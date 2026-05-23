@@ -1,0 +1,41 @@
+---
+source: crates/zendriver-stealth/src/fingerprint.rs
+expression: uam
+---
+{
+  "brands": [
+    {
+      "brand": "Not_A Brand",
+      "version": "8"
+    },
+    {
+      "brand": "Chromium",
+      "version": "120"
+    },
+    {
+      "brand": "Google Chrome",
+      "version": "120"
+    }
+  ],
+  "fullVersionList": [
+    {
+      "brand": "Not_A Brand",
+      "version": "8.0.0.0"
+    },
+    {
+      "brand": "Chromium",
+      "version": "120.0.6099.234"
+    },
+    {
+      "brand": "Google Chrome",
+      "version": "120.0.6099.234"
+    }
+  ],
+  "platform": "macOS",
+  "platformVersion": "10.15.7",
+  "architecture": "x86",
+  "bitness": "64",
+  "wow64": false,
+  "mobile": false,
+  "model": ""
+}
