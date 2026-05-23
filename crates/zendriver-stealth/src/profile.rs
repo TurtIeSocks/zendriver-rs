@@ -237,6 +237,16 @@ impl StealthProfile {
     pub fn bypass_csp_enabled(&self) -> bool {
         self.bypass_csp
     }
+
+    /// Returns the input-realism profile appropriate for this stealth profile.
+    /// `spoofed` returns realistic timings; `native` and `off` return zero-overhead.
+    #[must_use]
+    pub fn input_profile(&self) -> crate::InputProfile {
+        match self.kind {
+            ProfileKind::Spoofed => crate::InputProfile::spoofed(),
+            ProfileKind::Native | ProfileKind::Off => crate::InputProfile::native(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -313,6 +323,24 @@ mod profile_tests {
     fn build_flags_includes_locale_arg_when_set() {
         let flags = StealthProfile::native().locale("fr-FR").build_flags();
         assert!(flags.iter().any(|f| f == "--lang=fr-FR"));
+    }
+
+    #[test]
+    fn spoofed_profile_uses_spoofed_input_profile() {
+        let ip = StealthProfile::spoofed().input_profile();
+        assert!(ip.typo_rate > 0.0);
+    }
+
+    #[test]
+    fn native_profile_uses_native_input_profile() {
+        let ip = StealthProfile::native().input_profile();
+        assert_eq!(ip.typo_rate, 0.0);
+    }
+
+    #[test]
+    fn off_profile_uses_native_input_profile() {
+        let ip = StealthProfile::off().input_profile();
+        assert_eq!(ip.typo_rate, 0.0);
     }
 
     #[test]
