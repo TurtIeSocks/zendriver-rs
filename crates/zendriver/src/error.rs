@@ -33,6 +33,15 @@ pub enum ZendriverError {
     #[error("javascript exception: {0}")]
     JsException(String),
 
+    #[error("element is stale: refresh failed or origin not refreshable")]
+    ElementStale,
+
+    #[error("element not refreshable (was returned from a JS evaluation)")]
+    NotRefreshable,
+
+    #[error("element not actionable within {0:?}: {1}")]
+    NotActionable(std::time::Duration, String),
+
     #[error("serde: {0}")]
     Serde(#[from] serde_json::Error),
 
@@ -180,6 +189,36 @@ mod tests {
         let ze: ZendriverError = se.into();
         assert!(matches!(ze, ZendriverError::Stealth(_)));
         assert!(ze.to_string().contains("test"));
+    }
+
+    #[test]
+    fn display_element_stale() {
+        let e = ZendriverError::ElementStale;
+        assert_eq!(
+            e.to_string(),
+            "element is stale: refresh failed or origin not refreshable"
+        );
+    }
+
+    #[test]
+    fn display_not_refreshable() {
+        let e = ZendriverError::NotRefreshable;
+        assert_eq!(
+            e.to_string(),
+            "element not refreshable (was returned from a JS evaluation)"
+        );
+    }
+
+    #[test]
+    fn display_not_actionable_includes_duration_and_reason() {
+        let e = ZendriverError::NotActionable(
+            Duration::from_secs(5),
+            "not visible: display: none".into(),
+        );
+        assert_eq!(
+            e.to_string(),
+            "element not actionable within 5s: not visible: display: none"
+        );
     }
 
     #[test]

@@ -49,6 +49,9 @@ url                = { version = "2" }
 tempfile           = { version = "3" }
 sysinfo            = { version = "0.32", default-features = false, features = ["system"] }
 num_cpus           = "1"
+regex              = "1"
+bitflags           = "2"
+rand               = { version = "0.8", default-features = false, features = ["std", "std_rng", "small_rng"] }
 
 # Dev-deps
 tokio-test         = { version = "0.4" }
