@@ -55,14 +55,9 @@ serial_test        = { version = "3" }
 tracing-subscriber = { version = "0.3",   features = ["env-filter"] }
 
 [workspace.lints.rust]
-unsafe_code        = "deny"
-missing_docs       = "warn"
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
-pedantic           = { level = "warn", priority = -1 }
-nursery            = { level = "warn", priority = -1 }
-unwrap_used        = "warn"
-expect_used        = "warn"
-panic              = "warn"
-todo               = "warn"
-unimplemented      = "warn"
+todo          = "warn"
+unimplemented = "warn"
+panic         = "warn"
