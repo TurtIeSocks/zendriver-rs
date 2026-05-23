@@ -2,8 +2,19 @@
 //! graceful teardown.
 
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::sync::Arc;
+use std::time::Duration;
 
-use crate::error::BrowserError;
+use tempfile::TempDir;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::{Child, Command};
+use tokio::time::timeout;
+use tracing::{debug, info};
+use zendriver_transport::{Connection, SessionHandle};
+
+use crate::error::{BrowserError, ZendriverError};
+use crate::tab::Tab;
 
 /// Look for a Chromium-family binary on PATH and in conventional locations.
 /// Returns the first path that exists.
@@ -82,7 +93,6 @@ fn which_on_path(name: &str) -> Option<PathBuf> {
 }
 
 /// Parse a `DevTools listening on ws://...` line from Chrome's stderr.
-#[allow(dead_code)] // wired into launch path in a later task
 pub(crate) fn parse_devtools_line(line: &str) -> Option<String> {
     // Format: `DevTools listening on ws://127.0.0.1:NNNN/devtools/browser/UUID`
     let needle = "DevTools listening on ";
@@ -145,7 +155,6 @@ impl BrowserBuilder {
 
     /// Compute the full argv that would be passed to Chrome. Exposed to
     /// tests + snapshots; called internally by `launch`.
-    #[allow(dead_code)] // wired into launch path in Task 14
     pub(crate) fn build_flags(&self, user_data_dir: &Path) -> Vec<String> {
         let mut v = Vec::with_capacity(8 + self.extra_args.len());
         v.push("--remote-debugging-port=0".to_string());
@@ -161,15 +170,130 @@ impl BrowserBuilder {
     }
 }
 
+#[derive(Clone)]
+pub struct Browser {
+    pub(crate) inner: Arc<BrowserInner>,
+}
+
+pub(crate) struct BrowserInner {
+    pub(crate) conn: Connection,
+    pub(crate) main_tab: Tab,
+    #[allow(dead_code)] // consumed by Browser::close in Task 15
+    pub(crate) child: tokio::sync::Mutex<Option<Child>>,
+    pub(crate) _user_data: Option<TempDir>,
+}
+
+const WS_ENDPOINT_TIMEOUT: Duration = Duration::from_secs(15);
+#[allow(dead_code)] // wired into Browser::close in Task 15
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+
+impl BrowserBuilder {
+    /// Spawn Chrome and attach. Returns once the main tab is bound.
+    pub async fn launch(self) -> Result<Browser, ZendriverError> {
+        let exe = match self.executable.clone() {
+            Some(p) => p,
+            None => find_chrome_executable()?,
+        };
+
+        // Allocate user_data_dir (or use a TempDir we keep alive until shutdown).
+        let (user_data_path, owned_tmp) = match self.user_data_dir.clone() {
+            Some(p) => (p, None),
+            None => {
+                let td = tempfile::Builder::new()
+                    .prefix("zendriver-")
+                    .tempdir()
+                    .map_err(BrowserError::SpawnFailed)?;
+                (td.path().to_path_buf(), Some(td))
+            }
+        };
+
+        let flags = self.build_flags(&user_data_path);
+        info!(executable = %exe.display(), "launching chrome");
+
+        let mut cmd = Command::new(&exe);
+        cmd.args(&flags)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+
+        let mut child = cmd.spawn().map_err(BrowserError::SpawnFailed)?;
+
+        // Read stderr line-by-line until we see the DevTools URL.
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or(BrowserError::DevtoolsParse)?;
+        let mut lines = BufReader::new(stderr).lines();
+
+        let ws_url = timeout(WS_ENDPOINT_TIMEOUT, async {
+            while let Ok(Some(line)) = lines.next_line().await {
+                debug!(line = %line, "chrome stderr");
+                if let Some(url) = parse_devtools_line(&line) {
+                    return Ok::<String, ZendriverError>(url);
+                }
+            }
+            Err(BrowserError::DevtoolsParse.into())
+        })
+        .await
+        .map_err(|_| BrowserError::WsTimeout)??;
+
+        debug!(ws_url = %ws_url, "connecting to chrome");
+        let conn = zendriver_transport::connection::connect(&ws_url).await?;
+
+        // Attach to the first target. We discover it via Target.getTargets.
+        let list = conn
+            .call_raw("Target.getTargets", serde_json::json!({}), None)
+            .await?;
+        let target_id = list["targetInfos"]
+            .as_array()
+            .and_then(|arr| {
+                arr.iter()
+                    .find(|t| t["type"] == "page")
+                    .or_else(|| arr.first())
+            })
+            .and_then(|t| t["targetId"].as_str())
+            .ok_or_else(|| ZendriverError::Navigation("no initial target found".into()))?
+            .to_string();
+
+        let attach = conn
+            .call_raw(
+                "Target.attachToTarget",
+                serde_json::json!({ "targetId": target_id, "flatten": true }),
+                None,
+            )
+            .await?;
+        let session_id = attach["sessionId"]
+            .as_str()
+            .ok_or_else(|| ZendriverError::Navigation("attach returned no sessionId".into()))?
+            .to_string();
+
+        let session = SessionHandle::new(conn.clone(), session_id);
+        let main_tab = Tab::new(session);
+
+        Ok(Browser {
+            inner: Arc::new(BrowserInner {
+                conn,
+                main_tab,
+                child: tokio::sync::Mutex::new(Some(child)),
+                _user_data: owned_tmp,
+            }),
+        })
+    }
+}
+
 impl Browser {
     pub fn builder() -> BrowserBuilder {
         BrowserBuilder::new()
     }
-}
 
-// Forward declaration for Task 14. Defined more completely there.
-pub struct Browser {
-    pub(crate) _placeholder: (),
+    pub fn main_tab(&self) -> Tab {
+        self.inner.main_tab.clone()
+    }
+
+    pub fn cdp(&self) -> &Connection {
+        &self.inner.conn
+    }
 }
 
 #[cfg(test)]
