@@ -46,7 +46,7 @@ pub(crate) enum QueryScope<'a> {
 }
 
 impl QueryScope<'_> {
-    fn tab(&self) -> &Tab {
+    pub(crate) fn tab(&self) -> &Tab {
         match self {
             QueryScope::Tab(t) => t,
             QueryScope::Element(e) => e.tab(),
@@ -128,12 +128,13 @@ async fn resolve_css_one(scope: &QueryScope<'_>, selector: &str) -> Result<Optio
             .await?
         }
         QueryScope::Element(el) => {
+            let object_id = el.remote_object_id_cloned().await?;
             scope
                 .tab()
                 .call(
                     "Runtime.callFunctionOn",
                     json!({
-                        "objectId": el.inner.remote_object_id,
+                        "objectId": object_id,
                         "functionDeclaration": "function(s){return this.querySelector(s);}",
                         "arguments": [{ "value": selector }],
                         "returnByValue": false,
@@ -162,12 +163,13 @@ async fn resolve_css_many(scope: &QueryScope<'_>, selector: &str) -> Result<Vec<
             .await?
         }
         QueryScope::Element(el) => {
+            let object_id = el.remote_object_id_cloned().await?;
             scope
                 .tab()
                 .call(
                     "Runtime.callFunctionOn",
                     json!({
-                        "objectId": el.inner.remote_object_id,
+                        "objectId": object_id,
                         "functionDeclaration": "function(s){return Array.from(this.querySelectorAll(s));}",
                         "arguments": [{ "value": selector }],
                         "returnByValue": false,
@@ -200,12 +202,13 @@ async fn resolve_xpath_one(scope: &QueryScope<'_>, expr: &str) -> Result<Option<
             .await?
         }
         QueryScope::Element(el) => {
+            let object_id = el.remote_object_id_cloned().await?;
             scope
                 .tab()
                 .call(
                     "Runtime.callFunctionOn",
                     json!({
-                        "objectId": el.inner.remote_object_id,
+                        "objectId": object_id,
                         "functionDeclaration":
                             "function(e){return document.evaluate(e, this, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;}",
                         "arguments": [{ "value": expr }],
@@ -237,12 +240,13 @@ async fn resolve_xpath_many(scope: &QueryScope<'_>, expr: &str) -> Result<Vec<Re
             .await?
         }
         QueryScope::Element(el) => {
+            let object_id = el.remote_object_id_cloned().await?;
             scope
                 .tab()
                 .call(
                     "Runtime.callFunctionOn",
                     json!({
-                        "objectId": el.inner.remote_object_id,
+                        "objectId": object_id,
                         "functionDeclaration":
                             "function(e){var r=document.evaluate(e, this, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);var a=[];for(var i=0;i<r.snapshotLength;i++)a.push(r.snapshotItem(i));return a;}",
                         "arguments": [{ "value": expr }],
@@ -334,12 +338,13 @@ async fn resolve_text_one(
                 .await?
             }
             QueryScope::Element(el) => {
+                let object_id = el.remote_object_id_cloned().await?;
                 scope
                     .tab()
                     .call(
                         "Runtime.callFunctionOn",
                         json!({
-                            "objectId": el.inner.remote_object_id,
+                            "objectId": object_id,
                             "functionDeclaration": build_text_exact_xpath_fn_body(false),
                             "arguments": [{ "value": needle }],
                             "returnByValue": false,
@@ -363,12 +368,13 @@ async fn resolve_text_one(
                 .await?
             }
             QueryScope::Element(el) => {
+                let object_id = el.remote_object_id_cloned().await?;
                 scope
                     .tab()
                     .call(
                         "Runtime.callFunctionOn",
                         json!({
-                            "objectId": el.inner.remote_object_id,
+                            "objectId": object_id,
                             "functionDeclaration": format!(
                                 "function(n){{return ({})[0] || null;}}",
                                 // Build the substring filter body inline so
@@ -405,12 +411,13 @@ async fn resolve_text_many(
                 .await?
             }
             QueryScope::Element(el) => {
+                let object_id = el.remote_object_id_cloned().await?;
                 scope
                     .tab()
                     .call(
                         "Runtime.callFunctionOn",
                         json!({
-                            "objectId": el.inner.remote_object_id,
+                            "objectId": object_id,
                             "functionDeclaration": build_text_exact_xpath_fn_body(true),
                             "arguments": [{ "value": needle }],
                             "returnByValue": false,
@@ -432,12 +439,13 @@ async fn resolve_text_many(
                 .await?
             }
             QueryScope::Element(el) => {
+                let object_id = el.remote_object_id_cloned().await?;
                 scope
                     .tab()
                     .call(
                         "Runtime.callFunctionOn",
                         json!({
-                            "objectId": el.inner.remote_object_id,
+                            "objectId": object_id,
                             "functionDeclaration": build_text_substring_fn_body(),
                             "arguments": [{ "value": needle }],
                             "returnByValue": false,
@@ -498,12 +506,13 @@ async fn resolve_text_regex_one(
             .await?
         }
         QueryScope::Element(el) => {
+            let object_id = el.remote_object_id_cloned().await?;
             scope
                 .tab()
                 .call(
                     "Runtime.callFunctionOn",
                     json!({
-                        "objectId": el.inner.remote_object_id,
+                        "objectId": object_id,
                         "functionDeclaration": format!(
                             "function(p,f){{return ({})[0] || null;}}",
                             "(function(p,f){var r=new RegExp(p,f);return Array.from(this.querySelectorAll('*')).filter(function(el){var t=el.innerText||el.textContent||'';return r.test(t);});}).call(this,p,f)"
@@ -536,12 +545,13 @@ async fn resolve_text_regex_many(
             .await?
         }
         QueryScope::Element(el) => {
+            let object_id = el.remote_object_id_cloned().await?;
             scope
                 .tab()
                 .call(
                     "Runtime.callFunctionOn",
                     json!({
-                        "objectId": el.inner.remote_object_id,
+                        "objectId": object_id,
                         "functionDeclaration": build_text_regex_fn_body(),
                         "arguments": [{ "value": pattern }, { "value": flags }],
                         "returnByValue": false,

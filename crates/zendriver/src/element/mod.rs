@@ -12,8 +12,10 @@ use std::sync::Arc;
 
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
+use tokio::sync::Mutex;
 
 use crate::error::{Result, ZendriverError};
+use crate::query::selectors::{QueryScope, RemoteRef, SelectorKind};
 use crate::tab::Tab;
 
 #[derive(Clone)]
@@ -23,42 +25,106 @@ pub struct Element {
 
 pub(crate) struct ElementInner {
     pub(crate) tab: Tab,
-    // Held for future tasks (e.g. DOM-domain calls keyed by backendNodeId).
-    #[allow(dead_code)]
-    pub(crate) backend_node_id: i64,
-    pub(crate) remote_object_id: String,
+    /// `None` once the element has been observed stale; refilled by
+    /// `Element::refresh` (T17). Reads + actions lock briefly to clone
+    /// the inner value, then proceed without holding the lock across
+    /// `.await` on the CDP session.
+    pub(crate) backend_node_id: Mutex<Option<i64>>,
+    pub(crate) remote_object_id: Mutex<Option<String>>,
+    /// How this element was first obtained — drives T17's
+    /// `Element::refresh` re-resolution path.
+    #[allow(dead_code)] // First reader is T17 (refresh.rs).
+    pub(crate) origin: ElementOrigin,
+}
+
+/// How an `Element` was obtained. Drives `Element::refresh` (T17): a
+/// `Query`-origin element re-runs its selector against its original
+/// scope; a `Traversal`-origin element re-traverses from its parent
+/// (which itself may need refreshing recursively); an `Evaluation`
+/// origin has no way to re-resolve and surfaces `NotRefreshable`.
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // Variants consumed by T17 (refresh).
+pub(crate) enum ElementOrigin {
+    Query {
+        scope_kind: ScopeKind,
+        selector: SelectorKind,
+        nth: usize,
+    },
+    Traversal {
+        parent: Box<ElementOrigin>,
+        kind: TraversalKind,
+    },
+    /// Returned from a raw JS expression (e.g. `Tab::evaluate` that
+    /// yields a node handle). No selector to replay → not refreshable.
+    Evaluation,
+}
+
+/// The root context against which a `Query` origin's selector was
+/// originally resolved. P3 keeps this coarse — we only need to know
+/// "tab vs subtree" to decide where refresh should run. Re-resolving
+/// an element-subtree origin against a stale parent is deferred to P4
+/// (full traversal-chain refresh).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // Variants consumed by T17 (refresh).
+pub(crate) enum ScopeKind {
+    TabMain,
+    ElementSubtree,
+}
+
+/// The traversal step that produced a `Traversal`-origin element from
+/// its parent. P3 lands `Parent` + `NthChild`; richer relationships
+/// (sibling indices, etc.) can extend the enum without churn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // Variants consumed by T17 (refresh).
+pub(crate) enum TraversalKind {
+    Parent,
+    NthChild(usize),
 }
 
 impl Element {
-    // Constructor consumed by Task 23 (`FindBuilder` materializes Elements);
-    // no Phase 1 caller yet.
-    #[allow(dead_code)]
-    pub(crate) fn new(tab: Tab, backend_node_id: i64, remote_object_id: String) -> Self {
+    /// Construct an `Element` whose origin is a tracked query against
+    /// `scope`. T17's `Element::refresh` re-runs `selector` against
+    /// that scope and re-picks `nth` to recover from stale handles.
+    pub(crate) fn synthesize_query(
+        r: RemoteRef,
+        scope: &QueryScope<'_>,
+        selector: &SelectorKind,
+        nth: usize,
+    ) -> Self {
+        let scope_kind = match scope {
+            QueryScope::Tab(_) => ScopeKind::TabMain,
+            QueryScope::Element(_) => ScopeKind::ElementSubtree,
+        };
         Self {
             inner: Arc::new(ElementInner {
-                tab,
-                backend_node_id,
-                remote_object_id,
+                tab: scope.tab().clone(),
+                backend_node_id: Mutex::new(Some(r.backend_node_id)),
+                remote_object_id: Mutex::new(Some(r.remote_object_id)),
+                origin: ElementOrigin::Query {
+                    scope_kind,
+                    selector: selector.clone(),
+                    nth,
+                },
             }),
         }
     }
 
-    /// Constructor used by `FindBuilder::one()` to materialize an Element
-    /// from a resolved query match. T16 will replace this stub with the
-    /// real `ElementOrigin::Query { ... }` tracking so that
-    /// `Element::refresh()` can re-resolve. Until then this just delegates
-    /// to `Element::new` and the resulting Element has no origin metadata
-    /// (refresh will be a no-op / NotRefreshable when T17 lands).
-    //
-    // TODO(T16): wire the `ElementOrigin::Query { scope_kind, selector, nth }`
-    // payload through so auto-refresh works.
-    #[allow(dead_code)]
-    pub(crate) fn synthesize_query(
-        tab: Tab,
-        backend_node_id: i64,
-        remote_object_id: String,
-    ) -> Self {
-        Self::new(tab, backend_node_id, remote_object_id)
+    /// Construct an `Element` returned from a JS expression (e.g. a
+    /// `Runtime.evaluate` that yielded a node handle). No selector to
+    /// replay → `Element::refresh` will error with `NotRefreshable`
+    /// once T17 lands. This is the constructor P2's `Element::new`
+    /// becomes — the P2 semantics of "raw remote handle, no provenance"
+    /// match the new `Evaluation` origin exactly.
+    #[allow(dead_code)] // First public callers land with isolated_eval/traversal in T23+.
+    pub(crate) fn from_jsret(tab: Tab, backend_node_id: i64, remote_object_id: String) -> Self {
+        Self {
+            inner: Arc::new(ElementInner {
+                tab,
+                backend_node_id: Mutex::new(Some(backend_node_id)),
+                remote_object_id: Mutex::new(Some(remote_object_id)),
+                origin: ElementOrigin::Evaluation,
+            }),
+        }
     }
 
     /// Accessor for the parent `Tab` this element was queried from.
@@ -66,17 +132,46 @@ impl Element {
         &self.inner.tab
     }
 
+    /// Lock + clone the current `remote_object_id`, erroring with
+    /// `ElementStale` if it has been cleared (which T17's refresh path
+    /// does between a stale-error observation and the re-resolve).
+    /// Used everywhere a CDP call needs the raw object id.
+    pub(crate) async fn remote_object_id_cloned(&self) -> Result<String> {
+        self.inner
+            .remote_object_id
+            .lock()
+            .await
+            .clone()
+            .ok_or(ZendriverError::ElementStale)
+    }
+
+    /// Lock + clone the current `backend_node_id`, erroring with
+    /// `ElementStale` if it has been cleared. Symmetric with
+    /// `remote_object_id_cloned`; used by DOM-domain calls keyed by
+    /// backend id (e.g. `DOM.setFileInputFiles`, `DOM.getBoxModel`).
+    #[allow(dead_code)] // First callers land in T18 (reads) + T21 (upload_files).
+    pub(crate) async fn backend_node_id_cloned(&self) -> Result<i64> {
+        self.inner
+            .backend_node_id
+            .lock()
+            .await
+            .as_ref()
+            .copied()
+            .ok_or(ZendriverError::ElementStale)
+    }
+
     /// Call a JS function on this element's remote object. The function
     /// signature MUST take exactly one parameter (the element); use
     /// `function(el){ ... }`.
     pub(crate) async fn call_on(&self, function: &str, args: Value) -> Result<Value> {
+        let object_id = self.remote_object_id_cloned().await?;
         let res = self
             .inner
             .tab
             .call(
                 "Runtime.callFunctionOn",
                 json!({
-                    "objectId": self.inner.remote_object_id,
+                    "objectId": object_id,
                     "functionDeclaration": function,
                     "arguments": args,
                     "returnByValue": true,
@@ -103,13 +198,14 @@ impl Element {
     /// argument descriptors that follow the element. Returns the raw
     /// `result` RemoteObject (caller picks `value` if `returnByValue`).
     ///
-    /// Placeholder — T16 lands the full `ElementOrigin`-aware impl. For
-    /// now this delegates to the existing P2 `Runtime.callFunctionOn`
-    /// path, prepending the element's `objectId` to the argument list so
-    /// the `el` parameter resolves on the JS side.
+    /// Locks the remote-object Mutex once at the top, then routes
+    /// through `call_on` (which re-locks once more). The double-lock is
+    /// cheap — `tokio::sync::Mutex` is uncontended in the common case
+    /// and the guard is dropped before any `.await`.
     #[allow(dead_code)] // First callers (actionability predicates) wire up in T15.
     pub(crate) async fn call_on_main(&self, function: &str, args: Value) -> Result<Value> {
-        let mut full_args = vec![json!({ "objectId": self.inner.remote_object_id })];
+        let object_id = self.remote_object_id_cloned().await?;
+        let mut full_args = vec![json!({ "objectId": object_id })];
         if let Some(extra) = args.as_array() {
             full_args.extend(extra.iter().cloned());
         }
@@ -122,12 +218,7 @@ impl Element {
     /// world if found via `document.querySelector`).
     pub async fn evaluate_main<T: DeserializeOwned>(&self, js: impl AsRef<str>) -> Result<T> {
         let function = format!("function(el){{ return ({}) }}", js.as_ref());
-        let result = self
-            .call_on(
-                &function,
-                json!([{ "objectId": self.inner.remote_object_id }]),
-            )
-            .await?;
+        let result = self.call_on_main(&function, json!([])).await?;
         let value = result.get("value").cloned().unwrap_or(Value::Null);
         serde_json::from_value(value).map_err(ZendriverError::Serde)
     }
@@ -137,7 +228,7 @@ impl Element {
     /// re-resolving the element via `DOM.resolveNode { executionContextId }`,
     /// which is more invasive than P2 needs.
     pub async fn evaluate<T: DeserializeOwned>(&self, js: impl AsRef<str>) -> Result<T> {
-        // TODO(P3): true isolated-world via DOM.resolveNode { executionContextId: <isolated> }
+        // TODO(T25): true isolated-world via DOM.resolveNode { executionContextId: <isolated> }
         self.evaluate_main(js).await
     }
 
@@ -166,6 +257,7 @@ impl Element {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
     use zendriver_transport::testing::MockConnection;
@@ -176,7 +268,7 @@ mod tests {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
         let tab = Tab::new(sess, std::sync::Weak::new());
-        let el = Element::new(tab.clone(), 99, "R1".to_string());
+        let el = Element::from_jsret(tab.clone(), 99, "R1".to_string());
 
         let fut = tokio::spawn({
             let e = el.clone();
@@ -201,7 +293,7 @@ mod tests {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
         let tab = Tab::new(sess, std::sync::Weak::new());
-        let el = Element::new(tab, 1, "R1".to_string());
+        let el = Element::from_jsret(tab, 1, "R1".to_string());
 
         let fut = tokio::spawn({
             let e = el.clone();
@@ -224,7 +316,7 @@ mod tests {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
         let tab = Tab::new(sess, std::sync::Weak::new());
-        let el = Element::new(tab, 1, "R1".to_string());
+        let el = Element::from_jsret(tab, 1, "R1".to_string());
 
         let fut = tokio::spawn({
             let e = el.clone();
@@ -239,6 +331,33 @@ mod tests {
         .await;
         let s = fut.await.unwrap().unwrap();
         assert_eq!(s, "<button>x</button>");
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn from_jsret_yields_evaluation_origin() {
+        let (_mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new(sess, std::sync::Weak::new());
+        let el = Element::from_jsret(tab, 7, "R7".to_string());
+        assert!(matches!(el.inner.origin, ElementOrigin::Evaluation));
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn remote_object_id_cloned_errors_after_clear() {
+        let (_mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new(sess, std::sync::Weak::new());
+        let el = Element::from_jsret(tab, 1, "R1".to_string());
+
+        // Initially OK.
+        assert_eq!(el.remote_object_id_cloned().await.unwrap(), "R1");
+
+        // Clear → simulates the T17 refresh path mid-flight.
+        *el.inner.remote_object_id.lock().await = None;
+        let err = el.remote_object_id_cloned().await.unwrap_err();
+        assert!(matches!(err, ZendriverError::ElementStale));
         conn.shutdown();
     }
 }

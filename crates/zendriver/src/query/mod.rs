@@ -9,8 +9,9 @@
 //! `one()` polls `SelectorKind::resolve_many` until a match is found
 //! (within `timeout`), filters by `visible_only` (TODO(T16) — requires
 //! `Element::call_on_main`), picks `nth`, and wraps the resolved
-//! `RemoteRef` in an `Element` via `Element::synthesize_query` (which
-//! T16 will upgrade to carry full `ElementOrigin` metadata).
+//! `RemoteRef` in an `Element` via `Element::synthesize_query`. T16
+//! upgraded that constructor to carry full `ElementOrigin` metadata so
+//! T17's `Element::refresh` can re-resolve stale handles.
 
 pub mod actionability;
 pub mod modifiers;
@@ -210,9 +211,7 @@ impl<'tab> FindBuilder<'tab> {
 
             if let Some(picked) = filtered.into_iter().nth(want_nth) {
                 return Ok(Element::synthesize_query(
-                    tab.clone(),
-                    picked.backend_node_id,
-                    picked.remote_object_id,
+                    picked, &scope, &selector, want_nth,
                 ));
             }
             if Instant::now() >= deadline {
@@ -392,8 +391,7 @@ impl<'tab> FindAllBuilder<'tab> {
             )
         })?;
         let deadline = Instant::now() + self.timeout;
-        let tab = self.tab;
-        let scope = QueryScope::Tab(tab);
+        let scope = QueryScope::Tab(self.tab);
         loop {
             let candidates = selector.resolve_many(&scope).await?;
 
@@ -408,13 +406,8 @@ impl<'tab> FindAllBuilder<'tab> {
             if !filtered.is_empty() {
                 let elements: Vec<Element> = filtered
                     .into_iter()
-                    .map(|r| {
-                        Element::synthesize_query(
-                            tab.clone(),
-                            r.backend_node_id,
-                            r.remote_object_id,
-                        )
-                    })
+                    .enumerate()
+                    .map(|(i, r)| Element::synthesize_query(r, &scope, &selector, i))
                     .collect();
                 return Ok(elements);
             }
@@ -529,8 +522,11 @@ mod tests {
             .await;
 
         let el = fut.await.unwrap().unwrap();
-        assert_eq!(el.inner.backend_node_id, 42);
-        assert_eq!(el.inner.remote_object_id, "R1");
+        assert_eq!(*el.inner.backend_node_id.lock().await, Some(42));
+        assert_eq!(
+            el.inner.remote_object_id.lock().await.as_deref(),
+            Some("R1")
+        );
         conn.shutdown();
     }
 
@@ -788,10 +784,16 @@ mod tests {
 
         let els = fut.await.unwrap().unwrap();
         assert_eq!(els.len(), 2);
-        assert_eq!(els[0].inner.remote_object_id, "R0");
-        assert_eq!(els[0].inner.backend_node_id, 20);
-        assert_eq!(els[1].inner.remote_object_id, "R1");
-        assert_eq!(els[1].inner.backend_node_id, 21);
+        assert_eq!(
+            els[0].inner.remote_object_id.lock().await.as_deref(),
+            Some("R0")
+        );
+        assert_eq!(*els[0].inner.backend_node_id.lock().await, Some(20));
+        assert_eq!(
+            els[1].inner.remote_object_id.lock().await.as_deref(),
+            Some("R1")
+        );
+        assert_eq!(*els[1].inner.backend_node_id.lock().await, Some(21));
         conn.shutdown();
     }
 
@@ -884,8 +886,11 @@ mod tests {
             .await;
 
         let el = fut.await.unwrap().unwrap();
-        assert_eq!(el.inner.remote_object_id, "R1");
-        assert_eq!(el.inner.backend_node_id, 11);
+        assert_eq!(
+            el.inner.remote_object_id.lock().await.as_deref(),
+            Some("R1")
+        );
+        assert_eq!(*el.inner.backend_node_id.lock().await, Some(11));
         conn.shutdown();
     }
 }
