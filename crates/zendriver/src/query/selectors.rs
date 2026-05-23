@@ -1,5 +1,5 @@
-//! Selector kinds + CDP/JS resolution. T9 implements CSS + XPath. T10
-//! replaces the Text/TextRegex stubs; T11 replaces the Role stub.
+//! Selector kinds + CDP/JS resolution. T9 implements CSS + XPath; T10
+//! implements Text + TextRegex; T11 lands Role.
 //!
 //! Several items below (`Xpath`/`Text`/`TextRegex`/`Role` variants,
 //! `resolve_many`, the array-extraction helpers) compile but have no
@@ -43,17 +43,22 @@ impl QueryScope<'_> {
 }
 
 /// The set of supported selector kinds. T9 lands `Css` and `Xpath`;
-/// `Text` / `TextRegex` are filled in by T10 and `Role` by T11. Until
-/// then the stubs return a clearly-attributed error so an accidental
-/// dispatch surfaces immediately instead of returning an empty match
-/// set (which would silently pass tests).
+/// T10 lands `Text` and `TextRegex`; `Role` is filled in by T11. Until
+/// then the Role stub returns a clearly-attributed error so an
+/// accidental dispatch surfaces immediately instead of returning an
+/// empty match set (which would silently pass tests).
+///
+/// `TextRegex` stores pattern + flags as separate strings (rather than
+/// a `regex::Regex`) so the JS-side `new RegExp(pat, flags)` mirrors
+/// the user's intent exactly — `text_regex(re)` plumbs `re.as_str()`
+/// + empty flags, while `text_regex_with_flags` (T12) plumbs both.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Xpath/Text/TextRegex/Role wired up by T10–T12.
+#[allow(dead_code)] // Xpath/Text/TextRegex/Role wired up by T11/T12.
 pub(crate) enum SelectorKind {
     Css(String),
     Xpath(String),
     Text { needle: String, exact: bool },
-    TextRegex(regex::Regex),
+    TextRegex { pattern: String, flags: String },
     Role(AriaRole, Option<String>),
 }
 
@@ -67,10 +72,9 @@ impl SelectorKind {
         match self {
             SelectorKind::Css(sel) => resolve_css_one(scope, sel).await,
             SelectorKind::Xpath(expr) => resolve_xpath_one(scope, expr).await,
-            SelectorKind::Text { .. } | SelectorKind::TextRegex(_) => {
-                Err(ZendriverError::Navigation(
-                    "Text/TextRegex selectors implemented in T10".into(),
-                ))
+            SelectorKind::Text { needle, exact } => resolve_text_one(scope, needle, *exact).await,
+            SelectorKind::TextRegex { pattern, flags } => {
+                resolve_text_regex_one(scope, pattern, flags).await
             }
             SelectorKind::Role(_, _) => Err(ZendriverError::Navigation(
                 "Role selectors implemented in T11".into(),
@@ -85,10 +89,9 @@ impl SelectorKind {
         match self {
             SelectorKind::Css(sel) => resolve_css_many(scope, sel).await,
             SelectorKind::Xpath(expr) => resolve_xpath_many(scope, expr).await,
-            SelectorKind::Text { .. } | SelectorKind::TextRegex(_) => {
-                Err(ZendriverError::Navigation(
-                    "Text/TextRegex selectors implemented in T10".into(),
-                ))
+            SelectorKind::Text { needle, exact } => resolve_text_many(scope, needle, *exact).await,
+            SelectorKind::TextRegex { pattern, flags } => {
+                resolve_text_regex_many(scope, pattern, flags).await
             }
             SelectorKind::Role(_, _) => Err(ZendriverError::Navigation(
                 "Role selectors implemented in T11".into(),
@@ -243,6 +246,304 @@ async fn resolve_xpath_many(scope: &QueryScope<'_>, expr: &str) -> Result<Vec<Re
 }
 
 // ---------------------------------------------------------------------
+// Text (case-insensitive substring or whitespace-collapsed exact)
+// ---------------------------------------------------------------------
+//
+// Two paths:
+//   - exact=true  -> XPath `//*[normalize-space(.)=<needle>]` with
+//     `singleNodeValue` for `_one` / `ORDERED_NODE_SNAPSHOT_TYPE` for
+//     `_many`. The XPath string is constructed *in JS* via
+//     `JSON.stringify(needle)` (then `"`->`'`) so multi-quote needles
+//     don't break XPath literal escaping.
+//   - exact=false -> JS tree walk:
+//     `Array.from(ctx.querySelectorAll('*')).filter(el => (el.innerText||el.textContent).toLowerCase().includes(needle.toLowerCase()))`.
+//     `_one` slices `[0] || null`; `_many` returns the array.
+//
+// `innerText||textContent` matches Playwright's `getByText` and is
+// resilient to hidden elements (which have `innerText === ""` but
+// non-empty `textContent`).
+
+fn build_text_substring_js_tab(needle: &str) -> String {
+    // `Array.from(document.querySelectorAll('*')).filter(...)`.
+    format!(
+        "Array.from(document.querySelectorAll('*')).filter(function(el){{var n={n};var t=el.innerText||el.textContent||'';return t.toLowerCase().includes(n.toLowerCase());}})",
+        n = json!(needle),
+    )
+}
+
+fn build_text_substring_fn_body() -> &'static str {
+    // Element scope: `this` is the scope element. Used via
+    // `Runtime.callFunctionOn` with the needle as the sole argument.
+    "function(n){return Array.from(this.querySelectorAll('*')).filter(function(el){var t=el.innerText||el.textContent||'';return t.toLowerCase().includes(n.toLowerCase());});}"
+}
+
+fn build_text_exact_xpath_js_tab(needle: &str, snapshot: bool) -> String {
+    // Construct the XPath in JS so the needle literal is escaped by
+    // JSON.stringify -> single-quoted XPath string. snapshot=true
+    // returns an Array of all matches; snapshot=false returns the
+    // first match or null.
+    if snapshot {
+        format!(
+            "(function(){{var n={n};var xp=\"//*[normalize-space(.)=\"+JSON.stringify(n).replace(/\"/g,\"'\")+\"]\";var r=document.evaluate(xp,document,null,XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,null);var a=[];for(var i=0;i<r.snapshotLength;i++)a.push(r.snapshotItem(i));return a;}})()",
+            n = json!(needle),
+        )
+    } else {
+        format!(
+            "(function(){{var n={n};var xp=\"//*[normalize-space(.)=\"+JSON.stringify(n).replace(/\"/g,\"'\")+\"]\";return document.evaluate(xp,document,null,XPathResult.FIRST_ORDERED_NODE_TYPE,null).singleNodeValue;}})()",
+            n = json!(needle),
+        )
+    }
+}
+
+fn build_text_exact_xpath_fn_body(snapshot: bool) -> &'static str {
+    // Element scope: `this` is the context node. Needle passed as arg.
+    if snapshot {
+        "function(n){var xp=\"//*[normalize-space(.)=\"+JSON.stringify(n).replace(/\"/g,\"'\")+\"]\";var r=document.evaluate(xp,this,null,XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,null);var a=[];for(var i=0;i<r.snapshotLength;i++)a.push(r.snapshotItem(i));return a;}"
+    } else {
+        "function(n){var xp=\"//*[normalize-space(.)=\"+JSON.stringify(n).replace(/\"/g,\"'\")+\"]\";return document.evaluate(xp,this,null,XPathResult.FIRST_ORDERED_NODE_TYPE,null).singleNodeValue;}"
+    }
+}
+
+#[allow(dead_code)] // Reached via SelectorKind::resolve_one, gated until T12.
+async fn resolve_text_one(
+    scope: &QueryScope<'_>,
+    needle: &str,
+    exact: bool,
+) -> Result<Option<RemoteRef>> {
+    if exact {
+        // XPath path returns a single node or null.
+        let result = match scope {
+            QueryScope::Tab(tab) => {
+                tab.call(
+                    "Runtime.evaluate",
+                    json!({
+                        "expression": build_text_exact_xpath_js_tab(needle, false),
+                        "returnByValue": false,
+                    }),
+                )
+                .await?
+            }
+            QueryScope::Element(el) => {
+                scope
+                    .tab()
+                    .call(
+                        "Runtime.callFunctionOn",
+                        json!({
+                            "objectId": el.inner.remote_object_id,
+                            "functionDeclaration": build_text_exact_xpath_fn_body(false),
+                            "arguments": [{ "value": needle }],
+                            "returnByValue": false,
+                        }),
+                    )
+                    .await?
+            }
+        };
+        extract_node_ref(scope.tab(), &result["result"]).await
+    } else {
+        // Substring path returns an Array; pick first match.
+        let result = match scope {
+            QueryScope::Tab(tab) => {
+                tab.call(
+                    "Runtime.evaluate",
+                    json!({
+                        "expression": format!("({})[0] || null", build_text_substring_js_tab(needle)),
+                        "returnByValue": false,
+                    }),
+                )
+                .await?
+            }
+            QueryScope::Element(el) => {
+                scope
+                    .tab()
+                    .call(
+                        "Runtime.callFunctionOn",
+                        json!({
+                            "objectId": el.inner.remote_object_id,
+                            "functionDeclaration": format!(
+                                "function(n){{return ({})[0] || null;}}",
+                                // Build the substring filter body inline so
+                                // `this` resolves to the scope element.
+                                "Array.from(this.querySelectorAll('*')).filter(function(el){var t=el.innerText||el.textContent||'';return t.toLowerCase().includes(n.toLowerCase());})"
+                            ),
+                            "arguments": [{ "value": needle }],
+                            "returnByValue": false,
+                        }),
+                    )
+                    .await?
+            }
+        };
+        extract_node_ref(scope.tab(), &result["result"]).await
+    }
+}
+
+#[allow(dead_code)] // Reached via SelectorKind::resolve_many, gated until T12.
+async fn resolve_text_many(
+    scope: &QueryScope<'_>,
+    needle: &str,
+    exact: bool,
+) -> Result<Vec<RemoteRef>> {
+    let result = if exact {
+        match scope {
+            QueryScope::Tab(tab) => {
+                tab.call(
+                    "Runtime.evaluate",
+                    json!({
+                        "expression": build_text_exact_xpath_js_tab(needle, true),
+                        "returnByValue": false,
+                    }),
+                )
+                .await?
+            }
+            QueryScope::Element(el) => {
+                scope
+                    .tab()
+                    .call(
+                        "Runtime.callFunctionOn",
+                        json!({
+                            "objectId": el.inner.remote_object_id,
+                            "functionDeclaration": build_text_exact_xpath_fn_body(true),
+                            "arguments": [{ "value": needle }],
+                            "returnByValue": false,
+                        }),
+                    )
+                    .await?
+            }
+        }
+    } else {
+        match scope {
+            QueryScope::Tab(tab) => {
+                tab.call(
+                    "Runtime.evaluate",
+                    json!({
+                        "expression": build_text_substring_js_tab(needle),
+                        "returnByValue": false,
+                    }),
+                )
+                .await?
+            }
+            QueryScope::Element(el) => {
+                scope
+                    .tab()
+                    .call(
+                        "Runtime.callFunctionOn",
+                        json!({
+                            "objectId": el.inner.remote_object_id,
+                            "functionDeclaration": build_text_substring_fn_body(),
+                            "arguments": [{ "value": needle }],
+                            "returnByValue": false,
+                        }),
+                    )
+                    .await?
+            }
+        }
+    };
+    extract_array_refs(scope.tab(), &result["result"]).await
+}
+
+// ---------------------------------------------------------------------
+// TextRegex (serialized as JS `new RegExp(pattern, flags)`)
+// ---------------------------------------------------------------------
+//
+// JS path:
+//   `Array.from(ctx.querySelectorAll('*')).filter(el => new RegExp(pat, flags).test(el.innerText||el.textContent))`
+//
+// The regex is *re-parsed* on the JS side via `new RegExp`, so the
+// pattern must use JS-flavored regex syntax (which is essentially the
+// same as Rust's `regex` crate for the common subset). Flags are passed
+// verbatim — caller is responsible for valid JS flag chars (e.g. "i",
+// "im", "gi", etc.). Empty flags string is fine.
+//
+// We construct the RegExp *once outside* the filter callback so the
+// pattern is only compiled per query rather than per element.
+
+fn build_text_regex_js_tab(pattern: &str, flags: &str) -> String {
+    format!(
+        "(function(){{var r=new RegExp({p}, {f});return Array.from(document.querySelectorAll('*')).filter(function(el){{var t=el.innerText||el.textContent||'';return r.test(t);}});}})()",
+        p = json!(pattern),
+        f = json!(flags),
+    )
+}
+
+fn build_text_regex_fn_body() -> &'static str {
+    // Element scope: `this` is the scope element. Pattern + flags
+    // passed as arguments.
+    "function(p,f){var r=new RegExp(p,f);return Array.from(this.querySelectorAll('*')).filter(function(el){var t=el.innerText||el.textContent||'';return r.test(t);});}"
+}
+
+#[allow(dead_code)] // Reached via SelectorKind::resolve_one, gated until T12.
+async fn resolve_text_regex_one(
+    scope: &QueryScope<'_>,
+    pattern: &str,
+    flags: &str,
+) -> Result<Option<RemoteRef>> {
+    let result = match scope {
+        QueryScope::Tab(tab) => {
+            tab.call(
+                "Runtime.evaluate",
+                json!({
+                    "expression": format!("({})[0] || null", build_text_regex_js_tab(pattern, flags)),
+                    "returnByValue": false,
+                }),
+            )
+            .await?
+        }
+        QueryScope::Element(el) => {
+            scope
+                .tab()
+                .call(
+                    "Runtime.callFunctionOn",
+                    json!({
+                        "objectId": el.inner.remote_object_id,
+                        "functionDeclaration": format!(
+                            "function(p,f){{return ({})[0] || null;}}",
+                            "(function(p,f){var r=new RegExp(p,f);return Array.from(this.querySelectorAll('*')).filter(function(el){var t=el.innerText||el.textContent||'';return r.test(t);});}).call(this,p,f)"
+                        ),
+                        "arguments": [{ "value": pattern }, { "value": flags }],
+                        "returnByValue": false,
+                    }),
+                )
+                .await?
+        }
+    };
+    extract_node_ref(scope.tab(), &result["result"]).await
+}
+
+#[allow(dead_code)] // Reached via SelectorKind::resolve_many, gated until T12.
+async fn resolve_text_regex_many(
+    scope: &QueryScope<'_>,
+    pattern: &str,
+    flags: &str,
+) -> Result<Vec<RemoteRef>> {
+    let result = match scope {
+        QueryScope::Tab(tab) => {
+            tab.call(
+                "Runtime.evaluate",
+                json!({
+                    "expression": build_text_regex_js_tab(pattern, flags),
+                    "returnByValue": false,
+                }),
+            )
+            .await?
+        }
+        QueryScope::Element(el) => {
+            scope
+                .tab()
+                .call(
+                    "Runtime.callFunctionOn",
+                    json!({
+                        "objectId": el.inner.remote_object_id,
+                        "functionDeclaration": build_text_regex_fn_body(),
+                        "arguments": [{ "value": pattern }, { "value": flags }],
+                        "returnByValue": false,
+                    }),
+                )
+                .await?
+        }
+    };
+    extract_array_refs(scope.tab(), &result["result"]).await
+}
+
+// ---------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------
 
@@ -370,6 +671,110 @@ mod tests {
         let r = fut.await.unwrap().unwrap().unwrap();
         assert_eq!(r.remote_object_id, "R7");
         assert_eq!(r.backend_node_id, 99);
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn text_substring_eval_lowercases_and_includes_needle() {
+        // Non-exact text selector: confirm the dispatched JS expression
+        // contains the lowercase-fold (`.toLowerCase()`) + the needle
+        // verbatim so the case-insensitive substring contract is
+        // preserved. We respond with `null` so the future completes
+        // immediately without needing the full describeNode dance.
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new(sess, std::sync::Weak::new());
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                let scope = QueryScope::Tab(&t);
+                SelectorKind::Text {
+                    needle: "Sign In".into(),
+                    exact: false,
+                }
+                .resolve_one(&scope)
+                .await
+            }
+        });
+
+        let id_q = mock.expect_cmd("Runtime.evaluate").await;
+        let sent = mock.last_sent()["params"]["expression"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            sent.contains(".toLowerCase()"),
+            "substring path must lowercase-fold both sides; got: {sent}"
+        );
+        assert!(
+            sent.contains("Sign In"),
+            "substring path must embed the needle verbatim; got: {sent}"
+        );
+        assert!(
+            sent.contains(".includes("),
+            "substring path must call .includes; got: {sent}"
+        );
+
+        // null-out the result so resolve_one short-circuits to Ok(None).
+        mock.reply(
+            id_q,
+            json!({ "result": { "type": "object", "subtype": "null" } }),
+        )
+        .await;
+
+        let r = fut.await.unwrap().unwrap();
+        assert!(r.is_none(), "null subtype must yield Ok(None)");
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn text_regex_eval_constructs_new_regexp_with_pattern_and_flags() {
+        // TextRegex selector: confirm the dispatched JS expression
+        // builds `new RegExp(<pat>, <flags>)` with both strings present.
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new(sess, std::sync::Weak::new());
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                let scope = QueryScope::Tab(&t);
+                SelectorKind::TextRegex {
+                    pattern: "hello.*world".into(),
+                    flags: "im".into(),
+                }
+                .resolve_one(&scope)
+                .await
+            }
+        });
+
+        let id_q = mock.expect_cmd("Runtime.evaluate").await;
+        let sent = mock.last_sent()["params"]["expression"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            sent.contains("new RegExp"),
+            "regex path must instantiate `new RegExp`; got: {sent}"
+        );
+        assert!(
+            sent.contains("hello.*world"),
+            "regex path must embed the pattern; got: {sent}"
+        );
+        assert!(
+            sent.contains("im"),
+            "regex path must embed the flags string; got: {sent}"
+        );
+
+        mock.reply(
+            id_q,
+            json!({ "result": { "type": "object", "subtype": "null" } }),
+        )
+        .await;
+
+        let r = fut.await.unwrap().unwrap();
+        assert!(r.is_none(), "null subtype must yield Ok(None)");
         conn.shutdown();
     }
 }

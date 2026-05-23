@@ -238,11 +238,7 @@ pub(crate) async fn dispatch_char(tab: &Tab, c: char, modifier_bits: i32) -> Res
 
 /// Dispatch a named special key (Enter, Tab, etc).
 #[allow(dead_code)]
-pub(crate) async fn dispatch_special(
-    tab: &Tab,
-    k: SpecialKey,
-    modifier_bits: i32,
-) -> Result<()> {
+pub(crate) async fn dispatch_special(tab: &Tab, k: SpecialKey, modifier_bits: i32) -> Result<()> {
     let (code, key, vk) = k.to_cdp();
     tab.session()
         .call(
@@ -291,8 +287,8 @@ pub(crate) async fn type_text_realistic(
                     profile.per_char_delay_ms_range.0..=profile.per_char_delay_ms_range.1,
                 )
             };
-            let do_typo = profile.typo_rate > 0.0
-                && rand::Rng::gen::<f32>(&mut s.rng) < profile.typo_rate;
+            let do_typo =
+                profile.typo_rate > 0.0 && rand::Rng::gen::<f32>(&mut s.rng) < profile.typo_rate;
             let typo_char = if do_typo {
                 neighbor_key(ch, &mut s.rng)
             } else {
@@ -337,11 +333,7 @@ pub(crate) async fn type_text_realistic(
 
 /// Type `text` as fast as possible — no delays, no typos.
 #[allow(dead_code)]
-pub(crate) async fn type_text_raw(
-    input: &InputController,
-    tab: &Tab,
-    text: &str,
-) -> Result<()> {
+pub(crate) async fn type_text_raw(input: &InputController, tab: &Tab, text: &str) -> Result<()> {
     let mods = input.state.lock().await.modifiers_held.cdp_bits();
     for ch in text.chars() {
         dispatch_char(tab, ch, mods).await?;
