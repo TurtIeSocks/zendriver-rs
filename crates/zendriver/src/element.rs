@@ -70,8 +70,11 @@ impl Element {
         Ok(res["result"].clone())
     }
 
-    /// Evaluate a JS expression where `el` is bound to this element handle.
-    pub async fn evaluate<T: DeserializeOwned>(&self, js: impl AsRef<str>) -> Result<T> {
+    /// Evaluate a JS expression in the main world where `el` is bound to this
+    /// element handle. Uses `Runtime.callFunctionOn` against the element's
+    /// remote object, which lives in whatever world it was created in (main
+    /// world if found via `document.querySelector`).
+    pub async fn evaluate_main<T: DeserializeOwned>(&self, js: impl AsRef<str>) -> Result<T> {
         let function = format!("function(el){{ return ({}) }}", js.as_ref());
         let result = self
             .call_on(
@@ -81,6 +84,15 @@ impl Element {
             .await?;
         let value = result.get("value").cloned().unwrap_or(Value::Null);
         serde_json::from_value(value).map_err(ZendriverError::Serde)
+    }
+
+    /// Element evaluation in an isolated world. Currently delegates to
+    /// `evaluate_main`; true isolated-world Element evaluation requires
+    /// re-resolving the element via `DOM.resolveNode { executionContextId }`,
+    /// which is more invasive than P2 needs.
+    pub async fn evaluate<T: DeserializeOwned>(&self, js: impl AsRef<str>) -> Result<T> {
+        // TODO(P3): true isolated-world via DOM.resolveNode { executionContextId: <isolated> }
+        self.evaluate_main(js).await
     }
 
     /// Click this element via DOM `el.click()`. Phase 1 uses the simple DOM
