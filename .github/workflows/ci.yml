@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: '0 6 * * *'
 
 env:
   CARGO_TERM_COLOR: always
@@ -54,3 +56,15 @@ jobs:
       - name: Install Chromium
         run: sudo apt-get update && sudo apt-get install -y chromium-browser
       - run: cargo test --workspace --features integration-tests --test '*' --locked -- --test-threads=1
+
+  nightly-stealth-tests:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Chromium
+        run: sudo apt-get update && sudo apt-get install -y chromium-browser
+      - run: cargo test --workspace --features stealth-tests --test stealth_phase2 --locked -- --test-threads=1
