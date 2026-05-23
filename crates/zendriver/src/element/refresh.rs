@@ -63,7 +63,6 @@ impl Element {
     /// Run `op`, retrying it once if the first attempt errors with a
     /// stale-node signature. Used by every `Element` read + action so
     /// the retry-on-stale logic stays centralized.
-    #[allow(dead_code)] // First callers land in T18 (reads) + T19+ (actions).
     pub(crate) async fn with_refresh<T, F, Fut>(&self, op: F) -> Result<T>
     where
         F: Fn() -> Fut + Send,
@@ -94,7 +93,6 @@ impl Element {
 ///   - `ZendriverError::Cdp { message, .. }` where `message` contains
 ///     either of the above substrings (covers DOM-domain stale errors
 ///     that don't get pre-mapped to Navigation).
-#[allow(dead_code)] // First non-test caller is `with_refresh`, gated until T18.
 pub(crate) fn is_stale_node_error(e: &ZendriverError) -> bool {
     match e {
         ZendriverError::ElementStale => true,

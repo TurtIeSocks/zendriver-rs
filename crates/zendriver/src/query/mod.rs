@@ -22,6 +22,18 @@ pub use role::AriaRole;
 
 use std::time::Duration;
 
+/// Element geometry in CSS pixels relative to the viewport's top-left.
+/// Returned by [`crate::element::Element::bounding_box`] (and consumed by
+/// click target calculations, screenshot clip rects, hover coordinates).
+/// Derived from the `content` quad of `DOM.getBoxModel`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BoundingBox {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
 use tokio::time::Instant;
 
 use crate::element::Element;
