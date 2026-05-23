@@ -27,3 +27,4 @@ num_cpus.workspace            = true
 [dev-dependencies]
 tokio-test.workspace          = true
 insta.workspace               = true
+zendriver-transport           = { workspace = true, features = ["testing"] }

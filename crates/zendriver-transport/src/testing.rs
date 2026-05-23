@@ -7,11 +7,14 @@
 
 #![allow(clippy::expect_used, clippy::panic, clippy::missing_panics_doc)]
 
+use std::sync::Arc;
+
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::connection::{spawn_actor, Connection};
+use crate::connection::{spawn_actor, spawn_actor_with_observers, Connection};
+use crate::observer::TargetObserver;
 
 /// A paired pseudo-Chrome: tests push frames the driver would read, and read
 /// frames the driver sent. Driving an end-to-end interaction looks like:
@@ -51,6 +54,28 @@ impl MockConnection {
             rx: rx_driver,
         };
         let conn = spawn_actor(driver);
+        let mock = MockConnection {
+            server_in: tx_to_driver,
+            server_out: rx_test,
+            last_sent: None,
+        };
+        (mock, conn)
+    }
+
+    /// Variant of [`Self::pair`] that spawns the actor with the given
+    /// `observers` chain. Used by downstream crates (notably
+    /// `zendriver-stealth`) to assert their observer drives the correct
+    /// sequence of CDP calls on `Target.attachedToTarget`.
+    #[must_use]
+    pub fn pair_with_observers(observers: Vec<Arc<dyn TargetObserver>>) -> (Self, Connection) {
+        let (tx_to_driver, rx_driver) =
+            mpsc::channel::<Result<Message, tokio_tungstenite::tungstenite::Error>>(64);
+        let (tx_from_driver, rx_test) = mpsc::channel::<Message>(64);
+        let driver = crate::connection::test_only::DriverStream {
+            tx: tx_from_driver,
+            rx: rx_driver,
+        };
+        let conn = spawn_actor_with_observers(driver, observers);
         let mock = MockConnection {
             server_in: tx_to_driver,
             server_out: rx_test,
