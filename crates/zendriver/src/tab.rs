@@ -29,6 +29,13 @@ pub(crate) struct TabInner {
     /// consumed by later P3 tasks (Element actions).
     #[allow(dead_code)]
     pub(crate) browser: std::sync::Weak<crate::browser::BrowserInner>,
+    /// Test-only override for `Tab::input()` — production wiring goes
+    /// through `browser.upgrade()`, but unit tests for Element actions
+    /// (T19+) need an `InputController` without standing up a full
+    /// `BrowserInner`. When `Some`, `Tab::input()` returns this clone
+    /// in preference to the `browser` lookup.
+    #[cfg(test)]
+    pub(crate) test_input: Option<Arc<InputController>>,
 }
 
 #[derive(Default)]
@@ -47,6 +54,23 @@ impl Tab {
                 session,
                 isolated_world: tokio::sync::Mutex::new(IsolatedWorldCache::default()),
                 browser,
+                #[cfg(test)]
+                test_input: None,
+            }),
+        }
+    }
+
+    /// Test-only constructor: same as [`Tab::new`] but additionally seeds
+    /// `Tab::input()` so unit tests for Element actions (T19+) can drive a
+    /// real [`InputController`] without standing up a full `BrowserInner`.
+    #[cfg(test)]
+    pub(crate) fn new_with_input(session: SessionHandle, input: Arc<InputController>) -> Self {
+        Self {
+            inner: Arc::new(TabInner {
+                session,
+                isolated_world: tokio::sync::Mutex::new(IsolatedWorldCache::default()),
+                browser: std::sync::Weak::new(),
+                test_input: Some(input),
             }),
         }
     }
@@ -57,6 +81,12 @@ impl Tab {
     /// P3 tasks (Element actions).
     #[allow(dead_code)]
     pub(crate) fn input(&self) -> Option<Arc<InputController>> {
+        #[cfg(test)]
+        {
+            if let Some(inp) = &self.inner.test_input {
+                return Some(inp.clone());
+            }
+        }
         self.inner.browser.upgrade().map(|b| b.input.clone())
     }
 
