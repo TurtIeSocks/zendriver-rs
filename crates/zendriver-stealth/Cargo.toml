@@ -1,6 +1,6 @@
 [package]
 name = "zendriver-stealth"
-description = "CDP-level stealth patches for zendriver (populated in Phase 2)"
+description = "Anti-detection patches and profiles for zendriver"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,3 +10,20 @@ authors.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+zendriver-transport.workspace = true
+chromiumoxide_cdp.workspace   = true
+tokio.workspace               = true
+async-trait.workspace         = true
+futures.workspace             = true
+serde.workspace               = true
+serde_json.workspace          = true
+thiserror.workspace           = true
+tracing.workspace             = true
+sysinfo.workspace             = true
+num_cpus.workspace            = true
+
+[dev-dependencies]
+tokio-test.workspace          = true
+insta.workspace               = true

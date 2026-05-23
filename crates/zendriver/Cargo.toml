@@ -16,11 +16,15 @@ workspace = true
 default = []
 # Enables real-Chrome integration tests (requires Chrome installed on $PATH).
 integration-tests = []
+# Nightly stealth tests against external sites (sannysoft, areyouheadless).
+# Separate from integration-tests because external sites flake.
+stealth-tests = ["integration-tests"]
 # Re-exports the MockConnection testing helper for downstream users.
 testing = ["zendriver-transport/testing"]
 
 [dependencies]
 zendriver-transport.workspace = true
+zendriver-stealth.workspace   = true
 chromiumoxide_cdp.workspace   = true
 tokio.workspace               = true
 tokio-util.workspace          = true

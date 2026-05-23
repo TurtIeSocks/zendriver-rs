@@ -47,6 +47,8 @@ tracing            = { version = "0.1" }
 # External — utilities
 url                = { version = "2" }
 tempfile           = { version = "3" }
+sysinfo            = { version = "0.32", default-features = false, features = ["system"] }
+num_cpus           = "1"
 
 # Dev-deps
 tokio-test         = { version = "0.4" }
