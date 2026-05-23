@@ -72,16 +72,18 @@ impl Connection {
     where
         T: DeserializeOwned + Send + 'static,
     {
-        Box::pin(BroadcastStream::new(self.inner.event_tx.subscribe()).filter_map(
-            move |res| async move {
-                let ev = res.ok()?;
-                if ev.method == method {
-                    serde_json::from_value(ev.params).ok()
-                } else {
-                    None
-                }
-            },
-        ))
+        Box::pin(
+            BroadcastStream::new(self.inner.event_tx.subscribe()).filter_map(
+                move |res| async move {
+                    let ev = res.ok()?;
+                    if ev.method == method {
+                        serde_json::from_value(ev.params).ok()
+                    } else {
+                        None
+                    }
+                },
+            ),
+        )
     }
 
     /// Trigger graceful shutdown of the underlying actor.
@@ -123,9 +125,14 @@ pub async fn connect(ws_url: &str) -> Result<Connection, TransportError> {
 /// and for `connect`; production code uses `connect`.
 pub fn spawn_actor<S>(ws: S) -> Connection
 where
-    S: futures::Sink<tokio_tungstenite::tungstenite::Message, Error = tokio_tungstenite::tungstenite::Error>
-        + futures::Stream<
-            Item = Result<tokio_tungstenite::tungstenite::Message, tokio_tungstenite::tungstenite::Error>,
+    S: futures::Sink<
+            tokio_tungstenite::tungstenite::Message,
+            Error = tokio_tungstenite::tungstenite::Error,
+        > + futures::Stream<
+            Item = Result<
+                tokio_tungstenite::tungstenite::Message,
+                tokio_tungstenite::tungstenite::Error,
+            >,
         > + Send
         + Unpin
         + 'static,
@@ -167,10 +174,7 @@ pub(crate) mod test_only {
             std::task::Poll::Ready(Ok(()))
         }
 
-        fn start_send(
-            self: std::pin::Pin<&mut Self>,
-            item: Message,
-        ) -> Result<(), Self::Error> {
+        fn start_send(self: std::pin::Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
             self.tx
                 .try_send(item)
                 .map_err(|_| tokio_tungstenite::tungstenite::Error::ConnectionClosed)
@@ -217,8 +221,9 @@ mod tests {
         tokio::sync::mpsc::Receiver<Message>,
     ) {
         let (tx_out, rx_out) = tokio::sync::mpsc::channel::<Message>(32);
-        let (tx_in, rx_in) =
-            tokio::sync::mpsc::channel::<Result<Message, tokio_tungstenite::tungstenite::Error>>(32);
+        let (tx_in, rx_in) = tokio::sync::mpsc::channel::<
+            Result<Message, tokio_tungstenite::tungstenite::Error>,
+        >(32);
         (
             DriverStream {
                 tx: tx_out,

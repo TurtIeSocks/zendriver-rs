@@ -91,7 +91,10 @@ mod tests {
             session_id: None,
         };
         let s = serde_json::to_string(&cmd).expect("ser");
-        assert!(!s.contains("sessionId"), "sessionId should be omitted when None, got: {s}");
+        assert!(
+            !s.contains("sessionId"),
+            "sessionId should be omitted when None, got: {s}"
+        );
         assert!(s.contains(r#""id":1"#));
         assert!(s.contains(r#""method":"Page.navigate""#));
     }
@@ -113,7 +116,12 @@ mod tests {
         let raw = r#"{"id":3,"result":{"frameId":"F1"}}"#;
         let parsed: CdpInbound = serde_json::from_str(raw).expect("de");
         match parsed {
-            CdpInbound::Response { id, result, error, session_id } => {
+            CdpInbound::Response {
+                id,
+                result,
+                error,
+                session_id,
+            } => {
                 assert_eq!(id, 3);
                 assert_eq!(result.unwrap()["frameId"], "F1");
                 assert!(error.is_none());
@@ -138,10 +146,15 @@ mod tests {
 
     #[test]
     fn inbound_deserialize_event() {
-        let raw = r#"{"method":"Page.frameStoppedLoading","params":{"frameId":"F1"},"sessionId":"S1"}"#;
+        let raw =
+            r#"{"method":"Page.frameStoppedLoading","params":{"frameId":"F1"},"sessionId":"S1"}"#;
         let parsed: CdpInbound = serde_json::from_str(raw).expect("de");
         match parsed {
-            CdpInbound::Event { method, params, session_id } => {
+            CdpInbound::Event {
+                method,
+                params,
+                session_id,
+            } => {
                 assert_eq!(method, "Page.frameStoppedLoading");
                 assert_eq!(params["frameId"], "F1");
                 assert_eq!(session_id.as_deref(), Some("S1"));

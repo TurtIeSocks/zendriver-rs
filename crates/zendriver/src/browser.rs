@@ -25,7 +25,9 @@ pub fn find_chrome_executable() -> Result<PathBuf, BrowserError> {
             return Ok(c.clone());
         }
     }
-    Err(BrowserError::ExecutableNotFound { searched: candidates })
+    Err(BrowserError::ExecutableNotFound {
+        searched: candidates,
+    })
 }
 
 fn candidate_paths() -> Vec<PathBuf> {
@@ -98,9 +100,7 @@ pub(crate) fn parse_devtools_line(line: &str) -> Option<String> {
     let needle = "DevTools listening on ";
     let idx = line.find(needle)?;
     let rest = &line[idx + needle.len()..];
-    let end = rest
-        .find(char::is_whitespace)
-        .unwrap_or(rest.len());
+    let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
     let url = rest[..end].trim();
     if url.starts_with("ws://") || url.starts_with("wss://") {
         Some(url.to_string())
@@ -218,10 +218,7 @@ impl BrowserBuilder {
         let mut child = cmd.spawn().map_err(BrowserError::SpawnFailed)?;
 
         // Read stderr line-by-line until we see the DevTools URL.
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or(BrowserError::DevtoolsParse)?;
+        let stderr = child.stderr.take().ok_or(BrowserError::DevtoolsParse)?;
         let mut lines = BufReader::new(stderr).lines();
 
         let ws_url = timeout(WS_ENDPOINT_TIMEOUT, async {
@@ -344,8 +341,7 @@ mod tests {
 
     #[test]
     fn parse_devtools_line_extracts_ws_url() {
-        let line =
-            "DevTools listening on ws://127.0.0.1:54321/devtools/browser/abc-def-123\n";
+        let line = "DevTools listening on ws://127.0.0.1:54321/devtools/browser/abc-def-123\n";
         assert_eq!(
             parse_devtools_line(line).as_deref(),
             Some("ws://127.0.0.1:54321/devtools/browser/abc-def-123")
@@ -392,7 +388,10 @@ mod tests {
             .arg("--proxy-server=http://x")
             .arg("--lang=en-US");
         let flags = b.build_flags(Path::new("/tmp/x"));
-        let proxy = flags.iter().position(|f| f == "--proxy-server=http://x").unwrap();
+        let proxy = flags
+            .iter()
+            .position(|f| f == "--proxy-server=http://x")
+            .unwrap();
         let lang = flags.iter().position(|f| f == "--lang=en-US").unwrap();
         assert!(proxy < lang);
     }

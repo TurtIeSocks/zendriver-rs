@@ -28,7 +28,10 @@ mod tests {
 
     #[test]
     fn display_disconnected_is_stable() {
-        assert_eq!(TransportError::Disconnected.to_string(), "websocket closed unexpectedly");
+        assert_eq!(
+            TransportError::Disconnected.to_string(),
+            "websocket closed unexpectedly"
+        );
     }
 
     #[test]
@@ -39,7 +42,10 @@ mod tests {
     #[test]
     fn display_response_dropped_includes_id() {
         let e = TransportError::ResponseDropped { id: 42 };
-        assert_eq!(e.to_string(), "response channel dropped before reply (id=42)");
+        assert_eq!(
+            e.to_string(),
+            "response channel dropped before reply (id=42)"
+        );
     }
 
     #[test]

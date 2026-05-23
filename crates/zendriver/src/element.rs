@@ -154,7 +154,11 @@ mod tests {
         });
 
         let id = mock.expect_cmd("Runtime.callFunctionOn").await;
-        mock.reply(id, json!({ "result": { "value": "hello", "type": "string" } })).await;
+        mock.reply(
+            id,
+            json!({ "result": { "value": "hello", "type": "string" } }),
+        )
+        .await;
         let s = fut.await.unwrap().unwrap();
         assert_eq!(s, "hello");
         conn.shutdown();
@@ -173,7 +177,11 @@ mod tests {
         });
 
         let id = mock.expect_cmd("Runtime.callFunctionOn").await;
-        mock.reply(id, json!({ "result": { "value": "<button>x</button>", "type": "string" } })).await;
+        mock.reply(
+            id,
+            json!({ "result": { "value": "<button>x</button>", "type": "string" } }),
+        )
+        .await;
         let s = fut.await.unwrap().unwrap();
         assert_eq!(s, "<button>x</button>");
         conn.shutdown();

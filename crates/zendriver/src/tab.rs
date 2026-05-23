@@ -175,11 +175,8 @@ mod tests {
         mock.reply(id_enable, json!({})).await;
 
         let id_nav = mock.expect_cmd("Page.navigate").await;
-        mock.reply(
-            id_nav,
-            json!({ "errorText": "net::ERR_NAME_NOT_RESOLVED" }),
-        )
-        .await;
+        mock.reply(id_nav, json!({ "errorText": "net::ERR_NAME_NOT_RESOLVED" }))
+            .await;
 
         let res = fut.await.unwrap();
         match res {
