@@ -335,4 +335,65 @@ mod tests {
         shutdown.cancel();
         actor_handle.await.unwrap();
     }
+
+    #[tokio::test]
+    async fn event_fanned_out_to_multiple_subscribers() {
+        let (ws, test_tx, _test_rx) = duplex_pair();
+        let (_cmd_tx, cmd_rx) = mpsc::channel::<OutboundCmd>(8);
+        let (event_tx, _event_rx) = broadcast::channel::<RawEvent>(EVENT_BUS_CAPACITY);
+        let mut sub_a = event_tx.subscribe();
+        let mut sub_b = event_tx.subscribe();
+        let shutdown = CancellationToken::new();
+        let actor_handle = tokio::spawn(run_actor(ws, cmd_rx, event_tx, shutdown.clone()));
+
+        test_tx
+            .send(Ok(Message::text(
+                json!({ "method": "Page.frameStoppedLoading", "params": { "frameId": "F1" } })
+                    .to_string(),
+            )))
+            .await
+            .unwrap();
+
+        let a = sub_a.recv().await.unwrap();
+        let b = sub_b.recv().await.unwrap();
+        assert_eq!(a.method, "Page.frameStoppedLoading");
+        assert_eq!(b.method, "Page.frameStoppedLoading");
+
+        shutdown.cancel();
+        actor_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn lagged_subscriber_recovers_with_lagged_error() {
+        // Small bus to force the subscriber to lag.
+        let (ws, test_tx, _test_rx) = duplex_pair();
+        let (_cmd_tx, cmd_rx) = mpsc::channel::<OutboundCmd>(8);
+        let (event_tx, _event_rx) = broadcast::channel::<RawEvent>(2);
+        let mut sub = event_tx.subscribe();
+        let shutdown = CancellationToken::new();
+        let actor_handle = tokio::spawn(run_actor(ws, cmd_rx, event_tx, shutdown.clone()));
+
+        // Push 5 events while sub doesn't consume.
+        for i in 0..5 {
+            test_tx
+                .send(Ok(Message::text(
+                    json!({ "method": "Test.evt", "params": { "i": i } }).to_string(),
+                )))
+                .await
+                .unwrap();
+        }
+
+        // Give the actor a tick to drain.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        // First recv should be Lagged.
+        let first = sub.recv().await;
+        assert!(matches!(
+            first,
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_))
+        ));
+
+        shutdown.cancel();
+        actor_handle.await.unwrap();
+    }
 }
