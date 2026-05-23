@@ -304,7 +304,9 @@ mod profile_tests {
         assert_eq!(p.per_field.platform, Some(Platform::MacIntel));
         assert_eq!(p.per_field.locale.as_deref(), Some("en-US"));
         assert_eq!(p.per_field.timezone.as_deref(), Some("America/Los_Angeles"));
-        assert!(p.extra_flags.contains(&"--proxy-server=http://x".to_string()));
+        assert!(p
+            .extra_flags
+            .contains(&"--proxy-server=http://x".to_string()));
     }
 
     #[test]

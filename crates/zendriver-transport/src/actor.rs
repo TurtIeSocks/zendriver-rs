@@ -749,11 +749,8 @@ mod tests {
             calls: calls.clone(),
             behavior: ObserverBehavior::Sleep(Duration::from_secs(10)),
         });
-        let conn = spawn_actor_with_observers_and_timeout(
-            ws,
-            vec![obs],
-            Duration::from_millis(100),
-        );
+        let conn =
+            spawn_actor_with_observers_and_timeout(ws, vec![obs], Duration::from_millis(100));
 
         emit_attached(&test_tx, "S-slow").await;
 
@@ -779,7 +776,8 @@ mod tests {
                 behavior: ObserverBehavior::Ok,
             })
         };
-        let conn = spawn_actor_with_observers(ws, vec![make("first"), make("second"), make("third")]);
+        let conn =
+            spawn_actor_with_observers(ws, vec![make("first"), make("second"), make("third")]);
 
         emit_attached(&test_tx, "S-multi").await;
 

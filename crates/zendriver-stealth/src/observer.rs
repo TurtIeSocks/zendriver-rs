@@ -106,10 +106,7 @@ impl TargetObserver for StealthObserver {
 
         if let Some(ref tz) = self.fingerprint.timezone {
             session
-                .call(
-                    "Emulation.setTimezoneOverride",
-                    json!({ "timezoneId": tz }),
-                )
+                .call("Emulation.setTimezoneOverride", json!({ "timezoneId": tz }))
                 .await?;
         }
         if let Some(ref locale) = self.fingerprint.locale {
@@ -199,12 +196,10 @@ mod tests {
             "Page.addScriptToEvaluateOnNewDocument",
             "Runtime.runIfWaitingForDebugger",
         ] {
-            let id = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                mock.expect_cmd(expected),
-            )
-            .await
-            .unwrap_or_else(|_| panic!("did not see {expected} within 2s"));
+            let id =
+                tokio::time::timeout(std::time::Duration::from_secs(2), mock.expect_cmd(expected))
+                    .await
+                    .unwrap_or_else(|_| panic!("did not see {expected} within 2s"));
             mock.reply(id, json!({})).await;
         }
 

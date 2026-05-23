@@ -303,9 +303,7 @@ impl BrowserBuilder {
         .await?;
 
         // 7. Discover initial target via Target.getTargets.
-        let list = conn
-            .call_raw("Target.getTargets", json!({}), None)
-            .await?;
+        let list = conn.call_raw("Target.getTargets", json!({}), None).await?;
         let target_id = list["targetInfos"]
             .as_array()
             .and_then(|arr| {

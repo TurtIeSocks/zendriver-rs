@@ -22,7 +22,8 @@ fn shared_stealth_flags() -> Vec<String> {
         "--disable-renderer-backgrounding".into(),
         "--disable-background-networking".into(),
         "--disable-dev-shm-usage".into(),
-        "--disable-features=IsolateOrigins,DisableLoadExtensionCommandLineSwitch,site-per-process".into(),
+        "--disable-features=IsolateOrigins,DisableLoadExtensionCommandLineSwitch,site-per-process"
+            .into(),
         "--disable-session-crashed-bubble".into(),
         "--disable-search-engine-choice-screen".into(),
         "--remote-allow-origins=*".into(),
@@ -54,7 +55,9 @@ mod tests {
     #[test]
     fn native_profile_includes_webrtc_disable() {
         let flags = flags_for_profile(ProfileKind::Native);
-        assert!(flags.iter().any(|f| f.contains("webrtc-ip-handling-policy")));
+        assert!(flags
+            .iter()
+            .any(|f| f.contains("webrtc-ip-handling-policy")));
     }
 
     #[test]

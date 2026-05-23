@@ -34,12 +34,18 @@ mod tests {
     #[test]
     fn display_system_info_includes_message() {
         let e = StealthError::SystemInfo("permission denied".into());
-        assert_eq!(e.to_string(), "could not read system info: permission denied");
+        assert_eq!(
+            e.to_string(),
+            "could not read system info: permission denied"
+        );
     }
 
     #[test]
     fn display_invalid_override_includes_message() {
         let e = StealthError::InvalidOverride("memory_gb must be > 0".into());
-        assert_eq!(e.to_string(), "invalid fingerprint override: memory_gb must be > 0");
+        assert_eq!(
+            e.to_string(),
+            "invalid fingerprint override: memory_gb must be > 0"
+        );
     }
 }

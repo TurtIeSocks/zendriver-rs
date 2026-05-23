@@ -71,9 +71,15 @@ mod tests {
             s.contains("UNMASKED_VENDOR_WEBGL") || s.contains("37445"),
             "webgl patch missing"
         );
-        assert!(s.contains("Notification.permission"), "permissions patch missing");
+        assert!(
+            s.contains("Notification.permission"),
+            "permissions patch missing"
+        );
         assert!(s.contains("canPlayType"), "codecs patch missing");
-        assert!(s.contains("hardwareConcurrency"), "navigator_props patch missing");
+        assert!(
+            s.contains("hardwareConcurrency"),
+            "navigator_props patch missing"
+        );
         assert!(s.contains("userAgentData"), "user_agent_data patch missing");
         assert!(s.contains("naturalWidth"), "broken_image patch missing");
     }

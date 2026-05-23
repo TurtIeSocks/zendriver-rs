@@ -5,14 +5,16 @@
 use serial_test::serial;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-use zendriver::Browser;
 use zendriver::stealth::StealthProfile;
+use zendriver::Browser;
 
 async fn fixture_with_html(html: &str) -> MockServer {
     let mock = MockServer::start().await;
-    Mock::given(method("GET")).and(path("/"))
+    Mock::given(method("GET"))
+        .and(path("/"))
         .respond_with(ResponseTemplate::new(200).set_body_string(html))
-        .mount(&mock).await;
+        .mount(&mock)
+        .await;
     mock
 }
 
@@ -20,7 +22,11 @@ async fn fixture_with_html(html: &str) -> MockServer {
 #[serial]
 async fn spoofed_profile_patches_navigator_webdriver_to_false() {
     let mock = fixture_with_html("<!doctype html><body>hello</body>").await;
-    let browser = Browser::builder().stealth(StealthProfile::spoofed()).launch().await.unwrap();
+    let browser = Browser::builder()
+        .stealth(StealthProfile::spoofed())
+        .launch()
+        .await
+        .unwrap();
     let tab = browser.main_tab();
     tab.goto(&mock.uri()).await.unwrap();
     tab.wait_for_load().await.unwrap();
@@ -33,7 +39,11 @@ async fn spoofed_profile_patches_navigator_webdriver_to_false() {
 #[serial]
 async fn native_profile_does_not_patch_navigator_webdriver() {
     let mock = fixture_with_html("<!doctype html><body>hello</body>").await;
-    let browser = Browser::builder().stealth(StealthProfile::native()).launch().await.unwrap();
+    let browser = Browser::builder()
+        .stealth(StealthProfile::native())
+        .launch()
+        .await
+        .unwrap();
     let tab = browser.main_tab();
     tab.goto(&mock.uri()).await.unwrap();
     tab.wait_for_load().await.unwrap();
@@ -46,7 +56,11 @@ async fn native_profile_does_not_patch_navigator_webdriver() {
 #[serial]
 async fn ua_string_no_longer_contains_headless_under_native() {
     let mock = fixture_with_html("<!doctype html><body>hello</body>").await;
-    let browser = Browser::builder().stealth(StealthProfile::native()).launch().await.unwrap();
+    let browser = Browser::builder()
+        .stealth(StealthProfile::native())
+        .launch()
+        .await
+        .unwrap();
     let tab = browser.main_tab();
     tab.goto(&mock.uri()).await.unwrap();
     tab.wait_for_load().await.unwrap();
@@ -58,16 +72,29 @@ async fn ua_string_no_longer_contains_headless_under_native() {
 #[tokio::test]
 #[serial]
 async fn isolated_world_eval_does_not_see_page_globals() {
-    let mock = fixture_with_html(r#"
+    let mock = fixture_with_html(
+        r#"
         <!doctype html><script>window.evil = "should not be visible";</script>
-    "#).await;
-    let browser = Browser::builder().stealth(StealthProfile::off()).launch().await.unwrap();
+    "#,
+    )
+    .await;
+    let browser = Browser::builder()
+        .stealth(StealthProfile::off())
+        .launch()
+        .await
+        .unwrap();
     let tab = browser.main_tab();
     tab.goto(&mock.uri()).await.unwrap();
     tab.wait_for_load().await.unwrap();
-    let v: Option<String> = tab.evaluate("typeof window.evil === 'undefined' ? null : window.evil").await.unwrap();
+    let v: Option<String> = tab
+        .evaluate("typeof window.evil === 'undefined' ? null : window.evil")
+        .await
+        .unwrap();
     assert_eq!(v, None, "isolated world should NOT see window.evil");
     let v: String = tab.evaluate_main("window.evil").await.unwrap();
-    assert_eq!(v, "should not be visible", "main world DOES see window.evil");
+    assert_eq!(
+        v, "should not be visible",
+        "main world DOES see window.evil"
+    );
     browser.close().await.unwrap();
 }

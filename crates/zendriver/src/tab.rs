@@ -186,9 +186,7 @@ impl Tab {
         let tree = self.call("Page.getFrameTree", json!({})).await?;
         let frame_id = tree["frameTree"]["frame"]["id"]
             .as_str()
-            .ok_or_else(|| {
-                ZendriverError::Navigation("no main frame in Page.getFrameTree".into())
-            })?
+            .ok_or_else(|| ZendriverError::Navigation("no main frame in Page.getFrameTree".into()))?
             .to_string();
         let res = self
             .call(
@@ -381,14 +379,18 @@ mod tests {
         let id_world = mock.expect_cmd("Page.createIsolatedWorld").await;
         assert_eq!(mock.last_sent()["params"]["frameId"], "MAIN_FRAME");
         assert_eq!(mock.last_sent()["params"]["worldName"], "zendriver-eval");
-        mock.reply(id_world, json!({ "executionContextId": 42 })).await;
+        mock.reply(id_world, json!({ "executionContextId": 42 }))
+            .await;
 
         // 3. Runtime.evaluate with that contextId.
         let id_eval = mock.expect_cmd("Runtime.evaluate").await;
         assert_eq!(mock.last_sent()["params"]["expression"], "1+1");
         assert_eq!(mock.last_sent()["params"]["contextId"], 42);
-        mock.reply(id_eval, json!({ "result": { "value": 2, "type": "number" } }))
-            .await;
+        mock.reply(
+            id_eval,
+            json!({ "result": { "value": 2, "type": "number" } }),
+        )
+        .await;
 
         let n = fut.await.unwrap().unwrap();
         assert_eq!(n, 2);
@@ -413,11 +415,15 @@ mod tests {
         )
         .await;
         let id_world = mock.expect_cmd("Page.createIsolatedWorld").await;
-        mock.reply(id_world, json!({ "executionContextId": 7 })).await;
+        mock.reply(id_world, json!({ "executionContextId": 7 }))
+            .await;
         let id_eval1 = mock.expect_cmd("Runtime.evaluate").await;
         assert_eq!(mock.last_sent()["params"]["contextId"], 7);
-        mock.reply(id_eval1, json!({ "result": { "value": 1, "type": "number" } }))
-            .await;
+        mock.reply(
+            id_eval1,
+            json!({ "result": { "value": 1, "type": "number" } }),
+        )
+        .await;
         assert_eq!(fut1.await.unwrap().unwrap(), 1);
 
         // Second call: must reuse the cached contextId → next outbound
@@ -430,8 +436,11 @@ mod tests {
         let id_eval2 = mock.expect_cmd("Runtime.evaluate").await;
         assert_eq!(mock.last_sent()["params"]["contextId"], 7);
         assert_eq!(mock.last_sent()["params"]["expression"], "2");
-        mock.reply(id_eval2, json!({ "result": { "value": 2, "type": "number" } }))
-            .await;
+        mock.reply(
+            id_eval2,
+            json!({ "result": { "value": 2, "type": "number" } }),
+        )
+        .await;
         assert_eq!(fut2.await.unwrap().unwrap(), 2);
 
         conn.shutdown();
@@ -455,10 +464,14 @@ mod tests {
         )
         .await;
         let id_world = mock.expect_cmd("Page.createIsolatedWorld").await;
-        mock.reply(id_world, json!({ "executionContextId": 7 })).await;
-        let id_eval1 = mock.expect_cmd("Runtime.evaluate").await;
-        mock.reply(id_eval1, json!({ "result": { "value": 1, "type": "number" } }))
+        mock.reply(id_world, json!({ "executionContextId": 7 }))
             .await;
+        let id_eval1 = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id_eval1,
+            json!({ "result": { "value": 1, "type": "number" } }),
+        )
+        .await;
         assert_eq!(fut1.await.unwrap().unwrap(), 1);
 
         // --- Call 2: cached contextId is now stale. Runtime.evaluate
@@ -488,7 +501,8 @@ mod tests {
         .await;
         let id_world2 = mock.expect_cmd("Page.createIsolatedWorld").await;
         assert_eq!(mock.last_sent()["params"]["frameId"], "MAIN_FRAME_2");
-        mock.reply(id_world2, json!({ "executionContextId": 99 })).await;
+        mock.reply(id_world2, json!({ "executionContextId": 99 }))
+            .await;
 
         // Retried Runtime.evaluate uses the fresh contextId.
         let id_eval_retry = mock.expect_cmd("Runtime.evaluate").await;
@@ -507,8 +521,11 @@ mod tests {
         });
         let id_eval3 = mock.expect_cmd("Runtime.evaluate").await;
         assert_eq!(mock.last_sent()["params"]["contextId"], 99);
-        mock.reply(id_eval3, json!({ "result": { "value": 3, "type": "number" } }))
-            .await;
+        mock.reply(
+            id_eval3,
+            json!({ "result": { "value": 3, "type": "number" } }),
+        )
+        .await;
         assert_eq!(fut3.await.unwrap().unwrap(), 3);
 
         conn.shutdown();

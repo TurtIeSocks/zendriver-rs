@@ -33,18 +33,36 @@ impl UserAgentMetadata {
     /// "Chromium;v=N", "Google Chrome;v=N".
     pub fn realistic(platform: Platform, chrome_major: u32, chrome_full: &str) -> Self {
         let brands = vec![
-            Brand { brand: "Not_A Brand".into(),  version: "8".into() },
-            Brand { brand: "Chromium".into(),     version: chrome_major.to_string() },
-            Brand { brand: "Google Chrome".into(), version: chrome_major.to_string() },
+            Brand {
+                brand: "Not_A Brand".into(),
+                version: "8".into(),
+            },
+            Brand {
+                brand: "Chromium".into(),
+                version: chrome_major.to_string(),
+            },
+            Brand {
+                brand: "Google Chrome".into(),
+                version: chrome_major.to_string(),
+            },
         ];
         let full_version_list = vec![
-            Brand { brand: "Not_A Brand".into(),  version: "8.0.0.0".into() },
-            Brand { brand: "Chromium".into(),     version: chrome_full.to_string() },
-            Brand { brand: "Google Chrome".into(), version: chrome_full.to_string() },
+            Brand {
+                brand: "Not_A Brand".into(),
+                version: "8.0.0.0".into(),
+            },
+            Brand {
+                brand: "Chromium".into(),
+                version: chrome_full.to_string(),
+            },
+            Brand {
+                brand: "Google Chrome".into(),
+                version: chrome_full.to_string(),
+            },
         ];
         let (platform_version, architecture, bitness) = match platform {
-            Platform::Win32       => ("15.0.0", "x86", "64"),
-            Platform::MacIntel    => ("10.15.7", "x86", "64"),
+            Platform::Win32 => ("15.0.0", "x86", "64"),
+            Platform::MacIntel => ("10.15.7", "x86", "64"),
             Platform::LinuxX86_64 => ("5.15.0", "x86", "64"),
         };
         Self {
@@ -92,8 +110,8 @@ impl Fingerprint {
     #[allow(clippy::result_large_err)]
     pub fn auto_detect(chrome_executable: &Path) -> Result<Self, StealthError> {
         let platform = detect_platform();
-        let (chrome_major, chrome_full) = probe_chrome_version(chrome_executable)
-            .unwrap_or_else(|e| {
+        let (chrome_major, chrome_full) =
+            probe_chrome_version(chrome_executable).unwrap_or_else(|e| {
                 tracing::warn!("chrome version probe failed: {e}; using fallback");
                 (FALLBACK_CHROME_MAJOR, FALLBACK_CHROME_FULL.to_string())
             });
@@ -164,9 +182,7 @@ fn probe_chrome_version(exe: &Path) -> Result<(u32, String), StealthError> {
     let full = stdout
         .split_whitespace()
         .find(|tok| tok.chars().next().is_some_and(|c| c.is_ascii_digit()))
-        .ok_or_else(|| {
-            StealthError::ChromeVersionDetect(format!("no version token in: {stdout}"))
-        })?
+        .ok_or_else(|| StealthError::ChromeVersionDetect(format!("no version token in: {stdout}")))?
         .to_string();
     let major: u32 = full
         .split('.')
