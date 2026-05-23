@@ -54,3 +54,23 @@ zendriver-transport = { workspace = true, features = ["testing"] }
 [[example]]
 name = "hello"
 required-features = []
+
+[[example]]
+name = "set_user_agent"
+required-features = []
+
+[[example]]
+name = "browserscan"
+required-features = []
+
+[[example]]
+name = "highlight_links"
+required-features = []
+
+[[example]]
+name = "form_demo"
+required-features = []
+
+[[example]]
+name = "wait_for_page"
+required-features = []
