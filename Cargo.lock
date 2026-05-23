@@ -1760,10 +1760,13 @@ dependencies = [
 name = "zendriver"
 version = "0.1.0-dev"
 dependencies = [
+ "bitflags",
  "chromiumoxide_cdp",
  "futures",
  "insta",
  "libc",
+ "rand",
+ "regex",
  "serde",
  "serde_json",
  "serial_test",

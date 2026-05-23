@@ -7,12 +7,14 @@
 pub mod browser;
 pub mod element;
 pub mod error;
+pub mod input;
 pub mod query;
 pub mod tab;
 
 pub use browser::{Browser, BrowserBuilder};
 pub use element::Element;
 pub use error::{BrowserError, Result, ZendriverError};
+pub use input::{Key, KeyModifiers, MouseButton, SpecialKey};
 pub use query::FindBuilder;
 pub use tab::Tab;
 
