@@ -12,4 +12,4 @@ pub mod ua;
 pub use error::StealthError;
 // pub use fingerprint::{Fingerprint, UserAgentMetadata, Brand};
 // pub use observer::StealthObserver;
-// pub use profile::{Platform, ProfileKind, StealthProfile};
+pub use profile::{Platform, ProfileKind, StealthProfile};
