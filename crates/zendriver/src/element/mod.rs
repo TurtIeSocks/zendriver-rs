@@ -1,5 +1,13 @@
 //! `Element` — handle to a DOM node via CDP `RemoteObjectId` / `BackendNodeId`.
 
+pub mod actions;
+pub mod input;
+pub mod isolated_eval;
+pub mod reads;
+pub mod refresh;
+pub mod screenshot;
+pub mod traversal;
+
 use std::sync::Arc;
 
 use serde::de::DeserializeOwned;

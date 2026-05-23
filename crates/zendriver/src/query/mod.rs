@@ -1,5 +1,10 @@
 //! `FindBuilder` — chainable element queries scoped to a `Tab`.
 
+pub mod actionability;
+pub mod modifiers;
+pub mod role;
+pub mod selectors;
+
 use std::time::Duration;
 
 use serde_json::json;
