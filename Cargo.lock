@@ -1760,6 +1760,7 @@ dependencies = [
 name = "zendriver"
 version = "0.1.0-dev"
 dependencies = [
+ "base64",
  "bitflags",
  "chromiumoxide_cdp",
  "futures",

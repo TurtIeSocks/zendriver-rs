@@ -52,6 +52,7 @@ num_cpus           = "1"
 regex              = "1"
 bitflags           = "2"
 rand               = { version = "0.8", default-features = false, features = ["std", "std_rng", "small_rng"] }
+base64             = "0.22"
 
 # Dev-deps
 tokio-test         = { version = "0.4" }

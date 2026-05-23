@@ -163,7 +163,8 @@ mod tests {
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["frameId"], "FRAME_1");
         assert_eq!(sent["params"]["worldName"], "zendriver-eval");
-        mock.reply(id_world, json!({ "executionContextId": 42 })).await;
+        mock.reply(id_world, json!({ "executionContextId": 42 }))
+            .await;
 
         // 3. DOM.resolveNode — re-binds backendNodeId 314 into ctx 42.
         let id_resolve = mock.expect_cmd("DOM.resolveNode").await;

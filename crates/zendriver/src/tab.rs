@@ -3,6 +3,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 use futures::StreamExt;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -274,6 +276,23 @@ impl Tab {
             .as_str()
             .unwrap_or("")
             .to_string())
+    }
+
+    /// Capture a full-viewport PNG screenshot of this tab. Sends
+    /// `Page.captureScreenshot { format: "png" }` and base64-decodes the
+    /// returned `data` field into the raw PNG bytes.
+    ///
+    /// For element-scoped screenshots, see [`Element::screenshot`].
+    pub async fn screenshot(&self) -> Result<Vec<u8>> {
+        let res = self
+            .call("Page.captureScreenshot", json!({ "format": "png" }))
+            .await?;
+        let data = res.get("data").and_then(|v| v.as_str()).ok_or_else(|| {
+            ZendriverError::Navigation("Page.captureScreenshot returned no data".into())
+        })?;
+        BASE64
+            .decode(data)
+            .map_err(|e| ZendriverError::Navigation(format!("invalid base64 in screenshot: {e}")))
     }
 
     /// Detach the target session for this tab.
@@ -629,6 +648,30 @@ mod tests {
         assert_eq!(mock.last_sent()["params"]["sessionId"], "S42");
         mock.reply(id, json!({})).await;
         fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn screenshot_sends_page_capturescreenshot_without_clip_and_decodes_base64() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new(sess, std::sync::Weak::new());
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.screenshot().await }
+        });
+
+        let id = mock.expect_cmd("Page.captureScreenshot").await;
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["format"], "png");
+        // Tab::screenshot must NOT pass a clip — that's Element::screenshot.
+        assert!(sent["params"].get("clip").is_none());
+        // "PNG!" → b"PNG!" once base64-decoded.
+        mock.reply(id, json!({ "data": "UE5HIQ==" })).await;
+
+        let bytes = fut.await.unwrap().unwrap();
+        assert_eq!(bytes, b"PNG!");
         conn.shutdown();
     }
 
