@@ -267,6 +267,14 @@ impl Tab {
     pub fn find(&self) -> crate::query::FindBuilder<'_> {
         crate::query::FindBuilder::new_for_tab(self)
     }
+
+    /// Begin a chainable element query against this tab that returns
+    /// ALL matches. Mirrors `find()` selectors + modifiers (no `nth`),
+    /// terminated with `.many()` (errors on empty) or `.many_or_empty()`
+    /// (returns empty `Vec` instead).
+    pub fn find_all(&self) -> crate::query::FindAllBuilder<'_> {
+        crate::query::FindAllBuilder::new_for_tab(self)
+    }
 }
 
 #[cfg(test)]

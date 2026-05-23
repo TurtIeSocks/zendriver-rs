@@ -235,6 +235,209 @@ impl<'tab> FindBuilder<'tab> {
     }
 }
 
+/// Chainable element query returning ALL matches (rather than the first
+/// / `nth`). Mirrors `FindBuilder` selectors + modifiers, minus `nth`
+/// (which doesn't make sense for a "return everything" terminal).
+///
+/// Selector kinds are mutually exclusive — calling `.css(...)` after
+/// `.xpath(...)` overwrites the prior selector.
+///
+/// Terminals: `.many()` errors when the result is empty;
+/// `.many_or_empty()` returns an empty `Vec` instead.
+pub struct FindAllBuilder<'tab> {
+    pub(crate) tab: &'tab Tab,
+    pub(crate) selector: Option<SelectorKind>,
+    pub(crate) timeout: Duration,
+    pub(crate) visible_only: bool,
+    // Reserved for OOPIF frame-targeted queries. P3 plumbs the field but
+    // resolution still goes through the main frame; cross-frame routing
+    // lands in P4.
+    #[allow(dead_code)]
+    pub(crate) in_frame: Option<String>,
+}
+
+impl<'tab> FindAllBuilder<'tab> {
+    pub(crate) fn new_for_tab(tab: &'tab Tab) -> Self {
+        Self {
+            tab,
+            selector: None,
+            timeout: DEFAULT_TIMEOUT,
+            visible_only: false,
+            in_frame: None,
+        }
+    }
+
+    // -- Selector methods (mutually exclusive — last call wins) --------
+
+    #[must_use]
+    pub fn css(mut self, selector: impl Into<String>) -> Self {
+        self.selector = Some(SelectorKind::Css(selector.into()));
+        self
+    }
+
+    #[must_use]
+    pub fn xpath(mut self, expr: impl Into<String>) -> Self {
+        self.selector = Some(SelectorKind::Xpath(expr.into()));
+        self
+    }
+
+    /// Case-insensitive substring text match. Walks the subtree filtering
+    /// elements whose `innerText` (or `textContent` for hidden nodes)
+    /// contains `needle` after lower-casing both sides.
+    #[must_use]
+    pub fn text(mut self, needle: impl Into<String>) -> Self {
+        self.selector = Some(SelectorKind::Text {
+            needle: needle.into(),
+            exact: false,
+        });
+        self
+    }
+
+    /// Whitespace-collapsed exact text match. Uses XPath
+    /// `normalize-space(.)=<needle>`.
+    #[must_use]
+    pub fn text_exact(mut self, needle: impl Into<String>) -> Self {
+        self.selector = Some(SelectorKind::Text {
+            needle: needle.into(),
+            exact: true,
+        });
+        self
+    }
+
+    /// Text regex match. The supplied `regex::Regex` is serialized to its
+    /// pattern string via `as_str()` and re-parsed on the JS side as
+    /// `new RegExp(pattern, "")`. Use `text_regex_with_flags` to pass
+    /// explicit JS regex flags (e.g. `"i"`, `"im"`).
+    #[must_use]
+    pub fn text_regex(mut self, re: regex::Regex) -> Self {
+        self.selector = Some(SelectorKind::TextRegex {
+            pattern: re.as_str().to_string(),
+            flags: String::new(),
+        });
+        self
+    }
+
+    /// Text regex match with explicit JS-flavored flags string (e.g.
+    /// `"i"` for case-insensitive, `"im"` for case-insensitive +
+    /// multiline). The pattern is interpreted on the JS side via
+    /// `new RegExp(pattern, flags)`.
+    #[must_use]
+    pub fn text_regex_with_flags(
+        mut self,
+        pattern: impl Into<String>,
+        flags: impl Into<String>,
+    ) -> Self {
+        self.selector = Some(SelectorKind::TextRegex {
+            pattern: pattern.into(),
+            flags: flags.into(),
+        });
+        self
+    }
+
+    /// ARIA role match. Compiles to a `[role="..."]` CSS attribute
+    /// selector.
+    #[must_use]
+    pub fn role(mut self, role: AriaRole) -> Self {
+        self.selector = Some(SelectorKind::Role(role, None));
+        self
+    }
+
+    /// ARIA role + accessible name match. Post-filters role candidates
+    /// by computed accessible name via `Accessibility.getPartialAXTree`
+    /// (case-insensitive substring).
+    #[must_use]
+    pub fn role_named(mut self, role: AriaRole, name: impl Into<String>) -> Self {
+        self.selector = Some(SelectorKind::Role(role, Some(name.into())));
+        self
+    }
+
+    // -- Modifier methods ----------------------------------------------
+
+    /// When `true`, candidates that fail `actionability::check_visible`
+    /// are filtered out before being returned. T16 wires the actual
+    /// check; until then this is a no-op (every candidate is considered
+    /// visible).
+    #[must_use]
+    pub fn visible_only(mut self, on: bool) -> Self {
+        self.visible_only = on;
+        self
+    }
+
+    /// Reserved for OOPIF queries — currently a no-op. Cross-frame
+    /// targeting lands in P4.
+    #[must_use]
+    pub fn in_frame(mut self, frame_id: impl Into<String>) -> Self {
+        self.in_frame = Some(frame_id.into());
+        self
+    }
+
+    /// Override the default 10s timeout for the poll loop. The loop
+    /// returns the first non-empty result it observes; on timeout
+    /// `many()` errors with `ElementNotFound` and `many_or_empty()`
+    /// returns an empty `Vec`.
+    #[must_use]
+    pub fn timeout(mut self, dur: Duration) -> Self {
+        self.timeout = dur;
+        self
+    }
+
+    // -- Terminals ------------------------------------------------------
+
+    /// Wait for and return ALL matching elements. Errors with
+    /// `ElementNotFound` if no element matches within the timeout.
+    pub async fn many(self) -> Result<Vec<Element>> {
+        let selector = self.selector.ok_or_else(|| {
+            ZendriverError::Navigation(
+                "FindAllBuilder requires a selector (.css/.xpath/.text/.role/...)".into(),
+            )
+        })?;
+        let deadline = Instant::now() + self.timeout;
+        let tab = self.tab;
+        let scope = QueryScope::Tab(tab);
+        loop {
+            let candidates = selector.resolve_many(&scope).await?;
+
+            // Visible-only filter: TODO(T16) — depends on
+            // `actionability::check_visible`, which depends on
+            // `Element::call_on_main`. Until that lands, treat every
+            // candidate as visible so the wider FindAllBuilder API can
+            // ship.
+            let _ = self.visible_only;
+            let filtered = candidates;
+
+            if !filtered.is_empty() {
+                let elements: Vec<Element> = filtered
+                    .into_iter()
+                    .map(|r| {
+                        Element::synthesize_query(
+                            tab.clone(),
+                            r.backend_node_id,
+                            r.remote_object_id,
+                        )
+                    })
+                    .collect();
+                return Ok(elements);
+            }
+            if Instant::now() >= deadline {
+                return Err(ZendriverError::ElementNotFound {
+                    selector: describe_selector(&selector),
+                });
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+    }
+
+    /// Like `many()`, but returns an empty `Vec` instead of erroring
+    /// when no element matches within the timeout.
+    pub async fn many_or_empty(self) -> Result<Vec<Element>> {
+        match self.many().await {
+            Ok(els) => Ok(els),
+            Err(ZendriverError::ElementNotFound { .. }) => Ok(Vec::new()),
+            Err(e) => Err(e),
+        }
+    }
+}
+
 /// Render a short, log-friendly description of a `SelectorKind` so the
 /// `ElementNotFound { selector }` payload conveys what the user asked
 /// for, regardless of which selector kind they chose.
@@ -529,6 +732,109 @@ mod tests {
         assert!(fb.visible_only);
         assert_eq!(fb.in_frame.as_deref(), Some("F2"));
         assert_eq!(fb.timeout, Duration::from_secs(5));
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn many_returns_all_matches() {
+        // Two-match scenario: many() must return BOTH elements as a Vec
+        // (vs FindBuilder::one which picks one based on nth).
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new(sess, std::sync::Weak::new());
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.find_all().css(".item").many().await }
+        });
+
+        let id_q = mock.expect_cmd("Runtime.evaluate").await;
+        let sent = mock.last_sent()["params"]["expression"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            sent.contains("document.querySelectorAll") && sent.contains(".item"),
+            "expected querySelectorAll with selector, got: {sent}"
+        );
+        mock.reply(
+            id_q,
+            json!({ "result": { "objectId": "RArr", "type": "object", "subtype": "array" } }),
+        )
+        .await;
+
+        let id_p = mock.expect_cmd("Runtime.getProperties").await;
+        assert_eq!(mock.last_sent()["params"]["objectId"], "RArr");
+        mock.reply(
+            id_p,
+            json!({
+                "result": [
+                    { "name": "0", "value": { "objectId": "R0", "type": "object", "subtype": "node" } },
+                    { "name": "1", "value": { "objectId": "R1", "type": "object", "subtype": "node" } },
+                    { "name": "length", "value": { "value": 2, "type": "number" } }
+                ]
+            }),
+        )
+        .await;
+
+        let id_d0 = mock.expect_cmd("DOM.describeNode").await;
+        assert_eq!(mock.last_sent()["params"]["objectId"], "R0");
+        mock.reply(id_d0, json!({ "node": { "backendNodeId": 20 } }))
+            .await;
+        let id_d1 = mock.expect_cmd("DOM.describeNode").await;
+        assert_eq!(mock.last_sent()["params"]["objectId"], "R1");
+        mock.reply(id_d1, json!({ "node": { "backendNodeId": 21 } }))
+            .await;
+
+        let els = fut.await.unwrap().unwrap();
+        assert_eq!(els.len(), 2);
+        assert_eq!(els[0].inner.remote_object_id, "R0");
+        assert_eq!(els[0].inner.backend_node_id, 20);
+        assert_eq!(els[1].inner.remote_object_id, "R1");
+        assert_eq!(els[1].inner.backend_node_id, 21);
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn many_or_empty_returns_empty_vec_on_timeout() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new(sess, std::sync::Weak::new());
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                t.find_all()
+                    .css(".missing")
+                    .timeout(Duration::from_millis(120))
+                    .many_or_empty()
+                    .await
+            }
+        });
+
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(200)) => break,
+                cmd = mock.expect_cmd("Runtime.evaluate") => {
+                    mock.reply(
+                        cmd,
+                        json!({ "result": { "objectId": "RArrEmpty", "type": "object", "subtype": "array" } }),
+                    )
+                    .await;
+                    let id_p = mock.expect_cmd("Runtime.getProperties").await;
+                    mock.reply(id_p, json!({ "result": [
+                        { "name": "length", "value": { "value": 0, "type": "number" } }
+                    ] })).await;
+                }
+            }
+        }
+
+        let res = fut.await.unwrap().unwrap();
+        assert!(
+            res.is_empty(),
+            "expected empty Vec on timeout, got len={}",
+            res.len()
+        );
         conn.shutdown();
     }
 
