@@ -17,4 +17,4 @@ pub mod testing;
 pub use connection::Connection;
 pub use error::TransportError;
 pub use frame::{CdpCommand, CdpInbound, CdpRpcError, RawEvent};
-// pub use session::SessionHandle;
+pub use session::SessionHandle;
