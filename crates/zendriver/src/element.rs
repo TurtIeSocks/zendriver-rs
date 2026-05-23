@@ -94,6 +94,20 @@ impl Element {
             .await?;
         Ok(())
     }
+
+    pub async fn inner_text(&self) -> Result<String> {
+        let res = self
+            .call_on("function(){ return this.innerText; }", json!([]))
+            .await?;
+        Ok(res["value"].as_str().unwrap_or("").to_string())
+    }
+
+    pub async fn outer_html(&self) -> Result<String> {
+        let res = self
+            .call_on("function(){ return this.outerHTML; }", json!([]))
+            .await?;
+        Ok(res["value"].as_str().unwrap_or("").to_string())
+    }
 }
 
 #[cfg(test)]
@@ -124,6 +138,44 @@ mod tests {
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
         fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn inner_text_returns_value_field() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new(sess);
+        let el = Element::new(tab, 1, "R1".to_string());
+
+        let fut = tokio::spawn({
+            let e = el.clone();
+            async move { e.inner_text().await }
+        });
+
+        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        mock.reply(id, json!({ "result": { "value": "hello", "type": "string" } })).await;
+        let s = fut.await.unwrap().unwrap();
+        assert_eq!(s, "hello");
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn outer_html_returns_value_field() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new(sess);
+        let el = Element::new(tab, 1, "R1".to_string());
+
+        let fut = tokio::spawn({
+            let e = el.clone();
+            async move { e.outer_html().await }
+        });
+
+        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        mock.reply(id, json!({ "result": { "value": "<button>x</button>", "type": "string" } })).await;
+        let s = fut.await.unwrap().unwrap();
+        assert_eq!(s, "<button>x</button>");
         conn.shutdown();
     }
 }
