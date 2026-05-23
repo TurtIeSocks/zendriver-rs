@@ -96,6 +96,26 @@ impl Element {
         Ok(res["result"].clone())
     }
 
+    /// Invoke a JS function in the main world with this element bound as
+    /// the first positional argument. Accepts a function declaration whose
+    /// first parameter is the element handle (`function(el, ...rest){...}`)
+    /// and an `args` JSON array of additional `Runtime.callFunctionOn`
+    /// argument descriptors that follow the element. Returns the raw
+    /// `result` RemoteObject (caller picks `value` if `returnByValue`).
+    ///
+    /// Placeholder — T16 lands the full `ElementOrigin`-aware impl. For
+    /// now this delegates to the existing P2 `Runtime.callFunctionOn`
+    /// path, prepending the element's `objectId` to the argument list so
+    /// the `el` parameter resolves on the JS side.
+    #[allow(dead_code)] // First callers (actionability predicates) wire up in T15.
+    pub(crate) async fn call_on_main(&self, function: &str, args: Value) -> Result<Value> {
+        let mut full_args = vec![json!({ "objectId": self.inner.remote_object_id })];
+        if let Some(extra) = args.as_array() {
+            full_args.extend(extra.iter().cloned());
+        }
+        self.call_on(function, Value::Array(full_args)).await
+    }
+
     /// Evaluate a JS expression in the main world where `el` is bound to this
     /// element handle. Uses `Runtime.callFunctionOn` against the element's
     /// remote object, which lives in whatever world it was created in (main
