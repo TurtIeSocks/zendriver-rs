@@ -396,4 +396,35 @@ mod tests {
         shutdown.cancel();
         actor_handle.await.unwrap();
     }
+
+    #[tokio::test]
+    async fn shutdown_drains_pending_with_shutdown_error() {
+        let (ws, _test_tx, _test_rx) = duplex_pair();
+        let (cmd_tx, cmd_rx) = mpsc::channel::<OutboundCmd>(8);
+        let (event_tx, _event_rx) = broadcast::channel::<RawEvent>(EVENT_BUS_CAPACITY);
+        let shutdown = CancellationToken::new();
+        let actor_handle = tokio::spawn(run_actor(ws, cmd_rx, event_tx, shutdown.clone()));
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        cmd_tx
+            .send(OutboundCmd {
+                method: "Page.navigate".into(),
+                params: json!({ "url": "https://x.test" }),
+                session_id: None,
+                reply: reply_tx,
+            })
+            .await
+            .unwrap();
+
+        // Give actor time to register the pending entry before cancelling.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        shutdown.cancel();
+
+        let res = reply_rx.await.unwrap();
+        let err = res.unwrap_err();
+        assert_eq!(err.code, -32001);
+        assert!(err.message.contains("shut down"));
+
+        actor_handle.await.unwrap();
+    }
 }
