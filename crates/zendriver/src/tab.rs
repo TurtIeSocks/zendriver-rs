@@ -104,6 +104,24 @@ impl Tab {
             .unwrap_or(Value::Null);
         serde_json::from_value(value).map_err(ZendriverError::Serde)
     }
+
+    /// Get the tab's current URL.
+    pub async fn url(&self) -> Result<url::Url> {
+        let res = self.call("Target.getTargetInfo", json!({})).await?;
+        let s = res["targetInfo"]["url"]
+            .as_str()
+            .ok_or_else(|| ZendriverError::Navigation("target has no url".into()))?;
+        url::Url::parse(s).map_err(|e| ZendriverError::Navigation(e.to_string()))
+    }
+
+    /// Get the tab's `<title>`.
+    pub async fn title(&self) -> Result<String> {
+        let res = self.call("Target.getTargetInfo", json!({})).await?;
+        Ok(res["targetInfo"]["title"]
+            .as_str()
+            .unwrap_or("")
+            .to_string())
+    }
 }
 
 #[cfg(test)]
@@ -210,6 +228,50 @@ mod tests {
             Err(ZendriverError::JsException(m)) => assert!(m.contains("Error: boom")),
             other => panic!("unexpected: {other:?}"),
         }
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn url_returns_parsed_url_from_target_info() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.url().await }
+        });
+
+        let id = mock.expect_cmd("Target.getTargetInfo").await;
+        mock.reply(
+            id,
+            json!({ "targetInfo": { "url": "https://example.com/x", "title": "ok" } }),
+        )
+        .await;
+        let u = fut.await.unwrap().unwrap();
+        assert_eq!(u.as_str(), "https://example.com/x");
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn title_returns_string_from_target_info() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.title().await }
+        });
+
+        let id = mock.expect_cmd("Target.getTargetInfo").await;
+        mock.reply(
+            id,
+            json!({ "targetInfo": { "url": "https://x", "title": "Hello" } }),
+        )
+        .await;
+        let s = fut.await.unwrap().unwrap();
+        assert_eq!(s, "Hello");
         conn.shutdown();
     }
 }
