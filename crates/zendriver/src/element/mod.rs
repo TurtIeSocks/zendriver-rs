@@ -127,6 +127,30 @@ impl Element {
         }
     }
 
+    /// Construct an `Element` produced by traversing from `parent_origin`
+    /// via `kind` (e.g. `Parent` or `NthChild(i)`). P3 stores the origin
+    /// for completeness; full chain-refresh lands in P4 (today, T17's
+    /// `refresh` returns `NotRefreshable` for `Traversal` origins).
+    pub(crate) fn synthesize_traversal(
+        tab: Tab,
+        backend_node_id: i64,
+        remote_object_id: String,
+        parent_origin: ElementOrigin,
+        kind: TraversalKind,
+    ) -> Self {
+        Self {
+            inner: Arc::new(ElementInner {
+                tab,
+                backend_node_id: Mutex::new(Some(backend_node_id)),
+                remote_object_id: Mutex::new(Some(remote_object_id)),
+                origin: ElementOrigin::Traversal {
+                    parent: Box::new(parent_origin),
+                    kind,
+                },
+            }),
+        }
+    }
+
     /// Accessor for the parent `Tab` this element was queried from.
     pub fn tab(&self) -> &Tab {
         &self.inner.tab
