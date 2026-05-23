@@ -1585,6 +1585,7 @@ dependencies = [
  "chromiumoxide_cdp",
  "futures",
  "insta",
+ "libc",
  "serde",
  "serde_json",
  "serial_test",

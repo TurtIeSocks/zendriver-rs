@@ -297,8 +297,24 @@ impl Browser {
         self.inner.conn.shutdown();
         let mut child_guard = self.inner.child.lock().await;
         if let Some(mut child) = child_guard.take() {
-            // Try graceful exit first.
-            let _ = child.start_kill();
+            // Try graceful exit first. On Unix, tokio's `start_kill` is
+            // `kill(pid, SIGKILL)` — too aggressive for graceful shutdown.
+            // We send SIGTERM ourselves and fall back to SIGKILL on timeout.
+            #[cfg(unix)]
+            {
+                if let Some(pid) = child.id() {
+                    // SIGTERM gives Chrome a chance to flush + clean up; SIGKILL fallback below.
+                    // Safety: just sending a signal to a known pid; no shared state.
+                    #[allow(unsafe_code)]
+                    unsafe {
+                        libc::kill(pid as i32, libc::SIGTERM);
+                    }
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = child.start_kill(); // best-effort on non-Unix
+            }
             match timeout(SHUTDOWN_GRACE, child.wait()).await {
                 Ok(Ok(_status)) => {}
                 _ => {

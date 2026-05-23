@@ -32,6 +32,9 @@ url.workspace                 = true
 tempfile.workspace            = true
 futures.workspace             = true
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tokio-test.workspace          = true
 insta.workspace               = true
