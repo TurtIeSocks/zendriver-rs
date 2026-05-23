@@ -22,6 +22,18 @@ pub enum TransportError {
     Io(#[from] std::io::Error),
 }
 
+/// Result of a CDP call: either a transport-level failure, or a structured
+/// JSON-RPC error returned by Chrome. Higher layers (the `zendriver` crate)
+/// map `Rpc` into the typed `ZendriverError::Cdp` variant.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum CallError {
+    #[error("transport: {0}")]
+    Transport(#[from] TransportError),
+    #[error("CDP RPC error [{0}] {1}")]
+    Rpc(i32, String, Option<serde_json::Value>),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

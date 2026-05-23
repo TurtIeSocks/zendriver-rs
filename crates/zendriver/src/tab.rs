@@ -129,11 +129,7 @@ impl Tab {
         self.inner
             .session
             .connection()
-            .call_raw(
-                "Target.detachFromTarget",
-                json!({ "sessionId": sid }),
-                None,
-            )
+            .call_raw("Target.detachFromTarget", json!({ "sessionId": sid }), None)
             .await?;
         Ok(())
     }

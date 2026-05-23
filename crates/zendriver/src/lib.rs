@@ -17,7 +17,7 @@ pub use query::FindBuilder;
 pub use tab::Tab;
 
 // Re-export selected transport types for advanced users.
-pub use zendriver_transport::{Connection, SessionHandle, TransportError};
+pub use zendriver_transport::{CallError, Connection, SessionHandle, TransportError};
 
 /// Convenience entry point: launch a Chrome instance with default settings.
 ///

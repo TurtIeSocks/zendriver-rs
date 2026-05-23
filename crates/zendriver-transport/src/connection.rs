@@ -10,8 +10,8 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_util::sync::CancellationToken;
 
 use crate::actor::{run_actor, OutboundCmd, EVENT_BUS_CAPACITY};
-use crate::error::TransportError;
-use crate::frame::{CdpRpcError, RawEvent};
+use crate::error::{CallError, TransportError};
+use crate::frame::RawEvent;
 
 /// Cheap-to-clone handle to the connection actor. All `Tab`s and `Element`s
 /// hold one of these (via `Arc<...>`); the actor itself runs in a separate
@@ -33,12 +33,16 @@ impl Connection {
     /// `method` is the dotted CDP method name (e.g. `"Page.navigate"`).
     /// `params` is the JSON value for the command's parameters.
     /// `session_id` routes the command to a particular target's session.
+    ///
+    /// Returns [`CallError::Rpc`] when Chrome answered with a JSON-RPC error
+    /// (preserving `code`, `message`, and `data`), and [`CallError::Transport`]
+    /// for connection-level failures.
     pub async fn call_raw(
         &self,
         method: impl Into<String>,
         params: Value,
         session_id: Option<String>,
-    ) -> Result<Value, TransportError> {
+    ) -> Result<Value, CallError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.inner
             .cmd_tx
@@ -52,8 +56,16 @@ impl Connection {
             .map_err(|_| TransportError::Shutdown)?;
         match reply_rx.await {
             Ok(Ok(v)) => Ok(v),
-            Ok(Err(rpc_err)) => Err(rpc_err_to_transport(rpc_err)),
-            Err(_) => Err(TransportError::Shutdown),
+            Ok(Err(rpc_err)) => {
+                // Preserve the transport-shutdown sentinel for shutdown-drained
+                // pendings; everything else surfaces as a typed RPC error.
+                if rpc_err.code == -32001 && rpc_err.message.contains("shut down") {
+                    Err(CallError::Transport(TransportError::Shutdown))
+                } else {
+                    Err(CallError::Rpc(rpc_err.code, rpc_err.message, rpc_err.data))
+                }
+            }
+            Err(_) => Err(CallError::Transport(TransportError::Shutdown)),
         }
     }
 
@@ -95,22 +107,6 @@ impl Connection {
     /// shutdown token directly.
     pub fn shutdown_token(&self) -> CancellationToken {
         self.inner.shutdown.clone()
-    }
-}
-
-fn rpc_err_to_transport(e: CdpRpcError) -> TransportError {
-    // Mapping is mostly for the transport-level cases that round-trip; higher
-    // layers map richer CDP errors. Here we just preserve the message.
-    if e.code == -32001 && e.message.contains("shut down") {
-        TransportError::Shutdown
-    } else {
-        // Embed the JSON-RPC error as an io error so it survives the trait
-        // bounds; richer mapping is the job of the zendriver crate.
-        TransportError::Io(std::io::Error::other(format!(
-            "[{code}] {msg}",
-            code = e.code,
-            msg = e.message
-        )))
     }
 }
 

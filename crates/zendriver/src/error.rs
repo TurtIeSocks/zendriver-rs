@@ -3,6 +3,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use zendriver_transport::CallError;
+
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ZendriverError {
@@ -38,6 +40,33 @@ pub enum ZendriverError {
     Io(#[from] std::io::Error),
 }
 
+impl From<CallError> for ZendriverError {
+    fn from(e: CallError) -> Self {
+        match e {
+            CallError::Transport(t) => ZendriverError::Transport(t),
+            CallError::Rpc(code, message, data) => {
+                // Special-case: Chrome returns -32000 "Cannot find context in
+                // which to perform call" when the page navigated out from
+                // under us. That's semantically a navigation failure, not a
+                // raw protocol error.
+                if code == -32000 && message.contains("Cannot find context") {
+                    ZendriverError::Navigation(message)
+                } else {
+                    ZendriverError::Cdp {
+                        code,
+                        message,
+                        data,
+                    }
+                }
+            }
+            // `CallError` is `#[non_exhaustive]`; if a new variant lands and
+            // higher layers need to handle it specially, this fallback keeps
+            // information by wrapping the Display in a transport-io error.
+            other => ZendriverError::Io(std::io::Error::other(other.to_string())),
+        }
+    }
+}
+
 pub type Result<T, E = ZendriverError> = std::result::Result<T, E>;
 
 #[derive(Debug, thiserror::Error)]
@@ -63,6 +92,7 @@ pub enum BrowserError {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -104,6 +134,41 @@ mod tests {
         let ze: ZendriverError = te.into();
         assert!(matches!(ze, ZendriverError::Transport(_)));
         assert!(ze.to_string().contains("connection shut down"));
+    }
+
+    #[test]
+    fn from_call_error_rpc_minus_32602_maps_to_cdp_variant() {
+        let ce = CallError::Rpc(-32602, "Invalid params".into(), None);
+        let ze: ZendriverError = ce.into();
+        match ze {
+            ZendriverError::Cdp {
+                code,
+                message,
+                data,
+            } => {
+                assert_eq!(code, -32602);
+                assert_eq!(message, "Invalid params");
+                assert!(data.is_none());
+            }
+            other => panic!("expected Cdp, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_call_error_cannot_find_context_maps_to_navigation() {
+        let ce = CallError::Rpc(-32000, "Cannot find context with specified id".into(), None);
+        let ze: ZendriverError = ce.into();
+        match ze {
+            ZendriverError::Navigation(m) => assert!(m.contains("Cannot find context")),
+            other => panic!("expected Navigation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_call_error_transport_maps_to_transport() {
+        let ce = CallError::Transport(zendriver_transport::TransportError::Shutdown);
+        let ze: ZendriverError = ce.into();
+        assert!(matches!(ze, ZendriverError::Transport(_)));
     }
 
     #[test]

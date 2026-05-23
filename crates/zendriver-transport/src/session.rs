@@ -8,7 +8,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::connection::Connection;
-use crate::error::TransportError;
+use crate::error::CallError;
 use crate::frame::RawEvent;
 
 #[derive(Clone)]
@@ -40,11 +40,7 @@ impl SessionHandle {
     }
 
     /// Send a CDP command routed to this session.
-    pub async fn call(
-        &self,
-        method: impl Into<String>,
-        params: Value,
-    ) -> Result<Value, TransportError> {
+    pub async fn call(&self, method: impl Into<String>, params: Value) -> Result<Value, CallError> {
         self.inner
             .conn
             .call_raw(method, params, Some(self.inner.session_id.clone()))
