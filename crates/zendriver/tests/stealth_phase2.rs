@@ -130,3 +130,36 @@ async fn spoofed_passes_intoli_basic_test() {
     assert!(fails.is_empty(), "intoli basic test fails: {fails:?}");
     browser.close().await.expect("close");
 }
+
+#[tokio::test]
+#[serial]
+async fn native_fails_sannysoft_navigator_webdriver_but_passes_user_agent() {
+    // Opposite-direction assertion: the native profile honors its
+    // "no JS patches" contract while still scrubbing the headless UA.
+    let browser = Browser::builder()
+        .stealth(StealthProfile::native())
+        .headless(true)
+        .launch()
+        .await
+        .expect("launch");
+    let tab = browser.main_tab();
+    tab.goto("https://bot.sannysoft.com").await.expect("goto");
+    tab.wait_for_load().await.expect("load");
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    // UA row should pass (HeadlessChrome scrubbed).
+    let ua: String = tab.evaluate_main("navigator.userAgent").await.expect("ua");
+    assert!(
+        !ua.contains("HeadlessChrome"),
+        "native profile must scrub UA: got {ua}"
+    );
+
+    // WebDriver row should fail (native applies no JS patch for webdriver).
+    let wd: bool = tab.evaluate_main("navigator.webdriver").await.expect("wd");
+    assert!(
+        wd,
+        "native profile must NOT hide webdriver (would defeat the 'no JS' contract)"
+    );
+
+    browser.close().await.expect("close");
+}
