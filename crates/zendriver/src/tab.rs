@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt;
+use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use tokio::time::timeout;
 use tracing::trace;
@@ -72,6 +73,37 @@ impl Tab {
             .ok_or_else(|| ZendriverError::Navigation("page event stream closed".into()))?;
         Ok(())
     }
+
+    /// Evaluate a JavaScript expression in the tab's main frame. The result
+    /// is deserialized into `T`. Throws `JsException` if the expression
+    /// raises.
+    pub async fn evaluate<T: DeserializeOwned>(&self, js: impl AsRef<str>) -> Result<T> {
+        let res = self
+            .call(
+                "Runtime.evaluate",
+                json!({
+                    "expression": js.as_ref(),
+                    "returnByValue": true,
+                    "awaitPromise": true,
+                }),
+            )
+            .await?;
+        if let Some(details) = res.get("exceptionDetails") {
+            let msg = details
+                .get("exception")
+                .and_then(|e| e.get("description"))
+                .and_then(|d| d.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            return Err(ZendriverError::JsException(msg));
+        }
+        let value = res
+            .get("result")
+            .and_then(|r| r.get("value"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        serde_json::from_value(value).map_err(ZendriverError::Serde)
+    }
 }
 
 #[cfg(test)]
@@ -126,6 +158,56 @@ mod tests {
         let res = fut.await.unwrap();
         match res {
             Err(ZendriverError::Navigation(m)) => assert!(m.contains("ERR_NAME_NOT_RESOLVED")),
+            other => panic!("unexpected: {other:?}"),
+        }
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn evaluate_returns_typed_value() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.evaluate::<i32>("1+1").await }
+        });
+
+        let id = mock.expect_cmd("Runtime.evaluate").await;
+        assert_eq!(mock.last_sent()["params"]["expression"], "1+1");
+        mock.reply(id, json!({ "result": { "value": 2, "type": "number" } }))
+            .await;
+        let n = fut.await.unwrap().unwrap();
+        assert_eq!(n, 2);
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn evaluate_returns_js_exception_when_chrome_reports_one() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.evaluate::<i32>("throw new Error('boom')").await }
+        });
+
+        let id = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id,
+            json!({
+                "result": { "type": "object", "subtype": "error" },
+                "exceptionDetails": {
+                    "exception": { "description": "Error: boom\n    at <anonymous>:1:7" }
+                }
+            }),
+        )
+        .await;
+        let res = fut.await.unwrap();
+        match res {
+            Err(ZendriverError::JsException(m)) => assert!(m.contains("Error: boom")),
             other => panic!("unexpected: {other:?}"),
         }
         conn.shutdown();
