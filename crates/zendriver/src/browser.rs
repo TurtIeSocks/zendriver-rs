@@ -6,12 +6,14 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde_json::json;
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
 use tracing::{debug, info};
-use zendriver_transport::{Connection, SessionHandle};
+use zendriver_stealth::{StealthObserver, StealthProfile};
+use zendriver_transport::{Connection, SessionHandle, TargetObserver};
 
 use crate::error::{BrowserError, ZendriverError};
 use crate::tab::Tab;
@@ -109,18 +111,26 @@ pub(crate) fn parse_devtools_line(line: &str) -> Option<String> {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Default, Clone)]
 pub struct BrowserBuilder {
     pub(crate) headless: Option<bool>,
     pub(crate) executable: Option<PathBuf>,
     pub(crate) user_data_dir: Option<PathBuf>,
     pub(crate) extra_args: Vec<String>,
+    pub(crate) stealth: Option<StealthProfile>,
+    pub(crate) extra_observers: Vec<Arc<dyn TargetObserver>>,
 }
 
 impl BrowserBuilder {
+    /// Builder seeded with the default `StealthProfile::native()` profile.
+    /// Pass `.stealth(StealthProfile::off())` to opt out, or
+    /// `.stealth(StealthProfile::spoofed())` for the full anti-detection set.
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            stealth: Some(StealthProfile::native()),
+            ..Self::default()
+        }
     }
 
     #[must_use]
@@ -150,6 +160,22 @@ impl BrowserBuilder {
     #[must_use]
     pub fn args(mut self, flags: impl IntoIterator<Item = String>) -> Self {
         self.extra_args.extend(flags);
+        self
+    }
+
+    /// Override the default `StealthProfile::native()` profile. Pass
+    /// `StealthProfile::off()` to disable stealth entirely.
+    #[must_use]
+    pub fn stealth(mut self, profile: StealthProfile) -> Self {
+        self.stealth = Some(profile);
+        self
+    }
+
+    /// Register an additional `TargetObserver` that fires on each new attached
+    /// page target. The stealth observer (if any) is added before user observers.
+    #[must_use]
+    pub fn observer(mut self, obs: Arc<dyn TargetObserver>) -> Self {
+        self.extra_observers.push(obs);
         self
     }
 
@@ -187,13 +213,36 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 impl BrowserBuilder {
     /// Spawn Chrome and attach. Returns once the main tab is bound.
+    ///
+    /// When a `StealthProfile` is set (the default), this:
+    /// 1. Resolves a `Fingerprint` from the resolved Chrome executable.
+    /// 2. Prepends the profile's `StealthObserver` to the observer chain.
+    /// 3. Appends the profile's stealth flags to the launch argv.
+    /// 4. Sends `Target.setAutoAttach { waitForDebuggerOnStart: true }` at
+    ///    browser scope so the actor can route pauses through observers
+    ///    before any page script runs.
     pub async fn launch(self) -> Result<Browser, ZendriverError> {
+        // 1. Resolve Chrome executable.
         let exe = match self.executable.clone() {
             Some(p) => p,
             None => find_chrome_executable()?,
         };
 
-        // Allocate user_data_dir (or use a TempDir we keep alive until shutdown).
+        // 2. Resolve fingerprint + build observer chain + profile flags.
+        let (observers, extra_flags): (Vec<Arc<dyn TargetObserver>>, Vec<String>) =
+            if let Some(ref profile) = self.stealth {
+                let fp = profile.resolve_fingerprint(&exe)?;
+                let stealth_obs: Arc<dyn TargetObserver> =
+                    Arc::new(StealthObserver::new(profile.clone(), fp));
+                let mut obs_vec = Vec::with_capacity(1 + self.extra_observers.len());
+                obs_vec.push(stealth_obs);
+                obs_vec.extend(self.extra_observers.iter().cloned());
+                (obs_vec, profile.build_flags())
+            } else {
+                (self.extra_observers.clone(), Vec::new())
+            };
+
+        // 3. Allocate user_data_dir (or use a TempDir we keep alive until shutdown).
         let (user_data_path, owned_tmp) = match self.user_data_dir.clone() {
             Some(p) => (p, None),
             None => {
@@ -205,9 +254,11 @@ impl BrowserBuilder {
             }
         };
 
-        let flags = self.build_flags(&user_data_path);
+        let mut flags = self.build_flags(&user_data_path);
+        flags.extend(extra_flags);
         info!(executable = %exe.display(), "launching chrome");
 
+        // 4. Spawn chrome + parse WS URL.
         let mut cmd = Command::new(&exe);
         cmd.args(&flags)
             .stdin(Stdio::null())
@@ -233,12 +284,27 @@ impl BrowserBuilder {
         .await
         .map_err(|_| BrowserError::WsTimeout)??;
 
+        // 5. Connect with observers.
         debug!(ws_url = %ws_url, "connecting to chrome");
-        let conn = zendriver_transport::connection::connect(&ws_url).await?;
+        let conn = zendriver_transport::connect_with_observers(&ws_url, observers).await?;
 
-        // Attach to the first target. We discover it via Target.getTargets.
+        // 6. Enable auto-attach with debugger-pause BEFORE attaching to the
+        // initial target. Sent at browser scope (no session_id) so it covers
+        // both the initial target and any subsequently-opened pages/iframes.
+        conn.call_raw(
+            "Target.setAutoAttach",
+            json!({
+                "autoAttach": true,
+                "waitForDebuggerOnStart": true,
+                "flatten": true,
+            }),
+            None,
+        )
+        .await?;
+
+        // 7. Discover initial target via Target.getTargets.
         let list = conn
-            .call_raw("Target.getTargets", serde_json::json!({}), None)
+            .call_raw("Target.getTargets", json!({}), None)
             .await?;
         let target_id = list["targetInfos"]
             .as_array()
@@ -251,10 +317,13 @@ impl BrowserBuilder {
             .ok_or_else(|| ZendriverError::Navigation("no initial target found".into()))?
             .to_string();
 
+        // 8. Attach to the initial target. This triggers `Target.attachedToTarget`
+        // which the actor routes through observers (`on_target_attached`) and
+        // then releases via `Runtime.runIfWaitingForDebugger`.
         let attach = conn
             .call_raw(
                 "Target.attachToTarget",
-                serde_json::json!({ "targetId": target_id, "flatten": true }),
+                json!({ "targetId": target_id, "flatten": true }),
                 None,
             )
             .await?;
@@ -263,6 +332,7 @@ impl BrowserBuilder {
             .ok_or_else(|| ZendriverError::Navigation("attach returned no sessionId".into()))?
             .to_string();
 
+        // 9. Wrap session in Tab; return Browser.
         let session = SessionHandle::new(conn.clone(), session_id);
         let main_tab = Tab::new(session);
 
