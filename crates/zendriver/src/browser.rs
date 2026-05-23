@@ -16,6 +16,7 @@ use zendriver_stealth::{StealthObserver, StealthProfile};
 use zendriver_transport::{Connection, SessionHandle, TargetObserver};
 
 use crate::error::{BrowserError, ZendriverError};
+use crate::input::InputController;
 use crate::tab::Tab;
 
 /// Look for a Chromium-family binary on PATH and in conventional locations.
@@ -206,6 +207,7 @@ pub(crate) struct BrowserInner {
     pub(crate) main_tab: Tab,
     pub(crate) child: tokio::sync::Mutex<Option<Child>>,
     pub(crate) _user_data: Option<TempDir>,
+    pub(crate) input: Arc<InputController>,
 }
 
 const WS_ENDPOINT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -330,18 +332,37 @@ impl BrowserBuilder {
             .ok_or_else(|| ZendriverError::Navigation("attach returned no sessionId".into()))?
             .to_string();
 
-        // 9. Wrap session in Tab; return Browser.
-        let session = SessionHandle::new(conn.clone(), session_id);
-        let main_tab = Tab::new(session);
+        // 9. Build the per-Browser InputController from the active
+        // StealthProfile (or zero-overhead `native` when stealth is off).
+        let input_profile = self
+            .stealth
+            .as_ref()
+            .map_or_else(zendriver_stealth::InputProfile::native, |sp| {
+                sp.input_profile()
+            });
+        let input = InputController::new(input_profile);
 
-        Ok(Browser {
-            inner: Arc::new(BrowserInner {
-                conn,
-                main_tab,
-                child: tokio::sync::Mutex::new(Some(child)),
-                _user_data: owned_tmp,
+        // 10. Wrap session in Tab; return Browser.
+        //
+        // `Arc::new_cyclic` is the canonical pattern for building
+        // self-referential Arc graphs: the inner closure receives a
+        // `Weak<BrowserInner>` it can hand to the Tab so Element actions
+        // can later `upgrade()` back to the owning Browser's
+        // InputController without forming a strong cycle.
+        let browser = Browser {
+            inner: Arc::new_cyclic(|weak: &std::sync::Weak<BrowserInner>| {
+                let session = SessionHandle::new(conn.clone(), session_id);
+                let main_tab = Tab::new(session, weak.clone());
+                BrowserInner {
+                    conn,
+                    main_tab,
+                    child: tokio::sync::Mutex::new(Some(child)),
+                    _user_data: owned_tmp,
+                    input,
+                }
             }),
-        })
+        };
+        Ok(browser)
     }
 }
 
@@ -356,6 +377,14 @@ impl Browser {
 
     pub fn cdp(&self) -> &Connection {
         &self.inner.conn
+    }
+
+    /// The per-Browser `InputController` shared across all Tabs spawned
+    /// from this Browser. Element actions (`click`, `type_text`, etc.)
+    /// read from it to coordinate pointer position + modifier state.
+    #[must_use]
+    pub fn input(&self) -> &Arc<InputController> {
+        &self.inner.input
     }
 
     /// Graceful shutdown: cancel the transport, send SIGTERM to Chrome,

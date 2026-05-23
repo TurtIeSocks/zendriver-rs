@@ -118,7 +118,7 @@ mod tests {
     async fn one_returns_element_when_query_selector_matches() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess);
+        let tab = Tab::new(sess, std::sync::Weak::new());
 
         let fut = tokio::spawn({
             let t = tab.clone();
@@ -150,7 +150,7 @@ mod tests {
     async fn one_returns_element_not_found_when_query_returns_null() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess);
+        let tab = Tab::new(sess, std::sync::Weak::new());
 
         let fut = tokio::spawn({
             let t = tab.clone();
@@ -186,7 +186,7 @@ mod tests {
     async fn one_or_none_returns_none_on_timeout() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess);
+        let tab = Tab::new(sess, std::sync::Weak::new());
 
         let fut = tokio::spawn({
             let t = tab.clone();

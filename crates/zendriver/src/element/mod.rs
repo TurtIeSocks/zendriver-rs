@@ -137,7 +137,7 @@ mod tests {
     async fn click_calls_runtime_callfunctionon_with_this_dot_click() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess);
+        let tab = Tab::new(sess, std::sync::Weak::new());
         let el = Element::new(tab.clone(), 99, "R1".to_string());
 
         let fut = tokio::spawn({
@@ -162,7 +162,7 @@ mod tests {
     async fn inner_text_returns_value_field() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess);
+        let tab = Tab::new(sess, std::sync::Weak::new());
         let el = Element::new(tab, 1, "R1".to_string());
 
         let fut = tokio::spawn({
@@ -185,7 +185,7 @@ mod tests {
     async fn outer_html_returns_value_field() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess);
+        let tab = Tab::new(sess, std::sync::Weak::new());
         let el = Element::new(tab, 1, "R1".to_string());
 
         let fut = tokio::spawn({

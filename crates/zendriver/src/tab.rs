@@ -11,6 +11,7 @@ use tracing::trace;
 use zendriver_transport::SessionHandle;
 
 use crate::error::{Result, ZendriverError};
+use crate::input::InputController;
 
 const DEFAULT_LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -22,6 +23,12 @@ pub struct Tab {
 pub(crate) struct TabInner {
     pub(crate) session: SessionHandle,
     pub(crate) isolated_world: tokio::sync::Mutex<IsolatedWorldCache>,
+    /// Weak ref to the owning `BrowserInner`. Used by Element actions to
+    /// reach the shared `InputController`. `Weak` breaks the
+    /// Browser→Tab→Browser cycle. Read by `Tab::input()`, which is
+    /// consumed by later P3 tasks (Element actions).
+    #[allow(dead_code)]
+    pub(crate) browser: std::sync::Weak<crate::browser::BrowserInner>,
 }
 
 #[derive(Default)]
@@ -31,13 +38,26 @@ pub(crate) struct IsolatedWorldCache {
 }
 
 impl Tab {
-    pub(crate) fn new(session: SessionHandle) -> Self {
+    pub(crate) fn new(
+        session: SessionHandle,
+        browser: std::sync::Weak<crate::browser::BrowserInner>,
+    ) -> Self {
         Self {
             inner: Arc::new(TabInner {
                 session,
                 isolated_world: tokio::sync::Mutex::new(IsolatedWorldCache::default()),
+                browser,
             }),
         }
+    }
+
+    /// Returns a strong handle to the owning Browser's `InputController`,
+    /// or `None` if the Browser has been dropped (typically only in
+    /// test-only Tabs constructed with `Weak::new()`). Consumed by later
+    /// P3 tasks (Element actions).
+    #[allow(dead_code)]
+    pub(crate) fn input(&self) -> Option<Arc<InputController>> {
+        self.inner.browser.upgrade().map(|b| b.input.clone())
     }
 
     /// Escape hatch: raw `SessionHandle` for advanced users who need to send
@@ -256,7 +276,7 @@ mod tests {
     async fn goto_sends_page_enable_then_page_navigate_with_url() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess);
+        let tab = Tab::new(sess, std::sync::Weak::new());
 
         let fut = tokio::spawn({
             let t = tab.clone();
@@ -278,7 +298,7 @@ mod tests {
     async fn goto_returns_navigation_error_when_chrome_reports_errortext() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess);
+        let tab = Tab::new(sess, std::sync::Weak::new());
 
         let fut = tokio::spawn({
             let t = tab.clone();
@@ -306,7 +326,7 @@ mod tests {
     async fn evaluate_main_returns_typed_value() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess);
+        let tab = Tab::new(sess, std::sync::Weak::new());
 
         let fut = tokio::spawn({
             let t = tab.clone();
@@ -328,7 +348,7 @@ mod tests {
     async fn evaluate_main_returns_js_exception_when_chrome_reports_one() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess);
+        let tab = Tab::new(sess, std::sync::Weak::new());
 
         let fut = tokio::spawn({
             let t = tab.clone();
@@ -360,7 +380,7 @@ mod tests {
     async fn evaluate_isolated_creates_world_then_evaluates() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess);
+        let tab = Tab::new(sess, std::sync::Weak::new());
 
         let fut = tokio::spawn({
             let t = tab.clone();
@@ -401,7 +421,7 @@ mod tests {
     async fn evaluate_caches_context_id_across_calls() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess);
+        let tab = Tab::new(sess, std::sync::Weak::new());
 
         // First call: full handshake + eval.
         let fut1 = tokio::spawn({
@@ -450,7 +470,7 @@ mod tests {
     async fn evaluate_recreates_world_after_context_destroyed_error() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess);
+        let tab = Tab::new(sess, std::sync::Weak::new());
 
         // --- Call 1: establishes cache, succeeds. ---
         let fut1 = tokio::spawn({
@@ -535,7 +555,7 @@ mod tests {
     async fn url_returns_parsed_url_from_target_info() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess);
+        let tab = Tab::new(sess, std::sync::Weak::new());
 
         let fut = tokio::spawn({
             let t = tab.clone();
@@ -557,7 +577,7 @@ mod tests {
     async fn close_sends_target_detach_with_session_id() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S42");
-        let tab = Tab::new(sess);
+        let tab = Tab::new(sess, std::sync::Weak::new());
 
         let fut = tokio::spawn({
             let t = tab.clone();
@@ -575,7 +595,7 @@ mod tests {
     async fn title_returns_string_from_target_info() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess);
+        let tab = Tab::new(sess, std::sync::Weak::new());
 
         let fut = tokio::spawn({
             let t = tab.clone();
