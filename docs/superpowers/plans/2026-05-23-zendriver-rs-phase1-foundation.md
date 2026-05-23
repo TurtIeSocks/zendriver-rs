@@ -3177,7 +3177,7 @@ git commit -m "feat(zendriver): Element struct + Runtime.callFunctionOn helper +
 **Files:**
 - Modify: `crates/zendriver/src/element.rs`
 
-- [ ] **Step 1: Add click + tests**
+- [x] **Step 1: Add click + tests**
 
 Append to `impl Element`:
 
@@ -3229,12 +3229,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run tests**
+- [x] **Step 2: Run tests**
 
 Run: `cargo test -p zendriver --lib element::tests`
 Expected: 1 passed.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add crates/zendriver/src/element.rs
