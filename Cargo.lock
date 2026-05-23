@@ -1815,6 +1815,7 @@ dependencies = [
 name = "zendriver-transport"
 version = "0.1.0-dev"
 dependencies = [
+ "async-trait",
  "chromiumoxide_cdp",
  "futures",
  "serde",

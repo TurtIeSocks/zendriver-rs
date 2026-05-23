@@ -17,6 +17,7 @@ default = []
 testing = []
 
 [dependencies]
+async-trait.workspace         = true
 chromiumoxide_cdp.workspace   = true
 tokio.workspace               = true
 tokio-util.workspace          = true
