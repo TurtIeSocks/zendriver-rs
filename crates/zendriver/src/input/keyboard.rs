@@ -110,7 +110,6 @@ impl KeyModifiers {
 
 /// Returns a plausible nearby QWERTY key for `c`, or None for non-alphanumeric.
 /// Used by realistic typing to inject occasional typos.
-#[allow(dead_code)] // wired into type_text_realistic in Task 7
 pub(crate) fn neighbor_key(c: char, rng: &mut impl rand::Rng) -> Option<char> {
     use rand::seq::SliceRandom;
     let lower = c.to_ascii_lowercase();
@@ -202,5 +201,211 @@ mod tests {
         assert!(neighbor_key('5', &mut rng).is_none());
         assert!(neighbor_key('!', &mut rng).is_none());
         assert!(neighbor_key(' ', &mut rng).is_none());
+    }
+}
+
+use std::time::Duration;
+
+use serde_json::json;
+
+use crate::error::Result;
+use crate::input::InputController;
+use crate::tab::Tab;
+
+/// Dispatch a single character via Input.dispatchKeyEvent (keyDown + keyUp).
+pub(crate) async fn dispatch_char(tab: &Tab, c: char, modifier_bits: i32) -> Result<()> {
+    let s = c.to_string();
+    tab.session()
+        .call(
+            "Input.dispatchKeyEvent",
+            json!({
+                "type": "keyDown", "text": &s, "key": &s,
+                "modifiers": modifier_bits,
+            }),
+        )
+        .await?;
+    tab.session()
+        .call(
+            "Input.dispatchKeyEvent",
+            json!({
+                "type": "keyUp", "text": &s, "key": &s,
+                "modifiers": modifier_bits,
+            }),
+        )
+        .await?;
+    Ok(())
+}
+
+/// Dispatch a named special key (Enter, Tab, etc).
+#[allow(dead_code)]
+pub(crate) async fn dispatch_special(
+    tab: &Tab,
+    k: SpecialKey,
+    modifier_bits: i32,
+) -> Result<()> {
+    let (code, key, vk) = k.to_cdp();
+    tab.session()
+        .call(
+            "Input.dispatchKeyEvent",
+            json!({
+                "type": "rawKeyDown",
+                "code": code, "key": key,
+                "windowsVirtualKeyCode": vk,
+                "modifiers": modifier_bits,
+            }),
+        )
+        .await?;
+    tab.session()
+        .call(
+            "Input.dispatchKeyEvent",
+            json!({
+                "type": "keyUp",
+                "code": code, "key": key,
+                "windowsVirtualKeyCode": vk,
+                "modifiers": modifier_bits,
+            }),
+        )
+        .await?;
+    Ok(())
+}
+
+/// Type `text` with realistic per-character timing, occasional typos, and
+/// inter-word "thinking" pauses pulled from the InputProfile.
+#[allow(dead_code)]
+pub(crate) async fn type_text_realistic(
+    input: &InputController,
+    tab: &Tab,
+    text: &str,
+) -> Result<()> {
+    let profile = input.profile.clone();
+    for ch in text.chars() {
+        let (per_char_delay_ms, mods, do_typo, typo_char, thinking_pause_ms) = {
+            let mut s = input.state.lock().await;
+            let per_char = if profile.per_char_delay_ms_range.0 == 0
+                && profile.per_char_delay_ms_range.1 == 0
+            {
+                0
+            } else {
+                rand::Rng::gen_range(
+                    &mut s.rng,
+                    profile.per_char_delay_ms_range.0..=profile.per_char_delay_ms_range.1,
+                )
+            };
+            let do_typo = profile.typo_rate > 0.0
+                && rand::Rng::gen::<f32>(&mut s.rng) < profile.typo_rate;
+            let typo_char = if do_typo {
+                neighbor_key(ch, &mut s.rng)
+            } else {
+                None
+            };
+            let thinking = if ch == ' '
+                && profile.thinking_pause_ms_range.0 > 0
+                && rand::Rng::gen::<f32>(&mut s.rng) < 0.05
+            {
+                rand::Rng::gen_range(
+                    &mut s.rng,
+                    profile.thinking_pause_ms_range.0..=profile.thinking_pause_ms_range.1,
+                )
+            } else {
+                0
+            };
+            (
+                per_char,
+                s.modifiers_held.cdp_bits(),
+                do_typo,
+                typo_char,
+                thinking,
+            )
+        };
+        if per_char_delay_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(per_char_delay_ms as u64)).await;
+        }
+        if thinking_pause_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(thinking_pause_ms as u64)).await;
+        }
+        if do_typo {
+            if let Some(wrong) = typo_char {
+                dispatch_char(tab, wrong, mods).await?;
+                tokio::time::sleep(Duration::from_millis(80)).await;
+                dispatch_special(tab, SpecialKey::Backspace, mods).await?;
+            }
+        }
+        dispatch_char(tab, ch, mods).await?;
+    }
+    Ok(())
+}
+
+/// Type `text` as fast as possible — no delays, no typos.
+#[allow(dead_code)]
+pub(crate) async fn type_text_raw(
+    input: &InputController,
+    tab: &Tab,
+    text: &str,
+) -> Result<()> {
+    let mods = input.state.lock().await.modifiers_held.cdp_bits();
+    for ch in text.chars() {
+        dispatch_char(tab, ch, mods).await?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used)]
+mod dispatch_tests {
+    use super::*;
+    use serde_json::Value;
+    use zendriver_stealth::InputProfile;
+    use zendriver_transport::testing::MockConnection;
+    use zendriver_transport::SessionHandle;
+
+    #[tokio::test]
+    async fn type_text_raw_emits_keydown_keyup_per_char() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new(sess, std::sync::Weak::new());
+        let input = InputController::new_with_seed(InputProfile::native(), 42);
+
+        let fut = tokio::spawn({
+            let input = input.clone();
+            let tab = tab.clone();
+            async move { type_text_raw(&input, &tab, "ab").await }
+        });
+
+        for ch in ['a', 'a', 'b', 'b'] {
+            // 4 events: a-down a-up b-down b-up
+            let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+            let last = mock.last_sent();
+            let text = last["params"]["text"].as_str().unwrap();
+            assert_eq!(text, ch.to_string());
+            mock.reply(id, Value::Null).await;
+        }
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn dispatch_special_enter_emits_correct_cdp_fields() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new(sess, std::sync::Weak::new());
+
+        let fut = tokio::spawn({
+            let tab = tab.clone();
+            async move { dispatch_special(&tab, SpecialKey::Enter, 0).await }
+        });
+
+        let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+        let last = mock.last_sent();
+        assert_eq!(last["params"]["type"], "rawKeyDown");
+        assert_eq!(last["params"]["key"], "Enter");
+        assert_eq!(last["params"]["windowsVirtualKeyCode"], 13);
+        mock.reply(id, Value::Null).await;
+
+        let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+        let last = mock.last_sent();
+        assert_eq!(last["params"]["type"], "keyUp");
+        mock.reply(id, Value::Null).await;
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
     }
 }
