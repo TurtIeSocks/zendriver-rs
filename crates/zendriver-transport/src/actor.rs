@@ -13,7 +13,6 @@ use tracing::{debug, error, trace, warn};
 use crate::frame::{CdpCommand, CdpInbound, CdpRpcError, RawEvent};
 
 /// Outbound command sent from a `Connection` handle to the actor.
-#[allow(dead_code)] // wired up in Task 7 (Connection handle)
 pub(crate) struct OutboundCmd {
     pub method: String,
     pub params: Value,
@@ -22,14 +21,12 @@ pub(crate) struct OutboundCmd {
 }
 
 /// Default broadcast bus capacity. Lagged subscribers drop frames.
-#[allow(dead_code)] // wired up in Task 7 (Connection handle)
 pub(crate) const EVENT_BUS_CAPACITY: usize = 1024;
 
 /// Runs the actor loop until `shutdown` is cancelled or the WS dies.
 ///
 /// Generic over the WS sink + stream so tests can drive in-memory streams
 /// instead of real WebSockets.
-#[allow(dead_code)] // wired up in Task 7 (Connection handle)
 pub(crate) async fn run_actor<S>(
     mut ws: S,
     mut cmd_rx: mpsc::Receiver<OutboundCmd>,
@@ -142,6 +139,7 @@ pub(crate) async fn run_actor<S>(
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::connection::test_only::DriverStream;
     use serde_json::json;
     use tokio_tungstenite::tungstenite::Message;
 
@@ -163,56 +161,6 @@ mod tests {
             rx: driver_rx_in,
         };
         (driver, test_tx_in, test_rx)
-    }
-
-    struct DriverStream {
-        tx: mpsc::Sender<Message>,
-        rx: mpsc::Receiver<Result<Message, tokio_tungstenite::tungstenite::Error>>,
-    }
-
-    impl futures::Sink<Message> for DriverStream {
-        type Error = tokio_tungstenite::tungstenite::Error;
-
-        fn poll_ready(
-            self: std::pin::Pin<&mut Self>,
-            _cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Result<(), Self::Error>> {
-            std::task::Poll::Ready(Ok(()))
-        }
-
-        fn start_send(
-            self: std::pin::Pin<&mut Self>,
-            item: Message,
-        ) -> Result<(), Self::Error> {
-            self.tx
-                .try_send(item)
-                .map_err(|_| tokio_tungstenite::tungstenite::Error::ConnectionClosed)
-        }
-
-        fn poll_flush(
-            self: std::pin::Pin<&mut Self>,
-            _cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Result<(), Self::Error>> {
-            std::task::Poll::Ready(Ok(()))
-        }
-
-        fn poll_close(
-            self: std::pin::Pin<&mut Self>,
-            _cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Result<(), Self::Error>> {
-            std::task::Poll::Ready(Ok(()))
-        }
-    }
-
-    impl futures::Stream for DriverStream {
-        type Item = Result<Message, tokio_tungstenite::tungstenite::Error>;
-
-        fn poll_next(
-            mut self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Option<Self::Item>> {
-            self.rx.poll_recv(cx)
-        }
     }
 
     #[tokio::test]

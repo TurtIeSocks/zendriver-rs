@@ -29,6 +29,7 @@ zendriver-fetcher       = { path = "crates/zendriver-fetcher",       version = "
 tokio              = { version = "1.40",  features = ["full"] }
 tokio-util         = { version = "0.7",   features = ["rt"] }
 tokio-tungstenite  = { version = "0.24" }
+tokio-stream       = { version = "0.1",   features = ["sync"] }
 futures            = { version = "0.3" }
 async-trait        = { version = "0.1" }
 

@@ -21,6 +21,7 @@ chromiumoxide_cdp.workspace   = true
 tokio.workspace               = true
 tokio-util.workspace          = true
 tokio-tungstenite.workspace   = true
+tokio-stream.workspace        = true
 futures.workspace             = true
 serde.workspace               = true
 serde_json.workspace          = true
