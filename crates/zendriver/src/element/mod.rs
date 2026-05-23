@@ -43,6 +43,24 @@ impl Element {
         }
     }
 
+    /// Constructor used by `FindBuilder::one()` to materialize an Element
+    /// from a resolved query match. T16 will replace this stub with the
+    /// real `ElementOrigin::Query { ... }` tracking so that
+    /// `Element::refresh()` can re-resolve. Until then this just delegates
+    /// to `Element::new` and the resulting Element has no origin metadata
+    /// (refresh will be a no-op / NotRefreshable when T17 lands).
+    //
+    // TODO(T16): wire the `ElementOrigin::Query { scope_kind, selector, nth }`
+    // payload through so auto-refresh works.
+    #[allow(dead_code)]
+    pub(crate) fn synthesize_query(
+        tab: Tab,
+        backend_node_id: i64,
+        remote_object_id: String,
+    ) -> Self {
+        Self::new(tab, backend_node_id, remote_object_id)
+    }
+
     /// Accessor for the parent `Tab` this element was queried from.
     pub fn tab(&self) -> &Tab {
         &self.inner.tab

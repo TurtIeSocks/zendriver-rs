@@ -259,10 +259,13 @@ impl Tab {
 }
 
 impl Tab {
-    /// Begin a chainable element query against this tab. Use `.css(...)` to
-    /// supply a selector, then `.one()` / `.one_or_none()` to await a result.
+    /// Begin a chainable element query against this tab. Pick a selector
+    /// kind (`.css`, `.xpath`, `.text`, `.text_exact`, `.text_regex`,
+    /// `.text_regex_with_flags`, `.role`, `.role_named`), optionally
+    /// apply modifiers (`.nth`, `.visible_only`, `.in_frame`,
+    /// `.timeout`), then terminate with `.one()` / `.one_or_none()`.
     pub fn find(&self) -> crate::query::FindBuilder<'_> {
-        crate::query::FindBuilder::new(self)
+        crate::query::FindBuilder::new_for_tab(self)
     }
 }
 

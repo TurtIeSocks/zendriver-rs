@@ -1,4 +1,16 @@
-//! `FindBuilder` — chainable element queries scoped to a `Tab`.
+//! `FindBuilder` — chainable element queries scoped to a `Tab` (or, in T24,
+//! to an existing `Element`'s subtree). Owns the selector kind, the
+//! actionability + timeout knobs, and the poll-loop terminal that materializes
+//! a fresh `Element`.
+//!
+//! T12 lands the full extension: every selector kind exposed in
+//! `SelectorKind` (CSS / XPath / Text / TextRegex / Role) plus the four
+//! modifiers (`nth`, `visible_only`, `in_frame`, `timeout`). The terminal
+//! `one()` polls `SelectorKind::resolve_many` until a match is found
+//! (within `timeout`), filters by `visible_only` (TODO(T16) — requires
+//! `Element::call_on_main`), picks `nth`, and wraps the resolved
+//! `RemoteRef` in an `Element` via `Element::synthesize_query` (which
+//! T16 will upgrade to carry full `ElementOrigin` metadata).
 
 pub mod actionability;
 pub mod modifiers;
@@ -9,63 +21,211 @@ pub use role::AriaRole;
 
 use std::time::Duration;
 
-use serde_json::json;
 use tokio::time::Instant;
 
 use crate::element::Element;
 use crate::error::{Result, ZendriverError};
+use crate::query::selectors::{QueryScope, SelectorKind};
 use crate::tab::Tab;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
+/// Chainable element query. Call a selector method (`.css`, `.xpath`,
+/// `.text`, `.text_exact`, `.text_regex`, `.text_regex_with_flags`,
+/// `.role`, `.role_named`), optionally chain modifiers (`.nth`,
+/// `.visible_only`, `.in_frame`, `.timeout`), then terminate with
+/// `.one()` / `.one_or_none()`.
+///
+/// Selector kinds are mutually exclusive — calling `.css(...)` after
+/// `.xpath(...)` overwrites the prior selector.
 pub struct FindBuilder<'tab> {
     pub(crate) tab: &'tab Tab,
-    pub(crate) selector: Option<String>,
+    pub(crate) selector: Option<SelectorKind>,
     pub(crate) timeout: Duration,
+    pub(crate) nth: Option<usize>,
+    pub(crate) visible_only: bool,
+    // Reserved for OOPIF frame-targeted queries. P3 plumbs the field but
+    // resolution still goes through the main frame; cross-frame routing
+    // lands in P4.
+    #[allow(dead_code)]
+    pub(crate) in_frame: Option<String>,
 }
 
 impl<'tab> FindBuilder<'tab> {
-    pub(crate) fn new(tab: &'tab Tab) -> Self {
+    pub(crate) fn new_for_tab(tab: &'tab Tab) -> Self {
         Self {
             tab,
             selector: None,
             timeout: DEFAULT_TIMEOUT,
+            nth: None,
+            visible_only: false,
+            in_frame: None,
         }
     }
 
+    // -- Selector methods (mutually exclusive — last call wins) --------
+
     #[must_use]
     pub fn css(mut self, selector: impl Into<String>) -> Self {
-        self.selector = Some(selector.into());
+        self.selector = Some(SelectorKind::Css(selector.into()));
         self
     }
 
+    #[must_use]
+    pub fn xpath(mut self, expr: impl Into<String>) -> Self {
+        self.selector = Some(SelectorKind::Xpath(expr.into()));
+        self
+    }
+
+    /// Case-insensitive substring text match. Walks the subtree filtering
+    /// elements whose `innerText` (or `textContent` for hidden nodes)
+    /// contains `needle` after lower-casing both sides.
+    #[must_use]
+    pub fn text(mut self, needle: impl Into<String>) -> Self {
+        self.selector = Some(SelectorKind::Text {
+            needle: needle.into(),
+            exact: false,
+        });
+        self
+    }
+
+    /// Whitespace-collapsed exact text match. Uses XPath
+    /// `normalize-space(.)=<needle>`.
+    #[must_use]
+    pub fn text_exact(mut self, needle: impl Into<String>) -> Self {
+        self.selector = Some(SelectorKind::Text {
+            needle: needle.into(),
+            exact: true,
+        });
+        self
+    }
+
+    /// Text regex match. The supplied `regex::Regex` is serialized to its
+    /// pattern string via `as_str()` and re-parsed on the JS side as
+    /// `new RegExp(pattern, "")`. Use `text_regex_with_flags` to pass
+    /// explicit JS regex flags (e.g. `"i"`, `"im"`).
+    #[must_use]
+    pub fn text_regex(mut self, re: regex::Regex) -> Self {
+        self.selector = Some(SelectorKind::TextRegex {
+            pattern: re.as_str().to_string(),
+            flags: String::new(),
+        });
+        self
+    }
+
+    /// Text regex match with explicit JS-flavored flags string (e.g.
+    /// `"i"` for case-insensitive, `"im"` for case-insensitive +
+    /// multiline). The pattern is interpreted on the JS side via
+    /// `new RegExp(pattern, flags)`.
+    #[must_use]
+    pub fn text_regex_with_flags(
+        mut self,
+        pattern: impl Into<String>,
+        flags: impl Into<String>,
+    ) -> Self {
+        self.selector = Some(SelectorKind::TextRegex {
+            pattern: pattern.into(),
+            flags: flags.into(),
+        });
+        self
+    }
+
+    /// ARIA role match. Compiles to a `[role="..."]` CSS attribute
+    /// selector.
+    #[must_use]
+    pub fn role(mut self, role: AriaRole) -> Self {
+        self.selector = Some(SelectorKind::Role(role, None));
+        self
+    }
+
+    /// ARIA role + accessible name match. Post-filters role candidates
+    /// by computed accessible name via `Accessibility.getPartialAXTree`
+    /// (case-insensitive substring).
+    #[must_use]
+    pub fn role_named(mut self, role: AriaRole, name: impl Into<String>) -> Self {
+        self.selector = Some(SelectorKind::Role(role, Some(name.into())));
+        self
+    }
+
+    // -- Modifier methods ----------------------------------------------
+
+    /// Pick the `idx`-th match (0-based) instead of the first. Combined
+    /// with `visible_only`, the index applies AFTER the visibility
+    /// filter.
+    #[must_use]
+    pub fn nth(mut self, idx: usize) -> Self {
+        self.nth = Some(idx);
+        self
+    }
+
+    /// When `true`, candidates that fail `actionability::check_visible`
+    /// are filtered out before `nth`/first selection. T16 wires the
+    /// actual check; until then this is a no-op (every candidate is
+    /// considered visible).
+    #[must_use]
+    pub fn visible_only(mut self, on: bool) -> Self {
+        self.visible_only = on;
+        self
+    }
+
+    /// Reserved for OOPIF queries — currently a no-op. Cross-frame
+    /// targeting lands in P4.
+    #[must_use]
+    pub fn in_frame(mut self, frame_id: impl Into<String>) -> Self {
+        self.in_frame = Some(frame_id.into());
+        self
+    }
+
+    /// Override the default 10s timeout for `one()`'s poll loop.
     #[must_use]
     pub fn timeout(mut self, dur: Duration) -> Self {
         self.timeout = dur;
         self
     }
 
-    /// Wait for and return the first matching element. Errors with
-    /// `ElementNotFound` if no element matches within the timeout.
+    // -- Terminals ------------------------------------------------------
+
+    /// Wait for and return the first (or `nth`) matching element. Errors
+    /// with `ElementNotFound` if no element matches within the timeout.
     pub async fn one(self) -> Result<Element> {
-        let sel = self.selector.ok_or_else(|| {
-            ZendriverError::Navigation("FindBuilder requires a selector (.css(...))".into())
+        let selector = self.selector.ok_or_else(|| {
+            ZendriverError::Navigation(
+                "FindBuilder requires a selector (.css/.xpath/.text/.role/...)".into(),
+            )
         })?;
         let deadline = Instant::now() + self.timeout;
+        let tab = self.tab;
+        let scope = QueryScope::Tab(tab);
+        let want_nth = self.nth.unwrap_or(0);
         loop {
-            if let Some(el) = try_query_selector(self.tab, &sel).await? {
-                return Ok(el);
+            let candidates = selector.resolve_many(&scope).await?;
+
+            // Visible-only filter: TODO(T16) — depends on
+            // `actionability::check_visible`, which depends on
+            // `Element::call_on_main`. Until that lands, treat every
+            // candidate as visible so the wider FindBuilder API can ship.
+            let _ = self.visible_only;
+            let filtered = candidates;
+
+            if let Some(picked) = filtered.into_iter().nth(want_nth) {
+                return Ok(Element::synthesize_query(
+                    tab.clone(),
+                    picked.backend_node_id,
+                    picked.remote_object_id,
+                ));
             }
             if Instant::now() >= deadline {
-                return Err(ZendriverError::ElementNotFound { selector: sel });
+                return Err(ZendriverError::ElementNotFound {
+                    selector: describe_selector(&selector),
+                });
             }
             tokio::time::sleep(POLL_INTERVAL).await;
         }
     }
 
-    /// Like `one()`, but returns `None` instead of erroring when no element
-    /// matches within the timeout.
+    /// Like `one()`, but returns `None` instead of erroring when no
+    /// element matches within the timeout.
     pub async fn one_or_none(self) -> Result<Option<Element>> {
         match self.one().await {
             Ok(el) => Ok(Some(el)),
@@ -75,44 +235,39 @@ impl<'tab> FindBuilder<'tab> {
     }
 }
 
-async fn try_query_selector(tab: &Tab, selector: &str) -> Result<Option<Element>> {
-    // Use Runtime.evaluate to find the node and return a remote object handle.
-    let res = tab
-        .call(
-            "Runtime.evaluate",
-            json!({
-                "expression": format!("document.querySelector({})", json!(selector)),
-                "returnByValue": false,
-            }),
-        )
-        .await?;
-    let result = &res["result"];
-    if result["subtype"] == "null" || result["type"] == "undefined" {
-        return Ok(None);
+/// Render a short, log-friendly description of a `SelectorKind` so the
+/// `ElementNotFound { selector }` payload conveys what the user asked
+/// for, regardless of which selector kind they chose.
+fn describe_selector(sel: &SelectorKind) -> String {
+    match sel {
+        SelectorKind::Css(s) => format!("css({s})"),
+        SelectorKind::Xpath(s) => format!("xpath({s})"),
+        SelectorKind::Text { needle, exact } => {
+            if *exact {
+                format!("text_exact({needle})")
+            } else {
+                format!("text({needle})")
+            }
+        }
+        SelectorKind::TextRegex { pattern, flags } => {
+            if flags.is_empty() {
+                format!("text_regex(/{pattern}/)")
+            } else {
+                format!("text_regex(/{pattern}/{flags})")
+            }
+        }
+        SelectorKind::Role(role, None) => format!("role({})", role.to_css()),
+        SelectorKind::Role(role, Some(name)) => {
+            format!("role_named({}, {name})", role.to_css())
+        }
     }
-    let object_id = result["objectId"]
-        .as_str()
-        .ok_or_else(|| ZendriverError::Navigation("querySelector returned no objectId".into()))?
-        .to_string();
-
-    // Get the backend node id for later use (Element::call_on uses objectId,
-    // but other operations need backend_node_id — we resolve once here).
-    let describe = tab
-        .call("DOM.describeNode", json!({ "objectId": object_id }))
-        .await
-        .ok();
-    let backend_node_id = describe
-        .as_ref()
-        .and_then(|d| d["node"]["backendNodeId"].as_i64())
-        .unwrap_or_default();
-
-    Ok(Some(Element::new(tab.clone(), backend_node_id, object_id)))
 }
 
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use zendriver_transport::testing::MockConnection;
     use zendriver_transport::SessionHandle;
 
@@ -127,18 +282,46 @@ mod tests {
             async move { t.find().css("#b").one().await }
         });
 
+        // T12: one() now resolves via SelectorKind::resolve_many, which
+        // for CSS dispatches `Array.from(document.querySelectorAll(...))`.
         let id_q = mock.expect_cmd("Runtime.evaluate").await;
-        assert!(mock.last_sent()["params"]["expression"]
+        let sent = mock.last_sent()["params"]["expression"]
             .as_str()
             .unwrap()
-            .contains("document.querySelector"));
+            .to_string();
+        assert!(
+            sent.contains("document.querySelectorAll") && sent.contains("#b"),
+            "expected querySelectorAll with selector, got: {sent}"
+        );
         mock.reply(
             id_q,
-            json!({ "result": { "objectId": "R1", "type": "object", "subtype": "node" } }),
+            json!({ "result": { "objectId": "RArr", "type": "object", "subtype": "array" } }),
         )
         .await;
 
+        // Enumerate the array — one element at index 0.
+        let id_p = mock.expect_cmd("Runtime.getProperties").await;
+        assert_eq!(mock.last_sent()["params"]["objectId"], "RArr");
+        mock.reply(
+            id_p,
+            json!({
+                "result": [
+                    {
+                        "name": "0",
+                        "value": { "objectId": "R1", "type": "object", "subtype": "node" }
+                    },
+                    {
+                        "name": "length",
+                        "value": { "value": 1, "type": "number" }
+                    }
+                ]
+            }),
+        )
+        .await;
+
+        // describe the picked node to fill backend_node_id.
         let id_d = mock.expect_cmd("DOM.describeNode").await;
+        assert_eq!(mock.last_sent()["params"]["objectId"], "R1");
         mock.reply(id_d, json!({ "node": { "backendNodeId": 42 } }))
             .await;
 
@@ -149,7 +332,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn one_returns_element_not_found_when_query_returns_null() {
+    async fn one_returns_element_not_found_when_query_returns_empty() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
         let tab = Tab::new(sess, std::sync::Weak::new());
@@ -165,19 +348,32 @@ mod tests {
             }
         });
 
-        // The builder will poll a few times; reply null each time until timeout.
+        // The builder polls until timeout. Each poll: Runtime.evaluate
+        // (returning an empty array RemoteObject) → Runtime.getProperties
+        // (zero indexed entries). Respond to both each iteration so
+        // resolve_many returns an empty Vec rather than erroring.
         loop {
             tokio::select! {
-                _ = tokio::time::sleep(Duration::from_millis(200)) => break,
+                _ = tokio::time::sleep(Duration::from_millis(220)) => break,
                 cmd = mock.expect_cmd("Runtime.evaluate") => {
-                    mock.reply(cmd, json!({ "result": { "type": "object", "subtype": "null" } })).await;
+                    mock.reply(
+                        cmd,
+                        json!({ "result": { "objectId": "RArrEmpty", "type": "object", "subtype": "array" } }),
+                    )
+                    .await;
+                    let id_p = mock.expect_cmd("Runtime.getProperties").await;
+                    mock.reply(id_p, json!({ "result": [
+                        { "name": "length", "value": { "value": 0, "type": "number" } }
+                    ] })).await;
                 }
             }
         }
 
         let res = fut.await.unwrap();
         match res {
-            Err(ZendriverError::ElementNotFound { selector }) => assert_eq!(selector, "#missing"),
+            Err(ZendriverError::ElementNotFound { selector }) => {
+                assert!(selector.contains("#missing"), "got: {selector}");
+            }
             Err(e) => panic!("unexpected error: {e:?}"),
             Ok(_) => panic!("unexpected ok"),
         }
@@ -203,15 +399,187 @@ mod tests {
 
         loop {
             tokio::select! {
-                _ = tokio::time::sleep(Duration::from_millis(180)) => break,
+                _ = tokio::time::sleep(Duration::from_millis(200)) => break,
                 cmd = mock.expect_cmd("Runtime.evaluate") => {
-                    mock.reply(cmd, json!({ "result": { "type": "object", "subtype": "null" } })).await;
+                    mock.reply(
+                        cmd,
+                        json!({ "result": { "objectId": "RArrEmpty", "type": "object", "subtype": "array" } }),
+                    )
+                    .await;
+                    let id_p = mock.expect_cmd("Runtime.getProperties").await;
+                    mock.reply(id_p, json!({ "result": [
+                        { "name": "length", "value": { "value": 0, "type": "number" } }
+                    ] })).await;
                 }
             }
         }
 
         let res = fut.await.unwrap().unwrap();
         assert!(res.is_none());
+        conn.shutdown();
+    }
+
+    // --- describe_selector renders each kind --------------------------
+
+    #[test]
+    fn describe_selector_renders_each_kind() {
+        assert_eq!(
+            describe_selector(&SelectorKind::Css("#b".into())),
+            "css(#b)"
+        );
+        assert_eq!(
+            describe_selector(&SelectorKind::Xpath("//a".into())),
+            "xpath(//a)"
+        );
+        assert_eq!(
+            describe_selector(&SelectorKind::Text {
+                needle: "Hi".into(),
+                exact: false,
+            }),
+            "text(Hi)"
+        );
+        assert_eq!(
+            describe_selector(&SelectorKind::Text {
+                needle: "Hi".into(),
+                exact: true,
+            }),
+            "text_exact(Hi)"
+        );
+        assert_eq!(
+            describe_selector(&SelectorKind::TextRegex {
+                pattern: "a.*b".into(),
+                flags: String::new(),
+            }),
+            "text_regex(/a.*b/)"
+        );
+        assert_eq!(
+            describe_selector(&SelectorKind::TextRegex {
+                pattern: "a.*b".into(),
+                flags: "i".into(),
+            }),
+            "text_regex(/a.*b/i)"
+        );
+        assert_eq!(
+            describe_selector(&SelectorKind::Role(AriaRole::Button, None)),
+            r#"role([role="button"])"#
+        );
+        assert_eq!(
+            describe_selector(&SelectorKind::Role(AriaRole::Button, Some("Save".into()))),
+            r#"role_named([role="button"], Save)"#
+        );
+    }
+
+    // --- selector kind chaining: last call wins -----------------------
+
+    #[tokio::test]
+    async fn text_regex_wraps_regex_pattern_and_empty_flags() {
+        let re = regex::Regex::new("hello.*world").unwrap();
+        let (_mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new(sess, std::sync::Weak::new());
+        let fb = tab.find().text_regex(re);
+        let Some(SelectorKind::TextRegex { pattern, flags }) = fb.selector else {
+            panic!("expected TextRegex selector kind");
+        };
+        assert_eq!(pattern, "hello.*world");
+        assert_eq!(flags, "");
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn text_regex_with_flags_passes_pattern_and_flags_through() {
+        let (_mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new(sess, std::sync::Weak::new());
+        let fb = tab.find().text_regex_with_flags("h.*w", "im");
+        let Some(SelectorKind::TextRegex { pattern, flags }) = fb.selector else {
+            panic!("expected TextRegex selector kind");
+        };
+        assert_eq!(pattern, "h.*w");
+        assert_eq!(flags, "im");
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn later_selector_overrides_earlier() {
+        let (_mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new(sess, std::sync::Weak::new());
+        let fb = tab.find().css("#a").xpath("//b");
+        let Some(SelectorKind::Xpath(expr)) = fb.selector else {
+            panic!("expected Xpath selector kind after .xpath() override");
+        };
+        assert_eq!(expr, "//b");
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn modifiers_chain_and_persist_on_builder() {
+        let (_mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new(sess, std::sync::Weak::new());
+        let fb = tab
+            .find()
+            .css(".item")
+            .nth(3)
+            .visible_only(true)
+            .in_frame("F2")
+            .timeout(Duration::from_secs(5));
+        assert_eq!(fb.nth, Some(3));
+        assert!(fb.visible_only);
+        assert_eq!(fb.in_frame.as_deref(), Some("F2"));
+        assert_eq!(fb.timeout, Duration::from_secs(5));
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn one_with_nth_picks_indexed_match() {
+        // Two-match scenario: nth(1) must pick the second array entry,
+        // not the first. Verifies the modifier wires through to the
+        // resolve_many path.
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new(sess, std::sync::Weak::new());
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.find().css(".item").nth(1).one().await }
+        });
+
+        let id_q = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id_q,
+            json!({ "result": { "objectId": "RArr", "type": "object", "subtype": "array" } }),
+        )
+        .await;
+
+        let id_p = mock.expect_cmd("Runtime.getProperties").await;
+        mock.reply(
+            id_p,
+            json!({
+                "result": [
+                    { "name": "0", "value": { "objectId": "R0", "type": "object", "subtype": "node" } },
+                    { "name": "1", "value": { "objectId": "R1", "type": "object", "subtype": "node" } },
+                    { "name": "length", "value": { "value": 2, "type": "number" } }
+                ]
+            }),
+        )
+        .await;
+
+        // describeNode runs for each indexed entry as extract_array_refs
+        // enumerates the array. Reply to both.
+        let id_d0 = mock.expect_cmd("DOM.describeNode").await;
+        assert_eq!(mock.last_sent()["params"]["objectId"], "R0");
+        mock.reply(id_d0, json!({ "node": { "backendNodeId": 10 } }))
+            .await;
+        let id_d1 = mock.expect_cmd("DOM.describeNode").await;
+        assert_eq!(mock.last_sent()["params"]["objectId"], "R1");
+        mock.reply(id_d1, json!({ "node": { "backendNodeId": 11 } }))
+            .await;
+
+        let el = fut.await.unwrap().unwrap();
+        assert_eq!(el.inner.remote_object_id, "R1");
+        assert_eq!(el.inner.backend_node_id, 11);
         conn.shutdown();
     }
 }
