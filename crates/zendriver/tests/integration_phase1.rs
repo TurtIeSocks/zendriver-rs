@@ -37,7 +37,10 @@ async fn click_dispatches_event_to_dom_listener() {
     let btn = tab.find().css("#b").one().await.expect("find #b");
     btn.click().await.expect("click");
 
-    let clicked: bool = tab.evaluate("window.clicked").await.expect("eval");
+    // Use evaluate_main: the onclick handler sets `window.clicked` on the page's
+    // main world, but the default `evaluate` runs in an isolated world where
+    // page globals are not visible. We must read it from the main world.
+    let clicked: bool = tab.evaluate_main("window.clicked").await.expect("eval");
     assert!(clicked, "button click should have set window.clicked");
 
     browser.close().await.expect("close");
