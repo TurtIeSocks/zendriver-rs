@@ -54,6 +54,11 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// `.xpath(...)` overwrites the prior selector.
 pub struct FindBuilder<'tab> {
     pub(crate) tab: &'tab Tab,
+    /// When set, the terminal resolves against this element's subtree
+    /// (`QueryScope::Element`) rather than the whole tab (`QueryScope::Tab`).
+    /// Populated by [`FindBuilder::new_for_element`]; the bare
+    /// [`FindBuilder::new_for_tab`] leaves it `None`.
+    pub(crate) element: Option<&'tab Element>,
     pub(crate) selector: Option<SelectorKind>,
     pub(crate) timeout: Duration,
     pub(crate) nth: Option<usize>,
@@ -69,6 +74,24 @@ impl<'tab> FindBuilder<'tab> {
     pub(crate) fn new_for_tab(tab: &'tab Tab) -> Self {
         Self {
             tab,
+            element: None,
+            selector: None,
+            timeout: DEFAULT_TIMEOUT,
+            nth: None,
+            visible_only: false,
+            in_frame: None,
+        }
+    }
+
+    /// Build a subtree-scoped query rooted at `element`. The terminal
+    /// `one()` / `one_or_none()` resolves the selector against
+    /// `element.querySelector(...)` (CSS) or the equivalent
+    /// element-relative form for other selector kinds — matches outside
+    /// the element's subtree are not considered.
+    pub(crate) fn new_for_element(element: &'tab Element) -> Self {
+        Self {
+            tab: element.tab(),
+            element: Some(element),
             selector: None,
             timeout: DEFAULT_TIMEOUT,
             nth: None,
@@ -208,8 +231,10 @@ impl<'tab> FindBuilder<'tab> {
             )
         })?;
         let deadline = Instant::now() + self.timeout;
-        let tab = self.tab;
-        let scope = QueryScope::Tab(tab);
+        let scope = match self.element {
+            Some(el) => QueryScope::Element(el),
+            None => QueryScope::Tab(self.tab),
+        };
         let want_nth = self.nth.unwrap_or(0);
         loop {
             let candidates = selector.resolve_many(&scope).await?;
@@ -257,6 +282,11 @@ impl<'tab> FindBuilder<'tab> {
 /// `.many_or_empty()` returns an empty `Vec` instead.
 pub struct FindAllBuilder<'tab> {
     pub(crate) tab: &'tab Tab,
+    /// When set, the terminal resolves against this element's subtree
+    /// (`QueryScope::Element`) rather than the whole tab (`QueryScope::Tab`).
+    /// Populated by [`FindAllBuilder::new_for_element`]; the bare
+    /// [`FindAllBuilder::new_for_tab`] leaves it `None`.
+    pub(crate) element: Option<&'tab Element>,
     pub(crate) selector: Option<SelectorKind>,
     pub(crate) timeout: Duration,
     pub(crate) visible_only: bool,
@@ -271,6 +301,22 @@ impl<'tab> FindAllBuilder<'tab> {
     pub(crate) fn new_for_tab(tab: &'tab Tab) -> Self {
         Self {
             tab,
+            element: None,
+            selector: None,
+            timeout: DEFAULT_TIMEOUT,
+            visible_only: false,
+            in_frame: None,
+        }
+    }
+
+    /// Build a subtree-scoped `find_all` rooted at `element`. The
+    /// terminal `many()` / `many_or_empty()` resolves the selector
+    /// against the element's subtree — siblings and ancestors are not
+    /// considered.
+    pub(crate) fn new_for_element(element: &'tab Element) -> Self {
+        Self {
+            tab: element.tab(),
+            element: Some(element),
             selector: None,
             timeout: DEFAULT_TIMEOUT,
             visible_only: false,
@@ -403,7 +449,10 @@ impl<'tab> FindAllBuilder<'tab> {
             )
         })?;
         let deadline = Instant::now() + self.timeout;
-        let scope = QueryScope::Tab(self.tab);
+        let scope = match self.element {
+            Some(el) => QueryScope::Element(el),
+            None => QueryScope::Tab(self.tab),
+        };
         loop {
             let candidates = selector.resolve_many(&scope).await?;
 
