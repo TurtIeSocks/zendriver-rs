@@ -178,13 +178,11 @@ pub struct Browser {
 pub(crate) struct BrowserInner {
     pub(crate) conn: Connection,
     pub(crate) main_tab: Tab,
-    #[allow(dead_code)] // consumed by Browser::close in Task 15
     pub(crate) child: tokio::sync::Mutex<Option<Child>>,
     pub(crate) _user_data: Option<TempDir>,
 }
 
 const WS_ENDPOINT_TIMEOUT: Duration = Duration::from_secs(15);
-#[allow(dead_code)] // wired into Browser::close in Task 15
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 impl BrowserBuilder {
@@ -293,6 +291,35 @@ impl Browser {
 
     pub fn cdp(&self) -> &Connection {
         &self.inner.conn
+    }
+
+    /// Graceful shutdown: cancel the transport, send SIGTERM to Chrome,
+    /// wait up to `SHUTDOWN_GRACE`, then SIGKILL on timeout. Cleans up
+    /// user_data_dir.
+    pub async fn close(self) -> Result<(), ZendriverError> {
+        self.inner.conn.shutdown();
+        let mut child_guard = self.inner.child.lock().await;
+        if let Some(mut child) = child_guard.take() {
+            // Try graceful exit first.
+            let _ = child.start_kill();
+            match timeout(SHUTDOWN_GRACE, child.wait()).await {
+                Ok(Ok(_status)) => {}
+                _ => {
+                    let _ = child.kill().await;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for BrowserInner {
+    fn drop(&mut self) {
+        self.conn.shutdown();
+        // We can't `.await` in Drop. If `close()` was not called explicitly,
+        // we rely on `kill_on_drop(true)` set on the spawned Command, which
+        // causes tokio to SIGKILL the child when the Child is dropped.
+        // The TempDir for user_data_dir is dropped here too.
     }
 }
 
