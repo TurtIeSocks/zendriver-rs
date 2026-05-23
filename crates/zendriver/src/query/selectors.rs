@@ -7,6 +7,18 @@
 //! T12. The `#[allow(dead_code)]` annotations are scoped to those
 //! items so a future stray dead-code regression elsewhere in the file
 //! is still caught.
+//!
+//! Role resolution (T11): role-only queries compile to a `[role="..."]`
+//! CSS attribute selector and reuse `resolve_css_one`/`resolve_css_many`
+//! directly. Role + accessible-name queries do the same CSS pass first
+//! to get all candidates, then post-filter via
+//! `Accessibility.getPartialAXTree { backendNodeId, fetchRelatives: false }`
+//! per candidate, matching `name.value` against the needle with
+//! case-insensitive substring semantics. The AX call has to be per-node
+//! because the AX tree doesn't expose a "find by computed name" query —
+//! the JS-side `aria-label` attribute alone misses cases where the name
+//! comes from `aria-labelledby`, the wrapped text, or `<label>` linkage,
+//! which only the computed AX tree resolves.
 
 use serde_json::{json, Value};
 
@@ -76,9 +88,7 @@ impl SelectorKind {
             SelectorKind::TextRegex { pattern, flags } => {
                 resolve_text_regex_one(scope, pattern, flags).await
             }
-            SelectorKind::Role(_, _) => Err(ZendriverError::Navigation(
-                "Role selectors implemented in T11".into(),
-            )),
+            SelectorKind::Role(role, name) => resolve_role_one(scope, *role, name.as_deref()).await,
         }
     }
 
@@ -93,9 +103,9 @@ impl SelectorKind {
             SelectorKind::TextRegex { pattern, flags } => {
                 resolve_text_regex_many(scope, pattern, flags).await
             }
-            SelectorKind::Role(_, _) => Err(ZendriverError::Navigation(
-                "Role selectors implemented in T11".into(),
-            )),
+            SelectorKind::Role(role, name) => {
+                resolve_role_many(scope, *role, name.as_deref()).await
+            }
         }
     }
 }
@@ -544,6 +554,87 @@ async fn resolve_text_regex_many(
 }
 
 // ---------------------------------------------------------------------
+// Role (`[role="..."]` CSS + optional accessible-name post-filter)
+// ---------------------------------------------------------------------
+
+#[allow(dead_code)] // Reached via SelectorKind::resolve_one, gated until T12.
+async fn resolve_role_one(
+    scope: &QueryScope<'_>,
+    role: AriaRole,
+    name: Option<&str>,
+) -> Result<Option<RemoteRef>> {
+    // Always go through `resolve_css_many` (rather than `resolve_css_one`)
+    // so that name-filter and no-filter paths share the same candidate
+    // enumeration. With no name filter we just return the first match.
+    let css = role.to_css();
+    let candidates = resolve_css_many(scope, &css).await?;
+    let Some(needle) = name else {
+        return Ok(candidates.into_iter().next());
+    };
+    let tab = scope.tab();
+    for candidate in candidates {
+        if accessible_name_matches(tab, &candidate, needle).await? {
+            return Ok(Some(candidate));
+        }
+    }
+    Ok(None)
+}
+
+#[allow(dead_code)] // Reached via SelectorKind::resolve_many, gated until T12.
+async fn resolve_role_many(
+    scope: &QueryScope<'_>,
+    role: AriaRole,
+    name: Option<&str>,
+) -> Result<Vec<RemoteRef>> {
+    let css = role.to_css();
+    let candidates = resolve_css_many(scope, &css).await?;
+    let Some(needle) = name else {
+        return Ok(candidates);
+    };
+    let tab = scope.tab();
+    let mut out = Vec::new();
+    for candidate in candidates {
+        if accessible_name_matches(tab, &candidate, needle).await? {
+            out.push(candidate);
+        }
+    }
+    Ok(out)
+}
+
+/// Returns `true` if the computed accessible name for `node` contains
+/// `needle` as a case-insensitive substring.
+///
+/// Uses `Accessibility.getPartialAXTree { backendNodeId, fetchRelatives: false }`
+/// to fetch the AX node and reads `name.value`. Nodes with no AX entry,
+/// no name, or a name that isn't a string are treated as a non-match
+/// (returns `Ok(false)`).
+#[allow(dead_code)] // Called via resolve_role_*, gated until T12.
+async fn accessible_name_matches(tab: &Tab, node: &RemoteRef, needle: &str) -> Result<bool> {
+    let response = tab
+        .call(
+            "Accessibility.getPartialAXTree",
+            json!({
+                "backendNodeId": node.backend_node_id,
+                "fetchRelatives": false,
+            }),
+        )
+        .await?;
+    let needle_lower = needle.to_lowercase();
+    let Some(nodes) = response["nodes"].as_array() else {
+        return Ok(false);
+    };
+    for ax_node in nodes {
+        let Some(name_value) = ax_node["name"]["value"].as_str() else {
+            continue;
+        };
+        if name_value.to_lowercase().contains(&needle_lower) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+// ---------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------
 
@@ -775,6 +866,76 @@ mod tests {
 
         let r = fut.await.unwrap().unwrap();
         assert!(r.is_none(), "null subtype must yield Ok(None)");
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn role_button_without_name_dispatches_attribute_selector_and_resolves_first_match() {
+        // Role(Button, None) should:
+        //   1. Runtime.evaluate `Array.from(document.querySelectorAll('[role="button"]'))`
+        //   2. Runtime.getProperties on the returned Array
+        //   3. DOM.describeNode on the first array element to fetch backendNodeId
+        // and return a RemoteRef with the resolved id.
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new(sess, std::sync::Weak::new());
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                let scope = QueryScope::Tab(&t);
+                SelectorKind::Role(AriaRole::Button, None)
+                    .resolve_one(&scope)
+                    .await
+            }
+        });
+
+        let id_q = mock.expect_cmd("Runtime.evaluate").await;
+        let sent = mock.last_sent()["params"]["expression"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            sent.contains(r#"[role=\"button\"]"#),
+            "role path must embed the `[role=\"button\"]` attribute selector verbatim; got: {sent}"
+        );
+        assert!(
+            sent.contains("document.querySelectorAll"),
+            "role path must call querySelectorAll for the candidate enumeration; got: {sent}"
+        );
+        mock.reply(
+            id_q,
+            json!({ "result": { "objectId": "RArr", "type": "object", "subtype": "array" } }),
+        )
+        .await;
+
+        let id_p = mock.expect_cmd("Runtime.getProperties").await;
+        assert_eq!(mock.last_sent()["params"]["objectId"], "RArr");
+        mock.reply(
+            id_p,
+            json!({
+                "result": [
+                    {
+                        "name": "0",
+                        "value": { "objectId": "RN0", "type": "object", "subtype": "node" }
+                    },
+                    {
+                        "name": "length",
+                        "value": { "value": 1, "type": "number" }
+                    }
+                ]
+            }),
+        )
+        .await;
+
+        let id_d = mock.expect_cmd("DOM.describeNode").await;
+        assert_eq!(mock.last_sent()["params"]["objectId"], "RN0");
+        mock.reply(id_d, json!({ "node": { "backendNodeId": 42 } }))
+            .await;
+
+        let r = fut.await.unwrap().unwrap().unwrap();
+        assert_eq!(r.remote_object_id, "RN0");
+        assert_eq!(r.backend_node_id, 42);
         conn.shutdown();
     }
 }
