@@ -122,6 +122,21 @@ impl Tab {
             .unwrap_or("")
             .to_string())
     }
+
+    /// Detach the target session for this tab.
+    pub async fn close(self) -> Result<()> {
+        let sid = self.inner.session.session_id().to_string();
+        self.inner
+            .session
+            .connection()
+            .call_raw(
+                "Target.detachFromTarget",
+                json!({ "sessionId": sid }),
+                None,
+            )
+            .await?;
+        Ok(())
+    }
 }
 
 impl Tab {
@@ -255,6 +270,24 @@ mod tests {
         .await;
         let u = fut.await.unwrap().unwrap();
         assert_eq!(u.as_str(), "https://example.com/x");
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn close_sends_target_detach_with_session_id() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S42");
+        let tab = Tab::new(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.close().await }
+        });
+
+        let id = mock.expect_cmd("Target.detachFromTarget").await;
+        assert_eq!(mock.last_sent()["params"]["sessionId"], "S42");
+        mock.reply(id, json!({})).await;
+        fut.await.unwrap().unwrap();
         conn.shutdown();
     }
 
