@@ -1,14 +1,35 @@
 //! zendriver — async, undetectable Chrome automation over CDP.
 //!
-//! Phase 1 surface: see the [module-level docs] on each public type.
-//!
-//! [module-level docs]: crate
+//! Phase 1 public surface.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-// Module skeleton; populated in subsequent tasks.
 pub mod browser;
 pub mod element;
 pub mod error;
 pub mod query;
 pub mod tab;
+
+pub use browser::{Browser, BrowserBuilder};
+pub use element::Element;
+pub use error::{BrowserError, Result, ZendriverError};
+pub use query::FindBuilder;
+pub use tab::Tab;
+
+// Re-export selected transport types for advanced users.
+pub use zendriver_transport::{Connection, SessionHandle, TransportError};
+
+/// Convenience entry point: launch a Chrome instance with default settings.
+///
+/// Equivalent to `Browser::builder().launch().await`.
+///
+/// ```no_run
+/// # async fn ex() -> zendriver::Result<()> {
+/// let browser = zendriver::start().await?;
+/// let tab = browser.main_tab();
+/// tab.goto("https://example.com").await?;
+/// # Ok(()) }
+/// ```
+pub async fn start() -> Result<Browser> {
+    Browser::builder().launch().await
+}
