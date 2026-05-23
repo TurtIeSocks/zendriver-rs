@@ -124,6 +124,14 @@ impl Tab {
     }
 }
 
+impl Tab {
+    /// Begin a chainable element query against this tab. Use `.css(...)` to
+    /// supply a selector, then `.one()` / `.one_or_none()` to await a result.
+    pub fn find(&self) -> crate::query::FindBuilder<'_> {
+        crate::query::FindBuilder::new(self)
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
