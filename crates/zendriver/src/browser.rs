@@ -1,7 +1,7 @@
 //! Browser lifecycle: executable discovery, subprocess spawn, WS attach,
 //! graceful teardown.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::error::BrowserError;
 
@@ -99,6 +99,79 @@ pub(crate) fn parse_devtools_line(line: &str) -> Option<String> {
     }
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct BrowserBuilder {
+    pub(crate) headless: Option<bool>,
+    pub(crate) executable: Option<PathBuf>,
+    pub(crate) user_data_dir: Option<PathBuf>,
+    pub(crate) extra_args: Vec<String>,
+}
+
+impl BrowserBuilder {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn headless(mut self, on: bool) -> Self {
+        self.headless = Some(on);
+        self
+    }
+
+    #[must_use]
+    pub fn executable(mut self, path: impl Into<PathBuf>) -> Self {
+        self.executable = Some(path.into());
+        self
+    }
+
+    #[must_use]
+    pub fn user_data_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.user_data_dir = Some(path.into());
+        self
+    }
+
+    #[must_use]
+    pub fn arg(mut self, flag: impl Into<String>) -> Self {
+        self.extra_args.push(flag.into());
+        self
+    }
+
+    #[must_use]
+    pub fn args(mut self, flags: impl IntoIterator<Item = String>) -> Self {
+        self.extra_args.extend(flags);
+        self
+    }
+
+    /// Compute the full argv that would be passed to Chrome. Exposed to
+    /// tests + snapshots; called internally by `launch`.
+    #[allow(dead_code)] // wired into launch path in Task 14
+    pub(crate) fn build_flags(&self, user_data_dir: &Path) -> Vec<String> {
+        let mut v = Vec::with_capacity(8 + self.extra_args.len());
+        v.push("--remote-debugging-port=0".to_string());
+        v.push(format!("--user-data-dir={}", user_data_dir.display()));
+        v.push("--no-first-run".to_string());
+        v.push("--no-default-browser-check".to_string());
+        if self.headless.unwrap_or(true) {
+            v.push("--headless=new".to_string());
+            v.push("--disable-gpu".to_string());
+        }
+        v.extend(self.extra_args.iter().cloned());
+        v
+    }
+}
+
+impl Browser {
+    pub fn builder() -> BrowserBuilder {
+        BrowserBuilder::new()
+    }
+}
+
+// Forward declaration for Task 14. Defined more completely there.
+pub struct Browser {
+    pub(crate) _placeholder: (),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,5 +215,34 @@ mod tests {
             parse_devtools_line(line).as_deref(),
             Some("ws://localhost:1/devtools/browser/x")
         );
+    }
+
+    #[test]
+    fn build_flags_default_is_headless() {
+        let b = BrowserBuilder::new();
+        let flags = b.build_flags(Path::new("/tmp/x"));
+        assert!(flags.contains(&"--headless=new".to_string()));
+        assert!(flags.contains(&"--disable-gpu".to_string()));
+        assert!(flags.contains(&"--user-data-dir=/tmp/x".to_string()));
+        assert!(flags.contains(&"--remote-debugging-port=0".to_string()));
+    }
+
+    #[test]
+    fn build_flags_no_headless_when_disabled() {
+        let b = BrowserBuilder::new().headless(false);
+        let flags = b.build_flags(Path::new("/tmp/x"));
+        assert!(!flags.iter().any(|f| f.starts_with("--headless")));
+        assert!(!flags.contains(&"--disable-gpu".to_string()));
+    }
+
+    #[test]
+    fn build_flags_includes_extra_args_in_order() {
+        let b = BrowserBuilder::new()
+            .arg("--proxy-server=http://x")
+            .arg("--lang=en-US");
+        let flags = b.build_flags(Path::new("/tmp/x"));
+        let proxy = flags.iter().position(|f| f == "--proxy-server=http://x").unwrap();
+        let lang = flags.iter().position(|f| f == "--lang=en-US").unwrap();
+        assert!(proxy < lang);
     }
 }
