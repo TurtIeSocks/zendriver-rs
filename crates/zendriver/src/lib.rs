@@ -19,6 +19,11 @@ pub use tab::Tab;
 // Re-export selected transport types for advanced users.
 pub use zendriver_transport::{CallError, Connection, SessionHandle, TransportError};
 
+/// Stealth profile + fingerprint configuration re-exported from `zendriver-stealth`.
+pub mod stealth {
+    pub use zendriver_stealth::{Fingerprint, Platform, StealthProfile, UserAgentMetadata};
+}
+
 /// Convenience entry point: launch a Chrome instance with default settings.
 ///
 /// Equivalent to `Browser::builder().launch().await`.
