@@ -2,7 +2,7 @@
 
 A Rust port of [zendriver](https://github.com/cdpdriver/zendriver) — an undetectable, async-first browser automation library using the Chrome DevTools Protocol directly.
 
-**Status:** Phase 1 (foundation) under active development. Not yet published to crates.io.
+**Status:** Phases 1-3 shipped. Not yet published to crates.io.
 
 ## Example
 
@@ -16,8 +16,14 @@ async fn main() -> zendriver::Result<()> {
     tab.goto("https://example.com").await?;
     tab.wait_for_load().await?;
 
-    let h1 = tab.find().css("h1").one().await?;
-    println!("h1: {}", h1.inner_text().await?);
+    // Find by visible text (auto-waits up to the selector's timeout).
+    let link = tab.find().text("More information...").one().await?;
+    link.click().await?;
+    tab.wait_for_load().await?;
+
+    // Evaluate in the page's main world.
+    let title: String = tab.evaluate_main("document.title").await?;
+    println!("title: {title}");
 
     browser.close().await?;
     Ok(())
@@ -26,10 +32,10 @@ async fn main() -> zendriver::Result<()> {
 
 ## Phases
 
-1. **Foundation** (in progress): transport + minimal `Browser`/`Tab`/`Element`.
-2. Stealth (planned).
-3. Element API completeness (planned).
-4. `Tab`/`Browser` completeness, cookies, screenshots, multi-tab, iframes (planned).
+1. **Foundation** **DONE**: transport + minimal `Browser`/`Tab`/`Element`.
+2. **Stealth** **DONE**: fingerprint patches + isolated worlds + stealth JS bundle.
+3. **Element API completeness** **DONE**: selectors (CSS/XPath/text/role), actionability, input controller, screenshots.
+4. `Tab`/`Browser` completeness, cookies, multi-tab, iframes (planned).
 5. Optional gated features: interception, Cloudflare bypass, `expect()`, fetcher (planned).
 6. Polish + 0.1 release (planned).
 
