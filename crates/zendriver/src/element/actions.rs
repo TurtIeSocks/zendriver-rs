@@ -32,13 +32,13 @@
 //! `behavior: 'instant'` skips animation so the post-scroll bbox is final
 //! by the time the next CDP call runs.
 //!
-//! Test scaffolding limitation: `Tab::input()` returns `None` when the
-//! owning `Browser`'s `Weak` ref can't upgrade — true for unit tests that
-//! build a `Tab` with `std::sync::Weak::new()`. `hover` and `hover_raw`
-//! surface that as `ZendriverError::Navigation("no input controller
-//! available")` so tests can detect the mis-configuration without a panic.
-//! `focus` and `scroll_into_view` don't dispatch pointer events and need
-//! no `InputController`, so they work in those test setups unchanged.
+//! Post-P4 T0: `Tab::input()` returns `&Arc<InputController>` directly —
+//! there's no longer an upgrade-through-Browser dance, so the dispatch
+//! sites just clone the per-Tab controller and pass it to the helpers.
+//! Tests that exercise these methods go through
+//! [`crate::tab::Tab::new_for_test`], which seeds a deterministic native
+//! [`InputController`] (seed `42`) — stable Bezier paths + zero typo rate
+//! make the per-test mock-traffic expectations exact.
 
 use std::path::Path;
 use std::time::Duration;
@@ -146,9 +146,7 @@ impl Element {
                 Some((dx, dy)) => (bbox.x + dx, bbox.y + dy),
                 None => (bbox.x + bbox.width / 2.0, bbox.y + bbox.height / 2.0),
             };
-            let input = self.inner.tab.input().ok_or_else(|| {
-                ZendriverError::Navigation("no input controller available".into())
-            })?;
+            let input = self.inner.tab.input().clone();
             mouse::click_at(
                 &input,
                 &self.inner.tab,
@@ -189,9 +187,7 @@ impl Element {
                 .ok_or_else(|| ZendriverError::Navigation("element has no bounding box".into()))?;
             let cx = bbox.x + bbox.width / 2.0;
             let cy = bbox.y + bbox.height / 2.0;
-            let input = self.inner.tab.input().ok_or_else(|| {
-                ZendriverError::Navigation("no input controller available".into())
-            })?;
+            let input = self.inner.tab.input().clone();
             mouse::move_realistic(&input, &self.inner.tab, cx, cy).await
         })
         .await
@@ -222,9 +218,7 @@ impl Element {
                 .ok_or_else(|| ZendriverError::Navigation("element has no bounding box".into()))?;
             let cx = bbox.x + bbox.width / 2.0;
             let cy = bbox.y + bbox.height / 2.0;
-            let input = self.inner.tab.input().ok_or_else(|| {
-                ZendriverError::Navigation("no input controller available".into())
-            })?;
+            let input = self.inner.tab.input().clone();
             mouse::move_raw(&input, &self.inner.tab, cx, cy).await
         })
         .await
@@ -367,9 +361,7 @@ impl Element {
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::input::InputController;
     use crate::tab::Tab;
-    use zendriver_stealth::InputProfile;
     use zendriver_transport::testing::MockConnection;
     use zendriver_transport::SessionHandle;
 
@@ -377,11 +369,11 @@ mod tests {
     async fn hover_dispatches_input_dispatchmouseevent_with_type_mousemoved() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        // `native` profile: fast (10 px/ms ⇒ 0.5 ms segment delay) and
-        // zero jitter ⇒ stable Bezier output. Deterministic seed pins the
+        // `Tab::new_for_test` seeds an `InputController` from the native
+        // profile (fast: 10 px/ms ⇒ 0.5 ms segment delay; zero jitter ⇒
+        // stable Bezier output) with deterministic seed 42 — pinning the
         // RNG path in case a future profile tweak adds entropy.
-        let input = InputController::new_with_seed(InputProfile::native(), 0xC0FFEE);
-        let tab = Tab::new_with_input(sess, input);
+        let tab = Tab::new_for_test(sess);
         let el = Element::from_jsret(tab.clone(), 99, "R1".to_string());
 
         let fut = tokio::spawn({
@@ -479,12 +471,12 @@ mod tests {
     async fn click_dispatches_mousemoved_then_mousepressed_then_mousereleased() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        // `native` profile: fast (zero realism overhead) — Bezier path still
-        // emits, but with zero jitter + 10 px/ms each segment dispatches at
-        // 0.5 ms intervals. Deterministic seed pins the path in case future
-        // profile tweaks change entropy expectations.
-        let input = InputController::new_with_seed(InputProfile::native(), 0xC0FFEE);
-        let tab = Tab::new_with_input(sess, input);
+        // `Tab::new_for_test` seeds the native input profile (fast, zero
+        // jitter) with deterministic seed 42. Bezier path still emits N
+        // mouseMoved frames, then exactly one mousePressed + one
+        // mouseReleased — the per-tab `InputController` lives on `TabInner`
+        // since P4 T0 (no `Browser::input()` dance any more).
+        let tab = Tab::new_for_test(sess);
         let el = Element::from_jsret(tab.clone(), 99, "R1".to_string());
 
         let fut = tokio::spawn({
@@ -583,7 +575,7 @@ mod tests {
     async fn set_value_dispatches_call_function_on_with_value_argument() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
         let el = Element::from_jsret(tab, 7, "R1".to_string());
 
         let fut = tokio::spawn({
@@ -615,7 +607,7 @@ mod tests {
     async fn upload_files_dispatches_dom_set_file_input_files_with_paths() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
         let el = Element::from_jsret(tab, 42, "R1".to_string());
 
         let paths: &[&std::path::Path] = &[

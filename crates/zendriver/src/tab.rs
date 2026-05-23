@@ -25,19 +25,17 @@ pub struct Tab {
 pub(crate) struct TabInner {
     pub(crate) session: SessionHandle,
     pub(crate) isolated_world: tokio::sync::Mutex<IsolatedWorldCache>,
-    /// Weak ref to the owning `BrowserInner`. Used by Element actions to
-    /// reach the shared `InputController`. `Weak` breaks the
-    /// Browser→Tab→Browser cycle. Read by `Tab::input()`, which is
-    /// consumed by later P3 tasks (Element actions).
+    /// Weak ref to the owning `BrowserInner`. Used by future P4 tasks to
+    /// reach Browser-wide resources (CookieJar, tabs registry). `Weak`
+    /// breaks the Browser→Tab→Browser cycle.
     #[allow(dead_code)]
     pub(crate) browser: std::sync::Weak<crate::browser::BrowserInner>,
-    /// Test-only override for `Tab::input()` — production wiring goes
-    /// through `browser.upgrade()`, but unit tests for Element actions
-    /// (T19+) need an `InputController` without standing up a full
-    /// `BrowserInner`. When `Some`, `Tab::input()` returns this clone
-    /// in preference to the `browser` lookup.
-    #[cfg(test)]
-    pub(crate) test_input: Option<Arc<InputController>>,
+    /// Per-Tab input controller. Each tab owns its own cursor + held-modifier
+    /// state — distinct tabs in the same Browser have independent pointers.
+    /// `Element` actions clone this `Arc` to drive `mouse::*` / `keyboard::*`
+    /// dispatch helpers; the shared mutex inside `InputController` serializes
+    /// per-tab writes without crossing tab boundaries.
+    pub(crate) input: Arc<InputController>,
 }
 
 #[derive(Default)]
@@ -50,46 +48,44 @@ impl Tab {
     pub(crate) fn new(
         session: SessionHandle,
         browser: std::sync::Weak<crate::browser::BrowserInner>,
+        input: Arc<InputController>,
     ) -> Self {
         Self {
             inner: Arc::new(TabInner {
                 session,
                 isolated_world: tokio::sync::Mutex::new(IsolatedWorldCache::default()),
                 browser,
-                #[cfg(test)]
-                test_input: None,
+                input,
             }),
         }
     }
 
-    /// Test-only constructor: same as [`Tab::new`] but additionally seeds
-    /// `Tab::input()` so unit tests for Element actions (T19+) can drive a
-    /// real [`InputController`] without standing up a full `BrowserInner`.
+    /// Test-only constructor: builds a `Tab` with a deterministic seeded
+    /// [`InputController`] (native input profile, seed `42`) and an empty
+    /// `Weak` browser ref. Replaces the P3 `Tab::new(sess, Weak::new())`
+    /// pattern that paired with `Tab::input() -> Option<_>`; now that
+    /// `Tab::input()` returns `&Arc<InputController>` unconditionally, tests
+    /// must seed a controller at construction time.
     #[cfg(test)]
-    pub(crate) fn new_with_input(session: SessionHandle, input: Arc<InputController>) -> Self {
-        Self {
-            inner: Arc::new(TabInner {
-                session,
-                isolated_world: tokio::sync::Mutex::new(IsolatedWorldCache::default()),
-                browser: std::sync::Weak::new(),
-                test_input: Some(input),
-            }),
-        }
+    pub(crate) fn new_for_test(session: SessionHandle) -> Self {
+        Self::new(
+            session,
+            std::sync::Weak::new(),
+            crate::input::InputController::new_with_seed(
+                zendriver_stealth::InputProfile::native(),
+                42,
+            ),
+        )
     }
 
-    /// Returns a strong handle to the owning Browser's `InputController`,
-    /// or `None` if the Browser has been dropped (typically only in
-    /// test-only Tabs constructed with `Weak::new()`). Consumed by later
-    /// P3 tasks (Element actions).
-    #[allow(dead_code)]
-    pub(crate) fn input(&self) -> Option<Arc<InputController>> {
-        #[cfg(test)]
-        {
-            if let Some(inp) = &self.inner.test_input {
-                return Some(inp.clone());
-            }
-        }
-        self.inner.browser.upgrade().map(|b| b.input.clone())
+    /// The per-Tab [`InputController`]. Each tab carries its own cursor +
+    /// modifier state; `Element` actions (`click`, `hover`, `type_text`,
+    /// `press`) call this to drive `mouse::*` / `keyboard::*` dispatch.
+    /// Always returns a valid handle — distinct from the P3 shape that
+    /// returned `Option` to handle the `Weak::new()` test case.
+    #[must_use]
+    pub fn input(&self) -> &Arc<InputController> {
+        &self.inner.input
     }
 
     /// Escape hatch: raw `SessionHandle` for advanced users who need to send
@@ -336,7 +332,7 @@ mod tests {
     async fn goto_sends_page_enable_then_page_navigate_with_url() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
 
         let fut = tokio::spawn({
             let t = tab.clone();
@@ -358,7 +354,7 @@ mod tests {
     async fn goto_returns_navigation_error_when_chrome_reports_errortext() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
 
         let fut = tokio::spawn({
             let t = tab.clone();
@@ -386,7 +382,7 @@ mod tests {
     async fn evaluate_main_returns_typed_value() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
 
         let fut = tokio::spawn({
             let t = tab.clone();
@@ -408,7 +404,7 @@ mod tests {
     async fn evaluate_main_returns_js_exception_when_chrome_reports_one() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
 
         let fut = tokio::spawn({
             let t = tab.clone();
@@ -440,7 +436,7 @@ mod tests {
     async fn evaluate_isolated_creates_world_then_evaluates() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
 
         let fut = tokio::spawn({
             let t = tab.clone();
@@ -481,7 +477,7 @@ mod tests {
     async fn evaluate_caches_context_id_across_calls() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
 
         // First call: full handshake + eval.
         let fut1 = tokio::spawn({
@@ -530,7 +526,7 @@ mod tests {
     async fn evaluate_recreates_world_after_context_destroyed_error() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
 
         // --- Call 1: establishes cache, succeeds. ---
         let fut1 = tokio::spawn({
@@ -615,7 +611,7 @@ mod tests {
     async fn url_returns_parsed_url_from_target_info() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
 
         let fut = tokio::spawn({
             let t = tab.clone();
@@ -637,7 +633,7 @@ mod tests {
     async fn close_sends_target_detach_with_session_id() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S42");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
 
         let fut = tokio::spawn({
             let t = tab.clone();
@@ -655,7 +651,7 @@ mod tests {
     async fn screenshot_sends_page_capturescreenshot_without_clip_and_decodes_base64() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
 
         let fut = tokio::spawn({
             let t = tab.clone();
@@ -679,7 +675,7 @@ mod tests {
     async fn title_returns_string_from_target_info() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
 
         let fut = tokio::spawn({
             let t = tab.clone();

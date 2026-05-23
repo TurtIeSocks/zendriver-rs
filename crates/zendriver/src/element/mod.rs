@@ -258,7 +258,7 @@ mod tests {
     async fn from_jsret_yields_evaluation_origin() {
         let (_mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
         let el = Element::from_jsret(tab, 7, "R7".to_string());
         assert!(matches!(el.inner.origin, ElementOrigin::Evaluation));
         conn.shutdown();
@@ -268,7 +268,7 @@ mod tests {
     async fn remote_object_id_cloned_errors_after_clear() {
         let (_mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
         let el = Element::from_jsret(tab, 1, "R1".to_string());
 
         // Initially OK.

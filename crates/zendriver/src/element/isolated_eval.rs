@@ -142,7 +142,7 @@ mod tests {
         //   5. Runtime.releaseObject        (best-effort cleanup)
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
         let el = Element::from_jsret(tab, 314, "R_MAIN".to_string());
 
         let fut = tokio::spawn({

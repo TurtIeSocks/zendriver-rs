@@ -739,7 +739,7 @@ mod tests {
     async fn css_one_sends_query_selector_with_selector() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
 
         let fut = tokio::spawn({
             let t = tab.clone();
@@ -784,7 +784,7 @@ mod tests {
         // immediately without needing the full describeNode dance.
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
 
         let fut = tokio::spawn({
             let t = tab.clone();
@@ -835,7 +835,7 @@ mod tests {
         // builds `new RegExp(<pat>, <flags>)` with both strings present.
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
 
         let fut = tokio::spawn({
             let t = tab.clone();
@@ -888,7 +888,7 @@ mod tests {
         // and return a RemoteRef with the resolved id.
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
 
         let fut = tokio::spawn({
             let t = tab.clone();

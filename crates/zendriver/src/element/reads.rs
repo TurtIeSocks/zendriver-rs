@@ -210,7 +210,7 @@ mod tests {
     async fn attr_returns_some_when_attribute_present() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
         let el = Element::from_jsret(tab, 1, "R1".to_string());
 
         let fut = tokio::spawn({
@@ -241,7 +241,7 @@ mod tests {
     async fn attrs_returns_hashmap_of_all_attributes() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
         let el = Element::from_jsret(tab, 1, "R1".to_string());
 
         let fut = tokio::spawn({
@@ -278,7 +278,7 @@ mod tests {
     async fn bounding_box_parses_dom_get_box_model_content_quad() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
         let el = Element::from_jsret(tab, 42, "R1".to_string());
 
         let fut = tokio::spawn({

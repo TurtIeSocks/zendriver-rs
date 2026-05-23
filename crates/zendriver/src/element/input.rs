@@ -21,16 +21,13 @@
 //! the state mutex directly — that's a P4 concern when the public
 //! input-state API lands.
 //!
-//! `Tab::input()` returns `None` when the owning `Browser`'s `Weak` ref
-//! can't upgrade — true for unit tests that build a `Tab` via
-//! [`crate::tab::Tab::new`] with `std::sync::Weak::new()`. The keyboard
-//! methods surface that as
-//! `ZendriverError::Navigation("no input controller available")` so tests
-//! see the mis-configuration without a panic. Tests that exercise the
-//! full path use [`crate::tab::Tab::new_with_input`].
+//! Post-P4 T0: `Tab::input()` returns `&Arc<InputController>` directly
+//! (the controller lives on `TabInner` now, not the owning Browser).
+//! Tests build a `Tab` via [`crate::tab::Tab::new_for_test`], which seeds
+//! a deterministic native [`InputController`] (seed `42`).
 
 use crate::element::Element;
-use crate::error::{Result, ZendriverError};
+use crate::error::Result;
 use crate::input::keyboard::{self, Key, KeyModifiers};
 
 impl Element {
@@ -48,9 +45,7 @@ impl Element {
             let text = text.clone();
             async move {
                 self.focus().await?;
-                let input = self.inner.tab.input().ok_or_else(|| {
-                    ZendriverError::Navigation("no input controller available".into())
-                })?;
+                let input = self.inner.tab.input().clone();
                 keyboard::type_text_realistic(&input, &self.inner.tab, &text).await
             }
         })
@@ -70,9 +65,7 @@ impl Element {
             let text = text.clone();
             async move {
                 self.focus().await?;
-                let input = self.inner.tab.input().ok_or_else(|| {
-                    ZendriverError::Navigation("no input controller available".into())
-                })?;
+                let input = self.inner.tab.input().clone();
                 keyboard::type_text_raw(&input, &self.inner.tab, &text).await
             }
         })
@@ -88,9 +81,7 @@ impl Element {
     pub async fn press(&self, key: Key) -> Result<()> {
         self.with_refresh(|| async move {
             self.focus().await?;
-            let input = self.inner.tab.input().ok_or_else(|| {
-                ZendriverError::Navigation("no input controller available".into())
-            })?;
+            let input = self.inner.tab.input().clone();
             let mods = input.state.lock().await.modifiers_held.cdp_bits();
             dispatch_key(&self.inner.tab, key, mods).await
         })
@@ -109,13 +100,6 @@ impl Element {
     pub async fn press_with(&self, key: Key, mods: KeyModifiers) -> Result<()> {
         self.with_refresh(|| async move {
             self.focus().await?;
-            // `Tab::input()` is checked even though press_with doesn't
-            // need the controller — symmetry with the other keyboard
-            // methods, so misconfigured test setups error the same way
-            // regardless of which method they exercise.
-            let _input = self.inner.tab.input().ok_or_else(|| {
-                ZendriverError::Navigation("no input controller available".into())
-            })?;
             dispatch_key(&self.inner.tab, key, mods.cdp_bits()).await
         })
         .await
@@ -136,10 +120,8 @@ async fn dispatch_key(tab: &crate::tab::Tab, key: Key, modifier_bits: i32) -> Re
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::input::InputController;
     use crate::tab::Tab;
     use serde_json::{json, Value};
-    use zendriver_stealth::InputProfile;
     use zendriver_transport::testing::MockConnection;
     use zendriver_transport::SessionHandle;
 
@@ -147,8 +129,10 @@ mod tests {
     async fn type_text_raw_emits_two_dispatchkeyevent_per_char() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let input = InputController::new_with_seed(InputProfile::native(), 0xC0FFEE);
-        let tab = Tab::new_with_input(sess, input);
+        // `Tab::new_for_test` seeds the native input profile with a
+        // deterministic seed; the raw type path doesn't sample the RNG
+        // (no jitter, no typos), so seed value is irrelevant here.
+        let tab = Tab::new_for_test(sess);
         let el = Element::from_jsret(tab.clone(), 17, "R17".to_string());
 
         let fut = tokio::spawn({

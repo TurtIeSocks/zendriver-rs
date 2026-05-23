@@ -133,7 +133,7 @@ mod tests {
     async fn parent_calls_runtime_callfunctionon_with_parent_element() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
         let el = Element::from_jsret(tab, 7, "R7".to_string());
 
         let fut = tokio::spawn({
@@ -185,7 +185,7 @@ mod tests {
         // subtree-scoped queries from tab-scoped queries.
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
         let el = Element::from_jsret(tab, 9, "ROOT".to_string());
 
         let fut = tokio::spawn({

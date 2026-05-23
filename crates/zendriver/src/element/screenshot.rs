@@ -87,7 +87,7 @@ mod tests {
     async fn screenshot_sends_page_capturescreenshot_with_clip_matching_bbox() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
         let el = Element::from_jsret(tab, 7, "R1".to_string());
 
         let fut = tokio::spawn({

@@ -532,7 +532,7 @@ mod tests {
     async fn one_returns_element_when_query_selector_matches() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
 
         let fut = tokio::spawn({
             let t = tab.clone();
@@ -595,7 +595,7 @@ mod tests {
     async fn one_returns_element_not_found_when_query_returns_empty() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
 
         let fut = tokio::spawn({
             let t = tab.clone();
@@ -644,7 +644,7 @@ mod tests {
     async fn one_or_none_returns_none_on_timeout() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
 
         let fut = tokio::spawn({
             let t = tab.clone();
@@ -736,7 +736,7 @@ mod tests {
         let re = regex::Regex::new("hello.*world").unwrap();
         let (_mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
         let fb = tab.find().text_regex(re);
         let Some(SelectorKind::TextRegex { pattern, flags }) = fb.selector else {
             panic!("expected TextRegex selector kind");
@@ -750,7 +750,7 @@ mod tests {
     async fn text_regex_with_flags_passes_pattern_and_flags_through() {
         let (_mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
         let fb = tab.find().text_regex_with_flags("h.*w", "im");
         let Some(SelectorKind::TextRegex { pattern, flags }) = fb.selector else {
             panic!("expected TextRegex selector kind");
@@ -764,7 +764,7 @@ mod tests {
     async fn later_selector_overrides_earlier() {
         let (_mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
         let fb = tab.find().css("#a").xpath("//b");
         let Some(SelectorKind::Xpath(expr)) = fb.selector else {
             panic!("expected Xpath selector kind after .xpath() override");
@@ -777,7 +777,7 @@ mod tests {
     async fn modifiers_chain_and_persist_on_builder() {
         let (_mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
         let fb = tab
             .find()
             .css(".item")
@@ -798,7 +798,7 @@ mod tests {
         // (vs FindBuilder::one which picks one based on nth).
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
 
         let fut = tokio::spawn({
             let t = tab.clone();
@@ -862,7 +862,7 @@ mod tests {
     async fn many_or_empty_returns_empty_vec_on_timeout() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
 
         let fut = tokio::spawn({
             let t = tab.clone();
@@ -908,7 +908,7 @@ mod tests {
         // resolve_many path.
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
+        let tab = Tab::new_for_test(sess);
 
         let fut = tokio::spawn({
             let t = tab.clone();
