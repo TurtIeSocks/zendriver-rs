@@ -15,5 +15,5 @@ pub mod testing;
 
 // Re-exports added as types land in later Phase 1 tasks:
 // pub use connection::Connection;
-// pub use error::TransportError;
+pub use error::TransportError;
 // pub use session::SessionHandle;
