@@ -38,6 +38,9 @@ pub enum ZendriverError {
 
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("stealth: {0}")]
+    Stealth(#[from] zendriver_stealth::StealthError),
 }
 
 impl From<CallError> for ZendriverError {
@@ -169,6 +172,14 @@ mod tests {
         let ce = CallError::Transport(zendriver_transport::TransportError::Shutdown);
         let ze: ZendriverError = ce.into();
         assert!(matches!(ze, ZendriverError::Transport(_)));
+    }
+
+    #[test]
+    fn from_stealth_error_works() {
+        let se = zendriver_stealth::StealthError::ChromeVersionDetect("test".into());
+        let ze: ZendriverError = se.into();
+        assert!(matches!(ze, ZendriverError::Stealth(_)));
+        assert!(ze.to_string().contains("test"));
     }
 
     #[test]
