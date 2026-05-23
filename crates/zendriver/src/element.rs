@@ -35,9 +35,8 @@ impl Element {
         }
     }
 
-    // Accessor consumed by later phases; no Phase 1 caller yet.
-    #[allow(dead_code)]
-    pub(crate) fn tab(&self) -> &Tab {
+    /// Accessor for the parent `Tab` this element was queried from.
+    pub fn tab(&self) -> &Tab {
         &self.inner.tab
     }
 
@@ -72,8 +71,6 @@ impl Element {
     }
 
     /// Evaluate a JS expression where `el` is bound to this element handle.
-    // Public API consumed by later phases; no Phase 1 caller yet.
-    #[allow(dead_code)]
     pub async fn evaluate<T: DeserializeOwned>(&self, js: impl AsRef<str>) -> Result<T> {
         let function = format!("function(el){{ return ({}) }}", js.as_ref());
         let result = self
