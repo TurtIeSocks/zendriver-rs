@@ -396,4 +396,18 @@ mod tests {
         let lang = flags.iter().position(|f| f == "--lang=en-US").unwrap();
         assert!(proxy < lang);
     }
+
+    #[test]
+    fn default_launch_flags_snapshot() {
+        let b = BrowserBuilder::new();
+        let flags = b.build_flags(std::path::Path::new("/tmp/test-user-data"));
+        insta::assert_yaml_snapshot!("default_launch_flags", flags);
+    }
+
+    #[test]
+    fn non_headless_launch_flags_snapshot() {
+        let b = BrowserBuilder::new().headless(false);
+        let flags = b.build_flags(std::path::Path::new("/tmp/test-user-data"));
+        insta::assert_yaml_snapshot!("non_headless_launch_flags", flags);
+    }
 }

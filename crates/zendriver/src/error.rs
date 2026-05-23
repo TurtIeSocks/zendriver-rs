@@ -105,4 +105,39 @@ mod tests {
         assert!(matches!(ze, ZendriverError::Transport(_)));
         assert!(ze.to_string().contains("connection shut down"));
     }
+
+    #[test]
+    fn error_displays_snapshot() {
+        let cases = vec![
+            (
+                "element_not_found",
+                ZendriverError::ElementNotFound {
+                    selector: "button.foo".into(),
+                }
+                .to_string(),
+            ),
+            (
+                "timeout_5s",
+                ZendriverError::Timeout(Duration::from_secs(5)).to_string(),
+            ),
+            (
+                "cdp_invalid_params",
+                ZendriverError::Cdp {
+                    code: -32602,
+                    message: "Invalid params".into(),
+                    data: None,
+                }
+                .to_string(),
+            ),
+            (
+                "navigation",
+                ZendriverError::Navigation("ERR_NAME_NOT_RESOLVED".into()).to_string(),
+            ),
+            (
+                "js_exception",
+                ZendriverError::JsException("Error: boom".into()).to_string(),
+            ),
+        ];
+        insta::assert_yaml_snapshot!("error_displays", cases);
+    }
 }

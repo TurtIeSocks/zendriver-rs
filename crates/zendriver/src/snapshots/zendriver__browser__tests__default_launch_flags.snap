@@ -1,0 +1,10 @@
+---
+source: crates/zendriver/src/browser.rs
+expression: flags
+---
+- "--remote-debugging-port=0"
+- "--user-data-dir=/tmp/test-user-data"
+- "--no-first-run"
+- "--no-default-browser-check"
+- "--headless=new"
+- "--disable-gpu"

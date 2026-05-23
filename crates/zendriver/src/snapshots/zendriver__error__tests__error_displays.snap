@@ -1,0 +1,14 @@
+---
+source: crates/zendriver/src/error.rs
+expression: cases
+---
+- - element_not_found
+  - "element not found: button.foo"
+- - timeout_5s
+  - timed out after 5s
+- - cdp_invalid_params
+  - "CDP RPC error [-32602] Invalid params"
+- - navigation
+  - "navigation failed: ERR_NAME_NOT_RESOLVED"
+- - js_exception
+  - "javascript exception: Error: boom"
