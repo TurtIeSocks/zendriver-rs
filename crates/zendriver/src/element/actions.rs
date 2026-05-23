@@ -40,6 +40,7 @@
 //! `focus` and `scroll_into_view` don't dispatch pointer events and need
 //! no `InputController`, so they work in those test setups unchanged.
 
+use std::path::Path;
 use std::time::Duration;
 
 use serde_json::json;
@@ -270,6 +271,96 @@ impl Element {
         })
         .await
     }
+
+    /// Set this element's `value` directly + fire `input` and `change` events.
+    /// Bypasses keydown/keyup (use [`Element::type_text`] in T22 for a real
+    /// keystroke sequence) but dispatches the bubbled `input` + `change`
+    /// events so React-style controlled inputs see the update through their
+    /// onChange handlers. `{ bubbles: true }` matches what the user agent
+    /// fires on real keystrokes, so listeners attached to ancestors still
+    /// see the change.
+    ///
+    /// No actionability gate — `set_value` is the fast-path for tests +
+    /// automation flows that don't care about visibility/enabledness. If
+    /// you need the gate, focus the element first (which runs
+    /// [`ActionabilityCheck::TEXT_INPUT`]) then call this.
+    pub async fn set_value(&self, value: impl AsRef<str>) -> Result<()> {
+        let value = value.as_ref().to_string();
+        self.with_refresh(|| {
+            let value = value.clone();
+            async move {
+                let _ = self
+                    .call_on_main(
+                        "function(el, v){ \
+                            this.value = v; \
+                            this.dispatchEvent(new Event('input', {bubbles: true})); \
+                            this.dispatchEvent(new Event('change', {bubbles: true})); \
+                        }",
+                        json!([{ "value": value }]),
+                    )
+                    .await?;
+                Ok(())
+            }
+        })
+        .await
+    }
+
+    /// Clear this element's `value` by assigning `''` and firing a bubbled
+    /// `input` event. The P3 simplification omits the `change` event +
+    /// focus + Backspace sequence — for contenteditable / non-`<input>`
+    /// clearing semantics, use [`Element::type_text`] in T22 once it lands.
+    ///
+    /// No actionability gate — same rationale as [`Element::set_value`].
+    pub async fn clear(&self) -> Result<()> {
+        self.with_refresh(|| async move {
+            let _ = self
+                .call_on_main(
+                    "function(){ \
+                        this.value = ''; \
+                        this.dispatchEvent(new Event('input', {bubbles: true})); \
+                    }",
+                    json!([]),
+                )
+                .await?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Attach files to this `<input type=\"file\">` element via
+    /// `DOM.setFileInputFiles`. Bypasses the OS file picker entirely —
+    /// CDP wires the paths straight into the input's `FileList`, and
+    /// the page sees a normal `change` event from the input.
+    ///
+    /// P3 scope is direct `<input type=\"file\">` only; routing through
+    /// a hidden input clicked by a label / button wrapper is the page's
+    /// responsibility. Paths are passed as their lossy `to_string_lossy()`
+    /// representation, matching CDP's UTF-8 string contract.
+    pub async fn upload_files<P: AsRef<Path>>(&self, paths: &[P]) -> Result<()> {
+        let files: Vec<String> = paths
+            .iter()
+            .map(|p| p.as_ref().to_string_lossy().into_owned())
+            .collect();
+        self.with_refresh(|| {
+            let files = files.clone();
+            async move {
+                let backend_node_id = self.backend_node_id_cloned().await?;
+                let _ = self
+                    .inner
+                    .tab
+                    .call(
+                        "DOM.setFileInputFiles",
+                        json!({
+                            "files": files,
+                            "backendNodeId": backend_node_id,
+                        }),
+                    )
+                    .await?;
+                Ok(())
+            }
+        })
+        .await
+    }
 }
 
 #[cfg(test)]
@@ -485,6 +576,69 @@ mod tests {
             last_kind, "mouseReleased",
             "final dispatch should be mouseReleased"
         );
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn set_value_dispatches_call_function_on_with_value_argument() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new(sess, std::sync::Weak::new());
+        let el = Element::from_jsret(tab, 7, "R1".to_string());
+
+        let fut = tokio::spawn({
+            let e = el.clone();
+            async move { e.set_value("hello world").await }
+        });
+
+        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let sent = mock.last_sent();
+        let decl = sent["params"]["functionDeclaration"].as_str().unwrap();
+        // JS body fires both input + change events for React-style listeners.
+        assert!(decl.contains("this.value = v"));
+        assert!(decl.contains("'input'"));
+        assert!(decl.contains("'change'"));
+        // call_on_main prepends the element {objectId:...}; the user-supplied
+        // value lands at arguments[1].
+        let args = sent["params"]["arguments"].as_array().unwrap();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0]["objectId"], "R1");
+        assert_eq!(args[1]["value"], "hello world");
+        mock.reply(id, json!({ "result": { "type": "undefined" } }))
+            .await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn upload_files_dispatches_dom_set_file_input_files_with_paths() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new(sess, std::sync::Weak::new());
+        let el = Element::from_jsret(tab, 42, "R1".to_string());
+
+        let paths: &[&std::path::Path] = &[
+            std::path::Path::new("/tmp/a.txt"),
+            std::path::Path::new("/tmp/b.pdf"),
+        ];
+
+        let fut = tokio::spawn({
+            let e = el.clone();
+            let paths: Vec<std::path::PathBuf> = paths.iter().map(|p| p.to_path_buf()).collect();
+            async move { e.upload_files(&paths).await }
+        });
+
+        let id = mock.expect_cmd("DOM.setFileInputFiles").await;
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["backendNodeId"], 42);
+        let files = sent["params"]["files"].as_array().unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0], "/tmp/a.txt");
+        assert_eq!(files[1], "/tmp/b.pdf");
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
         conn.shutdown();
     }
 }
