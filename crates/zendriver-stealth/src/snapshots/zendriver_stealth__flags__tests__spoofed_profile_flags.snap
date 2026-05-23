@@ -1,0 +1,23 @@
+---
+source: crates/zendriver-stealth/src/flags.rs
+expression: flags
+---
+- "--no-first-run"
+- "--no-service-autorun"
+- "--no-default-browser-check"
+- "--homepage=about:blank"
+- "--no-pings"
+- "--password-store=basic"
+- "--disable-infobars"
+- "--disable-breakpad"
+- "--disable-component-update"
+- "--disable-backgrounding-occluded-windows"
+- "--disable-renderer-backgrounding"
+- "--disable-background-networking"
+- "--disable-dev-shm-usage"
+- "--disable-features=IsolateOrigins,DisableLoadExtensionCommandLineSwitch,site-per-process"
+- "--disable-session-crashed-bubble"
+- "--disable-search-engine-choice-screen"
+- "--remote-allow-origins=*"
+- "--webrtc-ip-handling-policy=disable_non_proxied_udp"
+- "--force-webrtc-ip-handling-policy"
