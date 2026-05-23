@@ -1,6 +1,7 @@
 //! `Connection` — the public handle to the transport actor.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::{Stream, StreamExt};
 use serde::de::DeserializeOwned;
@@ -12,19 +13,27 @@ use tokio_util::sync::CancellationToken;
 use crate::actor::{run_actor, OutboundCmd, EVENT_BUS_CAPACITY};
 use crate::error::{CallError, TransportError};
 use crate::frame::RawEvent;
+use crate::observer::TargetObserver;
+
+/// Default ceiling on a single observer's `on_target_attached` future, applied
+/// before the actor releases the debugger via
+/// `Runtime.runIfWaitingForDebugger`. Slow observers don't block the actor
+/// indefinitely; a misbehaving one trips the timeout and the debugger releases.
+pub(crate) const DEFAULT_OBSERVER_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Cheap-to-clone handle to the connection actor. All `Tab`s and `Element`s
 /// hold one of these (via `Arc<...>`); the actor itself runs in a separate
 /// tokio task.
 #[derive(Clone)]
 pub struct Connection {
-    inner: Arc<ConnectionInner>,
+    pub(crate) inner: Arc<ConnectionInner>,
 }
 
 pub(crate) struct ConnectionInner {
     pub(crate) cmd_tx: mpsc::Sender<OutboundCmd>,
     pub(crate) event_tx: broadcast::Sender<RawEvent>,
     pub(crate) shutdown: CancellationToken,
+    pub(crate) observer_timeout: Duration,
 }
 
 impl Connection {
@@ -108,18 +117,77 @@ impl Connection {
     pub fn shutdown_token(&self) -> CancellationToken {
         self.inner.shutdown.clone()
     }
+
+    /// Per-connection observer timeout. Exposed for the actor's handler
+    /// (and for tests that override the default).
+    pub(crate) fn observer_timeout(&self) -> Duration {
+        self.inner.observer_timeout
+    }
 }
 
-/// Connect to a Chrome DevTools WebSocket URL and spawn the actor.
+/// Connect to a Chrome DevTools WebSocket URL and spawn the actor with no
+/// observers. Convenience wrapper for [`connect_with_observers`].
 pub async fn connect(ws_url: &str) -> Result<Connection, TransportError> {
+    connect_with_observers(ws_url, Vec::new()).await
+}
+
+/// Connect to a Chrome DevTools WebSocket URL and spawn the actor with the
+/// provided `TargetObserver` chain. Observers fire on `Target.attachedToTarget`
+/// (serially, in registration order) before the actor releases the debugger.
+pub async fn connect_with_observers(
+    ws_url: &str,
+    observers: Vec<Arc<dyn TargetObserver>>,
+) -> Result<Connection, TransportError> {
     use tokio_tungstenite::connect_async;
     let (ws, _resp) = connect_async(ws_url).await?;
-    Ok(spawn_actor(ws))
+    Ok(spawn_actor_with_observers(ws, observers))
 }
 
-/// Spawn the actor on the given pre-connected WebSocket. Mainly for tests
-/// and for `connect`; production code uses `connect`.
+/// Spawn the actor on the given pre-connected WebSocket with no observers.
+/// Mainly for tests and for `connect`; production code uses `connect`.
 pub fn spawn_actor<S>(ws: S) -> Connection
+where
+    S: futures::Sink<
+            tokio_tungstenite::tungstenite::Message,
+            Error = tokio_tungstenite::tungstenite::Error,
+        > + futures::Stream<
+            Item = Result<
+                tokio_tungstenite::tungstenite::Message,
+                tokio_tungstenite::tungstenite::Error,
+            >,
+        > + Send
+        + Unpin
+        + 'static,
+{
+    spawn_actor_with_observers(ws, Vec::new())
+}
+
+/// Spawn the actor on the given pre-connected WebSocket with `observers`.
+pub fn spawn_actor_with_observers<S>(ws: S, observers: Vec<Arc<dyn TargetObserver>>) -> Connection
+where
+    S: futures::Sink<
+            tokio_tungstenite::tungstenite::Message,
+            Error = tokio_tungstenite::tungstenite::Error,
+        > + futures::Stream<
+            Item = Result<
+                tokio_tungstenite::tungstenite::Message,
+                tokio_tungstenite::tungstenite::Error,
+            >,
+        > + Send
+        + Unpin
+        + 'static,
+{
+    spawn_actor_with_observers_and_timeout(ws, observers, DEFAULT_OBSERVER_TIMEOUT)
+}
+
+/// Spawn the actor with a custom `observer_timeout`. Exposed primarily for
+/// tests that need to assert timeout behavior without waiting on the 5 s
+/// default; production callers should prefer [`spawn_actor_with_observers`].
+pub fn spawn_actor_with_observers_and_timeout<S>(
+    ws: S,
+    observers: Vec<Arc<dyn TargetObserver>>,
+    observer_timeout: Duration,
+) -> Connection
 where
     S: futures::Sink<
             tokio_tungstenite::tungstenite::Message,
@@ -136,14 +204,20 @@ where
     let (cmd_tx, cmd_rx) = mpsc::channel::<OutboundCmd>(64);
     let (event_tx, _event_rx) = broadcast::channel::<RawEvent>(EVENT_BUS_CAPACITY);
     let shutdown = CancellationToken::new();
-    tokio::spawn(run_actor(ws, cmd_rx, event_tx.clone(), shutdown.clone()));
-    Connection {
-        inner: Arc::new(ConnectionInner {
-            cmd_tx,
-            event_tx,
-            shutdown,
-        }),
-    }
+    let inner = Arc::new(ConnectionInner {
+        cmd_tx,
+        event_tx: event_tx.clone(),
+        shutdown: shutdown.clone(),
+        observer_timeout,
+    });
+    // Actor task uses a weak ref to ConnectionInner so it can reconstruct a
+    // Connection for observer-handler tasks without forming a strong cycle
+    // (the actor's lifetime would otherwise transitively own itself).
+    let weak_inner = Arc::downgrade(&inner);
+    tokio::spawn(run_actor(
+        ws, cmd_rx, event_tx, shutdown, observers, weak_inner,
+    ));
+    Connection { inner }
 }
 
 /// Re-export the test `DriverStream` type at a shared visibility level so
