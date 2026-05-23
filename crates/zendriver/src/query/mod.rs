@@ -5,6 +5,8 @@ pub mod modifiers;
 pub mod role;
 pub mod selectors;
 
+pub use role::AriaRole;
+
 use std::time::Duration;
 
 use serde_json::json;

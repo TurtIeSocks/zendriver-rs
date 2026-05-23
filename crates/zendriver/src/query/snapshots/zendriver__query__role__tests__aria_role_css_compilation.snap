@@ -1,0 +1,25 @@
+---
+source: crates/zendriver/src/query/role.rs
+expression: css
+---
+- "[role=\"button\"]"
+- "[role=\"link\"]"
+- "[role=\"textbox\"]"
+- "[role=\"combobox\"]"
+- "[role=\"checkbox\"]"
+- "[role=\"radio\"]"
+- "[role=\"tab\"]"
+- "[role=\"menu\"]"
+- "[role=\"menuitem\"]"
+- "[role=\"dialog\"]"
+- "[role=\"heading\"]"
+- "[role=\"banner\"]"
+- "[role=\"navigation\"]"
+- "[role=\"main\"]"
+- "[role=\"article\"]"
+- "[role=\"list\"]"
+- "[role=\"listitem\"]"
+- "[role=\"row\"]"
+- "[role=\"cell\"]"
+- "[role=\"columnheader\"]"
+- "[role=\"rowheader\"]"

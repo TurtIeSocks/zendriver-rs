@@ -15,7 +15,7 @@ pub use browser::{Browser, BrowserBuilder};
 pub use element::Element;
 pub use error::{BrowserError, Result, ZendriverError};
 pub use input::{Key, KeyModifiers, MouseButton, SpecialKey};
-pub use query::FindBuilder;
+pub use query::{AriaRole, FindBuilder};
 pub use tab::Tab;
 
 // Re-export selected transport types for advanced users.
