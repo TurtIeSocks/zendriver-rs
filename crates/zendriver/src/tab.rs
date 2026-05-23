@@ -194,7 +194,7 @@ impl Tab {
                 json!({
                     "frameId": frame_id,
                     "worldName": "zendriver-eval",
-                    "grantUniveralAccess": false,
+                    "grantUniversalAccess": false,
                 }),
             )
             .await?;
