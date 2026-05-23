@@ -144,8 +144,10 @@ where
 }
 
 /// Re-export the test `DriverStream` type at a shared visibility level so
-/// both `actor::tests` and `connection::tests` can construct it.
-#[cfg(test)]
+/// both `actor::tests` and `connection::tests` can construct it. Also used
+/// by the `testing` module when the `testing` feature is enabled, so
+/// downstream crates can build a `MockConnection` against the same plumbing.
+#[cfg(any(test, feature = "testing"))]
 pub(crate) mod test_only {
     use tokio::sync::mpsc;
     use tokio_tungstenite::tungstenite::Message;
