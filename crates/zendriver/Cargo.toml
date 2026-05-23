@@ -38,3 +38,4 @@ insta.workspace               = true
 tracing-subscriber.workspace  = true
 wiremock = { workspace = true, optional = false }
 serial_test = { workspace = true, optional = false }
+zendriver-transport = { workspace = true, features = ["testing"] }
