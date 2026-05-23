@@ -1,0 +1,68 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/zendriver",
+    "crates/zendriver-transport",
+    "crates/zendriver-stealth",
+    "crates/zendriver-cloudflare",
+    "crates/zendriver-interception",
+    "crates/zendriver-fetcher",
+]
+
+[workspace.package]
+version = "0.1.0-dev"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/cdpdriver/zendriver-rs"
+authors = ["zendriver-rs contributors"]
+
+[workspace.dependencies]
+# Internal
+zendriver-transport     = { path = "crates/zendriver-transport", version = "0.1.0-dev" }
+zendriver-stealth       = { path = "crates/zendriver-stealth",       version = "0.1.0-dev" }
+zendriver-cloudflare    = { path = "crates/zendriver-cloudflare",    version = "0.1.0-dev" }
+zendriver-interception  = { path = "crates/zendriver-interception",  version = "0.1.0-dev" }
+zendriver-fetcher       = { path = "crates/zendriver-fetcher",       version = "0.1.0-dev" }
+
+# External — runtime
+tokio              = { version = "1.40",  features = ["full"] }
+tokio-util         = { version = "0.7",   features = ["rt"] }
+tokio-tungstenite  = { version = "0.24" }
+futures            = { version = "0.3" }
+async-trait        = { version = "0.1" }
+
+# External — CDP
+chromiumoxide_cdp  = { version = "0.7" }
+
+# External — serde
+serde              = { version = "1",     features = ["derive"] }
+serde_json         = { version = "1" }
+
+# External — errors / logging
+thiserror          = { version = "1" }
+tracing            = { version = "0.1" }
+
+# External — utilities
+url                = { version = "2" }
+tempfile           = { version = "3" }
+
+# Dev-deps
+tokio-test         = { version = "0.4" }
+wiremock           = { version = "0.6" }
+insta              = { version = "1",     features = ["yaml", "json"] }
+serial_test        = { version = "3" }
+tracing-subscriber = { version = "0.3",   features = ["env-filter"] }
+
+[workspace.lints.rust]
+unsafe_code        = "deny"
+missing_docs       = "warn"
+
+[workspace.lints.clippy]
+pedantic           = { level = "warn", priority = -1 }
+nursery            = { level = "warn", priority = -1 }
+unwrap_used        = "warn"
+expect_used        = "warn"
+panic              = "warn"
+todo               = "warn"
+unimplemented      = "warn"

@@ -1,0 +1,40 @@
+[package]
+name = "zendriver"
+description = "Async-first, undetectable browser automation via the Chrome DevTools Protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme = "../../README.md"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Enables real-Chrome integration tests (requires Chrome installed on $PATH).
+integration-tests = []
+# Re-exports the MockConnection testing helper for downstream users.
+testing = ["zendriver-transport/testing"]
+
+[dependencies]
+zendriver-transport.workspace = true
+chromiumoxide_cdp.workspace   = true
+tokio.workspace               = true
+tokio-util.workspace          = true
+serde.workspace               = true
+serde_json.workspace          = true
+thiserror.workspace           = true
+tracing.workspace             = true
+url.workspace                 = true
+tempfile.workspace            = true
+futures.workspace             = true
+
+[dev-dependencies]
+tokio-test.workspace          = true
+insta.workspace               = true
+tracing-subscriber.workspace  = true
+wiremock = { workspace = true, optional = false }
+serial_test = { workspace = true, optional = false }
