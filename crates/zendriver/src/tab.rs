@@ -227,7 +227,7 @@ impl Tab {
 
     /// Ensure an isolated-world execution context exists for this tab's main
     /// frame, returning its `executionContextId`. Cached after first call.
-    async fn ensure_isolated_world(&self) -> Result<i64> {
+    pub(crate) async fn ensure_isolated_world(&self) -> Result<i64> {
         let mut cache = self.inner.isolated_world.lock().await;
         if let Some(ctx) = cache.context_id {
             return Ok(ctx);

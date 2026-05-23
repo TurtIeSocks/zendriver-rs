@@ -245,15 +245,6 @@ impl Element {
         let value = result.get("value").cloned().unwrap_or(Value::Null);
         serde_json::from_value(value).map_err(ZendriverError::Serde)
     }
-
-    /// Element evaluation in an isolated world. Currently delegates to
-    /// `evaluate_main`; true isolated-world Element evaluation requires
-    /// re-resolving the element via `DOM.resolveNode { executionContextId }`,
-    /// which is more invasive than P2 needs.
-    pub async fn evaluate<T: DeserializeOwned>(&self, js: impl AsRef<str>) -> Result<T> {
-        // TODO(T25): true isolated-world via DOM.resolveNode { executionContextId: <isolated> }
-        self.evaluate_main(js).await
-    }
 }
 
 #[cfg(test)]
