@@ -10,6 +10,6 @@ pub mod ua;
 
 // Re-exports added as types land in Tasks 1–13:
 pub use error::StealthError;
-pub use fingerprint::{Brand, UserAgentMetadata};
+pub use fingerprint::{Brand, Fingerprint, UserAgentMetadata};
 // pub use observer::StealthObserver;
 pub use profile::{Platform, ProfileKind, StealthProfile};
