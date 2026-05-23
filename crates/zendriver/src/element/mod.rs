@@ -230,15 +230,6 @@ impl Element {
         // TODO(T25): true isolated-world via DOM.resolveNode { executionContextId: <isolated> }
         self.evaluate_main(js).await
     }
-
-    /// Click this element via DOM `el.click()`. Phase 1 uses the simple DOM
-    /// dispatch; Phase 3 will upgrade to realistic mouse-move + `Input.dispatchMouseEvent`.
-    pub async fn click(&self) -> Result<()> {
-        let _ = self
-            .call_on("function(){ this.click(); }", json!([]))
-            .await?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -247,31 +238,6 @@ mod tests {
     use super::*;
     use zendriver_transport::testing::MockConnection;
     use zendriver_transport::SessionHandle;
-
-    #[tokio::test]
-    async fn click_calls_runtime_callfunctionon_with_this_dot_click() {
-        let (mut mock, conn) = MockConnection::pair();
-        let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new(sess, std::sync::Weak::new());
-        let el = Element::from_jsret(tab.clone(), 99, "R1".to_string());
-
-        let fut = tokio::spawn({
-            let e = el.clone();
-            async move { e.click().await }
-        });
-
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
-        let last = mock.last_sent();
-        assert_eq!(last["params"]["objectId"], "R1");
-        assert!(last["params"]["functionDeclaration"]
-            .as_str()
-            .unwrap()
-            .contains("this.click()"));
-        mock.reply(id, json!({ "result": { "type": "undefined" } }))
-            .await;
-        fut.await.unwrap().unwrap();
-        conn.shutdown();
-    }
 
     #[tokio::test]
     async fn from_jsret_yields_evaluation_origin() {

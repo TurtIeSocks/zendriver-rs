@@ -12,6 +12,7 @@ pub mod query;
 pub mod tab;
 
 pub use browser::{Browser, BrowserBuilder};
+pub use element::actions::ClickOptions;
 pub use element::Element;
 pub use error::{BrowserError, Result, ZendriverError};
 pub use input::{Key, KeyModifiers, MouseButton, SpecialKey};
