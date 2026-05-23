@@ -42,6 +42,21 @@ pub enum ZendriverError {
     #[error("element not actionable within {0:?}: {1}")]
     NotActionable(std::time::Duration, String),
 
+    #[error("frame not found: {0}")]
+    FrameNotFound(String),
+
+    #[error("tab not found: {0}")]
+    TabNotFound(String),
+
+    #[error("cookie operation failed: {0}")]
+    Cookie(String),
+
+    #[error("storage operation failed: {0}")]
+    Storage(String),
+
+    #[error("history navigation failed: {0}")]
+    HistoryNavigation(String),
+
     #[error("serde: {0}")]
     Serde(#[from] serde_json::Error),
 
@@ -219,6 +234,36 @@ mod tests {
             e.to_string(),
             "element not actionable within 5s: not visible: display: none"
         );
+    }
+
+    #[test]
+    fn display_frame_not_found() {
+        let e = ZendriverError::FrameNotFound("F1".into());
+        assert_eq!(e.to_string(), "frame not found: F1");
+    }
+
+    #[test]
+    fn display_tab_not_found() {
+        let e = ZendriverError::TabNotFound("S2".into());
+        assert_eq!(e.to_string(), "tab not found: S2");
+    }
+
+    #[test]
+    fn display_cookie() {
+        let e = ZendriverError::Cookie("bad domain".into());
+        assert_eq!(e.to_string(), "cookie operation failed: bad domain");
+    }
+
+    #[test]
+    fn display_storage() {
+        let e = ZendriverError::Storage("origin mismatch".into());
+        assert_eq!(e.to_string(), "storage operation failed: origin mismatch");
+    }
+
+    #[test]
+    fn display_history_navigation() {
+        let e = ZendriverError::HistoryNavigation("no back history".into());
+        assert_eq!(e.to_string(), "history navigation failed: no back history");
     }
 
     #[test]
