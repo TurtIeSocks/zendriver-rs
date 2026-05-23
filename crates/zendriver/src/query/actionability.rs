@@ -7,10 +7,13 @@
 //! `ActionabilityCheck` requirements struct that downstream actions use to
 //! describe which checks they need.
 
+use std::time::Duration;
+
 use serde_json::json;
+use tokio::time::Instant;
 
 use crate::element::Element;
-use crate::error::Result;
+use crate::error::{Result, ZendriverError};
 
 /// Set of actionability checks an action wants the element to satisfy
 /// before its CDP dispatch. Per-field booleans gate the corresponding
@@ -158,4 +161,45 @@ pub(crate) async fn check_receives_pointer(el: &Element) -> Result<bool> {
     "#;
     let res = el.call_on_main(js, json!([])).await?;
     Ok(res.get("value").and_then(|v| v.as_bool()).unwrap_or(false))
+}
+
+/// Poll each predicate in `require` at 50 ms intervals until all enabled
+/// checks pass, or `timeout` elapses. On deadline, returns
+/// [`ZendriverError::NotActionable`] with the first-failing check's
+/// human-readable reason ("not visible", "not enabled", "not stable (still
+/// animating)", or "occluded by overlay").
+///
+/// Predicates are evaluated in fixed order: visible → enabled → stable →
+/// receives_pointer. This matches Playwright's gate ordering and avoids
+/// running the more-expensive stability + hit-testing checks while the
+/// element is still hidden or disabled.
+#[allow(dead_code)] // First callers (`click_with`, `hover`, `focus`, …) land in T19/T20/T22/T26.
+pub(crate) async fn wait_actionable(
+    el: &Element,
+    require: ActionabilityCheck,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    let poll_interval = Duration::from_millis(50);
+    loop {
+        let mut failed_reason: Option<&'static str> = None;
+        if require.visible && !check_visible(el).await? {
+            failed_reason = Some("not visible");
+        } else if require.enabled && !check_enabled(el).await? {
+            failed_reason = Some("not enabled");
+        } else if require.stable && !check_stable(el).await? {
+            failed_reason = Some("not stable (still animating)");
+        } else if require.receives_pointer && !check_receives_pointer(el).await? {
+            failed_reason = Some("occluded by overlay");
+        }
+        match failed_reason {
+            None => return Ok(()),
+            Some(reason) => {
+                if Instant::now() >= deadline {
+                    return Err(ZendriverError::NotActionable(timeout, reason.to_owned()));
+                }
+                tokio::time::sleep(poll_interval).await;
+            }
+        }
+    }
 }
