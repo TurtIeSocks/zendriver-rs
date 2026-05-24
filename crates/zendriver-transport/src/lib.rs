@@ -1,6 +1,25 @@
-//! Internal transport layer for zendriver: WebSocket I/O, command/response
-//! routing, event broadcast. Not a public API — re-exported selectively via
-//! the `zendriver` crate.
+//! Internal CDP transport for `zendriver`: WebSocket I/O, command/response
+//! routing, event broadcast.
+//!
+//! **Use via the `zendriver` crate's re-exports.** This crate is published so
+//! the workspace can compile end-to-end but its surface is not covered by the
+//! same SemVer guarantees as `zendriver`; expect minor versions to rearrange
+//! types here freely. See [`SEMVER.md`] in the repo root for the policy.
+//!
+//! # What lives here
+//!
+//! - [`Connection`] — cheap, clonable handle to the actor task. All `Tab`s
+//!   and `Element`s hold one.
+//! - [`SessionHandle`] — a connection scoped to a particular CDP `sessionId`.
+//! - [`CdpCommand`] / [`CdpInbound`] / [`CdpRpcError`] / [`RawEvent`] — wire
+//!   types.
+//! - [`TargetObserver`] — observer trait fired on `Target.attachedToTarget`
+//!   before the debugger is released; used by `zendriver-stealth` to install
+//!   patches on new pages.
+//! - [`CallError`] / [`TransportError`] — error types surfaced via
+//!   `zendriver`'s `ZendriverError::Transport` / `Cdp` variants.
+//!
+//! [`SEMVER.md`]: https://github.com/cdpdriver/zendriver-rs/blob/main/SEMVER.md
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 

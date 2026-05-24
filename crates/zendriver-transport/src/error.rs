@@ -1,23 +1,36 @@
 //! Transport-layer errors.
 
+/// Connection-level failure modes — anything that happens "below" a CDP
+/// response getting routed back to its caller.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum TransportError {
+    /// The WebSocket closed without Chrome having sent a Close frame.
     #[error("websocket closed unexpectedly")]
     Disconnected,
 
+    /// Tungstenite raised an error on the underlying WebSocket.
     #[error("websocket: {0}")]
     Ws(#[from] tokio_tungstenite::tungstenite::Error),
 
+    /// JSON serialization or framing failed.
     #[error("framing: {0}")]
     Frame(#[from] serde_json::Error),
 
+    /// The actor task has been told to shut down — pending calls drain with
+    /// this variant so callers don't hang forever.
     #[error("connection shut down")]
     Shutdown,
 
+    /// The actor sent a reply but the oneshot receiver had already been
+    /// dropped. Carries the originating command id for diagnostics.
     #[error("response channel dropped before reply (id={id})")]
-    ResponseDropped { id: u64 },
+    ResponseDropped {
+        /// Command id whose reply landed without a receiver.
+        id: u64,
+    },
 
+    /// An I/O error occurred (typically inside tungstenite).
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -28,8 +41,11 @@ pub enum TransportError {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum CallError {
+    /// Connection-level failure (see [`TransportError`]).
     #[error("transport: {0}")]
     Transport(#[from] TransportError),
+    /// Chrome answered the command with a structured JSON-RPC error. Carries
+    /// the JSON-RPC `code`, `message`, and optional `data` payload.
     #[error("CDP RPC error [{0}] {1}")]
     Rpc(i32, String, Option<serde_json::Value>),
 }

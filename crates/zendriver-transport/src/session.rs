@@ -1,4 +1,4 @@
-//! `SessionHandle`: a `Connection` bound to a particular CDP `sessionId`.
+//! `SessionHandle`: a [`Connection`] bound to a particular CDP `sessionId`.
 //! All commands sent through the handle are routed to that target.
 
 use std::sync::Arc;
@@ -11,6 +11,12 @@ use crate::connection::Connection;
 use crate::error::CallError;
 use crate::frame::RawEvent;
 
+/// Cheap-to-clone handle binding a [`Connection`] to a specific CDP session.
+///
+/// Every CDP target — page, OOPIF, worker — has its own `sessionId` after the
+/// browser fires `Target.attachedToTarget`. A `SessionHandle` couples a shared
+/// transport with one such id so callers can issue commands without repeating
+/// the id on every call.
 #[derive(Clone, Debug)]
 pub struct SessionHandle {
     inner: Arc<Inner>,
@@ -23,6 +29,8 @@ struct Inner {
 }
 
 impl SessionHandle {
+    /// Construct a handle around `conn` scoped to `session_id`. Used by
+    /// `zendriver` core when wiring a `Tab` to a newly attached page target.
     pub fn new(conn: Connection, session_id: impl Into<String>) -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -32,15 +40,20 @@ impl SessionHandle {
         }
     }
 
+    /// The CDP `sessionId` this handle is scoped to.
     pub fn session_id(&self) -> &str {
         &self.inner.session_id
     }
 
+    /// Borrow the underlying [`Connection`].
     pub fn connection(&self) -> &Connection {
         &self.inner.conn
     }
 
     /// Send a CDP command routed to this session.
+    ///
+    /// Forwards to [`Connection::call_raw`] with this handle's `sessionId`
+    /// — the surface most layers above this crate go through.
     pub async fn call(&self, method: impl Into<String>, params: Value) -> Result<Value, CallError> {
         self.inner
             .conn
@@ -48,7 +61,8 @@ impl SessionHandle {
             .await
     }
 
-    /// Subscribe to events for this session only (others are filtered out).
+    /// Subscribe to events of type `T` on this session, filtering out events
+    /// for every other target.
     pub fn subscribe<T>(&self, method: &'static str) -> impl Stream<Item = T> + Send + Unpin
     where
         T: DeserializeOwned + Send + 'static,
