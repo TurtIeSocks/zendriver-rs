@@ -16,26 +16,32 @@ async fn click_dispatches_event_to_dom_listener() {
     let mock = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(
-            r#"<!doctype html>
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(
+                r#"<!doctype html>
             <html><body>
               <button id="b" onclick="window.clicked = true">x</button>
-            </body></html>"#,
-        ))
+            </body></html>"#
+                    .as_bytes()
+                    .to_vec(),
+                "text/html",
+            ),
+        )
         .mount(&mock)
         .await;
 
-    let browser = Browser::builder()
+    let mut b = Browser::builder()
         .headless(true)
         // GitHub Actions runs as root in the runner container; Chromium's
         // user-namespace sandbox refuses to start without `--no-sandbox`,
         // and the small `/dev/shm` (~64 MB) in the runner makes the
         // renderer crash unless `/tmp` is used instead.
         .arg("--no-sandbox")
-        .arg("--disable-dev-shm-usage")
-        .launch()
-        .await
-        .expect("launch failed");
+        .arg("--disable-dev-shm-usage");
+    if let Ok(p) = std::env::var("CHROME_BIN") {
+        b = b.executable(p);
+    }
+    let browser = b.launch().await.expect("launch failed");
     let tab = browser.main_tab();
     tab.goto(&mock.uri()).await.expect("goto");
     tab.wait_for_load().await.expect("wait_for_load");
