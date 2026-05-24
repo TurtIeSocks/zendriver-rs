@@ -171,9 +171,16 @@ pub struct BrowserBuilder {
     pub(crate) headless: Option<bool>,
     pub(crate) executable: Option<PathBuf>,
     pub(crate) user_data_dir: Option<PathBuf>,
+    pub(crate) downloads_dir: Option<PathBuf>,
     pub(crate) extra_args: Vec<String>,
     pub(crate) stealth: Option<StealthProfile>,
     pub(crate) extra_observers: Vec<Arc<dyn TargetObserver>>,
+    /// Optional `(username, password)` for proxy / HTTP basic-auth handling.
+    /// Only honored when the `interception` feature is enabled; when present
+    /// at launch, an interception actor is spawned on the main tab session
+    /// that auto-replies to `Fetch.authRequired`. See cdpdriver/zendriver#208.
+    #[cfg(feature = "interception")]
+    pub(crate) proxy_auth: Option<(String, String)>,
 }
 
 // Hand-rolled `Debug` because `Vec<Arc<dyn TargetObserver>>` doesn't derive
@@ -181,17 +188,27 @@ pub struct BrowserBuilder {
 // field as `<N observers>` so the rest of the builder stays inspectable.
 impl std::fmt::Debug for BrowserBuilder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BrowserBuilder")
-            .field("headless", &self.headless)
+        let mut s = f.debug_struct("BrowserBuilder");
+        s.field("headless", &self.headless)
             .field("executable", &self.executable)
             .field("user_data_dir", &self.user_data_dir)
+            .field("downloads_dir", &self.downloads_dir)
             .field("extra_args", &self.extra_args)
             .field("stealth", &self.stealth)
             .field(
                 "extra_observers",
                 &format_args!("<{} observers>", self.extra_observers.len()),
-            )
-            .finish()
+            );
+        #[cfg(feature = "interception")]
+        s.field(
+            "proxy_auth",
+            &self
+                .proxy_auth
+                .as_ref()
+                .map(|(u, _)| format!("Some({u:?}, <redacted>)"))
+                .unwrap_or_else(|| "None".into()),
+        );
+        s.finish()
     }
 }
 
@@ -261,6 +278,66 @@ impl BrowserBuilder {
     #[must_use]
     pub fn user_data_dir(mut self, path: impl Into<PathBuf>) -> Self {
         self.user_data_dir = Some(path.into());
+        self
+    }
+
+    /// Auto-respond to proxy / HTTP basic-auth challenges with
+    /// `(username, password)`.
+    ///
+    /// At launch, an interception actor is spawned on the main tab session
+    /// that sends `Fetch.enable { handleAuthRequests: true }` and answers
+    /// every `Fetch.authRequired` event with `Fetch.continueWithAuth`
+    /// carrying these credentials. Combine with `.arg("--proxy-server=...")`
+    /// to drive Chrome through an authenticated upstream proxy without the
+    /// extension-based workarounds the upstream Python project requires.
+    ///
+    /// Scope: applies to the main tab only — tabs opened later via
+    /// [`Browser::new_tab`] do **not** inherit auth handling. For those,
+    /// wire `tab.intercept().handle_auth(user, pass).start()` yourself.
+    ///
+    /// See cdpdriver/zendriver#208.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// let browser = zendriver::Browser::builder()
+    ///     .arg("--proxy-server=http://my-proxy.example:3128")
+    ///     .proxy_auth("user", "pass")
+    ///     .launch().await?;
+    /// # browser.close().await?;
+    /// # Ok(()) }
+    /// ```
+    #[cfg(feature = "interception")]
+    #[must_use]
+    pub fn proxy_auth(mut self, user: impl Into<String>, pass: impl Into<String>) -> Self {
+        self.proxy_auth = Some((user.into(), pass.into()));
+        self
+    }
+
+    /// Direct file downloads to `path` instead of the OS default Downloads
+    /// folder.
+    ///
+    /// When set, `launch` sends `Browser.setDownloadBehavior {behavior:"allow",
+    /// downloadPath}` at browser scope after Chrome is ready, so every tab —
+    /// including new tabs opened later — saves files into `path`. The directory
+    /// is **not** created for you; ensure it exists before launching.
+    ///
+    /// See <https://github.com/cdpdriver/zendriver/issues/88>.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// let browser = zendriver::Browser::builder()
+    ///     .downloads_dir("/tmp/zendriver-downloads")
+    ///     .launch().await?;
+    /// # browser.close().await?;
+    /// # Ok(()) }
+    /// ```
+    #[must_use]
+    pub fn downloads_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.downloads_dir = Some(path.into());
         self
     }
 
@@ -342,11 +419,17 @@ impl BrowserBuilder {
     /// Compute the full argv that would be passed to Chrome. Exposed to
     /// tests + snapshots; called internally by `launch`.
     pub(crate) fn build_flags(&self, user_data_dir: &Path) -> Vec<String> {
-        let mut v = Vec::with_capacity(8 + self.extra_args.len());
+        let mut v = Vec::with_capacity(10 + self.extra_args.len());
         v.push("--remote-debugging-port=0".to_string());
         v.push(format!("--user-data-dir={}", user_data_dir.display()));
         v.push("--no-first-run".to_string());
         v.push("--no-default-browser-check".to_string());
+        // Suppress the Chrome "Save password?" / autofill bubbles + onboarding
+        // popups that otherwise hijack focus inside automated runs.
+        // See cdpdriver/zendriver#13.
+        v.push("--password-store=basic".to_string());
+        v.push("--disable-save-password-bubble".to_string());
+        v.push("--disable-features=PasswordManagerOnboarding,AutofillServerCommunication".to_string());
         if self.headless.unwrap_or(true) {
             v.push("--headless=new".to_string());
             v.push("--disable-gpu".to_string());
@@ -401,6 +484,15 @@ pub(crate) struct BrowserInner {
     /// notification before reading the map so a fire that lands between
     /// the read and the wait is still delivered.
     pub(crate) tabs_changed: tokio::sync::Notify,
+    /// Optional RAII guard for the proxy-auth interception actor spawned in
+    /// [`BrowserBuilder::launch`] when `proxy_auth` is set. Held here so
+    /// the actor lives for the entire `Browser` lifetime; on `Browser` drop
+    /// the handle drops and cancels the actor cleanly. See
+    /// cdpdriver/zendriver#208.
+    #[cfg(feature = "interception")]
+    #[allow(dead_code)]
+    pub(crate) proxy_auth_handle:
+        std::sync::OnceLock<zendriver_interception::InterceptHandle>,
 }
 
 /// [`TargetObserver`] that maintains [`BrowserInner::tabs`] in step with
@@ -728,6 +820,8 @@ impl BrowserBuilder {
                 stealth_input_profile: input_profile,
                 tabs: tokio::sync::RwLock::new(HashMap::new()),
                 tabs_changed: tokio::sync::Notify::new(),
+                #[cfg(feature = "interception")]
+                proxy_auth_handle: std::sync::OnceLock::new(),
             }
         });
 
@@ -744,6 +838,39 @@ impl BrowserBuilder {
             .write()
             .await
             .insert(session_id_for_registry, inner.main_tab.clone());
+
+        // 13. If a custom downloads_dir was set, configure browser-scoped
+        // download behavior so all tabs (current + future) save into it.
+        // See cdpdriver/zendriver#88.
+        if let Some(dir) = self.downloads_dir.as_ref() {
+            inner
+                .conn
+                .call_raw(
+                    "Browser.setDownloadBehavior",
+                    json!({
+                        "behavior": "allow",
+                        "downloadPath": dir.display().to_string(),
+                        "eventsEnabled": true,
+                    }),
+                    None,
+                )
+                .await?;
+        }
+
+        // 14. If proxy_auth was set, spawn an interception actor on the main
+        // tab session that auto-answers Fetch.authRequired challenges with
+        // the stored credentials. The InterceptHandle is parked on
+        // BrowserInner so the actor lives as long as the Browser does;
+        // dropping BrowserInner drops the handle which cancels the actor.
+        // See cdpdriver/zendriver#208.
+        #[cfg(feature = "interception")]
+        if let Some((user, pass)) = self.proxy_auth.clone() {
+            let main_session = inner.main_tab.session().clone();
+            let handle = zendriver_interception::InterceptBuilder::new(&main_session)
+                .handle_auth(user, pass)
+                .start();
+            let _ = inner.proxy_auth_handle.set(handle);
+        }
 
         Ok(Browser { inner })
     }
@@ -1111,6 +1238,17 @@ mod tests {
     }
 
     #[test]
+    fn build_flags_suppresses_password_popups() {
+        let b = BrowserBuilder::new();
+        let flags = b.build_flags(Path::new("/tmp/x"));
+        assert!(flags.contains(&"--password-store=basic".to_string()));
+        assert!(flags.contains(&"--disable-save-password-bubble".to_string()));
+        assert!(flags
+            .iter()
+            .any(|f| f.contains("PasswordManagerOnboarding")));
+    }
+
+    #[test]
     fn build_flags_no_headless_when_disabled() {
         let b = BrowserBuilder::new().headless(false);
         let flags = b.build_flags(Path::new("/tmp/x"));
@@ -1180,6 +1318,8 @@ mod tests {
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 tabs_changed: tokio::sync::Notify::new(),
+                #[cfg(feature = "interception")]
+                proxy_auth_handle: std::sync::OnceLock::new(),
             }
         });
         registrar.set_browser(Arc::downgrade(&inner));
@@ -1263,6 +1403,8 @@ mod tests {
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 tabs_changed: tokio::sync::Notify::new(),
+                #[cfg(feature = "interception")]
+                proxy_auth_handle: std::sync::OnceLock::new(),
             }
         });
         registrar.set_browser(Arc::downgrade(&inner));
@@ -1369,6 +1511,8 @@ mod tests {
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 tabs_changed: tokio::sync::Notify::new(),
+                #[cfg(feature = "interception")]
+                proxy_auth_handle: std::sync::OnceLock::new(),
             }
         });
         registrar.set_browser(Arc::downgrade(&inner));
@@ -1428,6 +1572,8 @@ mod tests {
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 tabs_changed: tokio::sync::Notify::new(),
+                #[cfg(feature = "interception")]
+                proxy_auth_handle: std::sync::OnceLock::new(),
             }
         });
         let browser = Browser { inner };
@@ -1483,6 +1629,8 @@ mod tests {
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 tabs_changed: tokio::sync::Notify::new(),
+                #[cfg(feature = "interception")]
+                proxy_auth_handle: std::sync::OnceLock::new(),
             }
         });
         let browser = Browser { inner };
@@ -1534,6 +1682,8 @@ mod tests {
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 tabs_changed: tokio::sync::Notify::new(),
+                #[cfg(feature = "interception")]
+                proxy_auth_handle: std::sync::OnceLock::new(),
             }
         });
         registrar.set_browser(Arc::downgrade(&inner));
@@ -1662,6 +1812,8 @@ mod tests {
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 tabs_changed: tokio::sync::Notify::new(),
+                #[cfg(feature = "interception")]
+                proxy_auth_handle: std::sync::OnceLock::new(),
             }
         });
         registrar.set_browser(Arc::downgrade(&inner));

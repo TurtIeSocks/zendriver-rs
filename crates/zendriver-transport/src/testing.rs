@@ -118,6 +118,24 @@ impl MockConnection {
         self.last_sent.as_ref().expect("no command observed yet")
     }
 
+    /// Non-blocking probe: returns `(method, id)` for the next queued
+    /// outbound command, or `None` if the channel is empty. Use in negative
+    /// assertions like "no second CDP call landed after X" — the canonical
+    /// example is verifying that [`Drop`] paths do not double-fire a CDP
+    /// method already dispatched by a `mut self` consuming method.
+    pub fn try_recv_cmd(&mut self) -> Option<(String, u64)> {
+        let msg = self.server_out.try_recv().ok()?;
+        let text = match msg {
+            Message::Text(t) => t,
+            _ => return None,
+        };
+        let v: Value = serde_json::from_str(&text).ok()?;
+        self.last_sent = Some(v.clone());
+        let method = v["method"].as_str()?.to_string();
+        let id = v["id"].as_u64()?;
+        Some((method, id))
+    }
+
     /// Reply to command `id` with a success `result`.
     pub async fn reply(&self, id: u64, result: Value) {
         let frame = serde_json::json!({ "id": id, "result": result }).to_string();

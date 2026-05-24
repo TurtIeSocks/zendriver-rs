@@ -11,8 +11,12 @@
 //!    would otherwise be dropped, and the `MockConnection` test harness in
 //!    `zendriver-transport` (gated `feature = "testing"`) never replies to
 //!    fire-and-forget enables anyway.
-//! 2. Sends `Fetch.enable { patterns, handleAuthRequests: false }` with the
-//!    explicit pattern list supplied by the builder.
+//! 2. Sends `Fetch.enable { patterns, handleAuthRequests }` with the
+//!    explicit pattern list supplied by the builder; `handleAuthRequests`
+//!    flips to `true` when the builder also called
+//!    [`InterceptBuilder::handle_auth`](crate::builder::InterceptBuilder::handle_auth)
+//!    so Chrome surfaces `Fetch.authRequired` events the actor answers with
+//!    `Fetch.continueWithAuth`.
 //! 3. Per `Fetch.requestPaused` event: walks `rules` in registration order,
 //!    first match wins, dispatches the matching action's CDP call. No
 //!    match → plain `Fetch.continueRequest` (let through).
@@ -166,6 +170,7 @@ pub(crate) async fn run_actor(
     session: SessionHandle,
     rules: Vec<Rule>,
     patterns: Vec<RequestPattern>,
+    auth: Option<(String, String)>,
     cancel: CancellationToken,
     done: oneshot::Sender<()>,
 ) {
@@ -175,6 +180,10 @@ pub(crate) async fn run_actor(
     // synthetic `Fetch.enable` call, so awaiting it first would deadlock the
     // actor before any subscription existed.
     let mut paused = session.subscribe::<Value>("Fetch.requestPaused");
+    // When `handleAuthRequests: true`, Chrome additionally emits
+    // `Fetch.authRequired` events for proxy / HTTP basic-auth challenges.
+    // Subscribe up-front for the same race-free reason as `requestPaused`.
+    let mut auth_required = session.subscribe::<Value>("Fetch.authRequired");
 
     // Step 2: fire-and-forget `Fetch.enable`. Mirrors `InFlightTracker::run`
     // / `frame::lifecycle::run`: a failed enable surfaces as a `warn!` but
@@ -183,13 +192,14 @@ pub(crate) async fn run_actor(
     // any other torn-down session).
     let enable_session = session.clone();
     let enable_patterns: Vec<Value> = patterns.iter().map(serialize_pattern).collect();
+    let handle_auth_requests = auth.is_some();
     tokio::spawn(async move {
         if let Err(e) = enable_session
             .call(
                 "Fetch.enable",
                 json!({
                     "patterns": enable_patterns,
-                    "handleAuthRequests": false,
+                    "handleAuthRequests": handle_auth_requests,
                 }),
             )
             .await
@@ -217,6 +227,41 @@ pub(crate) async fn run_actor(
                 };
                 if let Err(e) = handle_paused(&session, &rules, ev).await {
                     warn!(error = %e, "interception: handler dispatch failed");
+                }
+            }
+            Some(ev_value) = auth_required.next() => {
+                // `Fetch.authRequired` carries a `requestId` we must echo
+                // back via `Fetch.continueWithAuth`. If `auth` is None the
+                // user didn't ask for auth handling — fall back to
+                // `Default` so Chrome surfaces a normal auth dialog instead
+                // of hanging the pause forever.
+                let Some(request_id) = ev_value
+                    .get("requestId")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                else {
+                    warn!("interception: Fetch.authRequired without requestId");
+                    continue;
+                };
+                let response = match &auth {
+                    Some((user, pass)) => json!({
+                        "response": "ProvideCredentials",
+                        "username": user,
+                        "password": pass,
+                    }),
+                    None => json!({ "response": "Default" }),
+                };
+                if let Err(e) = session
+                    .call(
+                        "Fetch.continueWithAuth",
+                        json!({
+                            "requestId": request_id,
+                            "authChallengeResponse": response,
+                        }),
+                    )
+                    .await
+                {
+                    warn!(error = %e, "interception: Fetch.continueWithAuth failed");
                 }
             }
             else => {
@@ -527,7 +572,7 @@ mod tests {
         let (done_tx, done_rx) = oneshot::channel();
         let actor_cancel = cancel.clone();
         let actor = tokio::spawn(async move {
-            run_actor(sess, rules, patterns, actor_cancel, done_tx).await;
+            run_actor(sess, rules, patterns, None, actor_cancel, done_tx).await;
         });
 
         // Step 1: the actor fires `Fetch.enable` in a side-task. The mock
@@ -586,6 +631,161 @@ mod tests {
             .await
             .expect("actor did not signal exit within 2s")
             .expect("oneshot sender dropped without sending");
+        actor.await.unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn actor_handles_auth_required_with_credentials() {
+        // cdpdriver/zendriver#208: proxy / HTTP basic-auth support. When the
+        // builder is configured with `handle_auth(user, pass)`, the actor
+        // must (a) send `Fetch.enable { handleAuthRequests: true }` and
+        // (b) respond to each `Fetch.authRequired` event with
+        // `Fetch.continueWithAuth { authChallengeResponse:
+        // ProvideCredentials + user/pass }`.
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let cancel = CancellationToken::new();
+        let (done_tx, done_rx) = oneshot::channel();
+        let actor_cancel = cancel.clone();
+        let auth = Some(("user1".to_string(), "pass1".to_string()));
+        let actor = tokio::spawn(async move {
+            run_actor(
+                sess,
+                Vec::new(),
+                vec![RequestPattern {
+                    url_pattern: Some("*".into()),
+                    ..RequestPattern::default()
+                }],
+                auth,
+                actor_cancel,
+                done_tx,
+            )
+            .await;
+        });
+
+        let enable_id =
+            tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Fetch.enable"))
+                .await
+                .expect("actor did not send Fetch.enable within 2s");
+        assert_eq!(
+            mock.last_sent()["params"]["handleAuthRequests"],
+            true,
+            "auth-enabled actor must flip handleAuthRequests"
+        );
+        mock.reply(enable_id, json!({})).await;
+
+        mock.emit_event_for_session(
+            "Fetch.authRequired",
+            json!({
+                "requestId": "AUTH-REQ-1",
+                "request": { "url": "https://example.test/", "method": "GET" },
+                "frameId": "F1",
+                "resourceType": "Document",
+                "authChallenge": {
+                    "source": "Proxy",
+                    "origin": "http://proxy.test",
+                    "scheme": "basic",
+                    "realm": "",
+                },
+            }),
+            "S1",
+        )
+        .await;
+
+        let auth_id = tokio::time::timeout(
+            Duration::from_secs(2),
+            mock.expect_cmd("Fetch.continueWithAuth"),
+        )
+        .await
+        .expect("actor did not send Fetch.continueWithAuth within 2s");
+        let params = mock.last_sent()["params"].clone();
+        assert_eq!(params["requestId"], "AUTH-REQ-1");
+        assert_eq!(
+            params["authChallengeResponse"]["response"],
+            "ProvideCredentials"
+        );
+        assert_eq!(params["authChallengeResponse"]["username"], "user1");
+        assert_eq!(params["authChallengeResponse"]["password"], "pass1");
+        mock.reply(auth_id, json!({})).await;
+
+        cancel.cancel();
+        let disable_id =
+            tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Fetch.disable"))
+                .await
+                .expect("actor did not send Fetch.disable on cancel");
+        mock.reply(disable_id, json!({})).await;
+        tokio::time::timeout(Duration::from_secs(2), done_rx)
+            .await
+            .expect("actor did not signal exit")
+            .expect("oneshot sender dropped");
+        actor.await.unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn actor_without_auth_responds_default_to_auth_required() {
+        // Defensive: even when the builder did NOT configure auth, an
+        // `authRequired` event must be released (Default response) so Chrome
+        // doesn't hang. handleAuthRequests stays false so this path only
+        // triggers if the server pushed a stray event we didn't ask for —
+        // exercising it confirms the actor degrades gracefully.
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S2");
+        let cancel = CancellationToken::new();
+        let (done_tx, done_rx) = oneshot::channel();
+        let actor_cancel = cancel.clone();
+        let actor = tokio::spawn(async move {
+            run_actor(
+                sess,
+                Vec::new(),
+                vec![RequestPattern {
+                    url_pattern: Some("*".into()),
+                    ..RequestPattern::default()
+                }],
+                None,
+                actor_cancel,
+                done_tx,
+            )
+            .await;
+        });
+
+        let enable_id =
+            tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Fetch.enable"))
+                .await
+                .expect("actor did not send Fetch.enable");
+        assert_eq!(mock.last_sent()["params"]["handleAuthRequests"], false);
+        mock.reply(enable_id, json!({})).await;
+
+        mock.emit_event_for_session(
+            "Fetch.authRequired",
+            json!({ "requestId": "AUTH-REQ-2" }),
+            "S2",
+        )
+        .await;
+
+        let auth_id = tokio::time::timeout(
+            Duration::from_secs(2),
+            mock.expect_cmd("Fetch.continueWithAuth"),
+        )
+        .await
+        .expect("actor did not respond to stray authRequired");
+        assert_eq!(
+            mock.last_sent()["params"]["authChallengeResponse"]["response"],
+            "Default"
+        );
+        mock.reply(auth_id, json!({})).await;
+
+        cancel.cancel();
+        let disable_id =
+            tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Fetch.disable"))
+                .await
+                .expect("actor did not send Fetch.disable");
+        mock.reply(disable_id, json!({})).await;
+        tokio::time::timeout(Duration::from_secs(2), done_rx)
+            .await
+            .expect("actor did not exit")
+            .expect("oneshot dropped");
         actor.await.unwrap();
         conn.shutdown();
     }

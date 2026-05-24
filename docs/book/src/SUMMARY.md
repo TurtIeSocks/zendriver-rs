@@ -12,6 +12,8 @@
 - [Cloudflare](./cloudflare.md)
 - [Fetcher](./fetcher.md)
 - [Migration from Playwright](./migration-playwright.md)
+- [Migration from zendriver (Python)](./migration-zendriver-python.md)
+- [Migration from nodriver (Python)](./migration-nodriver-python.md)
 - [Architecture](./architecture.md)
 - [FAQ](./faq.md)
 - [Error Reference](./error-reference.md)

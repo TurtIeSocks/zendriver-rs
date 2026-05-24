@@ -86,6 +86,11 @@ pub struct InterceptBuilder<'tab> {
     tab: &'tab SessionHandle,
     patterns: Vec<RequestPattern>,
     rules: Vec<Rule>,
+    /// Optional proxy/server credentials. When set, `Fetch.enable` is sent
+    /// with `handleAuthRequests: true` and the actor responds to each
+    /// `Fetch.authRequired` event with `Fetch.continueWithAuth` carrying
+    /// these credentials. See cdpdriver/zendriver#208.
+    auth: Option<(String, String)>,
 }
 
 impl<'tab> InterceptBuilder<'tab> {
@@ -112,7 +117,29 @@ impl<'tab> InterceptBuilder<'tab> {
             tab,
             patterns: Vec::new(),
             rules: Vec::new(),
+            auth: None,
         }
+    }
+
+    /// Auto-respond to `Fetch.authRequired` challenges with the given
+    /// credentials.
+    ///
+    /// This is the proxy-auth (and HTTP basic-auth) path: `Fetch.enable` is
+    /// sent with `handleAuthRequests: true` and every `Fetch.authRequired`
+    /// event is answered with `Fetch.continueWithAuth { authChallengeResponse:
+    /// { response: "ProvideCredentials", username, password } }`.
+    ///
+    /// Compose with rules: an `InterceptBuilder` configured with `handle_auth`
+    /// and `block` / `redirect` / `respond` rules handles both paths from the
+    /// same actor. Combine with [`BrowserBuilder::proxy_auth`] in the
+    /// `zendriver` crate if you want the wiring installed automatically on
+    /// every tab.
+    ///
+    /// See cdpdriver/zendriver#208.
+    #[must_use]
+    pub fn handle_auth(mut self, user: impl Into<String>, pass: impl Into<String>) -> Self {
+        self.auth = Some((user.into(), pass.into()));
+        self
     }
 
     /// Push a new pattern entry with the given URL pattern string.
@@ -247,11 +274,13 @@ impl<'tab> InterceptBuilder<'tab> {
         let actor_cancel = cancel.clone();
         let actor_rules = self.rules;
         let actor_patterns = self.patterns;
+        let actor_auth = self.auth;
         tokio::spawn(async move {
             run_actor(
                 actor_session,
                 actor_rules,
                 actor_patterns,
+                actor_auth,
                 actor_cancel,
                 done_tx,
             )

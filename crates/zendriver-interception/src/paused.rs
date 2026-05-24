@@ -35,6 +35,12 @@ use crate::types::{AbortReason, RequestInfo, RequestOverrides, ResponseInfo};
 /// (`&self`) usable at the `Response` stage to inspect the upstream body
 /// before deciding which terminal action to take.
 ///
+/// If a `PausedRequest` is dropped without one of the terminal actions
+/// firing (e.g. the consuming task panicked or a `select!` arm cancelled
+/// mid-handler), [`Drop`] dispatches a best-effort `Fetch.continueRequest`
+/// in a detached task so Chrome doesn't hold the request open indefinitely.
+/// See cdpdriver/zendriver#126 for the freeze pattern this prevents.
+///
 /// [`RequestStage`]: crate::types::RequestStage
 #[derive(Debug)]
 pub struct PausedRequest {
@@ -47,6 +53,12 @@ pub struct PausedRequest {
     /// `Response` stage. `None` at the `Request` stage.
     pub response: Option<ResponseInfo>,
     session: SessionHandle,
+    /// Flipped to `true` by every terminal action (`continue_`, `abort`,
+    /// `respond`, `modify_and_continue`) before the CDP call is dispatched.
+    /// [`Drop`] inspects this to decide whether to fire a fallback
+    /// `Fetch.continueRequest` — set means "already released, don't
+    /// double-fire"; clear means "owner forgot us, release Chrome".
+    released: bool,
 }
 
 impl PausedRequest {
@@ -64,6 +76,7 @@ impl PausedRequest {
             request,
             response,
             session,
+            released: false,
         }
     }
 
@@ -85,7 +98,8 @@ impl PausedRequest {
     /// }
     /// # Ok(()) }
     /// ```
-    pub async fn continue_(self) -> Result<(), InterceptionError> {
+    pub async fn continue_(mut self) -> Result<(), InterceptionError> {
+        self.released = true;
         self.session
             .call(
                 "Fetch.continueRequest",
@@ -114,7 +128,8 @@ impl PausedRequest {
     /// ```
     ///
     /// [`Network.ErrorReason`]: https://chromedevtools.github.io/devtools-protocol/tot/Network/#type-ErrorReason
-    pub async fn abort(self, reason: AbortReason) -> Result<(), InterceptionError> {
+    pub async fn abort(mut self, reason: AbortReason) -> Result<(), InterceptionError> {
+        self.released = true;
         self.session
             .call(
                 "Fetch.failRequest",
@@ -134,11 +149,12 @@ impl PausedRequest {
     /// are CDP's name/value array form; `body` is base64-encoded on the wire
     /// per CDP spec (callers pass raw bytes).
     pub async fn respond(
-        self,
+        mut self,
         status: u16,
         headers: Vec<(String, String)>,
         body: Vec<u8>,
     ) -> Result<(), InterceptionError> {
+        self.released = true;
         let response_headers = crate::actor::headers_to_cdp(&headers);
         self.session
             .call(
@@ -162,9 +178,10 @@ impl PausedRequest {
     /// crosses the wire base64-encoded and `headers` is the CDP name/value
     /// array form (replacement, not merge).
     pub async fn modify_and_continue(
-        self,
+        mut self,
         overrides: RequestOverrides,
     ) -> Result<(), InterceptionError> {
+        self.released = true;
         let mut params = Map::new();
         params.insert("requestId".into(), Value::String(self.request_id.clone()));
         if let Some(url) = overrides.url {
@@ -222,6 +239,39 @@ impl PausedRequest {
     }
 }
 
+/// Safety net for cdpdriver/zendriver#126: a paused request that gets dropped
+/// without a terminal action (panicked handler, cancelled `select!` arm,
+/// stream consumer exited early) would otherwise leave Chrome waiting on
+/// `requestId` forever and freeze the whole client. Spawning a detached
+/// `Fetch.continueRequest` releases the pause best-effort; failures are
+/// logged at `debug!` because the session may already be torn down (e.g. tab
+/// closed mid-pause), which is the same condition that produced the original
+/// freeze and not an actionable error.
+impl Drop for PausedRequest {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        let session = self.session.clone();
+        let request_id = std::mem::take(&mut self.request_id);
+        tokio::spawn(async move {
+            if let Err(e) = session
+                .call(
+                    "Fetch.continueRequest",
+                    json!({ "requestId": request_id }),
+                )
+                .await
+            {
+                tracing::debug!(
+                    error = %e,
+                    request_id = %request_id,
+                    "PausedRequest::drop: best-effort Fetch.continueRequest failed (session likely closed)"
+                );
+            }
+        });
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
@@ -257,6 +307,55 @@ mod tests {
         mock.reply(id, serde_json::json!({})).await;
 
         fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn drop_without_terminal_action_fires_fallback_continue() {
+        // cdpdriver/zendriver#126: a PausedRequest that goes out of scope
+        // without continue_/abort/respond/modify_and_continue must release
+        // Chrome — otherwise the InterceptionId stays armed forever and
+        // freezes the next render.
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        {
+            let req = PausedRequest::new("REQ-DROP", make_request_info(), None, sess);
+            drop(req);
+        }
+        // The Drop spawns the call on the current runtime; expect_cmd waits
+        // for it to land.
+        let id = mock.expect_cmd("Fetch.continueRequest").await;
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["requestId"], "REQ-DROP");
+        mock.reply(id, serde_json::json!({})).await;
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn continue_does_not_double_fire_on_drop() {
+        // After continue_() consumes self and returns, Drop runs on the moved
+        // value. `released = true` set by continue_() must suppress the Drop
+        // fallback — otherwise every successful path would send two CDP
+        // round-trips.
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let req = PausedRequest::new("REQ-ONCE", make_request_info(), None, sess);
+
+        let fut = tokio::spawn(async move { req.continue_().await });
+
+        let id = mock.expect_cmd("Fetch.continueRequest").await;
+        assert_eq!(mock.last_sent()["params"]["requestId"], "REQ-ONCE");
+        mock.reply(id, serde_json::json!({})).await;
+        fut.await.unwrap().unwrap();
+
+        // Give the runtime a tick — if Drop had spawned a second call it
+        // would be queued by now. `try_recv_cmd` returns None if the channel
+        // is empty.
+        tokio::task::yield_now().await;
+        assert!(
+            mock.try_recv_cmd().is_none(),
+            "Drop fired a second Fetch.continueRequest after continue_ already released"
+        );
         conn.shutdown();
     }
 

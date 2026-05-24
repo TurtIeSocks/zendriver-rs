@@ -124,6 +124,14 @@ name = "nav_history"
 required-features = []
 
 [[example]]
+name = "downloads_dir"
+required-features = []
+
+[[example]]
+name = "proxy_auth"
+required-features = ["interception"]
+
+[[example]]
 name = "intercept_block_ads"
 required-features = ["interception"]
 

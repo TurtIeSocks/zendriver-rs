@@ -6,5 +6,8 @@ expression: flags
 - "--user-data-dir=/tmp/test-user-data"
 - "--no-first-run"
 - "--no-default-browser-check"
+- "--password-store=basic"
+- "--disable-save-password-bubble"
+- "--disable-features=PasswordManagerOnboarding,AutofillServerCommunication"
 - "--headless=new"
 - "--disable-gpu"

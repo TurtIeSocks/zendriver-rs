@@ -1960,6 +1960,8 @@ mod tests {
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 tabs_changed: tokio::sync::Notify::new(),
+                #[cfg(feature = "interception")]
+                proxy_auth_handle: std::sync::OnceLock::new(),
             }
         });
         let tab = inner.main_tab.clone();
