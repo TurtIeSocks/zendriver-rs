@@ -276,11 +276,6 @@ impl TargetObserver for TabRegistrar {
     }
 
     async fn on_target_attached(&self, session: PausedSession<'_>) -> Result<(), ObserverError> {
-        // Only page targets become tabs. Iframes (OOPIF) and workers are
-        // handled separately in later P4 tasks.
-        if session.target_info.kind != "page" {
-            return Ok(());
-        }
         let Some(weak) = self.browser.get() else {
             // Registrar wired into observer chain before `set_browser` ran.
             // Should not happen in practice because launch wires the weak
@@ -295,23 +290,50 @@ impl TargetObserver for TabRegistrar {
             return Ok(());
         };
 
-        let conn = session.connection().clone();
-        let new_session = SessionHandle::new(conn, session.session_id.to_string());
-        let input = InputController::new(self.input_profile.clone());
-        let weak_inner = Arc::downgrade(&browser);
-        let tab = Tab::new(
-            new_session,
-            weak_inner,
-            input,
-            session.target_info.target_id.clone(),
-        );
+        match session.target_info.kind.as_str() {
+            "iframe" => {
+                // Out-of-process iframe: register a Frame under the parent
+                // tab's frames map. The OOPIF carries a distinct child
+                // session; the helper resolves the parent tab by walking
+                // the tabs registry for a matching frame_id (preferring
+                // `opener_frame_id` when present, falling back to
+                // `target_id`).
+                let conn = session.connection().clone();
+                let new_session = SessionHandle::new(conn, session.session_id.to_string());
+                crate::frame::oopif::register_oopif_frame(
+                    &browser,
+                    session.target_info,
+                    new_session,
+                )
+                .await;
+                Ok(())
+            }
+            "page" => {
+                let conn = session.connection().clone();
+                let new_session = SessionHandle::new(conn, session.session_id.to_string());
+                let input = InputController::new(self.input_profile.clone());
+                let weak_inner = Arc::downgrade(&browser);
+                let tab = Tab::new(
+                    new_session,
+                    weak_inner,
+                    input,
+                    session.target_info.target_id.clone(),
+                );
 
-        browser
-            .tabs
-            .write()
-            .await
-            .insert(session.session_id.to_string(), tab);
-        Ok(())
+                browser
+                    .tabs
+                    .write()
+                    .await
+                    .insert(session.session_id.to_string(), tab);
+                Ok(())
+            }
+            _ => {
+                // Workers / service workers / etc — out of scope for the
+                // current registrar; ignored silently. Future P4 tasks
+                // may add explicit handling.
+                Ok(())
+            }
+        }
     }
 
     async fn on_target_detached(&self, session_id: &str) {
@@ -321,7 +343,13 @@ impl TargetObserver for TabRegistrar {
         let Some(browser) = weak.upgrade() else {
             return;
         };
-        browser.tabs.write().await.remove(session_id);
+        // Tab path first — if the detached session backs a Tab, remove it.
+        // If it was an OOPIF (no matching tab), fall through to the OOPIF
+        // sweep which walks each tab's frames map.
+        let removed_tab = browser.tabs.write().await.remove(session_id).is_some();
+        if !removed_tab {
+            let _ = crate::frame::oopif::deregister_oopif_frame(&browser, session_id).await;
+        }
     }
 }
 
@@ -1104,6 +1132,210 @@ mod tests {
         let tabs = browser.tabs().await;
         assert_eq!(tabs.len(), 1);
         assert_eq!(tabs[0].target_id(), "T1");
+
+        conn.shutdown();
+    }
+
+    // ----- OOPIF Frame attach (P4 T16) -----------------------------------
+
+    /// Mock-drive a `Target.attachedToTarget` event with `type=iframe` and
+    /// a `targetId` that matches an already-known frame_id in the parent
+    /// tab's frames map. Asserts the [`TabRegistrar`] dispatches to the
+    /// OOPIF branch (instead of the page branch) and replaces the parent's
+    /// same-id frame entry with a [`crate::frame::Frame`] whose session is
+    /// the OOPIF's distinct child session (`S2` in the fixture, not the
+    /// parent tab's `S1`).
+    ///
+    /// The pre-seeded parent-frame entry simulates the
+    /// `Page.frameAttached` event a real Chrome would emit on the parent's
+    /// session before announcing the OOPIF target — `register_oopif_frame`
+    /// uses that entry to locate the owning tab.
+    #[tokio::test]
+    async fn tab_registrar_attaches_oopif_frame_under_parent_tab() {
+        use crate::frame::Frame;
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+
+        // Seed BrowserInner with one parent tab.
+        let inner = Arc::new_cyclic(|weak: &Weak<BrowserInner>| {
+            let main_session = SessionHandle::new(conn.clone(), "S1");
+            let main_input = InputController::new(input_profile.clone());
+            let main_tab = Tab::new(main_session, weak.clone(), main_input, "T1".to_string());
+            let mut map = HashMap::new();
+            map.insert("S1".to_string(), main_tab.clone());
+            BrowserInner {
+                conn: conn.clone(),
+                main_tab,
+                child: tokio::sync::Mutex::new(None),
+                _user_data: None,
+                stealth_input_profile: input_profile.clone(),
+                tabs: tokio::sync::RwLock::new(map),
+            }
+        });
+        registrar.set_browser(Arc::downgrade(&inner));
+
+        // Pre-seed the parent tab's frames map after `Arc::new_cyclic`
+        // resolves (we need the live `Weak<TabInner>` for the placeholder
+        // Frame). Simulates `Page.frameAttached` having already registered
+        // the host iframe under frame_id "F_OOPIF" before the OOPIF
+        // target announces itself. The placeholder Frame shares the
+        // parent tab's session so we can later assert that the post-
+        // attach entry carries a DIFFERENT session.
+        {
+            let main_tab = inner.tabs.read().await.get("S1").cloned().unwrap();
+            let parent_session = main_tab.session().clone();
+            let placeholder = Frame::new(
+                "F_OOPIF".to_string(),
+                Some("FROOT".to_string()),
+                String::new(),
+                None,
+                parent_session,
+                Arc::downgrade(&main_tab.inner),
+            );
+            main_tab
+                .inner
+                .frames
+                .write()
+                .await
+                .insert("F_OOPIF".to_string(), placeholder);
+        }
+
+        // Sanity: parent tab is the only tab, parent has the placeholder
+        // entry whose session matches the parent's "S1".
+        assert_eq!(inner.tabs.read().await.len(), 1);
+        let parent_tab = inner.tabs.read().await.get("S1").cloned().unwrap();
+        {
+            let frames = parent_tab.inner.frames.read().await;
+            let placeholder = frames.get("F_OOPIF").expect("placeholder seeded");
+            assert_eq!(placeholder.session().session_id(), "S1");
+        }
+
+        // Emit the OOPIF attach event. The actor will dispatch the
+        // registrar's `on_target_attached` which routes to the iframe
+        // branch; once it returns Ok the actor releases the debugger.
+        mock.emit_event(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": "S2",
+                "targetInfo": {
+                    "targetId": "F_OOPIF",
+                    "type": "iframe",
+                    "url": "https://oopif.example.com/",
+                    "attached": true,
+                },
+                "waitingForDebugger": true,
+            }),
+        )
+        .await;
+
+        let release_id = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            mock.expect_cmd("Runtime.runIfWaitingForDebugger"),
+        )
+        .await
+        .expect("debugger-release did not fire within 2s");
+        mock.reply(release_id, json!({})).await;
+
+        // Poll until the replacement lands.
+        for _ in 0..50 {
+            let frames = parent_tab.inner.frames.read().await;
+            if frames
+                .get("F_OOPIF")
+                .is_some_and(|f| f.session().session_id() == "S2")
+            {
+                break;
+            }
+            drop(frames);
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        // Parent tab's frames map still holds an F_OOPIF entry — but now
+        // bound to S2 (the OOPIF's distinct child session). Browser-wide
+        // tabs map is unchanged (OOPIFs do NOT become new tabs).
+        let frames = parent_tab.inner.frames.read().await;
+        let oopif = frames
+            .get("F_OOPIF")
+            .expect("OOPIF frame registered on parent");
+        assert_eq!(
+            oopif.session().session_id(),
+            "S2",
+            "OOPIF frame must carry the child session, not the parent's",
+        );
+        assert_eq!(oopif.id(), "F_OOPIF");
+        drop(frames);
+        assert_eq!(
+            inner.tabs.read().await.len(),
+            1,
+            "OOPIF must not be registered as a tab",
+        );
+
+        conn.shutdown();
+    }
+
+    /// Mock-drive a `Target.attachedToTarget` event with `type=iframe` whose
+    /// `targetId` does NOT match any frame in any tab. Asserts the
+    /// registrar logs + skips registration (no crash, no spurious entry).
+    #[tokio::test]
+    async fn tab_registrar_skips_oopif_when_parent_unknown() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+
+        let inner = Arc::new_cyclic(|weak: &Weak<BrowserInner>| {
+            let main_session = SessionHandle::new(conn.clone(), "S1");
+            let main_input = InputController::new(input_profile.clone());
+            let main_tab = Tab::new(main_session, weak.clone(), main_input, "T1".to_string());
+            let mut map = HashMap::new();
+            map.insert("S1".to_string(), main_tab.clone());
+            BrowserInner {
+                conn: conn.clone(),
+                main_tab,
+                child: tokio::sync::Mutex::new(None),
+                _user_data: None,
+                stealth_input_profile: input_profile.clone(),
+                tabs: tokio::sync::RwLock::new(map),
+            }
+        });
+        registrar.set_browser(Arc::downgrade(&inner));
+
+        mock.emit_event(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": "S_ORPHAN",
+                "targetInfo": {
+                    "targetId": "F_NOWHERE",
+                    "type": "iframe",
+                    "url": "https://orphan.example.com/",
+                    "attached": true,
+                },
+                "waitingForDebugger": true,
+            }),
+        )
+        .await;
+
+        // Observer must still complete + release the debugger even when
+        // the orphan branch warns and skips. Without this Chrome would
+        // hang the OOPIF target indefinitely.
+        let release_id = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            mock.expect_cmd("Runtime.runIfWaitingForDebugger"),
+        )
+        .await
+        .expect("debugger-release did not fire within 2s");
+        mock.reply(release_id, json!({})).await;
+
+        // Browser-wide tabs registry is unchanged; the parent tab's
+        // frames map is still empty (no placeholder was seeded).
+        assert_eq!(inner.tabs.read().await.len(), 1);
+        let parent_tab = inner.tabs.read().await.get("S1").cloned().unwrap();
+        assert!(parent_tab.inner.frames.read().await.is_empty());
 
         conn.shutdown();
     }

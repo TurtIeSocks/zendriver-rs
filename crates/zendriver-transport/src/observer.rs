@@ -74,6 +74,15 @@ pub struct TargetInfo {
     pub attached: bool,
     #[serde(default, rename = "browserContextId")]
     pub browser_context_id: Option<String>,
+    /// `frameId` of the iframe element that hosts this target, when present.
+    /// Chrome populates this for `kind == "iframe"` OOPIF targets (Chromium
+    /// 90+); used by [`crate::TargetObserver`] implementations to attach the
+    /// OOPIF's child session to its hosting frame in the parent tab's frame
+    /// tree. Not present for `kind == "page"` and may be absent on older
+    /// Chromium versions even for iframe targets, in which case attach
+    /// observers fall back to matching `target_id` against the frame tree.
+    #[serde(default, rename = "openerFrameId")]
+    pub opener_frame_id: Option<String>,
 }
 
 #[cfg(test)]
