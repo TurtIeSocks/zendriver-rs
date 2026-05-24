@@ -17,8 +17,8 @@ The crate is intentionally a passive observer of a real Chrome browser; the acti
 - **Hybrid CAPTCHA path.** Default behavior: detecting a CAPTCHA surface without a registered solver returns `ImpervaError::CaptchaRequired` immediately (no wait). Optional `.on_captcha(callback)` builder method registers an async solver; when set, CAPTCHA detection invokes the callback with a `CaptchaChallenge` (kind + site key + url), receives a `CaptchaSolution` (token + form field), injects it into the page, and resumes polling.
 - **Hybrid detection.** Default: tab polling at 250ms intervals via a single `detect.js` evaluate per tick that bundles cookie reads, body marker scan, and script-src checks. Opt-in `.with_interception(&interceptor)` enables a Fetch-domain hook that subscribes to `/_Incapsula_Resource*` and `Reese.js` responses; first signal wins (`tokio::select!` between poll tick and interception signal).
 - **Hybrid AND clearance signal.** A clearance outcome of `TokenAcquired` requires both (a) a `reese84` cookie set with non-empty value, scoped to the current eTLD+1, and (b) the page body no longer contains Imperva challenge markers. Avoids false positives (cookie set during pre-clearance redirect) and false negatives (cookie evicted by site CSP) seen with cookie-only or body-only signals.
-- **Required `zendriver-stealth` dependency.** The `imperva` feature on the parent `zendriver` crate implies `stealth` and `interception`. Imperva's reese84 sensor is itself a fingerprint check; running without stealth has near-zero empirical success rate on protected sites.
-- **Retrofit `zendriver-cloudflare` to require stealth.** Acceptable pre-1.0 breaking change per the project's recorded API-churn allowance through P6 publish. Restores workspace consistency: both bypass crates require stealth.
+- **Stealth posture enforced via documentation + runtime telemetry.** Parent `zendriver` crate already pulls `zendriver-stealth` as a non-optional dep; the crate is unconditionally compiled in. The "requirement" therefore lives at the runtime/UX layer: lib.rs module docs lead with a *Stealth required* call-out, `Tab::imperva()` rustdoc repeats it, and `wait_for_clearance` emits a `tracing::warn!` when the poll loop runs ≥10 ticks (~2.5s) with no surface-state change ("clearance stalled — is `BrowserBuilder::stealth` enabled?"). The `imperva` cargo feature on the parent crate pulls `dep:zendriver-imperva` and `interception` only; no `stealth` feature manipulation is needed because stealth is always present.
+- **Retrofit `zendriver-cloudflare` to add equivalent docs + stalled-clearance telemetry.** Same UX-layer enforcement (lib.rs docs + `Tab::cloudflare()` rustdoc + stalled-poll warning). Drop `zendriver-cloudflare`'s stale `zendriver-interception` Cargo.toml dep at the same time (currently declared but never imported). No breaking change to user code.
 - **Single-driver, single-surface-enum design.** One `ImpervaBypass` struct dispatches per-surface internally via a `match` on the detected `ImpervaSurface` variant. Mirrors `CloudflareBypass`'s single-struct shape; no per-surface trait/impl proliferation in v0.1.
 - **Tests:** unit tests (~25) using `MockConnection` covering surface detection, state-machine transitions, timeout behavior, CAPTCHA callback path, interception fast-path, cookie scoping. Doctests (~5) on lib + public methods. Advisory nightly integration job against 2–3 known stable public Imperva sites.
 
@@ -57,7 +57,6 @@ description = "Imperva WAF / Incapsula bypass for zendriver"
 [dependencies]
 zendriver-transport.workspace    = true
 zendriver-interception.workspace = true
-zendriver-stealth.workspace      = true
 tokio.workspace                  = true
 serde.workspace                  = true
 serde_json.workspace             = true
@@ -69,15 +68,18 @@ tokio-test.workspace = true
 zendriver-transport  = { workspace = true, features = ["testing"] }
 ```
 
+`zendriver-stealth` is not a direct dep — the crate doesn't import any stealth API at compile time. Stealth posture is enforced via docs + runtime telemetry per the Goals section.
+
 ### Parent `zendriver` crate feature flag
 
 ```toml
 [features]
-imperva    = ["stealth", "interception", "dep:zendriver-imperva"]
-cloudflare = ["stealth", "interception", "dep:zendriver-cloudflare"]  # retrofit — adds stealth requirement
+imperva    = ["interception", "dep:zendriver-imperva"]
+# cloudflare unchanged — already pulls interception; stealth is unconditional on parent crate.
+cloudflare = ["interception", "dep:zendriver-cloudflare"]
 ```
 
-Existing `cloudflare` feature gains `stealth` requirement. One breaking change; acceptable per pre-release memory.
+Stealth is unconditionally compiled into the parent crate today (`zendriver-stealth.workspace = true` is non-optional), so no feature implication is required. Stealth posture is enforced at the runtime/UX layer per the Goals section.
 
 `Tab::imperva()` convenience method lives in the parent `zendriver` crate behind the `imperva` feature, mirroring the existing `Tab::cloudflare()`.
 
@@ -326,16 +328,15 @@ New workflow `.github/workflows/imperva-tests.yml`:
 - Unit tests + doctests = blocking on PRs.
 - Nightly integration = informational only.
 
-## Retrofit: `zendriver-cloudflare` stealth requirement
+## Retrofit: `zendriver-cloudflare` stealth posture parity
 
 To restore workspace consistency:
 
-- `cloudflare` feature on parent `zendriver` crate adds `stealth` to its requirements list.
-- `crates/zendriver-cloudflare/Cargo.toml` adds `zendriver-stealth.workspace = true` (currently absent).
-- Existing `Tab::cloudflare()` documentation updated to mention stealth is implied.
-- One existing breaking change for any user already opting into `cloudflare` without `stealth`. Pre-1.0, no published users, acceptable per memory.
-
-Also flagged for cleanup in the same PR: `crates/zendriver-cloudflare/Cargo.toml` currently declares `zendriver-interception.workspace = true` but never imports it. Drop the stale dep.
+- `crates/zendriver-cloudflare/src/lib.rs` gains a *Stealth required* call-out at the top of the module docs, matching the Imperva crate.
+- `Tab::cloudflare()` rustdoc in `crates/zendriver/src/tab.rs` adds a one-line stealth-required note.
+- `CloudflareBypass::wait_for_clearance` emits a `tracing::warn!` once when the poll loop runs ≥10 ticks without progress, suggesting `BrowserBuilder::stealth`.
+- `crates/zendriver-cloudflare/Cargo.toml` drops the stale `zendriver-interception.workspace = true` line (currently declared but never imported in `src/`).
+- No public API change. No breaking change to user code.
 
 ## Out-of-scope but worth recording
 
