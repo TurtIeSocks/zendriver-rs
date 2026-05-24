@@ -8,6 +8,7 @@ pub mod browser;
 pub mod element;
 pub mod error;
 pub mod input;
+pub mod network_idle;
 pub mod query;
 pub mod tab;
 

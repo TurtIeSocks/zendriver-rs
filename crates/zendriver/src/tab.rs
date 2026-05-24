@@ -43,6 +43,29 @@ pub(crate) struct TabInner {
     /// dispatch by `targetId` without re-querying `Target.getTargetInfo`
     /// per call.
     pub(crate) target_id: String,
+    /// Per-Tab in-flight network request tracker. Constructed in
+    /// [`Tab::new`] alongside a background task (spawned via
+    /// [`crate::network_idle::InFlightTracker::run`]) that subscribes to
+    /// `Network.*` events and maintains the set. Consulted by
+    /// [`Tab::wait_for_idle`] / [`Tab::wait_for_idle_with`] for Playwright
+    /// `networkidle` semantics.
+    pub(crate) network_tracker: Arc<crate::network_idle::InFlightTracker>,
+    /// Cancellation token for the background tracker task. Fires on
+    /// [`Drop`] so the spawned task exits cleanly when the last clone of
+    /// this Tab goes away. Cloned by the spawned task at construction
+    /// time; cancelling here propagates to the task's `tokio::select!`
+    /// loop within one event tick.
+    pub(crate) network_cancel: tokio_util::sync::CancellationToken,
+}
+
+impl Drop for TabInner {
+    fn drop(&mut self) {
+        // Signal the spawned `InFlightTracker::run` task to exit. The task
+        // selects on this token alongside the four `Network.*` subscriber
+        // streams; cancellation unblocks the select even if no events are
+        // arriving. Without this the task would leak per Tab on shutdown.
+        self.network_cancel.cancel();
+    }
 }
 
 #[derive(Default)]
@@ -58,6 +81,23 @@ impl Tab {
         input: Arc<InputController>,
         target_id: String,
     ) -> Self {
+        // Build the per-Tab network tracker + spawn its background subscriber
+        // task. The task calls `Network.enable` once, then maintains the
+        // in-flight set in response to `Network.requestWillBeSent` /
+        // `responseReceived` / `loadingFailed` / `loadingFinished` events
+        // arriving on this tab's session. `wait_for_idle` reads from the
+        // same `network_tracker` Arc.
+        let network_tracker = crate::network_idle::InFlightTracker::new();
+        let network_cancel = tokio_util::sync::CancellationToken::new();
+        tokio::spawn({
+            let tracker = network_tracker.clone();
+            let session_for_task = session.clone();
+            let cancel_for_task = network_cancel.clone();
+            async move {
+                tracker.run(session_for_task, cancel_for_task).await;
+            }
+        });
+
         Self {
             inner: Arc::new(TabInner {
                 session,
@@ -65,6 +105,8 @@ impl Tab {
                 browser,
                 input,
                 target_id,
+                network_tracker,
+                network_cancel,
             }),
         }
     }
@@ -423,6 +465,70 @@ impl Tab {
         self.call("Page.reload", json!({ "ignoreCache": false }))
             .await?;
         Ok(())
+    }
+
+    /// Wait until the tab's network has been idle (0 in-flight requests)
+    /// for 500ms, with a 30s outer timeout. Playwright `networkidle`
+    /// semantics.
+    ///
+    /// Backed by the per-Tab [`crate::network_idle::InFlightTracker`]
+    /// spawned at [`Tab::new`] time, which subscribes to
+    /// `Network.requestWillBeSent` (insert) and the three terminal events
+    /// (`responseReceived` / `loadingFailed` / `loadingFinished`, all
+    /// remove). On timeout returns [`ZendriverError::Timeout`] with the
+    /// configured timeout duration.
+    ///
+    /// See [`Tab::wait_for_idle_with`] for tunable timeout + quiet window.
+    pub async fn wait_for_idle(&self) -> Result<()> {
+        self.wait_for_idle_with(Duration::from_secs(30), Duration::from_millis(500))
+            .await
+    }
+
+    /// Wait until the tab's network has been idle (0 in-flight requests)
+    /// for `quiet_window`, bounded by `timeout`.
+    ///
+    /// Algorithm: poll the in-flight set with a `Notify`-driven wake (or a
+    /// 50ms fallback tick). Track `quiet_start = Some(now)` on the first
+    /// observation of an empty set; reset to `None` on any observation
+    /// where the set is non-empty. Return `Ok(())` once `now - quiet_start
+    /// >= quiet_window`. Return [`ZendriverError::Timeout`] (carrying the
+    /// supplied `timeout`) once the outer deadline elapses.
+    ///
+    /// The 50ms tick is a safety net for the case where the tracker is
+    /// already at 0 in-flight requests and no further events fire to wake
+    /// the notifier — without it, `wait_for_idle` would block until an
+    /// unrelated event arrived. With it, the worst-case latency to detect
+    /// "stayed idle long enough" is `quiet_window + 50ms`.
+    pub async fn wait_for_idle_with(
+        &self,
+        timeout: Duration,
+        quiet_window: Duration,
+    ) -> Result<()> {
+        let tracker = self.inner.network_tracker.clone();
+        let deadline = tokio::time::Instant::now() + timeout;
+        let mut quiet_start: Option<tokio::time::Instant> = None;
+        loop {
+            let in_flight_count = tracker.in_flight.lock().await.len();
+            if in_flight_count == 0 {
+                let now = tokio::time::Instant::now();
+                match quiet_start {
+                    None => quiet_start = Some(now),
+                    Some(start) if now.duration_since(start) >= quiet_window => {
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            } else {
+                quiet_start = None;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(ZendriverError::Timeout(timeout));
+            }
+            tokio::select! {
+                () = tokio::time::sleep(Duration::from_millis(50)) => {}
+                () = tracker.notifier.notified() => {}
+            }
+        }
     }
 }
 
@@ -924,6 +1030,92 @@ mod tests {
         mock.reply(id, json!({})).await;
 
         fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    // --- wait_for_idle quiet-window enforcement ------------------------
+
+    /// End-to-end: emit a `Network.requestWillBeSent` event, then 100ms
+    /// later emit `Network.responseReceived` for the same id. With a 500ms
+    /// quiet window + 2s outer timeout, `wait_for_idle_with` should
+    /// resolve `Ok(())` within ~600ms of the response (500ms quiet +
+    /// scheduling slack). Asserts the call returns within 1.5s of the
+    /// response event — a generous bound that still rejects "never
+    /// resolves" without flaking on a loaded CI machine.
+    #[tokio::test]
+    async fn wait_for_idle_resolves_after_quiet_window_post_response() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        // Synchronize: wait until the background tracker task has run far
+        // enough to issue `Network.enable`. Once that command lands in the
+        // mock's outbound queue, the subscriptions are already registered
+        // (created in `InFlightTracker::run` before the enable spawn) — so
+        // any subsequent `emit_event_for_session` will be routed to them.
+        let id_enable =
+            tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Network.enable"))
+                .await
+                .expect("tracker did not send Network.enable within 2s");
+        mock.reply(id_enable, json!({})).await;
+
+        // Insert via requestWillBeSent.
+        mock.emit_event_for_session(
+            "Network.requestWillBeSent",
+            json!({ "requestId": "R1" }),
+            "S1",
+        )
+        .await;
+        // Wait for the tracker to actually observe the insert before
+        // starting the wait — otherwise wait_for_idle could see an empty
+        // set on its first poll and resolve immediately.
+        for _ in 0..50 {
+            if tab.inner.network_tracker.in_flight.lock().await.len() == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            tab.inner.network_tracker.in_flight.lock().await.len(),
+            1,
+            "request did not register before wait_for_idle starts",
+        );
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                t.wait_for_idle_with(Duration::from_secs(2), Duration::from_millis(500))
+                    .await
+            }
+        });
+
+        // Hold the request in-flight briefly, then close it. After this
+        // emit, the tracker drains to empty and the 500ms quiet window
+        // starts ticking.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let response_at = tokio::time::Instant::now();
+        mock.emit_event_for_session(
+            "Network.responseReceived",
+            json!({ "requestId": "R1" }),
+            "S1",
+        )
+        .await;
+
+        let res = tokio::time::timeout(Duration::from_millis(1500), fut)
+            .await
+            .expect("wait_for_idle did not resolve within 1500ms after response");
+        res.unwrap().unwrap();
+        let elapsed = response_at.elapsed();
+        // 500ms quiet window + slack; must be at least 500ms.
+        assert!(
+            elapsed >= Duration::from_millis(450),
+            "resolved too early ({elapsed:?}) — quiet window not enforced",
+        );
+        assert!(
+            elapsed < Duration::from_millis(1500),
+            "resolved too late ({elapsed:?})",
+        );
+
         conn.shutdown();
     }
 }
