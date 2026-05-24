@@ -121,13 +121,47 @@ pub(crate) async fn run(
             Some(ev) = attached.next() => {
                 let frame = Frame::new(
                     ev.frame_id.clone(),
-                    ev.parent_frame_id,
+                    ev.parent_frame_id.clone(),
                     String::new(),
                     None,
                     session.clone(),
                     tab_weak.clone(),
                 );
-                frames.write().await.insert(ev.frame_id, frame);
+                // Chrome occasionally fires `frameAttached` twice for a
+                // single iframe — once with a provisional `frameId` and
+                // again with the committed one — without an intervening
+                // `frameDetached`. Observed on `srcdoc` iframes under
+                // `--headless=new`. The provisional entry always has an
+                // empty URL (it never received a `frameNavigated`); the
+                // newer attach carries the real id. Sweep any
+                // same-parent provisional siblings before inserting so
+                // the registry doesn't accumulate dead frames that
+                // `Page.createIsolatedWorld` would reject with
+                // "No frame for given id found".
+                let mut map = frames.write().await;
+                if let Some(parent) = ev.parent_frame_id.as_deref() {
+                    let stale: Vec<String> = map
+                        .iter()
+                        .filter_map(|(id, f)| {
+                            if id == &ev.frame_id {
+                                return None;
+                            }
+                            if f.inner.parent_frame_id.as_deref() != Some(parent) {
+                                return None;
+                            }
+                            let url_slot = f.inner.url.try_read().ok()?;
+                            if url_slot.is_empty() {
+                                Some(id.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    for id in stale {
+                        map.remove(&id);
+                    }
+                }
+                map.insert(ev.frame_id, frame);
             }
             Some(ev) = navigated.next() => {
                 let frame_id = ev.frame.id.clone();

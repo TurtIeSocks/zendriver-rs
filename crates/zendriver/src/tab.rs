@@ -2374,11 +2374,15 @@ mod tests {
         mock.reply(id_enable, json!({})).await;
 
         // Start with the set already at 0 — wait_for_idle should accumulate
-        // a quiet window from T0.
+        // a quiet window from T0. The inner `wait_for_idle_with` timeout is
+        // deliberately generous (30s) so a slow / loaded CI runner doesn't
+        // flake the test; the correctness assertion below uses a strict
+        // lower bound on `elapsed` and an outer 10s tokio::time::timeout to
+        // catch a too-early resolve or a hang.
         let fut = tokio::spawn({
             let t = tab.clone();
             async move {
-                t.wait_for_idle_with(Duration::from_secs(5), Duration::from_millis(300))
+                t.wait_for_idle_with(Duration::from_secs(30), Duration::from_millis(300))
                     .await
             }
         });

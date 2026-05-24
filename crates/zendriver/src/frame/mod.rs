@@ -486,31 +486,95 @@ impl Frame {
     /// Unlike [`crate::tab::Tab::ensure_isolated_world`], we skip the
     /// `Page.getFrameTree` round-trip — the frame already knows its own
     /// CDP `frameId`, so we go straight to `Page.createIsolatedWorld`.
-    async fn ensure_isolated_world(&self) -> Result<i64> {
+    pub(crate) async fn ensure_isolated_world(&self) -> Result<i64> {
         let mut cache = self.inner.isolated_world.lock().await;
         if let Some(ctx) = cache.context_id {
             return Ok(ctx);
         }
+        // Try the frame_id we recorded at attach time. If Chrome rewrote
+        // it between the `frameAttached` event and now (observed for
+        // `srcdoc` iframes under `--headless=new`, which sometimes
+        // re-attach the iframe with a fresh id without emitting
+        // `frameDetached`), CDP returns "No frame for given id found";
+        // walk the current frame tree, find a child of our recorded
+        // parent, and retry with the live id.
+        let frame_id_for_call = match self.create_isolated_world(&self.inner.frame_id).await {
+            Ok(ctx) => {
+                cache.main_frame_id = Some(self.inner.frame_id.clone());
+                cache.context_id = Some(ctx);
+                return Ok(ctx);
+            }
+            Err(ZendriverError::Cdp {
+                code: -32602,
+                ref message,
+                ..
+            }) if message.contains("No frame for given id") => {
+                self.discover_current_frame_id().await?
+            }
+            Err(e) => return Err(e),
+        };
+        let ctx = self.create_isolated_world(&frame_id_for_call).await?;
+        cache.main_frame_id = Some(frame_id_for_call);
+        cache.context_id = Some(ctx);
+        Ok(ctx)
+    }
+
+    async fn create_isolated_world(&self, frame_id: &str) -> Result<i64> {
         let res = self
             .inner
             .session
             .call(
                 "Page.createIsolatedWorld",
                 json!({
-                    "frameId": self.inner.frame_id,
+                    "frameId": frame_id,
                     "worldName": "zendriver-eval",
                     "grantUniversalAccess": false,
                 }),
             )
             .await?;
-        let ctx_id = res["executionContextId"].as_i64().ok_or_else(|| {
+        res["executionContextId"].as_i64().ok_or_else(|| {
             ZendriverError::Navigation(
                 "Page.createIsolatedWorld did not return executionContextId".into(),
             )
+        })
+    }
+
+    async fn discover_current_frame_id(&self) -> Result<String> {
+        let parent = self.inner.parent_frame_id.as_deref().ok_or_else(|| {
+            ZendriverError::Navigation(
+                "frame_id rejected and no parent_frame_id recorded to recover from".into(),
+            )
         })?;
-        cache.main_frame_id = Some(self.inner.frame_id.clone());
-        cache.context_id = Some(ctx_id);
-        Ok(ctx_id)
+        let tree = self
+            .inner
+            .session
+            .call("Page.getFrameTree", json!({}))
+            .await?;
+        let main = tree["frameTree"].clone();
+        // Walk: depth-first. Find a child whose parentId matches `parent`
+        // and which is not the main frame. Single-iframe pages always
+        // win; multi-iframe pages get the first matching child, which
+        // is the best we can do without a name/url to disambiguate.
+        fn walk_for_child(node: &serde_json::Value, parent: &str) -> Option<String> {
+            if let Some(children) = node["childFrames"].as_array() {
+                for c in children {
+                    if c["frame"]["parentId"].as_str() == Some(parent) {
+                        if let Some(id) = c["frame"]["id"].as_str() {
+                            return Some(id.to_string());
+                        }
+                    }
+                    if let Some(found) = walk_for_child(c, parent) {
+                        return Some(found);
+                    }
+                }
+            }
+            None
+        }
+        walk_for_child(&main, parent).ok_or_else(|| {
+            ZendriverError::FrameNotFound(format!(
+                "no child frame found under parent {parent} during recovery"
+            ))
+        })
     }
 
     /// Shared post-processing for `Runtime.evaluate` responses — checks
@@ -700,9 +764,21 @@ mod tests {
             async move { f.find().css("button").one().await }
         });
 
-        // First dispatch: Runtime.evaluate with the document.querySelectorAll
-        // expression (resolve_css_many goes through the array path).
+        // Frame-scoped queries first allocate an isolated world for the
+        // frame (so `Runtime.evaluate` runs against the frame's document
+        // rather than the session's default — i.e. the parent tab's
+        // main frame). Reply with a stub executionContextId so the
+        // selector can attach it to the evaluate call below.
+        let id_iso = mock.expect_cmd("Page.createIsolatedWorld").await;
+        assert_eq!(mock.last_sent()["params"]["frameId"], "FRAME_FIND");
+        mock.reply(id_iso, json!({ "executionContextId": 4242 }))
+            .await;
+
+        // Next dispatch: Runtime.evaluate with the document.querySelectorAll
+        // expression (resolve_css_many goes through the array path), now
+        // pinned to the frame's isolated-world contextId.
         let id_q = mock.expect_cmd("Runtime.evaluate").await;
+        assert_eq!(mock.last_sent()["params"]["contextId"], 4242);
         let sent = mock.last_sent()["params"]["expression"]
             .as_str()
             .expect("expression should be a string")

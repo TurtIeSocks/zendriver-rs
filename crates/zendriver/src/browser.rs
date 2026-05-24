@@ -574,6 +574,18 @@ impl TargetObserver for TabRegistrar {
                 Ok(())
             }
             "page" => {
+                // Skip Chrome-internal pages (chrome://newtab/ that Chrome
+                // auto-opens when the last user tab closes, devtools://, etc).
+                // These aren't pages the caller drove zendriver to create and
+                // would inflate `tab_count` / `tabs()` with unwanted entries.
+                let url = &session.target_info.url;
+                if url.starts_with("chrome://")
+                    || url.starts_with("devtools://")
+                    || url.starts_with("chrome-extension://")
+                    || url.starts_with("chrome-untrusted://")
+                {
+                    return Ok(());
+                }
                 let conn = session.connection().clone();
                 let new_session = SessionHandle::new(conn, session.session_id.to_string());
                 let input = InputController::new(self.input_profile.clone());
@@ -585,11 +597,15 @@ impl TargetObserver for TabRegistrar {
                     session.target_info.target_id.clone(),
                 );
 
-                browser
-                    .tabs
-                    .write()
-                    .await
-                    .insert(session.session_id.to_string(), tab);
+                // Dedupe by `target_id`: if `flatten: true` re-fires
+                // `attachedToTarget` for the same target under a different
+                // sessionId (observed on `--headless=new`), the old entry
+                // would otherwise linger and inflate `tab_count`.
+                let target_id_str = session.target_info.target_id.clone();
+                let mut tabs = browser.tabs.write().await;
+                tabs.retain(|_, t| t.target_id() != target_id_str);
+                tabs.insert(session.session_id.to_string(), tab);
+                drop(tabs);
                 // Wake any `new_tab_at` callers waiting on this insert.
                 browser.tabs_changed.notify_waiters();
                 Ok(())

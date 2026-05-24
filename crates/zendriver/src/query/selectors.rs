@@ -69,6 +69,25 @@ impl QueryScope<'_> {
         }
     }
 
+    /// Execution-context id that `Runtime.evaluate` should target for
+    /// this scope, or `None` to let CDP pick the session's default
+    /// (which is the main-frame main-world for a Tab/Element scope).
+    ///
+    /// Frame scope must NOT use the session default — for a same-origin
+    /// iframe, the session is the parent tab's session and CDP's
+    /// "default context" is the *parent* document. A
+    /// `document.querySelectorAll(...)` evaluated without a contextId
+    /// would walk the parent DOM, not the iframe's, and find nothing
+    /// for selectors targeting iframe-only content. Returning the
+    /// frame's isolated-world contextId pins the eval to the iframe's
+    /// document.
+    pub(crate) async fn execution_context_id(&self) -> Result<Option<i64>> {
+        match self {
+            QueryScope::Tab(_) | QueryScope::Element(_) => Ok(None),
+            QueryScope::Frame(f) => Ok(Some(f.ensure_isolated_world().await?)),
+        }
+    }
+
     /// Owned `Tab` clone for `Element::synthesize_query`. Tab/Element
     /// scopes return a cheap `Arc` bump on the underlying `TabInner`;
     /// Frame scope upgrades the frame's `Weak<TabInner>` (which is
@@ -184,20 +203,20 @@ async fn resolve_css_one(scope: &QueryScope<'_>, selector: &str) -> Result<Optio
 #[allow(dead_code)] // Called via `SelectorKind::resolve_many`; gated until T12.
 async fn resolve_css_many(scope: &QueryScope<'_>, selector: &str) -> Result<Vec<RemoteRef>> {
     let session = scope.session();
+    let ctx = scope.execution_context_id().await?;
     let result = match scope {
         QueryScope::Tab(_) | QueryScope::Frame(_) => {
-            session
-                .call(
-                    "Runtime.evaluate",
-                    json!({
-                        "expression": format!(
-                            "Array.from(document.querySelectorAll({}))",
-                            json!(selector)
-                        ),
-                        "returnByValue": false,
-                    }),
-                )
-                .await?
+            let mut params = json!({
+                "expression": format!(
+                    "Array.from(document.querySelectorAll({}))",
+                    json!(selector)
+                ),
+                "returnByValue": false,
+            });
+            if let Some(id) = ctx {
+                params["contextId"] = json!(id);
+            }
+            session.call("Runtime.evaluate", params).await?
         }
         QueryScope::Element(el) => {
             let object_id = el.remote_object_id_cloned().await?;

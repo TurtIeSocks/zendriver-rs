@@ -308,24 +308,37 @@ async fn wait_for_idle_on_spa_with_delayed_xhr() {
     // observe the request, wait for it to complete, then require a 500ms
     // quiet window — so the total elapsed must comfortably exceed both
     // the delay and the quiet window.
-    let mock_data = MockServer::start().await;
+    //
+    // Use a single mock server for both the page and the data endpoint so
+    // the fetch is same-origin — a cross-origin fetch from a separate
+    // wiremock instance would be CORS-blocked and `window.x` would never
+    // be set, failing the read-back assertion below for an unrelated
+    // reason.
+    let mock = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/data"))
         .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
-        .mount(&mock_data)
+        .mount(&mock)
         .await;
-
-    let html = format!(
-        r#"<!doctype html><html><body>
+    Mock::given(method("GET"))
+        .and(path("/"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(
+                r#"<!doctype html><html><body>
           <script>
-            setTimeout(() => {{
-              fetch("{}/data").then(r => r.text()).then(t => {{ window.x = t; }});
-            }}, 500);
+            setTimeout(() => {
+              fetch("/data").then(r => r.text()).then(t => { window.x = t; });
+            }, 500);
           </script>
-        </body></html>"#,
-        mock_data.uri()
-    );
-    let mock_page = fixture_with_html(&html).await;
+        </body></html>"#
+                    .as_bytes()
+                    .to_vec(),
+                "text/html",
+            ),
+        )
+        .mount(&mock)
+        .await;
+    let mock_page = mock;
 
     let browser = Browser::builder().headless(true).launch().await.unwrap();
     let tab = browser.main_tab();

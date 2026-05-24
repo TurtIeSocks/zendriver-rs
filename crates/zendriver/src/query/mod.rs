@@ -1180,10 +1180,30 @@ mod tests {
             async move { t.find().in_frame(&f).css("button").one().await }
         });
 
+        // Frame scope first allocates an isolated world on the Frame's
+        // session so the follow-up `Runtime.evaluate` runs against the
+        // frame's document rather than the parent tab's default
+        // context. The override under test routes the createIsolatedWorld
+        // call to S_FRAME just like every subsequent dispatch.
+        let id_iso = mock.expect_cmd("Page.createIsolatedWorld").await;
+        assert_eq!(
+            mock.last_sent()["sessionId"],
+            "S_FRAME",
+            "in_frame override must route Page.createIsolatedWorld through the Frame's session"
+        );
+        assert_eq!(mock.last_sent()["params"]["frameId"], "F_OOPIF");
+        mock.reply(id_iso, json!({ "executionContextId": 9001 }))
+            .await;
+
         let id_q = mock.expect_cmd("Runtime.evaluate").await;
         assert_eq!(
             mock.last_sent()["sessionId"], "S_FRAME",
             "in_frame override must route Runtime.evaluate through the Frame's session, not the Tab's"
+        );
+        assert_eq!(
+            mock.last_sent()["params"]["contextId"],
+            9001,
+            "Runtime.evaluate must be pinned to the frame's isolated-world contextId"
         );
         let sent = mock.last_sent()["params"]["expression"]
             .as_str()
