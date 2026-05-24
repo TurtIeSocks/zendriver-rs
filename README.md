@@ -41,34 +41,40 @@ More working examples in [`crates/zendriver/examples/`](crates/zendriver/example
 
 ## Feature matrix
 
-| Feature        | Default? | Use case                                                       | Extra deps                           |
-|----------------|----------|----------------------------------------------------------------|--------------------------------------|
-| `stealth`      | yes      | Anti-detection: spoofed UA/platform, isolated worlds, JS shim  | (built-in to `zendriver`)            |
-| `interception` | no       | Block/modify requests via CDP `Fetch.*`; rule-based + streams  | `zendriver-interception`             |
-| `expect`       | no       | Playwright-style `expect_response()` / `expect_request()`      | (in-tree, no extra crate)            |
-| `cloudflare`   | no       | Solve Cloudflare Turnstile challenges                          | `zendriver-cloudflare`               |
-| `fetcher`      | no       | Auto-download a pinned Chrome for Testing build                | `zendriver-fetcher` + `reqwest`/`zip`|
+| Feature        | Default? | Use case                                                      | Extra deps                            |
+| -------------- | -------- | ------------------------------------------------------------- | ------------------------------------- |
+| `stealth`      | yes      | Anti-detection: spoofed UA/platform, isolated worlds, JS shim | (built-in to `zendriver`)             |
+| `interception` | no       | Block/modify requests via CDP `Fetch.*`; rule-based + streams | `zendriver-interception`              |
+| `expect`       | no       | Playwright-style `expect_response()` / `expect_request()`     | (in-tree, no extra crate)             |
+| `cloudflare`   | no       | Solve Cloudflare Turnstile challenges                         | `zendriver-cloudflare`                |
+| `fetcher`      | no       | Auto-download a pinned Chrome for Testing build               | `zendriver-fetcher` + `reqwest`/`zip` |
 
 ## Install
 
 Pick the use case that matches what you're building.
 
 **Just browse:**
+
 ```bash
 cargo add zendriver
 ```
+
 Default stealth is on.
 
 **Stealth scraping (explicit):**
+
 ```bash
 cargo add zendriver --features stealth
 ```
+
 Same as above — only spell out the feature if you want it visible in `Cargo.toml`.
 
 **Everything:**
+
 ```bash
 cargo add zendriver --features "interception expect cloudflare fetcher"
 ```
+
 Adds request interception, `expect()` matchers, Cloudflare Turnstile bypass, and the Chrome for Testing fetcher.
 
 ## Phases
@@ -84,14 +90,14 @@ Six development phases shipped into the v0.1.0 release. The mdBook covers each s
 
 ## Comparison
 
-| Feature                  | zendriver-rs            | chromiumoxide   | fantoccini       | headless_chrome | thirtyfour       |
-|--------------------------|-------------------------|-----------------|------------------|-----------------|------------------|
-| API ergonomics *opinion* | builder + auto-wait     | raw CDP types   | WebDriver verbs  | sync wrappers   | WebDriver verbs  |
-| Stealth out-of-box       | yes (default)           | no              | no               | no              | no               |
-| Multi-tab                | yes (first-class)       | yes             | yes              | yes             | yes              |
-| Interception             | yes (`Fetch.*` wrapper) | yes (raw)       | no (proxy-only)  | partial         | no (proxy-only)  |
-| License                  | MIT OR Apache-2.0       | MIT OR Apache-2.0 | Apache-2.0     | MIT             | MIT              |
-| Async runtime            | tokio                   | tokio / async-std | tokio          | sync            | tokio            |
+| Feature                  | zendriver-rs            | chromiumoxide     | fantoccini      | headless_chrome | thirtyfour      |
+| ------------------------ | ----------------------- | ----------------- | --------------- | --------------- | --------------- |
+| API ergonomics _opinion_ | builder + auto-wait     | raw CDP types     | WebDriver verbs | sync wrappers   | WebDriver verbs |
+| Stealth out-of-box       | yes (default)           | no                | no              | no              | no              |
+| Multi-tab                | yes (first-class)       | yes               | yes             | yes             | yes             |
+| Interception             | yes (`Fetch.*` wrapper) | yes (raw)         | no (proxy-only) | partial         | no (proxy-only) |
+| License                  | MIT OR Apache-2.0       | MIT OR Apache-2.0 | Apache-2.0      | MIT             | MIT             |
+| Async runtime            | tokio                   | tokio / async-std | tokio           | sync            | tokio           |
 
 Subjective rows marked `*opinion`. All claims accurate as of the 0.1.0 release; check upstream changelogs before relying on them.
 
