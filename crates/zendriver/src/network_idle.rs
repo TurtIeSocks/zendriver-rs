@@ -88,7 +88,8 @@ impl InFlightTracker {
     /// the "best-effort observability" contract: never block the caller on
     /// our subscription bookkeeping.
     pub(crate) async fn run(self: Arc<Self>, session: SessionHandle, cancel: CancellationToken) {
-        // Subscribe BEFORE awaiting `Network.enable` for two reasons:
+        // Subscribe to the connection's raw event stream BEFORE awaiting
+        // `Network.enable` for two reasons:
         // 1. Production correctness — Chrome can fire events between
         //    `Network.enable`'s reply and our subscription registration.
         //    Subscribing first plugs that race.
@@ -97,10 +98,16 @@ impl InFlightTracker {
         //    background subscription bookkeeping). If we awaited the call
         //    first the task would block before any subscription existed,
         //    and events emitted by the test would be dropped on the floor.
-        let mut req_will_be_sent = session.subscribe::<RequestEvent>("Network.requestWillBeSent");
-        let mut response_received = session.subscribe::<RequestEvent>("Network.responseReceived");
-        let mut loading_failed = session.subscribe::<RequestEvent>("Network.loadingFailed");
-        let mut loading_finished = session.subscribe::<RequestEvent>("Network.loadingFinished");
+        //
+        // We use a single raw subscription and dispatch on `method` rather
+        // than four typed subscriptions in `tokio::select!`. The select!
+        // form picks a ready arm at random, which can deliver
+        // `loadingFinished` to the handler before the matching
+        // `requestWillBeSent` — the REMOVE then runs against an empty
+        // set, the later INSERT installs the id, and the request leaks
+        // forever. One stream means CDP's wire order is preserved.
+        let session_id = session.session_id().to_string();
+        let mut events = session.connection().subscribe_raw();
 
         // Fire-and-forget `Network.enable`. We don't await the response
         // because the mock test harness never replies; the production
@@ -123,36 +130,37 @@ impl InFlightTracker {
                     trace!("InFlightTracker: cancellation received, exiting");
                     return;
                 }
-                Some(ev) = req_will_be_sent.next() => {
-                    let mut set = self.in_flight.lock().await;
-                    set.insert(ev.request_id);
-                    drop(set);
-                    self.notifier.notify_waiters();
-                }
-                Some(ev) = response_received.next() => {
-                    let mut set = self.in_flight.lock().await;
-                    set.remove(&ev.request_id);
-                    drop(set);
-                    self.notifier.notify_waiters();
-                }
-                Some(ev) = loading_failed.next() => {
-                    let mut set = self.in_flight.lock().await;
-                    set.remove(&ev.request_id);
-                    drop(set);
-                    self.notifier.notify_waiters();
-                }
-                Some(ev) = loading_finished.next() => {
-                    let mut set = self.in_flight.lock().await;
-                    set.remove(&ev.request_id);
-                    drop(set);
-                    self.notifier.notify_waiters();
-                }
-                else => {
-                    // All streams ended (transport closed). Nothing left to
-                    // observe — exit so the task doesn't sit forever in a
-                    // hot loop on the `select!` else arm.
-                    trace!("InFlightTracker: all event streams closed, exiting");
-                    return;
+                next = events.next() => {
+                    let Some(ev) = next else {
+                        // Event stream closed (transport torn down). Nothing
+                        // left to observe — exit so the task doesn't sit
+                        // forever on a closed stream.
+                        trace!("InFlightTracker: event stream closed, exiting");
+                        return;
+                    };
+                    if ev.session_id.as_deref() != Some(session_id.as_str()) {
+                        continue;
+                    }
+                    let changed = match ev.method.as_str() {
+                        "Network.requestWillBeSent" => {
+                            let Ok(parsed) = serde_json::from_value::<RequestEvent>(ev.params) else { continue };
+                            let mut set = self.in_flight.lock().await;
+                            set.insert(parsed.request_id);
+                            true
+                        }
+                        "Network.responseReceived"
+                        | "Network.loadingFailed"
+                        | "Network.loadingFinished" => {
+                            let Ok(parsed) = serde_json::from_value::<RequestEvent>(ev.params) else { continue };
+                            let mut set = self.in_flight.lock().await;
+                            set.remove(&parsed.request_id);
+                            true
+                        }
+                        _ => false,
+                    };
+                    if changed {
+                        self.notifier.notify_waiters();
+                    }
                 }
             }
         }
