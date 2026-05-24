@@ -53,38 +53,39 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 ///
 /// Selector kinds are mutually exclusive — calling `.css(...)` after
 /// `.xpath(...)` overwrites the prior selector.
-pub struct FindBuilder<'tab> {
+pub struct FindBuilder<'scope> {
     /// Tab whose document is the default query root when neither
     /// [`Self::element`] nor [`Self::frame`] is set. Cleared (`None`)
     /// for `Frame`-rooted builders (built by
     /// [`FindBuilder::new_for_frame`]) since the parent tab is reachable
     /// via the frame's `Weak<TabInner>` only on Element synthesis, not
     /// on dispatch.
-    pub(crate) tab: Option<&'tab Tab>,
+    pub(crate) tab: Option<&'scope Tab>,
     /// When set, the terminal resolves against this element's subtree
     /// (`QueryScope::Element`) rather than the whole tab (`QueryScope::Tab`).
     /// Populated by [`FindBuilder::new_for_element`]; the bare
     /// [`FindBuilder::new_for_tab`] leaves it `None`.
-    pub(crate) element: Option<&'tab Element>,
+    pub(crate) element: Option<&'scope Element>,
     /// When set, the terminal resolves against this frame's document
     /// (`QueryScope::Frame`) — dispatching on the frame's own CDP
     /// session. Populated by [`FindBuilder::new_for_frame`]; mutually
     /// exclusive with `element` (a non-`None` value here also implies
     /// `tab = None`).
-    pub(crate) frame: Option<&'tab Frame>,
+    pub(crate) frame: Option<&'scope Frame>,
     pub(crate) selector: Option<SelectorKind>,
     pub(crate) timeout: Duration,
     pub(crate) nth: Option<usize>,
     pub(crate) visible_only: bool,
-    // Reserved for OOPIF frame-targeted queries. P3 plumbs the field but
-    // resolution still goes through the main frame; cross-frame routing
-    // lands in P4.
-    #[allow(dead_code)]
-    pub(crate) in_frame: Option<String>,
+    /// Frame override populated by [`FindBuilder::in_frame`]. When set,
+    /// the terminal swaps the scope to [`QueryScope::Frame`] before
+    /// dispatch, routing commands through the frame's own session —
+    /// even if the builder was originally rooted on a Tab. Element
+    /// scope still takes precedence over both.
+    pub(crate) in_frame: Option<&'scope Frame>,
 }
 
-impl<'tab> FindBuilder<'tab> {
-    pub(crate) fn new_for_tab(tab: &'tab Tab) -> Self {
+impl<'scope> FindBuilder<'scope> {
+    pub(crate) fn new_for_tab(tab: &'scope Tab) -> Self {
         Self {
             tab: Some(tab),
             element: None,
@@ -102,7 +103,7 @@ impl<'tab> FindBuilder<'tab> {
     /// `element.querySelector(...)` (CSS) or the equivalent
     /// element-relative form for other selector kinds — matches outside
     /// the element's subtree are not considered.
-    pub(crate) fn new_for_element(element: &'tab Element) -> Self {
+    pub(crate) fn new_for_element(element: &'scope Element) -> Self {
         Self {
             tab: Some(element.tab()),
             element: Some(element),
@@ -120,7 +121,7 @@ impl<'tab> FindBuilder<'tab> {
     /// frame's `document` and dispatches on the frame's own CDP
     /// session — distinct from the parent tab's session for OOPIFs
     /// (T16+), identical for same-origin sub-frames.
-    pub(crate) fn new_for_frame(frame: &'tab Frame) -> Self {
+    pub(crate) fn new_for_frame(frame: &'scope Frame) -> Self {
         Self {
             tab: None,
             element: None,
@@ -238,12 +239,32 @@ impl<'tab> FindBuilder<'tab> {
         self
     }
 
-    /// Reserved for OOPIF queries — currently a no-op. Cross-frame
-    /// targeting lands in P4.
+    /// Re-target this query at `frame`. The terminal swaps to
+    /// [`QueryScope::Frame`] and dispatches on the frame's own CDP
+    /// session — same as the parent tab's session for same-origin
+    /// sub-frames, a distinct child session for OOPIFs. Element scope
+    /// (if set via [`Element::find`]) still takes precedence; this
+    /// override applies only when the builder started from a Tab or
+    /// another Frame.
+    ///
+    /// The returned builder's lifetime is the intersection of the
+    /// original scope's lifetime and the Frame's borrow — so the Frame
+    /// must outlive the terminal call.
     #[must_use]
-    pub fn in_frame(mut self, frame_id: impl Into<String>) -> Self {
-        self.in_frame = Some(frame_id.into());
-        self
+    pub fn in_frame<'a>(self, frame: &'a Frame) -> FindBuilder<'a>
+    where
+        'scope: 'a,
+    {
+        FindBuilder {
+            tab: self.tab,
+            element: self.element,
+            frame: self.frame,
+            selector: self.selector,
+            timeout: self.timeout,
+            nth: self.nth,
+            visible_only: self.visible_only,
+            in_frame: Some(frame),
+        }
     }
 
     /// Override the default 10s timeout for `one()`'s poll loop.
@@ -264,14 +285,20 @@ impl<'tab> FindBuilder<'tab> {
             )
         })?;
         let deadline = Instant::now() + self.timeout;
-        // Element > Frame > Tab precedence — Element-scoped queries
-        // beat a co-stored Tab ref (which is the element's own tab) and
-        // Frame-scoped queries are the only path where `tab` is None.
-        let scope = match (self.element, self.frame, self.tab) {
-            (Some(el), _, _) => QueryScope::Element(el),
-            (None, Some(fr), _) => QueryScope::Frame(fr),
-            (None, None, Some(tab)) => QueryScope::Tab(tab),
-            (None, None, None) => {
+        // Precedence: Element > in_frame override > Frame > Tab.
+        // - Element-scoped queries always win (they were built via
+        //   `Element::find` and constrain to that subtree explicitly).
+        // - `in_frame(&Frame)` overrides a co-stored Tab default so
+        //   `tab.find().in_frame(&f).css(...)` dispatches on the
+        //   Frame's session.
+        // - Frame-scoped queries (built via `Frame::find`) keep their
+        //   stored frame ref when no override is set.
+        let scope = match (self.element, self.in_frame, self.frame, self.tab) {
+            (Some(el), _, _, _) => QueryScope::Element(el),
+            (None, Some(fr), _, _) => QueryScope::Frame(fr),
+            (None, None, Some(fr), _) => QueryScope::Frame(fr),
+            (None, None, None, Some(tab)) => QueryScope::Tab(tab),
+            (None, None, None, None) => {
                 return Err(ZendriverError::Navigation(
                     "FindBuilder has no scope (no tab, element, or frame)".into(),
                 ))
@@ -322,31 +349,30 @@ impl<'tab> FindBuilder<'tab> {
 ///
 /// Terminals: `.many()` errors when the result is empty;
 /// `.many_or_empty()` returns an empty `Vec` instead.
-pub struct FindAllBuilder<'tab> {
+pub struct FindAllBuilder<'scope> {
     /// Tab whose document is the default query root. `None` when the
     /// builder is rooted at a `Frame` instead (see [`Self::frame`]).
-    pub(crate) tab: Option<&'tab Tab>,
+    pub(crate) tab: Option<&'scope Tab>,
     /// When set, the terminal resolves against this element's subtree
     /// (`QueryScope::Element`) rather than the whole tab (`QueryScope::Tab`).
     /// Populated by [`FindAllBuilder::new_for_element`]; the bare
     /// [`FindAllBuilder::new_for_tab`] leaves it `None`.
-    pub(crate) element: Option<&'tab Element>,
+    pub(crate) element: Option<&'scope Element>,
     /// When set, the terminal resolves against this frame's document
     /// and dispatches on the frame's own CDP session. Populated by
     /// [`FindAllBuilder::new_for_frame`].
-    pub(crate) frame: Option<&'tab Frame>,
+    pub(crate) frame: Option<&'scope Frame>,
     pub(crate) selector: Option<SelectorKind>,
     pub(crate) timeout: Duration,
     pub(crate) visible_only: bool,
-    // Reserved for OOPIF frame-targeted queries. P3 plumbs the field but
-    // resolution still goes through the main frame; cross-frame routing
-    // lands in P4.
-    #[allow(dead_code)]
-    pub(crate) in_frame: Option<String>,
+    /// Frame override populated by [`FindAllBuilder::in_frame`]. See
+    /// the corresponding field on [`FindBuilder`] for the precedence
+    /// rationale.
+    pub(crate) in_frame: Option<&'scope Frame>,
 }
 
-impl<'tab> FindAllBuilder<'tab> {
-    pub(crate) fn new_for_tab(tab: &'tab Tab) -> Self {
+impl<'scope> FindAllBuilder<'scope> {
+    pub(crate) fn new_for_tab(tab: &'scope Tab) -> Self {
         Self {
             tab: Some(tab),
             element: None,
@@ -362,7 +388,7 @@ impl<'tab> FindAllBuilder<'tab> {
     /// terminal `many()` / `many_or_empty()` resolves the selector
     /// against the element's subtree — siblings and ancestors are not
     /// considered.
-    pub(crate) fn new_for_element(element: &'tab Element) -> Self {
+    pub(crate) fn new_for_element(element: &'scope Element) -> Self {
         Self {
             tab: Some(element.tab()),
             element: Some(element),
@@ -377,7 +403,7 @@ impl<'tab> FindAllBuilder<'tab> {
     /// Build a frame-scoped `find_all` rooted at `frame`. The terminal
     /// `many()` / `many_or_empty()` resolves the selector against the
     /// frame's `document` and dispatches on the frame's own CDP session.
-    pub(crate) fn new_for_frame(frame: &'tab Frame) -> Self {
+    pub(crate) fn new_for_frame(frame: &'scope Frame) -> Self {
         Self {
             tab: None,
             element: None,
@@ -485,12 +511,22 @@ impl<'tab> FindAllBuilder<'tab> {
         self
     }
 
-    /// Reserved for OOPIF queries — currently a no-op. Cross-frame
-    /// targeting lands in P4.
+    /// Re-target this query at `frame`. See [`FindBuilder::in_frame`]
+    /// for the precedence rules and lifetime contract.
     #[must_use]
-    pub fn in_frame(mut self, frame_id: impl Into<String>) -> Self {
-        self.in_frame = Some(frame_id.into());
-        self
+    pub fn in_frame<'a>(self, frame: &'a Frame) -> FindAllBuilder<'a>
+    where
+        'scope: 'a,
+    {
+        FindAllBuilder {
+            tab: self.tab,
+            element: self.element,
+            frame: self.frame,
+            selector: self.selector,
+            timeout: self.timeout,
+            visible_only: self.visible_only,
+            in_frame: Some(frame),
+        }
     }
 
     /// Override the default 10s timeout for the poll loop. The loop
@@ -515,11 +551,12 @@ impl<'tab> FindAllBuilder<'tab> {
         })?;
         let deadline = Instant::now() + self.timeout;
         // See `FindBuilder::one` for the precedence rationale.
-        let scope = match (self.element, self.frame, self.tab) {
-            (Some(el), _, _) => QueryScope::Element(el),
-            (None, Some(fr), _) => QueryScope::Frame(fr),
-            (None, None, Some(tab)) => QueryScope::Tab(tab),
-            (None, None, None) => {
+        let scope = match (self.element, self.in_frame, self.frame, self.tab) {
+            (Some(el), _, _, _) => QueryScope::Element(el),
+            (None, Some(fr), _, _) => QueryScope::Frame(fr),
+            (None, None, Some(fr), _) => QueryScope::Frame(fr),
+            (None, None, None, Some(tab)) => QueryScope::Tab(tab),
+            (None, None, None, None) => {
                 return Err(ZendriverError::Navigation(
                     "FindAllBuilder has no scope (no tab, element, or frame)".into(),
                 ))
@@ -849,18 +886,107 @@ mod tests {
     async fn modifiers_chain_and_persist_on_builder() {
         let (_mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new_for_test(sess);
+        let tab = Tab::new_for_test(sess.clone());
+        let frame = Frame::new(
+            "F2".into(),
+            None,
+            String::new(),
+            None,
+            sess,
+            std::sync::Weak::new(),
+        );
         let fb = tab
             .find()
             .css(".item")
             .nth(3)
             .visible_only(true)
-            .in_frame("F2")
+            .in_frame(&frame)
             .timeout(Duration::from_secs(5));
         assert_eq!(fb.nth, Some(3));
         assert!(fb.visible_only);
-        assert_eq!(fb.in_frame.as_deref(), Some("F2"));
+        assert!(fb.in_frame.is_some(), "in_frame must hold Frame ref");
+        assert_eq!(fb.in_frame.unwrap().id(), "F2");
         assert_eq!(fb.timeout, Duration::from_secs(5));
+        conn.shutdown();
+    }
+
+    /// T17: `tab.find().in_frame(&frame).css(...).one()` must dispatch
+    /// `Runtime.evaluate` on the Frame's session, NOT the Tab's. The
+    /// override flips the scope from `QueryScope::Tab` to
+    /// `QueryScope::Frame` so the frame's CDP session routes the
+    /// command — load-bearing for OOPIFs where the two sessions are
+    /// distinct.
+    #[tokio::test]
+    async fn in_frame_override_routes_dispatch_to_frame_session() {
+        let (mut mock, conn) = MockConnection::pair();
+        // Two distinct sessions over the same mock connection so we can
+        // tell which one dispatched the command via the `sessionId`
+        // field on the outbound frame.
+        let tab_sess = SessionHandle::new(conn.clone(), "S_TAB");
+        let frame_sess = SessionHandle::new(conn.clone(), "S_FRAME");
+        let tab = Tab::new_for_test(tab_sess);
+        let frame = Frame::new(
+            "F_OOPIF".into(),
+            None,
+            String::new(),
+            None,
+            frame_sess,
+            std::sync::Arc::downgrade(&tab.inner),
+        );
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            let f = frame.clone();
+            async move { t.find().in_frame(&f).css("button").one().await }
+        });
+
+        let id_q = mock.expect_cmd("Runtime.evaluate").await;
+        assert_eq!(
+            mock.last_sent()["sessionId"], "S_FRAME",
+            "in_frame override must route Runtime.evaluate through the Frame's session, not the Tab's"
+        );
+        let sent = mock.last_sent()["params"]["expression"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            sent.contains("document.querySelectorAll") && sent.contains("button"),
+            "expected querySelectorAll with selector, got: {sent}"
+        );
+        mock.reply(
+            id_q,
+            json!({ "result": { "objectId": "RArr", "type": "object", "subtype": "array" } }),
+        )
+        .await;
+
+        let id_p = mock.expect_cmd("Runtime.getProperties").await;
+        assert_eq!(
+            mock.last_sent()["sessionId"],
+            "S_FRAME",
+            "follow-up Runtime.getProperties must also dispatch on the Frame's session"
+        );
+        mock.reply(
+            id_p,
+            json!({
+                "result": [
+                    { "name": "0", "value": { "objectId": "R0", "type": "object", "subtype": "node" } },
+                    { "name": "length", "value": { "value": 1, "type": "number" } }
+                ]
+            }),
+        )
+        .await;
+
+        let id_d = mock.expect_cmd("DOM.describeNode").await;
+        assert_eq!(
+            mock.last_sent()["sessionId"],
+            "S_FRAME",
+            "DOM.describeNode must also dispatch on the Frame's session"
+        );
+        mock.reply(id_d, json!({ "node": { "backendNodeId": 7 } }))
+            .await;
+
+        let el = fut.await.unwrap().unwrap();
+        assert_eq!(*el.inner.backend_node_id.lock().await, Some(7));
         conn.shutdown();
     }
 
