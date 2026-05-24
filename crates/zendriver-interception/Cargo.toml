@@ -24,6 +24,7 @@ thiserror.workspace           = true
 tracing.workspace             = true
 base64                        = "0.22"
 glob.workspace                = true
+regex.workspace               = true
 
 [dev-dependencies]
 tokio-test.workspace = true
