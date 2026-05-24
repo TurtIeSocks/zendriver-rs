@@ -1,0 +1,119 @@
+name: Publish
+
+# Security note: this workflow does NOT consume any untrusted GitHub event
+# input (issue/PR titles, commit messages, head refs, etc.) inside `run:`
+# scripts. The only interpolations are:
+#   - inputs.dry_run        (typed boolean from workflow_dispatch)
+#   - secrets.CARGO_REGISTRY_TOKEN (passed via env, never echoed)
+# No script-injection surface.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run — package and verify without uploading'
+        type: boolean
+        default: false
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish changed crates to crates.io
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Publish in topological order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          DRY_RUN_FLAG: ${{ inputs.dry_run == true && '--dry-run' || '' }}
+        run: |
+          set -euo pipefail
+
+          # Topological order: leaf deps first.
+          # zendriver-transport      -> (no internal deps)
+          # zendriver-stealth        -> transport
+          # zendriver-interception   -> transport
+          # zendriver-fetcher        -> (no internal deps)
+          # zendriver-cloudflare     -> transport, interception
+          # zendriver                -> transport, stealth, interception?, cloudflare?, fetcher?
+          CRATES=(
+            zendriver-transport
+            zendriver-stealth
+            zendriver-interception
+            zendriver-fetcher
+            zendriver-cloudflare
+            zendriver
+          )
+
+          summary() { echo "$1" >> "$GITHUB_STEP_SUMMARY"; }
+          summary "| Crate | Local | crates.io | Action |"
+          summary "|-------|-------|-----------|--------|"
+
+          published_any=0
+          for crate in "${CRATES[@]}"; do
+            echo "::group::$crate"
+
+            local_ver=$(cargo metadata --no-deps --format-version 1 \
+              | jq -r --arg c "$crate" '.packages[] | select(.name == $c) | .version')
+            echo "local version:  $local_ver"
+
+            http_code=$(curl -sS -o /tmp/crate.json -w '%{http_code}' \
+              -H 'User-Agent: zendriver-rs-publish (ci; github.com/TurtIeSocks/zendriver-rs)' \
+              "https://crates.io/api/v1/crates/$crate")
+
+            if [[ "$http_code" == "200" ]]; then
+              remote_ver=$(jq -r '.crate.max_version' /tmp/crate.json)
+            elif [[ "$http_code" == "404" ]]; then
+              remote_ver=""
+            else
+              echo "::error::crates.io query for $crate failed (HTTP $http_code)"
+              cat /tmp/crate.json || true
+              exit 1
+            fi
+            echo "remote version: ${remote_ver:-<unpublished>}"
+
+            if [[ "$local_ver" == "$remote_ver" ]]; then
+              echo "no version change; skipping"
+              summary "| \`$crate\` | $local_ver | $remote_ver | skip |"
+              echo "::endgroup::"
+              continue
+            fi
+
+            action="publish"
+            if [[ -n "$DRY_RUN_FLAG" ]]; then action="dry-run"; fi
+            echo "$action $crate $local_ver"
+            (cd "crates/$crate" && cargo publish $DRY_RUN_FLAG --locked)
+            published_any=1
+            summary "| \`$crate\` | $local_ver | ${remote_ver:-—} | $action |"
+
+            if [[ -z "$DRY_RUN_FLAG" ]]; then
+              echo "waiting 30s for crates.io index propagation..."
+              sleep 30
+            fi
+            echo "::endgroup::"
+          done
+
+          if [[ $published_any -eq 0 ]]; then
+            echo "no crates needed publishing"
+            summary ""
+            summary "_No crates required publishing — all versions match crates.io._"
+          fi

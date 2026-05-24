@@ -24,5 +24,9 @@ gated via `required-features`.
 
 ## Releases
 
-`scripts/publish.sh --dry-run` for verification; `scripts/publish.sh` for
-actual publish (after `git tag vX.Y.Z`).
+Bump the `version` in the workspace `[workspace.package]` table, commit,
+and merge to `main`. The `Publish` workflow (`.github/workflows/publish.yml`)
+publishes each crate in topological order, skipping crates whose version
+already matches crates.io. Tag the release with `git tag vX.Y.Z` after the
+workflow succeeds. For a local sanity check before bumping, run the
+`Publish` workflow via `workflow_dispatch` with `dry_run: true`.
