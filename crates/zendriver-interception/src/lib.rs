@@ -13,6 +13,7 @@ pub mod rule;
 pub mod types;
 pub mod url_pattern;
 
+pub use actor::InterceptHandle;
 pub use builder::{InterceptBuilder, RequestPattern};
 pub use error::InterceptionError;
 pub use paused::PausedRequest;
