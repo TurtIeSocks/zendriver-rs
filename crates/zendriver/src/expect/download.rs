@@ -115,6 +115,7 @@ pub(crate) type SharedDownloadState = Arc<tokio::sync::Mutex<DownloadState>>;
 /// - Spawns a long-running subscriber on `Page.downloadProgress` that walks
 ///   the routing map on every event and mutates the matching
 ///   [`DownloadState`] in place.
+#[derive(Debug)]
 pub(crate) struct DownloadCoordinator {
     /// Backing tempdir. Held to keep the directory alive — drops on Tab
     /// teardown clean up the temp files.
@@ -312,6 +313,7 @@ impl MatchedDownload {
 /// Implements [`Future`] directly — `.await` works without calling
 /// `.matched()`. The `.matched()` accessor exists for parity with the
 /// Playwright-style fluent API.
+#[derive(Debug)]
 pub struct DownloadExpectation {
     rx: oneshot::Receiver<MatchedDownload>,
     timeout: Duration,

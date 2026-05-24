@@ -34,6 +34,7 @@ use crate::observer::TargetObserver;
 /// let res = call.await.unwrap().unwrap();
 /// # });
 /// ```
+#[derive(Debug)]
 pub struct MockConnection {
     server_in: mpsc::Sender<Result<Message, tokio_tungstenite::tungstenite::Error>>,
     server_out: mpsc::Receiver<Message>,

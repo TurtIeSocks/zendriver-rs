@@ -132,6 +132,14 @@ impl AbortReason {
     }
 }
 
+impl std::fmt::Display for AbortReason {
+    /// Renders as the CDP wire string (e.g. `"BlockedByClient"`), matching
+    /// how Chrome reports the reason on the wire and in log output.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_cdp_str())
+    }
+}
+
 /// Information about an intercepted request, surfaced to rule closures and
 /// stream consumers.
 #[derive(Debug, Clone)]
@@ -227,5 +235,16 @@ mod tests {
             ],
         });
         insta::assert_yaml_snapshot!("enum_cdp_strings", pairs);
+    }
+
+    #[test]
+    fn abort_reason_display_matches_cdp_string() {
+        for reason in [
+            AbortReason::Failed,
+            AbortReason::BlockedByClient,
+            AbortReason::NameNotResolved,
+        ] {
+            assert_eq!(reason.to_string(), reason.as_cdp_str());
+        }
     }
 }

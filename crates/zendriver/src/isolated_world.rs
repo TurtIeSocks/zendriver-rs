@@ -27,7 +27,7 @@
 /// `main_frame_id` intact since the frame is still around) and retries —
 /// the next `ensure_isolated_world` call re-runs `Page.createIsolatedWorld`
 /// only, skipping the `Page.getFrameTree` round-trip.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub(crate) struct IsolatedWorldCache {
     pub(crate) main_frame_id: Option<String>,
     pub(crate) context_id: Option<i64>,

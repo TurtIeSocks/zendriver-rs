@@ -53,6 +53,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 ///
 /// Selector kinds are mutually exclusive — calling `.css(...)` after
 /// `.xpath(...)` overwrites the prior selector.
+#[derive(Debug)]
 pub struct FindBuilder<'scope> {
     /// Tab whose document is the default query root when neither
     /// [`Self::element`] nor [`Self::frame`] is set. Cleared (`None`)
@@ -349,6 +350,7 @@ impl<'scope> FindBuilder<'scope> {
 ///
 /// Terminals: `.many()` errors when the result is empty;
 /// `.many_or_empty()` returns an empty `Vec` instead.
+#[derive(Debug)]
 pub struct FindAllBuilder<'scope> {
     /// Tab whose document is the default query root. `None` when the
     /// builder is rooted at a `Frame` instead (see [`Self::frame`]).

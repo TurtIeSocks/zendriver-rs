@@ -18,11 +18,12 @@ use crate::error::{Result, ZendriverError};
 use crate::query::selectors::{QueryScope, RemoteRef, SelectorKind};
 use crate::tab::Tab;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Element {
     pub(crate) inner: Arc<ElementInner>,
 }
 
+#[derive(Debug)]
 pub(crate) struct ElementInner {
     pub(crate) tab: Tab,
     /// `None` once the element has been observed stale; refilled by

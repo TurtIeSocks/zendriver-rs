@@ -19,11 +19,12 @@ use crate::screenshot::ScreenshotBuilder;
 
 const DEFAULT_LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Tab {
     pub(crate) inner: Arc<TabInner>,
 }
 
+#[derive(Debug)]
 pub(crate) struct TabInner {
     pub(crate) session: SessionHandle,
     pub(crate) isolated_world: tokio::sync::Mutex<IsolatedWorldCache>,

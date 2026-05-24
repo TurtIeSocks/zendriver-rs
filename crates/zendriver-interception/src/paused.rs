@@ -36,10 +36,7 @@ use crate::types::{AbortReason, RequestInfo, RequestOverrides, ResponseInfo};
 /// before deciding which terminal action to take.
 ///
 /// [`RequestStage`]: crate::types::RequestStage
-//
-// No `Debug` derive: `SessionHandle` is not Debug (intentionally opaque from
-// `zendriver-transport`). If a debug repr is wanted later, hand-impl one that
-// skips the session.
+#[derive(Debug)]
 pub struct PausedRequest {
     /// Opaque CDP request id (`requestId` on `Fetch.requestPaused`). Must be
     /// echoed back on whichever terminal action releases the pause.

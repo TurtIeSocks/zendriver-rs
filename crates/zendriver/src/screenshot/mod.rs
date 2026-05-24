@@ -70,6 +70,7 @@ impl Format {
 /// Default state: PNG format, no clip, viewport-sized (not full-page), no
 /// quality override, opaque background. Terminate the chain with
 /// [`Self::bytes`] (raw image bytes) or [`Self::save`] (write to file).
+#[derive(Debug)]
 pub struct ScreenshotBuilder<'tab> {
     tab: &'tab Tab,
     format: Format,

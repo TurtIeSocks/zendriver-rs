@@ -24,11 +24,12 @@ pub(crate) const DEFAULT_OBSERVER_TIMEOUT: Duration = Duration::from_secs(5);
 /// Cheap-to-clone handle to the connection actor. All `Tab`s and `Element`s
 /// hold one of these (via `Arc<...>`); the actor itself runs in a separate
 /// tokio task.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Connection {
     pub(crate) inner: Arc<ConnectionInner>,
 }
 
+#[derive(Debug)]
 pub(crate) struct ConnectionInner {
     pub(crate) cmd_tx: mpsc::Sender<OutboundCmd>,
     pub(crate) event_tx: broadcast::Sender<RawEvent>,

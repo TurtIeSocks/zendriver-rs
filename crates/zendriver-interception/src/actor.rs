@@ -50,6 +50,7 @@ use crate::types::{RequestInfo, RequestOverrides, ResourceType, ResponseInfo};
 /// when the handle leaves scope. Call [`stop`](Self::stop) instead when the
 /// caller needs to observe `Fetch.disable` reaching the wire before
 /// proceeding — `Drop` is fire-and-forget by construction.
+#[derive(Debug)]
 #[must_use = "interception stops when the handle is dropped — bind it to a variable to keep it alive"]
 pub struct InterceptHandle {
     cancel: CancellationToken,

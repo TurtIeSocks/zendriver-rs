@@ -22,6 +22,7 @@ pub use mouse::MouseButton;
 /// One `InputController` lives on each `Browser` and is shared via
 /// `Arc<InputController>` so each `Tab`/`Element` action can coordinate
 /// pointer position + modifier state across the same tab tree.
+#[derive(Debug)]
 pub struct InputController {
     // Fields are exercised by tests and consumed by later P3 tasks
     // (mouse dispatch, keyboard dispatch, actionability waits).
@@ -32,6 +33,7 @@ pub struct InputController {
 }
 
 #[allow(dead_code)]
+#[derive(Debug)]
 pub(crate) struct InputState {
     pub pointer_x: f64,
     pub pointer_y: f64,

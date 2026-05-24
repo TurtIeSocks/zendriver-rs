@@ -42,11 +42,12 @@ use crate::tab::TabInner;
 /// [`crate::tab::Tab::session_storage`]. Wrapping is `Arc`-cheap; pass the
 /// handle around freely. All methods are async — each call performs at
 /// least one CDP round-trip (origin discovery), plus the data op.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Storage {
     inner: Arc<StorageInner>,
 }
 
+#[derive(Debug)]
 struct StorageInner {
     /// Tab session used for `DOMStorage.*` calls. For both local and session
     /// storage this is the tab's primary session — DOMStorage is page-scoped,

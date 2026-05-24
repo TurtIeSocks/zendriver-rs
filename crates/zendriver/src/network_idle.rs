@@ -43,6 +43,7 @@ use zendriver_transport::SessionHandle;
 /// Constructed by [`InFlightTracker::new`], driven by a background task
 /// spawned via [`InFlightTracker::run`]. Readers consult `in_flight` for
 /// the current count and wait on `notifier` for change events.
+#[derive(Debug)]
 pub(crate) struct InFlightTracker {
     /// Currently-pending request IDs. Inserted on `Network.requestWillBeSent`,
     /// removed on terminal events (`responseReceived` / `loadingFailed` /

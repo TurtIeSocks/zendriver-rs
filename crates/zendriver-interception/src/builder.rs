@@ -78,9 +78,10 @@ pub struct RequestPattern {
 /// `'tab` ties the builder's lifetime to the tab's session — the borrow lasts
 /// only until `start()` / `subscribe()` consumes the builder.
 //
-// No `Debug`: `Rule::Modify` carries an `Arc<dyn Fn ...>` (not `Debug`); the
-// inner `Vec<Rule>` therefore can't auto-derive. If callers want diagnostics,
-// `rules_count()` is exposed in tests via `pub(crate) fn rules_count`.
+// `Debug` works because `Rule` has a hand-written `Debug` impl that renders
+// the closure variant's body as `<closure>`. Inner `Vec<Rule>` derives via
+// that.
+#[derive(Debug)]
 pub struct InterceptBuilder<'tab> {
     tab: &'tab SessionHandle,
     patterns: Vec<RequestPattern>,

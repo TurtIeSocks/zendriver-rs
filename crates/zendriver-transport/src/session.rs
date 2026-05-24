@@ -11,11 +11,12 @@ use crate::connection::Connection;
 use crate::error::CallError;
 use crate::frame::RawEvent;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SessionHandle {
     inner: Arc<Inner>,
 }
 
+#[derive(Debug)]
 struct Inner {
     conn: Connection,
     session_id: String,

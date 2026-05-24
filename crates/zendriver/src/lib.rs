@@ -110,3 +110,58 @@ pub mod stealth {
 pub async fn start() -> Result<Browser> {
     Browser::builder().launch().await
 }
+
+#[cfg(test)]
+#[allow(dead_code)]
+mod auto_trait_assertions {
+    //! Compile-time `Send + Sync` assertions for the public surface.
+    //!
+    //! If any of these stop compiling, a field was added to the named type
+    //! whose auto traits don't cover `Send + Sync` — usually a `Rc` /
+    //! `RefCell` / un-`Send`able future. Treat that as a design bug rather
+    //! than a relaxation of the bounds: zendriver's whole point is to be
+    //! ferried across `tokio::spawn` boundaries.
+    use super::*;
+
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    #[test]
+    fn public_surface_is_send_sync() {
+        assert_send_sync::<Browser>();
+        assert_send_sync::<BrowserBuilder>();
+        assert_send_sync::<Tab>();
+        assert_send_sync::<Element>();
+        assert_send_sync::<Frame>();
+        assert_send_sync::<Storage>();
+        assert_send_sync::<CookieJar>();
+        assert_send_sync::<Cookie>();
+        assert_send_sync::<SameSite>();
+        assert_send_sync::<BoundingBox>();
+        assert_send_sync::<AriaRole>();
+        assert_send_sync::<Format>();
+        assert_send_sync::<MouseButton>();
+        assert_send_sync::<Key>();
+        assert_send_sync::<SpecialKey>();
+        assert_send_sync::<KeyModifiers>();
+        assert_send_sync::<ClickOptions>();
+        assert_send_sync::<ZendriverError>();
+        assert_send_sync::<BrowserError>();
+    }
+
+    #[cfg(feature = "expect")]
+    #[test]
+    fn expect_surface_is_send_sync() {
+        assert_send_sync::<UrlMatcher>();
+        assert_send_sync::<MatchedRequest>();
+        assert_send_sync::<RequestExpectation>();
+        assert_send_sync::<MatchedResponse>();
+        assert_send_sync::<ResponseExpectation>();
+        assert_send_sync::<MatchedDialog>();
+        assert_send_sync::<DialogExpectation>();
+        assert_send_sync::<DialogType>();
+        assert_send_sync::<MatchedDownload>();
+        assert_send_sync::<DownloadExpectation>();
+        assert_send_sync::<DownloadState>();
+        assert_send_sync::<DownloadProgressState>();
+    }
+}

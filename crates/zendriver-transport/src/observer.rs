@@ -18,6 +18,7 @@ pub trait TargetObserver: Send + Sync {
     fn name(&self) -> &'static str;
 }
 
+#[derive(Debug)]
 pub struct PausedSession<'a> {
     pub session_id: &'a str,
     pub target_info: &'a TargetInfo,

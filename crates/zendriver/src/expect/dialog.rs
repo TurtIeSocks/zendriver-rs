@@ -136,6 +136,7 @@ impl MatchedDialog {
 /// Implements [`Future`] directly — `.await` works without calling
 /// `.matched()`. The `.matched()` accessor exists for parity with the
 /// Playwright-style fluent API.
+#[derive(Debug)]
 pub struct DialogExpectation {
     rx: oneshot::Receiver<MatchedDialog>,
     timeout: Duration,

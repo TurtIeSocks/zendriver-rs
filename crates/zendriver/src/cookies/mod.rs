@@ -141,11 +141,12 @@ impl From<CdpCookie> for Cookie {
 /// cookie store is shared across all tabs in the browser, so per-tab
 /// scoping is meaningless for cookies. The owning Tab/Browser handle just
 /// passes its `Connection` in.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CookieJar {
     inner: Arc<CookieJarInner>,
 }
 
+#[derive(Debug)]
 struct CookieJarInner {
     conn: Connection,
 }

@@ -20,6 +20,7 @@ use crate::frame::{CdpCommand, CdpInbound, CdpRpcError, RawEvent};
 use crate::observer::{PausedSession, TargetInfo, TargetObserver};
 
 /// Outbound command sent from a `Connection` handle to the actor.
+#[derive(Debug)]
 pub(crate) struct OutboundCmd {
     pub method: String,
     pub params: Value,

@@ -38,7 +38,7 @@ const DEFAULT_LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 /// tab); sub-frames and OOPIFs arrive via the lifecycle / OOPIF wiring
 /// in later P4 tasks. All accessor methods operate on the inner `Arc`,
 /// so cloning a `Frame` is a single refcount bump.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Frame {
     inner: Arc<FrameInner>,
 }
@@ -48,6 +48,7 @@ pub struct Frame {
 // field until those land keeps clippy clean without dropping the (already
 // correct) plumbing. T13 enables `session` + `isolated_world` via the new
 // `Frame::evaluate` / `evaluate_main` / `content` accessors.
+#[derive(Debug)]
 pub(crate) struct FrameInner {
     /// CDP `frameId` (e.g. `"F0"`, a hex string at runtime). Stable for the
     /// lifetime of the frame.

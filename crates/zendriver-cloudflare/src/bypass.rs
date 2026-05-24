@@ -44,6 +44,7 @@ const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// Drives a Cloudflare Turnstile clearance flow against a single tab's session.
 ///
 /// Constructed via `Tab::cloudflare()`.
+#[derive(Debug)]
 pub struct CloudflareBypass<'a> {
     pub(crate) session: &'a SessionHandle,
     pub(crate) poll_interval: Duration,

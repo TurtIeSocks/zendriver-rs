@@ -125,6 +125,25 @@ pub struct BrowserBuilder {
     pub(crate) extra_observers: Vec<Arc<dyn TargetObserver>>,
 }
 
+// Hand-rolled `Debug` because `Vec<Arc<dyn TargetObserver>>` doesn't derive
+// (trait objects are intentionally not `Debug`-bounded). Renders the observers
+// field as `<N observers>` so the rest of the builder stays inspectable.
+impl std::fmt::Debug for BrowserBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BrowserBuilder")
+            .field("headless", &self.headless)
+            .field("executable", &self.executable)
+            .field("user_data_dir", &self.user_data_dir)
+            .field("extra_args", &self.extra_args)
+            .field("stealth", &self.stealth)
+            .field(
+                "extra_observers",
+                &format_args!("<{} observers>", self.extra_observers.len()),
+            )
+            .finish()
+    }
+}
+
 impl BrowserBuilder {
     /// Builder seeded with the default `StealthProfile::native()` profile.
     /// Pass `.stealth(StealthProfile::off())` to opt out, or
@@ -200,11 +219,12 @@ impl BrowserBuilder {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Browser {
     pub(crate) inner: Arc<BrowserInner>,
 }
 
+#[derive(Debug)]
 pub(crate) struct BrowserInner {
     pub(crate) conn: Connection,
     pub(crate) main_tab: Tab,

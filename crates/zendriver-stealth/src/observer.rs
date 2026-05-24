@@ -17,6 +17,7 @@ use crate::{Fingerprint, ProfileKind, StealthProfile};
 /// Observer that applies a [`StealthProfile`] + [`Fingerprint`] to every page
 /// target. Workers and iframes are skipped — workers have no DOM and iframes
 /// inherit patches from the parent target in flat session mode.
+#[derive(Debug)]
 pub struct StealthObserver {
     profile: StealthProfile,
     fingerprint: Fingerprint,
