@@ -1570,7 +1570,7 @@ mod tests {
 
     /// [`Browser::cookies`] returns a [`crate::CookieJar`] bound to the
     /// browser's root [`zendriver_transport::Connection`]. A `.set(...)` call
-    /// must dispatch `Network.setCookie` on that connection — confirming the
+    /// must dispatch `Storage.setCookies` on that connection — confirming the
     /// jar shares the browser's CDP channel (not a per-tab session channel).
     #[tokio::test]
     async fn browser_cookies_returns_jar_bound_to_browser_connection() {
@@ -1616,11 +1616,16 @@ mod tests {
             .await
         });
 
-        let id = mock.expect_cmd("Network.setCookie").await;
-        assert_eq!(mock.last_sent()["params"]["name"], "sid");
+        let id = mock.expect_cmd("Storage.setCookies").await;
+        let params = &mock.last_sent()["params"];
+        let arr = params["cookies"]
+            .as_array()
+            .expect("setCookies payload must carry a cookies array");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["name"], "sid");
         // Browser-scope command — no session_id.
         assert!(mock.last_sent().get("sessionId").is_none());
-        mock.reply(id, json!({ "success": true })).await;
+        mock.reply(id, json!({})).await;
 
         fut.await.unwrap().unwrap();
         conn.shutdown();

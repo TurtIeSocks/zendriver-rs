@@ -31,7 +31,7 @@ use crate::error::Result;
 impl CookieJar {
     /// Snapshot the cookie store to a JSON file at `path`.
     ///
-    /// Issues a single `Network.getAllCookies` round-trip, then writes the
+    /// Issues a single `Storage.getCookies` round-trip, then writes the
     /// pretty-printed array via [`tokio::fs::write`]. The file is
     /// overwritten if it already exists. Parent directories must already
     /// exist — `save_to_file` does not create them.
@@ -59,7 +59,7 @@ impl CookieJar {
     /// Hydrate the browser cookie store from a JSON file at `path`.
     ///
     /// Reads the file, deserializes a `Vec<Cookie>`, and dispatches a
-    /// single `Network.setCookies` bulk-set. Existing cookies in the
+    /// single `Storage.setCookies` bulk-set. Existing cookies in the
     /// browser are NOT cleared first — call [`CookieJar::clear`] before
     /// this method for a fresh slate.
     ///
@@ -93,8 +93,8 @@ mod tests {
     use crate::error::ZendriverError;
 
     /// End-to-end round-trip: dump the cookie store to disk, then load it back
-    /// into a fresh jar. The mock receives `Network.getAllCookies` on save,
-    /// then `Network.setCookies` on load — assert the payload preserves both
+    /// into a fresh jar. The mock receives `Storage.getCookies` on save,
+    /// then `Storage.setCookies` on load — assert the payload preserves both
     /// entries with their CDP camelCase fields intact.
     #[tokio::test]
     async fn save_and_load_roundtrip_preserves_cookies() {
@@ -103,14 +103,14 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let path = tmp.path().to_path_buf();
 
-        // --- Save half: Network.getAllCookies → write to tempfile.
+        // --- Save half: Storage.getCookies → write to tempfile.
         let save = tokio::spawn({
             let j = jar.clone();
             let p = path.clone();
             async move { j.save_to_file(p).await }
         });
 
-        let id = mock.expect_cmd("Network.getAllCookies").await;
+        let id = mock.expect_cmd("Storage.getCookies").await;
         mock.reply(
             id,
             json!({
@@ -149,14 +149,14 @@ mod tests {
         assert_eq!(arr[0]["same_site"], "Lax");
         assert_eq!(arr[1]["name"], "b");
 
-        // --- Load half: read tempfile → Network.setCookies bulk-set.
+        // --- Load half: read tempfile → Storage.setCookies bulk-set.
         let load = tokio::spawn({
             let j = jar.clone();
             let p = path.clone();
             async move { j.load_from_file(p).await }
         });
 
-        let id = mock.expect_cmd("Network.setCookies").await;
+        let id = mock.expect_cmd("Storage.setCookies").await;
         let params = &mock.last_sent()["params"];
         let cookies = params["cookies"].as_array().unwrap();
         assert_eq!(cookies.len(), 2);
@@ -195,7 +195,7 @@ mod tests {
         // task. (The pre-existing `_mock` would otherwise stall the call.)
         let reply = tokio::spawn(async move {
             let mut mock = _mock;
-            let id = mock.expect_cmd("Network.getAllCookies").await;
+            let id = mock.expect_cmd("Storage.getCookies").await;
             mock.reply(id, json!({ "cookies": [] })).await;
         });
 

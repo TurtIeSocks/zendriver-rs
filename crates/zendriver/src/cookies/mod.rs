@@ -191,7 +191,7 @@ impl CookieJar {
 
     /// Return every cookie in the browser's store.
     ///
-    /// Maps to `Network.getAllCookies`.
+    /// Maps to `Storage.getCookies`.
     ///
     /// # Examples
     ///
@@ -208,7 +208,7 @@ impl CookieJar {
         let resp = self
             .inner
             .conn
-            .call_raw("Network.getAllCookies", json!({}), None)
+            .call_raw("Storage.getCookies", json!({}), None)
             .await?;
         parse_cookies(&resp)
     }
@@ -245,12 +245,15 @@ impl CookieJar {
 
     /// Set a single cookie.
     ///
-    /// Maps to `Network.setCookie` — the cookie fields are flattened into
-    /// the top-level params object (CDP convention).
+    /// Maps to `Storage.setCookies` with a one-element batch. The singular
+    /// `Network.setCookie` is removed from newer Chrome / Chromium builds
+    /// (the CDP method is reported as not found), so the bulk endpoint is
+    /// the portable choice and is what the parent zendriver-python project
+    /// uses too.
     ///
     /// # Errors
     ///
-    /// Returns [`ZendriverError::Cookie`] if CDP reports `success: false`.
+    /// Returns [`ZendriverError::Cookie`] if CDP rejects the cookie.
     ///
     /// # Examples
     ///
@@ -273,29 +276,17 @@ impl CookieJar {
     /// ```
     pub async fn set(&self, cookie: Cookie) -> Result<()> {
         let cdp: CdpCookie = cookie.into();
-        let params = serde_json::to_value(&cdp).map_err(ZendriverError::Serde)?;
-        let resp = self
-            .inner
+        let cdp_json = serde_json::to_value(&cdp).map_err(ZendriverError::Serde)?;
+        self.inner
             .conn
-            .call_raw("Network.setCookie", params, None)
+            .call_raw("Storage.setCookies", json!({ "cookies": [cdp_json] }), None)
             .await?;
-        // CDP returns `{ "success": bool }`. Treat absent as success
-        // (defensive — older Chrome builds may omit on the happy path).
-        if resp
-            .get("success")
-            .and_then(serde_json::Value::as_bool)
-            .is_some_and(|ok| !ok)
-        {
-            return Err(ZendriverError::Cookie(format!(
-                "Network.setCookie reported success=false for {cdp:?}"
-            )));
-        }
         Ok(())
     }
 
     /// Set many cookies in a single CDP call.
     ///
-    /// Maps to `Network.setCookies`. Faster than looping over [`Self::set`]
+    /// Maps to `Storage.setCookies`. Faster than looping over [`Self::set`]
     /// for bulk loads (one round-trip instead of N).
     ///
     /// # Examples
@@ -316,7 +307,7 @@ impl CookieJar {
         let cdp: Vec<CdpCookie> = cookies.into_iter().map(CdpCookie::from).collect();
         self.inner
             .conn
-            .call_raw("Network.setCookies", json!({ "cookies": cdp }), None)
+            .call_raw("Storage.setCookies", json!({ "cookies": cdp }), None)
             .await?;
         Ok(())
     }
@@ -352,8 +343,9 @@ impl CookieJar {
 
     /// Clear the entire browser cookie store.
     ///
-    /// Maps to `Network.clearBrowserCookies` — no params, no response
-    /// payload.
+    /// Maps to `Storage.clearCookies` (the modern CDP method; newer
+    /// Chrome / Chromium builds dropped `Storage.clearCookies`
+    /// from the wire). No params, no response payload.
     ///
     /// # Examples
     ///
@@ -366,13 +358,13 @@ impl CookieJar {
     pub async fn clear(&self) -> Result<()> {
         self.inner
             .conn
-            .call_raw("Network.clearBrowserCookies", json!({}), None)
+            .call_raw("Storage.clearCookies", json!({}), None)
             .await?;
         Ok(())
     }
 }
 
-/// Shared parser for `Network.getAllCookies` and `Network.getCookies` —
+/// Shared parser for `Storage.getCookies` and `Network.getCookies` —
 /// both responses use `{ cookies: CdpCookie[] }`.
 #[allow(clippy::result_large_err)] // ZendriverError variance is the project-wide return type
 fn parse_cookies(resp: &serde_json::Value) -> Result<Vec<Cookie>> {
@@ -395,7 +387,7 @@ mod tests {
     use serde_json::json;
     use zendriver_transport::testing::MockConnection;
 
-    /// [`CookieJar::all`] dispatches `Network.getAllCookies` and parses the
+    /// [`CookieJar::all`] dispatches `Storage.getCookies` and parses the
     /// `cookies` array (with camelCase fields) into snake_case [`Cookie`]s.
     #[tokio::test]
     async fn all_parses_get_all_cookies_response() {
@@ -407,7 +399,7 @@ mod tests {
             async move { j.all().await }
         });
 
-        let id = mock.expect_cmd("Network.getAllCookies").await;
+        let id = mock.expect_cmd("Storage.getCookies").await;
         mock.reply(
             id,
             json!({
@@ -453,10 +445,12 @@ mod tests {
         conn.shutdown();
     }
 
-    /// [`CookieJar::set`] dispatches `Network.setCookie` with the cookie
-    /// flattened into params, using CDP's camelCase field names.
+    /// [`CookieJar::set`] dispatches `Storage.setCookies` with a one-element
+    /// `cookies` array, using CDP's camelCase field names. Singular
+    /// `Network.setCookie` was removed in newer Chrome builds; the bulk
+    /// endpoint is portable and matches zendriver-python's behaviour.
     #[tokio::test]
-    async fn set_dispatches_network_set_cookie_with_camel_case_payload() {
+    async fn set_dispatches_network_set_cookies_with_camel_case_payload() {
         let (mut mock, conn) = MockConnection::pair();
         let jar = CookieJar::new(conn.clone());
 
@@ -478,20 +472,25 @@ mod tests {
             }
         });
 
-        let id = mock.expect_cmd("Network.setCookie").await;
+        let id = mock.expect_cmd("Storage.setCookies").await;
         let params = &mock.last_sent()["params"];
-        assert_eq!(params["name"], "sid");
-        assert_eq!(params["value"], "xyz");
-        assert_eq!(params["domain"], ".example.com");
-        assert_eq!(params["path"], "/");
-        assert_eq!(params["httpOnly"], true);
-        assert_eq!(params["secure"], true);
-        assert_eq!(params["sameSite"], "Strict");
+        let arr = params["cookies"]
+            .as_array()
+            .expect("setCookies payload must carry a cookies array");
+        assert_eq!(arr.len(), 1);
+        let c = &arr[0];
+        assert_eq!(c["name"], "sid");
+        assert_eq!(c["value"], "xyz");
+        assert_eq!(c["domain"], ".example.com");
+        assert_eq!(c["path"], "/");
+        assert_eq!(c["httpOnly"], true);
+        assert_eq!(c["secure"], true);
+        assert_eq!(c["sameSite"], "Strict");
         // Snake-case names must NOT appear on the wire.
-        assert!(params.get("http_only").is_none());
-        assert!(params.get("same_site").is_none());
+        assert!(c.get("http_only").is_none());
+        assert!(c.get("same_site").is_none());
 
-        mock.reply(id, json!({ "success": true })).await;
+        mock.reply(id, json!({})).await;
         call.await.unwrap().unwrap();
 
         conn.shutdown();

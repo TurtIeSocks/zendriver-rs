@@ -1987,7 +1987,7 @@ mod tests {
     /// browser's root connection — discovered via the cached `Weak<BrowserInner>`
     /// upgrade. The test builds a synthetic `BrowserInner` with a known
     /// connection, attaches a Tab whose Weak ref points at it, and asserts
-    /// that calling `.set(...)` dispatches `Network.setCookie` on that
+    /// that calling `.set(...)` dispatches `Storage.setCookies` on that
     /// browser-level connection (not the Tab's session channel).
     #[tokio::test]
     async fn tab_cookies_dispatches_through_browser_connection_via_weak_upgrade() {
@@ -2035,12 +2035,17 @@ mod tests {
             .await
         });
 
-        let id = mock.expect_cmd("Network.setCookie").await;
-        assert_eq!(mock.last_sent()["params"]["name"], "sid");
+        let id = mock.expect_cmd("Storage.setCookies").await;
+        let params = &mock.last_sent()["params"];
+        let arr = params["cookies"]
+            .as_array()
+            .expect("setCookies payload must carry a cookies array");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["name"], "sid");
         // Browser-scope command — no session_id (jar dispatches against
         // the browser's connection, not the tab's session).
         assert!(mock.last_sent().get("sessionId").is_none());
-        mock.reply(id, json!({ "success": true })).await;
+        mock.reply(id, json!({})).await;
 
         fut.await.unwrap().unwrap();
         // Keep `inner` alive until after the dispatch so the Weak upgrade
