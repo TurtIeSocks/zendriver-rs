@@ -29,6 +29,8 @@
 //! URL and let Chrome infer domain/path) without leaking it into every
 //! parsed cookie keeps both shapes minimal.
 
+pub mod persistence;
+
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
