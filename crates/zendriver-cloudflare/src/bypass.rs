@@ -3,14 +3,14 @@
 //! Public entry is [`CloudflareBypass`] — constructed via
 //! `Tab::cloudflare()` (zendriver crate, feature-gated). The driver:
 //!
-//! 1. Locates the Turnstile iframe via [`crate::detection::detect_challenge`]
-//!    (a shadow-DOM-aware walk of the page main world).
+//! 1. Locates the Turnstile iframe via a shadow-DOM-aware walk of the page's
+//!    main world (private `detection::detect_challenge`).
 //! 2. Computes a click point at `bbox.x + bbox.width * 0.15,
 //!    bbox.y + bbox.height * 0.50` — the canonical 15%-from-left,
 //!    50%-from-top offset Python's `cloudflare.py` uses to land on the
 //!    visible Turnstile checkbox inside the iframe.
-//! 3. Dispatches a raw left-click via [`crate::click::click_at`] (no Bezier;
-//!    Cloudflare wants a real click on a real checkbox).
+//! 3. Dispatches a raw left-click via the private `click::click_at` helper
+//!    (no Bezier — Cloudflare wants a real click on a real checkbox).
 //! 4. Polls every `poll_interval` (default 500ms) for either the
 //!    `cf-turnstile-response` input gaining a non-empty value
 //!    ([`ClearanceOutcome::TokenAcquired`]) OR the challenge container
@@ -51,7 +51,8 @@ pub struct CloudflareBypass<'a> {
 }
 
 impl<'a> CloudflareBypass<'a> {
-    /// Create a new bypass driver bound to `session`.
+    /// Create a new bypass driver bound to `session` with a default 500ms
+    /// poll interval.
     pub fn new(session: &'a SessionHandle) -> Self {
         Self {
             session,
@@ -59,7 +60,8 @@ impl<'a> CloudflareBypass<'a> {
         }
     }
 
-    /// Override the default 500ms poll interval used by `wait_for_clearance`.
+    /// Override the default 500ms poll interval used by
+    /// [`wait_for_clearance`](Self::wait_for_clearance).
     #[must_use]
     pub fn poll_interval(mut self, dur: Duration) -> Self {
         self.poll_interval = dur;
@@ -69,17 +71,32 @@ impl<'a> CloudflareBypass<'a> {
     /// Detect a live Turnstile challenge, click its checkbox, then poll
     /// until the challenge yields a token, disappears, or `timeout` elapses.
     ///
-    /// Returns:
+    /// # Returns
     /// - `Ok(ClearanceOutcome::TokenAcquired(token))` — the
     ///   `cf-turnstile-response` input picked up a non-empty value.
     /// - `Ok(ClearanceOutcome::ChallengeGone)` — the challenge container
     ///   was removed without a token (e.g. a clearance cookie shortcut).
-    /// - `Err(CloudflareError::NoChallenge)` — no Turnstile iframe was
-    ///   mounted at the moment of the initial detect; nothing to bypass.
-    /// - `Err(CloudflareError::ClearanceTimeout)` — `timeout` elapsed
-    ///   before either success state was observed.
-    /// - `Err(CloudflareError::Call | JsError)` — propagated from CDP /
-    ///   the in-page evaluator.
+    ///
+    /// # Errors
+    /// - [`CloudflareError::NoChallenge`] — no Turnstile iframe was mounted
+    ///   at the moment of the initial detect; nothing to bypass.
+    /// - [`CloudflareError::ClearanceTimeout`] — `timeout` elapsed before
+    ///   either success state was observed.
+    /// - [`CloudflareError::Call`] / [`CloudflareError::JsError`] — CDP or
+    ///   in-page evaluator failure.
+    ///
+    /// ```no_run
+    /// # async fn ex(tab: &zendriver_transport::SessionHandle)
+    /// #   -> Result<(), zendriver_cloudflare::CloudflareError> {
+    /// use std::time::Duration;
+    /// use zendriver_cloudflare::CloudflareBypass;
+    ///
+    /// let bypass = CloudflareBypass::new(tab)
+    ///     .poll_interval(Duration::from_millis(250));
+    /// let outcome = bypass.wait_for_clearance(Duration::from_secs(15)).await?;
+    /// println!("{outcome:?}");
+    /// # Ok(()) }
+    /// ```
     pub async fn wait_for_clearance(
         self,
         timeout: Duration,
