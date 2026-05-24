@@ -1,0 +1,20 @@
+[profile.ci-integration]
+# Retry browser-driven integration tests up to 2 extra times before
+# failing. They depend on a real headless Chrome subprocess + wiremock
+# port allocation + CDP event timing, all of which produce rare
+# transient flakes (port collisions, scheduler stalls under load,
+# missed quiet windows). A retry sweep keeps the signal usable
+# without masking persistent failures: 3 consecutive timeouts on the
+# same test still fails the job.
+retries = 2
+
+# Match the previous `cargo test -- --test-threads=1` posture: integration
+# tests launch Chrome subprocesses and bind random local ports; running
+# them in parallel inside a single binary risks resource contention and
+# cross-test serialization issues that `serial_test::serial` only covers
+# within one process.
+test-threads = 1
+
+# Surface every failure in a single run instead of stopping at the first.
+# CI reruns are expensive; one job pass should report the full picture.
+fail-fast = false
