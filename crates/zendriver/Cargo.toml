@@ -75,3 +75,23 @@ required-features = []
 [[example]]
 name = "wait_for_page"
 required-features = []
+
+[[example]]
+name = "multi_tab"
+required-features = []
+
+[[example]]
+name = "iframe_inspect"
+required-features = []
+
+[[example]]
+name = "cookies_persist"
+required-features = []
+
+[[example]]
+name = "local_storage_demo"
+required-features = []
+
+[[example]]
+name = "nav_history"
+required-features = []
