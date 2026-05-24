@@ -1,29 +1,26 @@
-//! `Element` actions: `hover` / `hover_fast` / `focus` / `scroll_into_view`.
+//! [`Element`] actions: `click` / `hover` / `focus` / `scroll_into_view` /
+//! `set_value` / `clear` / `upload_files`.
 //!
-//! Each action wraps its CDP dispatch sequence in [`Element::with_refresh`]
-//! so a stale handle (post-navigation, post-React-rerender) transparently
-//! re-resolves once and retries.
+//! Each action wraps its CDP dispatch sequence in an internal "refresh on
+//! stale" wrapper so a stale handle (post-navigation, post-React-rerender)
+//! transparently re-resolves once and retries.
 //!
 //! `hover` / `hover_fast`:
 //!   1. `scroll_into_view` — bring the element into the viewport so its
 //!      bbox center is a real, dispatchable coordinate.
-//!   2. `wait_actionable` with `visible + stable + receives_pointer` — gate
-//!      to avoid mid-transition hover races and overlay occlusion. Pointer
-//!      events are dispatched at the geometric center, so we need the
-//!      element to be the actual hit-test target there. `enabled` is left
-//!      off — hover doesn't activate the element, so disabled controls
-//!      still accept mouseover.
+//!   2. Actionability gate (`visible + stable + receives_pointer`) — avoids
+//!      mid-transition hover races and overlay occlusion. Pointer events
+//!      are dispatched at the geometric center, so the element must be the
+//!      actual hit-test target there. `enabled` is left off — hover doesn't
+//!      activate the element, so disabled controls still accept mouseover.
 //!   3. Compute bbox center (`x + width / 2`, `y + height / 2`).
-//!   4. Dispatch the mouse-move via the shared [`InputController`]:
-//!      `hover` uses [`mouse::move_realistic`] (Bezier + jitter + timing
-//!      to model human pointer paths); `hover_fast` uses [`mouse::move_raw`]
-//!      (single teleport dispatch for test/automation paths that don't
-//!      need behavioral realism).
+//!   4. Dispatch the mouse-move via the shared [`crate::input::InputController`].
+//!      `hover` uses a realistic Bezier path; `hover_fast` uses a single
+//!      teleport dispatch for test/automation paths.
 //!
-//! `focus`: `wait_actionable` with [`ActionabilityCheck::TEXT_INPUT`]
-//! (visible + enabled, no pointer or stability requirement — focus routes
-//! through the focused element, not the cursor's position), then
-//! `el.focus()` via [`Element::call_on_main`].
+//! `focus`: actionability gate (visible + enabled — no pointer or stability
+//! requirement; focus routes through the focused element, not the cursor's
+//! position), then `el.focus()` in the main world.
 //!
 //! `scroll_into_view`: no actionability gate (this *is* the visibility
 //! prereq other actions wait for). Calls `el.scrollIntoView({ block:
@@ -31,14 +28,6 @@
 //! (avoids sticky headers/footers obscuring the element after the scroll);
 //! `behavior: 'instant'` skips animation so the post-scroll bbox is final
 //! by the time the next CDP call runs.
-//!
-//! Post-P4 T0: `Tab::input()` returns `&Arc<InputController>` directly —
-//! there's no longer an upgrade-through-Browser dance, so the dispatch
-//! sites just clone the per-Tab controller and pass it to the helpers.
-//! Tests that exercise these methods go through
-//! [`crate::tab::Tab::new_for_test`], which seeds a deterministic native
-//! [`InputController`] (seed `42`) — stable Bezier paths + zero typo rate
-//! make the per-test mock-traffic expectations exact.
 
 use std::path::Path;
 use std::time::Duration;
@@ -56,23 +45,40 @@ use crate::query::actionability::{self, ActionabilityCheck};
 /// the per-action options structs grow.
 const DEFAULT_ACTIONABILITY_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Per-call knobs for [`Element::click_with`]. `Default` matches the
-/// behavior of [`Element::click`]: a left, single, realistic click at the
-/// element's bbox center with no modifiers held and full actionability
-/// gating. Override fields individually for richer dispatches
-/// (right-click, modifier-held click, raw teleport, etc.).
+/// Per-call knobs for [`Element::click_with`].
+///
+/// `Default` matches the behavior of [`Element::click`]: a left, single,
+/// realistic click at the element's bbox center with no modifiers held and
+/// full actionability gating. Override fields individually for richer
+/// dispatches (right-click, modifier-held click, raw teleport, etc.).
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn ex() -> zendriver::Result<()> {
+/// use zendriver::{ClickOptions, MouseButton};
+/// # let browser = zendriver::Browser::builder().launch().await?;
+/// # let tab = browser.main_tab();
+/// let el = tab.find().css("button").one().await?;
+/// el.click_with(ClickOptions {
+///     button: MouseButton::Right,
+///     click_count: 2,
+///     ..Default::default()
+/// }).await?;
+/// # Ok(()) }
+/// ```
 #[derive(Debug, Clone, Copy)]
 pub struct ClickOptions {
-    /// Which mouse button to dispatch. `MouseButton::Left` by default.
+    /// Which mouse button to dispatch. [`MouseButton::Left`] by default.
     pub button: MouseButton,
     /// Modifier keys held during the dispatch. Empty by default.
     pub modifiers: KeyModifiers,
     /// `clickCount` for the CDP dispatch. `1` by default; set `2` for a
     /// double-click in a single `click_with` call.
     pub click_count: u32,
-    /// Skip the [`ActionabilityCheck::FULL`] gate when true. Use sparingly
-    /// — bypasses the visibility/stability/pointer checks the gate
-    /// performs. Mirrors Playwright's `force: true`.
+    /// Skip the actionability gate when true. Use sparingly — bypasses the
+    /// visibility/stability/pointer checks. Mirrors Playwright's
+    /// `force: true`.
     pub force: bool,
     /// Bezier-interpolated cursor path (`true`) vs single teleport
     /// dispatch (`false`). `true` by default; the `click_fast` shortcut
@@ -97,21 +103,51 @@ impl Default for ClickOptions {
 }
 
 impl Element {
-    /// Click this element with all defaults — left button, single click,
-    /// realistic Bezier-path cursor approach, and the full actionability
-    /// gate. Equivalent to `click_with(ClickOptions::default())`. For
-    /// right-click / modifier-held / double-click / raw-teleport
-    /// variations, use [`Element::click_with`].
+    /// Click this element with realistic defaults.
+    ///
+    /// Left button, single click, Bezier-path cursor approach, and the full
+    /// actionability gate. Equivalent to
+    /// `click_with(ClickOptions::default())`. For right-click / modifier-held
+    /// / double-click / raw-teleport variations, use [`Element::click_with`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::NotActionable`] when the actionability gate
+    /// times out, [`ZendriverError::ElementStale`] when the handle can't be
+    /// refreshed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let btn = tab.find().css("button#submit").one().await?;
+    /// btn.click().await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn click(&self) -> Result<()> {
         self.click_with(ClickOptions::default()).await
     }
 
-    /// Click this element with a deterministic raw teleport — skips the
-    /// Bezier interpolation [`Element::click`] does and bypasses the
-    /// actionability gate. Equivalent to
+    /// Click this element with a deterministic raw teleport.
+    ///
+    /// Skips the Bezier interpolation [`Element::click`] uses and bypasses
+    /// the actionability gate. Equivalent to
     /// `click_with(ClickOptions { realistic: false, force: true, ..Default::default() })`.
     /// Intended for test paths and fast automation flows where realism
     /// and per-action gating get in the way.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let btn = tab.find().css("button").one().await?;
+    /// btn.click_fast().await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn click_fast(&self) -> Result<()> {
         self.click_with(ClickOptions {
             realistic: false,
@@ -121,12 +157,28 @@ impl Element {
         .await
     }
 
-    /// Click this element with explicit [`ClickOptions`]. See module
-    /// docs for the dispatch sequence — same shape as `hover`
+    /// Click this element with explicit [`ClickOptions`].
+    ///
+    /// See module docs for the dispatch sequence — same shape as `hover`
     /// (scroll → gate → bbox math → pointer dispatch) but emits the
     /// `mousePressed` + `mouseReleased` pair after the cursor arrives.
-    /// `opts.force` skips the [`ActionabilityCheck::FULL`] gate;
-    /// `opts.position` shifts the click point off bbox-center.
+    /// `opts.force` skips the actionability gate; `opts.position` shifts
+    /// the click point off bbox-center.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use zendriver::{ClickOptions, MouseButton};
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let row = tab.find().css("tr.contact").one().await?;
+    /// row.click_with(ClickOptions {
+    ///     button: MouseButton::Right,
+    ///     ..Default::default()
+    /// }).await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn click_with(&self, opts: ClickOptions) -> Result<()> {
         self.with_refresh(|| async move {
             self.scroll_into_view().await?;
@@ -161,12 +213,23 @@ impl Element {
         .await
     }
 
-    /// Hover the cursor over this element's bbox center, with a realistic
-    /// Bezier-interpolated mouse path. See module docs for the full
-    /// sequence (`scroll_into_view` → actionability gate → bbox center →
-    /// dispatch). Use [`Element::hover_fast`] when the cursor path doesn't
-    /// matter (tests, fast automation paths that don't need behavioral
-    /// realism).
+    /// Hover the cursor over this element's bbox center.
+    ///
+    /// Uses a realistic Bezier-interpolated mouse path. See module docs for
+    /// the full sequence (`scroll_into_view` → actionability gate → bbox
+    /// center → dispatch). Use [`Element::hover_fast`] when the cursor path
+    /// doesn't matter.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let nav = tab.find().css("nav.dropdown").one().await?;
+    /// nav.hover().await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn hover(&self) -> Result<()> {
         self.with_refresh(|| async move {
             self.scroll_into_view().await?;
@@ -194,10 +257,23 @@ impl Element {
     }
 
     /// Hover the cursor over this element's bbox center via a single
-    /// dispatchMouseEvent teleport. Skips the Bezier interpolation
-    /// [`Element::hover`] does — same actionability gate + bbox math, but
-    /// no human-pointer modeling. Intended for paths where deterministic
-    /// timing matters more than realism.
+    /// teleport.
+    ///
+    /// Skips the Bezier interpolation [`Element::hover`] does — same
+    /// actionability gate + bbox math, but no human-pointer modeling.
+    /// Intended for paths where deterministic timing matters more than
+    /// realism.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let el = tab.find().css("button").one().await?;
+    /// el.hover_fast().await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn hover_fast(&self) -> Result<()> {
         self.with_refresh(|| async move {
             self.scroll_into_view().await?;
@@ -224,11 +300,24 @@ impl Element {
         .await
     }
 
-    /// Move keyboard focus to this element by calling `el.focus()`. Gated
-    /// by [`ActionabilityCheck::TEXT_INPUT`] (visible + enabled) so disabled
-    /// controls + hidden elements surface a `NotActionable` error rather
-    /// than silently no-op on the page side. Reused by `type_text` /
-    /// `press` in T22 — they focus first so keystrokes reach this element.
+    /// Move keyboard focus to this element by calling `el.focus()`.
+    ///
+    /// Gated by an actionability check (visible + enabled) so disabled
+    /// controls + hidden elements surface a [`ZendriverError::NotActionable`]
+    /// error rather than silently no-op on the page side. Reused by
+    /// [`Element::type_text`] / [`Element::press`] — they focus first so
+    /// keystrokes reach this element.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let input = tab.find().css("input[name=email]").one().await?;
+    /// input.focus().await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn focus(&self) -> Result<()> {
         self.with_refresh(|| async move {
             actionability::wait_actionable(
@@ -245,14 +334,25 @@ impl Element {
         .await
     }
 
-    /// Scroll this element into view, centered vertically + horizontally
-    /// in its scroll container, with no animation. The synchronous
-    /// (`behavior: 'instant'`) variant keeps the post-scroll bbox final by
-    /// the time the next CDP call (e.g. `bounding_box`) runs — important
+    /// Scroll this element into view, centered in its scroll container.
+    ///
+    /// Synchronous (`behavior: 'instant'`) so the post-scroll bbox is final
+    /// by the time the next CDP call (e.g. `bounding_box`) runs — important
     /// because subsequent action steps assume the layout is settled.
     ///
     /// No actionability gate: this method IS the visibility prerequisite
     /// for the other actions; gating it on visibility would deadlock.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let footer = tab.find().css("footer").one().await?;
+    /// footer.scroll_into_view().await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn scroll_into_view(&self) -> Result<()> {
         self.with_refresh(|| async move {
             let _ = self
@@ -266,18 +366,28 @@ impl Element {
         .await
     }
 
-    /// Set this element's `value` directly + fire `input` and `change` events.
-    /// Bypasses keydown/keyup (use [`Element::type_text`] in T22 for a real
+    /// Set this element's `value` directly + fire `input` and `change`
+    /// events.
+    ///
+    /// Bypasses keydown/keyup (use [`Element::type_text`] for a real
     /// keystroke sequence) but dispatches the bubbled `input` + `change`
     /// events so React-style controlled inputs see the update through their
-    /// onChange handlers. `{ bubbles: true }` matches what the user agent
-    /// fires on real keystrokes, so listeners attached to ancestors still
-    /// see the change.
+    /// onChange handlers.
     ///
     /// No actionability gate — `set_value` is the fast-path for tests +
     /// automation flows that don't care about visibility/enabledness. If
-    /// you need the gate, focus the element first (which runs
-    /// [`ActionabilityCheck::TEXT_INPUT`]) then call this.
+    /// you need the gate, focus the element first then call this.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let input = tab.find().css("input[name=q]").one().await?;
+    /// input.set_value("rust async").await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn set_value(&self, value: impl AsRef<str>) -> Result<()> {
         let value = value.as_ref().to_string();
         self.with_refresh(|| {
@@ -300,11 +410,24 @@ impl Element {
     }
 
     /// Clear this element's `value` by assigning `''` and firing a bubbled
-    /// `input` event. The P3 simplification omits the `change` event +
-    /// focus + Backspace sequence — for contenteditable / non-`<input>`
-    /// clearing semantics, use [`Element::type_text`] in T22 once it lands.
+    /// `input` event.
+    ///
+    /// Omits the `change` event + focus + Backspace sequence — for
+    /// contenteditable / non-`<input>` clearing semantics, use
+    /// [`Element::type_text`].
     ///
     /// No actionability gate — same rationale as [`Element::set_value`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let input = tab.find().css("input").one().await?;
+    /// input.clear().await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn clear(&self) -> Result<()> {
         self.with_refresh(|| async move {
             let _ = self
@@ -321,15 +444,28 @@ impl Element {
         .await
     }
 
-    /// Attach files to this `<input type=\"file\">` element via
-    /// `DOM.setFileInputFiles`. Bypasses the OS file picker entirely —
-    /// CDP wires the paths straight into the input's `FileList`, and
-    /// the page sees a normal `change` event from the input.
+    /// Attach files to this `<input type="file">` element via
+    /// `DOM.setFileInputFiles`.
     ///
-    /// P3 scope is direct `<input type=\"file\">` only; routing through
-    /// a hidden input clicked by a label / button wrapper is the page's
+    /// Bypasses the OS file picker entirely — CDP wires the paths straight
+    /// into the input's `FileList`, and the page sees a normal `change`
+    /// event from the input.
+    ///
+    /// Scope is direct `<input type="file">` only; routing through a hidden
+    /// input clicked by a label / button wrapper is the page's
     /// responsibility. Paths are passed as their lossy `to_string_lossy()`
     /// representation, matching CDP's UTF-8 string contract.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let file_input = tab.find().css("input[type=file]").one().await?;
+    /// file_input.upload_files(&["/tmp/photo.jpg"]).await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn upload_files<P: AsRef<Path>>(&self, paths: &[P]) -> Result<()> {
         let files: Vec<String> = paths
             .iter()

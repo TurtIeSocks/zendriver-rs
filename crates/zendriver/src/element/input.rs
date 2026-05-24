@@ -1,44 +1,46 @@
-//! `Element` keyboard input: `type_text` / `type_text_fast` / `press` /
+//! [`Element`] keyboard input: `type_text` / `type_text_fast` / `press` /
 //! `press_with`.
 //!
 //! Each method focuses this element first (so keystrokes route to it),
-//! then dispatches via the shared [`InputController`] — `type_text` /
-//! `type_text_fast` route through [`keyboard::type_text_realistic`] /
-//! [`keyboard::type_text_fast`], and `press` / `press_with` issue a single
-//! [`keyboard::dispatch_char`] or [`keyboard::dispatch_special`] depending
-//! on whether the [`Key`] is a character or a named special key.
+//! then dispatches via the shared [`crate::input::InputController`].
+//! `type_text` / `type_text_fast` route through realistic/fast typing
+//! helpers, and `press` / `press_with` issue a single keydown/keyup pair.
 //!
-//! Everything wraps in [`Element::with_refresh`] so a stale handle
-//! transparently re-resolves once and retries.
+//! Everything wraps in an internal "refresh on stale" wrapper so a stale
+//! handle transparently re-resolves once and retries.
 //!
-//! `press_with` deliberately does NOT mutate
-//! [`crate::input::InputState::modifiers_held`] — passing the modifier
-//! bits straight to the dispatch helpers avoids holding the
-//! `InputController` mutex across `.await` (which would serialize every
-//! CDP call on the Browser) and keeps the held-modifier state from
-//! drifting if a dispatch errors mid-flight. The downside: nested
-//! sequences like "hold Shift, click, then press Tab" still need to drive
-//! the state mutex directly — that's a P4 concern when the public
-//! input-state API lands.
-//!
-//! Post-P4 T0: `Tab::input()` returns `&Arc<InputController>` directly
-//! (the controller lives on `TabInner` now, not the owning Browser).
-//! Tests build a `Tab` via [`crate::tab::Tab::new_for_test`], which seeds
-//! a deterministic native [`InputController`] (seed `42`).
+//! `press_with` deliberately does NOT mutate the controller's tracked
+//! held-modifier state — passing the modifier bits straight to the
+//! dispatch helpers avoids holding the `InputController` mutex across
+//! `.await` (which would serialize every CDP call on the Browser) and
+//! keeps the held-modifier state from drifting if a dispatch errors
+//! mid-flight.
 
 use crate::element::Element;
 use crate::error::Result;
 use crate::input::keyboard::{self, Key, KeyModifiers};
 
 impl Element {
-    /// Focus this element, then type `text` with realistic per-character
-    /// timing, occasional typos, and "thinking" pauses pulled from the
-    /// active [`crate::input::InputController`]'s
+    /// Focus this element, then type `text` with realistic timing.
+    ///
+    /// Per-character delays, occasional typos, and "thinking" pauses are
+    /// pulled from the active [`crate::input::InputController`]'s
     /// [`zendriver_stealth::InputProfile`].
     ///
     /// Use [`Element::type_text_fast`] when you want a deterministic
     /// keystroke sequence (no delays, no typos) — that path is preferable
     /// for tests + fast automation flows.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let input = tab.find().css("input[name=q]").one().await?;
+    /// input.type_text("hello world").await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn type_text(&self, text: impl AsRef<str>) -> Result<()> {
         let text = text.as_ref().to_string();
         self.with_refresh(|| {
@@ -52,13 +54,25 @@ impl Element {
         .await
     }
 
-    /// Focus this element, then dispatch `text` one character at a time
-    /// with no delays and no typos. Each character becomes a `keyDown` +
-    /// `keyUp` pair via `Input.dispatchKeyEvent`.
+    /// Focus this element, then dispatch `text` with no delays.
+    ///
+    /// One character at a time with no typos. Each character becomes a
+    /// `keyDown` + `keyUp` pair via `Input.dispatchKeyEvent`.
     ///
     /// Use [`Element::type_text`] when realism matters (driving a page
     /// that's keystroke-timing-sensitive, paths under the `spoofed`
     /// stealth profile, etc.).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let input = tab.find().css("input").one().await?;
+    /// input.type_text_fast("test").await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn type_text_fast(&self, text: impl AsRef<str>) -> Result<()> {
         let text = text.as_ref().to_string();
         self.with_refresh(|| {
@@ -73,11 +87,23 @@ impl Element {
     }
 
     /// Focus this element, then dispatch a single [`Key`] with any
-    /// currently-held modifiers (read from
-    /// [`crate::input::InputState::modifiers_held`]).
+    /// currently-held modifiers.
     ///
+    /// Reads held modifiers from the tab's [`crate::input::InputController`].
     /// For dispatches that hold ad-hoc modifiers (e.g. Ctrl+A, Shift+End),
     /// use [`Element::press_with`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use zendriver::{Key, SpecialKey};
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let input = tab.find().css("input").one().await?;
+    /// input.press(Key::Special(SpecialKey::Enter)).await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn press(&self, key: Key) -> Result<()> {
         self.with_refresh(|| async move {
             self.focus().await?;
@@ -89,14 +115,25 @@ impl Element {
     }
 
     /// Focus this element, then dispatch a single [`Key`] with `mods`
-    /// held during the dispatch. The held bits replace (rather than
-    /// merge with) any modifiers already tracked in
-    /// [`crate::input::InputState::modifiers_held`] for the duration of
-    /// this one dispatch — `mods` is passed straight through to the CDP
-    /// `modifiers` field; the tracked state isn't mutated. See the
-    /// module-level docs for the rationale (avoids holding the input
-    /// mutex across `.await` + keeps held-modifier state from drifting
-    /// on dispatch errors).
+    /// held during the dispatch.
+    ///
+    /// The held bits replace (rather than merge with) any modifiers already
+    /// tracked in the controller for the duration of this one dispatch —
+    /// `mods` is passed straight through to the CDP `modifiers` field; the
+    /// tracked state isn't mutated. See the module-level docs for rationale.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use zendriver::{Key, KeyModifiers, SpecialKey};
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let input = tab.find().css("input").one().await?;
+    /// // Ctrl+A (select all)
+    /// input.press_with(Key::Char('a'), KeyModifiers::CTRL).await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn press_with(&self, key: Key, mods: KeyModifiers) -> Result<()> {
         self.with_refresh(|| async move {
             self.focus().await?;
