@@ -1,9 +1,10 @@
 //! Browser lifecycle: executable discovery, subprocess spawn, WS attach,
 //! graceful teardown.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
 use serde_json::json;
@@ -11,9 +12,11 @@ use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use zendriver_stealth::{StealthObserver, StealthProfile};
-use zendriver_transport::{Connection, SessionHandle, TargetObserver};
+use zendriver_transport::{
+    Connection, ObserverError, PausedSession, SessionHandle, TargetObserver,
+};
 
 use crate::error::{BrowserError, ZendriverError};
 use crate::input::InputController;
@@ -208,11 +211,113 @@ pub(crate) struct BrowserInner {
     pub(crate) child: tokio::sync::Mutex<Option<Child>>,
     pub(crate) _user_data: Option<TempDir>,
     /// Cached `InputProfile` from the active `StealthProfile` (or
-    /// `InputProfile::native` when stealth is off). P4 `Browser::new_tab`
-    /// reads this to build a fresh per-Tab `InputController` for each new
-    /// tab without re-resolving the stealth profile.
+    /// `InputProfile::native` when stealth is off). `Browser::new_tab` and
+    /// the [`TabRegistrar`] observer read this to build a fresh per-Tab
+    /// [`InputController`] for each new tab without re-resolving the
+    /// stealth profile.
+    ///
+    /// Currently consumed only by the [`TabRegistrar`] (via the clone
+    /// stashed inside the registrar at construction time); a direct
+    /// `Browser::new_tab` path will read this field once T3 lands, so
+    /// `dead_code` is suppressed in the interim.
     #[allow(dead_code)]
     pub(crate) stealth_input_profile: zendriver_stealth::InputProfile,
+    /// Browser-wide tab registry keyed by `sessionId`. Populated by the
+    /// [`TabRegistrar`] observer on `Target.attachedToTarget` (and the
+    /// initial main tab, inserted manually after construction); pruned on
+    /// `Target.detachedFromTarget`. Used by `Browser::new_tab` to discover
+    /// the [`Tab`] handle for a freshly-created page target and by
+    /// `Browser::tabs` / `Browser::tab_count` for snapshot reads.
+    pub(crate) tabs: tokio::sync::RwLock<HashMap<String, Tab>>,
+}
+
+/// [`TargetObserver`] that maintains [`BrowserInner::tabs`] in step with
+/// CDP target lifecycle events.
+///
+/// On `Target.attachedToTarget` with `target_info.kind == "page"`, it builds
+/// a fresh [`Tab`] for the new session (with its own [`InputController`]
+/// seeded from the cached [`zendriver_stealth::InputProfile`]) and inserts
+/// it into the registry. On `Target.detachedFromTarget`, the matching entry
+/// is removed.
+///
+/// The observer holds a [`Weak`] reference to [`BrowserInner`] so the
+/// observer chain does not extend the browser's lifetime — if the browser is
+/// dropped before a target event arrives, the upgrade fails silently and
+/// the event is ignored. The weak ref is wired in via [`OnceLock::set`]
+/// after the surrounding [`Arc::new_cyclic`] resolves; before that point
+/// the registrar is constructed empty.
+///
+/// Registered AFTER [`StealthObserver`] in the observer chain so stealth
+/// patches apply before any user code sees the new tab.
+pub(crate) struct TabRegistrar {
+    browser: OnceLock<Weak<BrowserInner>>,
+    input_profile: zendriver_stealth::InputProfile,
+}
+
+impl TabRegistrar {
+    fn new(input_profile: zendriver_stealth::InputProfile) -> Self {
+        Self {
+            browser: OnceLock::new(),
+            input_profile,
+        }
+    }
+
+    /// Wire the weak [`BrowserInner`] ref. Called once after
+    /// [`Arc::new_cyclic`] resolves; subsequent calls are silently ignored.
+    fn set_browser(&self, browser: Weak<BrowserInner>) {
+        let _ = self.browser.set(browser);
+    }
+}
+
+#[async_trait::async_trait]
+impl TargetObserver for TabRegistrar {
+    fn name(&self) -> &'static str {
+        "tab-registrar"
+    }
+
+    async fn on_target_attached(&self, session: PausedSession<'_>) -> Result<(), ObserverError> {
+        // Only page targets become tabs. Iframes (OOPIF) and workers are
+        // handled separately in later P4 tasks.
+        if session.target_info.kind != "page" {
+            return Ok(());
+        }
+        let Some(weak) = self.browser.get() else {
+            // Registrar wired into observer chain before `set_browser` ran.
+            // Should not happen in practice because launch wires the weak
+            // before any observer can fire — log + bail gracefully if it
+            // ever does.
+            warn!("TabRegistrar fired before browser weak ref was wired; skipping");
+            return Ok(());
+        };
+        let Some(browser) = weak.upgrade() else {
+            // Browser dropped between event arrival and observer body —
+            // nothing to register against.
+            return Ok(());
+        };
+
+        let conn = session.connection().clone();
+        let new_session = SessionHandle::new(conn, session.session_id.to_string());
+        let input = InputController::new(self.input_profile.clone());
+        let weak_inner = Arc::downgrade(&browser);
+        let tab = Tab::new(new_session, weak_inner, input);
+
+        browser
+            .tabs
+            .write()
+            .await
+            .insert(session.session_id.to_string(), tab);
+        Ok(())
+    }
+
+    async fn on_target_detached(&self, session_id: &str) {
+        let Some(weak) = self.browser.get() else {
+            return;
+        };
+        let Some(browser) = weak.upgrade() else {
+            return;
+        };
+        browser.tabs.write().await.remove(session_id);
+    }
 }
 
 const WS_ENDPOINT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -235,21 +340,46 @@ impl BrowserBuilder {
             None => find_chrome_executable()?,
         };
 
-        // 2. Resolve fingerprint + build observer chain + profile flags.
+        // 2. Resolve the per-tab InputProfile from the active StealthProfile
+        // (or zero-overhead `native` when stealth is off). Cached on
+        // `BrowserInner` so `Browser::new_tab` + the `TabRegistrar` observer
+        // can build fresh per-Tab controllers without re-resolving the
+        // profile each time.
+        let input_profile = self
+            .stealth
+            .as_ref()
+            .map_or_else(zendriver_stealth::InputProfile::native, |sp| {
+                sp.input_profile()
+            });
+
+        // 3. Build the `TabRegistrar` observer. Holds a `OnceLock` for the
+        // `Weak<BrowserInner>` that gets wired in step 10 — observers must
+        // be passed to `connect_with_observers` before the cyclic `Arc` is
+        // resolved, so the weak ref is filled in later. Retained here so
+        // we can `set_browser` after construction.
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+
+        // 4. Resolve fingerprint + build observer chain + profile flags.
+        // Observer order: stealth (patches each new target) → tab registrar
+        // (records the resulting Tab handle) → user-supplied observers.
         let (observers, extra_flags): (Vec<Arc<dyn TargetObserver>>, Vec<String>) =
             if let Some(ref profile) = self.stealth {
                 let fp = profile.resolve_fingerprint(&exe)?;
                 let stealth_obs: Arc<dyn TargetObserver> =
                     Arc::new(StealthObserver::new(profile.clone(), fp));
-                let mut obs_vec = Vec::with_capacity(1 + self.extra_observers.len());
+                let mut obs_vec = Vec::with_capacity(2 + self.extra_observers.len());
                 obs_vec.push(stealth_obs);
+                obs_vec.push(registrar.clone() as Arc<dyn TargetObserver>);
                 obs_vec.extend(self.extra_observers.iter().cloned());
                 (obs_vec, profile.build_flags())
             } else {
-                (self.extra_observers.clone(), Vec::new())
+                let mut obs_vec = Vec::with_capacity(1 + self.extra_observers.len());
+                obs_vec.push(registrar.clone() as Arc<dyn TargetObserver>);
+                obs_vec.extend(self.extra_observers.iter().cloned());
+                (obs_vec, Vec::new())
             };
 
-        // 3. Allocate user_data_dir (or use a TempDir we keep alive until shutdown).
+        // 5. Allocate user_data_dir (or use a TempDir we keep alive until shutdown).
         let (user_data_path, owned_tmp) = match self.user_data_dir.clone() {
             Some(p) => (p, None),
             None => {
@@ -265,7 +395,7 @@ impl BrowserBuilder {
         flags.extend(extra_flags);
         info!(executable = %exe.display(), "launching chrome");
 
-        // 4. Spawn chrome + parse WS URL.
+        // 6. Spawn chrome + parse WS URL.
         let mut cmd = Command::new(&exe);
         cmd.args(&flags)
             .stdin(Stdio::null())
@@ -291,11 +421,11 @@ impl BrowserBuilder {
         .await
         .map_err(|_| BrowserError::WsTimeout)??;
 
-        // 5. Connect with observers.
+        // 7. Connect with observers.
         debug!(ws_url = %ws_url, "connecting to chrome");
         let conn = zendriver_transport::connect_with_observers(&ws_url, observers).await?;
 
-        // 6. Enable auto-attach with debugger-pause BEFORE attaching to the
+        // 8. Enable auto-attach with debugger-pause BEFORE attaching to the
         // initial target. Sent at browser scope (no session_id) so it covers
         // both the initial target and any subsequently-opened pages/iframes.
         conn.call_raw(
@@ -309,7 +439,7 @@ impl BrowserBuilder {
         )
         .await?;
 
-        // 7. Discover initial target via Target.getTargets.
+        // 9. Discover initial target via Target.getTargets.
         let list = conn.call_raw("Target.getTargets", json!({}), None).await?;
         let target_id = list["targetInfos"]
             .as_array()
@@ -322,9 +452,15 @@ impl BrowserBuilder {
             .ok_or_else(|| ZendriverError::Navigation("no initial target found".into()))?
             .to_string();
 
-        // 8. Attach to the initial target. This triggers `Target.attachedToTarget`
+        // 10. Attach to the initial target. This triggers `Target.attachedToTarget`
         // which the actor routes through observers (`on_target_attached`) and
         // then releases via `Runtime.runIfWaitingForDebugger`.
+        //
+        // The `TabRegistrar` observer (in the chain) will try to insert into
+        // `BrowserInner.tabs` for the main tab too. That insertion is a
+        // no-op because the weak ref isn't wired yet (`OnceLock` empty →
+        // observer warns + skips). We re-insert the main tab manually in
+        // step 12 so the registry is consistent post-launch.
         let attach = conn
             .call_raw(
                 "Target.attachToTarget",
@@ -337,40 +473,44 @@ impl BrowserBuilder {
             .ok_or_else(|| ZendriverError::Navigation("attach returned no sessionId".into()))?
             .to_string();
 
-        // 9. Resolve the per-tab InputProfile from the active StealthProfile
-        // (or zero-overhead `native` when stealth is off). Cached on
-        // `BrowserInner` so P4 `Browser::new_tab` can build fresh per-Tab
-        // controllers without re-resolving the profile each time.
-        let input_profile = self
-            .stealth
-            .as_ref()
-            .map_or_else(zendriver_stealth::InputProfile::native, |sp| {
-                sp.input_profile()
-            });
-
-        // 10. Wrap session in Tab; return Browser.
+        // 11. Wrap session in Tab; build BrowserInner.
         //
         // `Arc::new_cyclic` is the canonical pattern for building
         // self-referential Arc graphs: the inner closure receives a
         // `Weak<BrowserInner>` it can hand to the Tab. The Tab uses that
-        // weak ref for later P4 access to Browser-wide resources
-        // (CookieJar, tabs registry); the per-Tab `InputController` is
-        // constructed inline here from the cached `input_profile`.
-        let browser = Browser {
-            inner: Arc::new_cyclic(|weak: &std::sync::Weak<BrowserInner>| {
-                let session = SessionHandle::new(conn.clone(), session_id);
-                let main_tab_input = InputController::new(input_profile.clone());
-                let main_tab = Tab::new(session, weak.clone(), main_tab_input);
-                BrowserInner {
-                    conn,
-                    main_tab,
-                    child: tokio::sync::Mutex::new(Some(child)),
-                    _user_data: owned_tmp,
-                    stealth_input_profile: input_profile,
-                }
-            }),
-        };
-        Ok(browser)
+        // weak ref for later access to Browser-wide resources (CookieJar,
+        // tabs registry); the per-Tab `InputController` is constructed
+        // inline here from the cached `input_profile`.
+        let session_id_for_registry = session_id.clone();
+        let inner = Arc::new_cyclic(|weak: &std::sync::Weak<BrowserInner>| {
+            let session = SessionHandle::new(conn.clone(), session_id);
+            let main_tab_input = InputController::new(input_profile.clone());
+            let main_tab = Tab::new(session, weak.clone(), main_tab_input);
+            BrowserInner {
+                conn,
+                main_tab,
+                child: tokio::sync::Mutex::new(Some(child)),
+                _user_data: owned_tmp,
+                stealth_input_profile: input_profile,
+                tabs: tokio::sync::RwLock::new(HashMap::new()),
+            }
+        });
+
+        // 12. Wire the registrar's weak ref + manually insert the main tab.
+        //
+        // The main tab was attached BEFORE the registrar had a usable weak
+        // ref (the `Arc::new_cyclic` block above only just resolved), so
+        // the registrar's `on_target_attached` ran with `OnceLock` empty
+        // and bailed early. Backfill the registry here so callers see the
+        // expected 1-entry state immediately after `launch`.
+        registrar.set_browser(Arc::downgrade(&inner));
+        inner
+            .tabs
+            .write()
+            .await
+            .insert(session_id_for_registry, inner.main_tab.clone());
+
+        Ok(Browser { inner })
     }
 }
 
@@ -434,6 +574,7 @@ impl Drop for BrowserInner {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -521,5 +662,90 @@ mod tests {
         let b = BrowserBuilder::new().headless(false);
         let flags = b.build_flags(std::path::Path::new("/tmp/test-user-data"));
         insta::assert_yaml_snapshot!("non_headless_launch_flags", flags);
+    }
+
+    // ----- TabRegistrar observer (P4 T2) ---------------------------------
+
+    /// Mock-drive a `Target.attachedToTarget` event with `type=page` and
+    /// assert the [`TabRegistrar`] inserts the new [`Tab`] into the
+    /// browser-wide tabs registry. The initial main tab (manually seeded
+    /// by `launch` step 12) accounts for the first entry; this test
+    /// confirms a second attach grows the map to 2.
+    #[tokio::test]
+    async fn tab_registrar_inserts_page_target_into_tabs_map() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+
+        // Seed a `BrowserInner` carrying a synthetic "main" tab — same
+        // shape `launch` produces after step 12 (the main tab is inserted
+        // under its real `sessionId`; here we use "S1" for the simulated
+        // initial target).
+        let inner = Arc::new_cyclic(|weak: &Weak<BrowserInner>| {
+            let main_session = SessionHandle::new(conn.clone(), "S1");
+            let main_input = InputController::new(input_profile.clone());
+            let main_tab = Tab::new(main_session, weak.clone(), main_input);
+            let mut map = HashMap::new();
+            map.insert("S1".to_string(), main_tab.clone());
+            BrowserInner {
+                conn: conn.clone(),
+                main_tab,
+                child: tokio::sync::Mutex::new(None),
+                _user_data: None,
+                stealth_input_profile: input_profile.clone(),
+                tabs: tokio::sync::RwLock::new(map),
+            }
+        });
+        registrar.set_browser(Arc::downgrade(&inner));
+
+        // Sanity: one entry to start.
+        assert_eq!(inner.tabs.read().await.len(), 1);
+
+        // Emit the attach event for a second page target. The actor will
+        // dispatch the registrar observer; once it returns Ok the actor
+        // releases the debugger via `Runtime.runIfWaitingForDebugger`,
+        // which is our signal that the observer body finished.
+        mock.emit_event(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": "S2",
+                "targetInfo": {
+                    "targetId": "T2",
+                    "type": "page",
+                    "url": "about:blank",
+                    "attached": true,
+                },
+                "waitingForDebugger": true,
+            }),
+        )
+        .await;
+
+        let release_id = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            mock.expect_cmd("Runtime.runIfWaitingForDebugger"),
+        )
+        .await
+        .expect("debugger-release did not fire within 2s");
+        mock.reply(release_id, json!({})).await;
+
+        // Give the actor a moment to drop its strong ref to the observer's
+        // upgraded Arc and let our `inner.tabs` write land.
+        for _ in 0..20 {
+            if inner.tabs.read().await.len() == 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let tabs = inner.tabs.read().await;
+        assert_eq!(tabs.len(), 2, "expected main + new tab in registry");
+        assert!(tabs.contains_key("S1"), "main tab still registered");
+        assert!(tabs.contains_key("S2"), "new tab registered by observer");
+
+        drop(tabs);
+        conn.shutdown();
     }
 }

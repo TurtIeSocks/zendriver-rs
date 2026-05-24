@@ -34,6 +34,15 @@ impl<'a> PausedSession<'a> {
             .call_raw(method, params, Some(self.session_id.to_string()))
             .await
     }
+
+    /// The underlying [`Connection`]. Observers that need to spawn
+    /// additional [`crate::SessionHandle`]s (e.g. zendriver's
+    /// `TabRegistrar`) clone this to bind a fresh handle for the newly
+    /// attached `sessionId`.
+    #[must_use]
+    pub fn connection(&self) -> &'a Connection {
+        self.conn
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

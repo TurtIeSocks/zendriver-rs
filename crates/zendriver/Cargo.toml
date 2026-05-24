@@ -25,6 +25,7 @@ testing = ["zendriver-transport/testing"]
 [dependencies]
 zendriver-transport.workspace = true
 zendriver-stealth.workspace   = true
+async-trait.workspace         = true
 chromiumoxide_cdp.workspace   = true
 tokio.workspace               = true
 tokio-util.workspace          = true
