@@ -1,0 +1,15 @@
+[book]
+title = "zendriver-rs"
+authors = ["zendriver-rs contributors"]
+language = "en"
+src = "src"
+
+[output.html]
+git-repository-url = "https://github.com/cdpdriver/zendriver-rs"
+edit-url-template = "https://github.com/cdpdriver/zendriver-rs/edit/main/docs/book/{path}"
+default-theme = "ayu"
+
+# NOTE: `[output.linkcheck]` re-enabled in Task 7 once mdbook-linkcheck (or the
+# maintained mdbook-linkcheck2 fork) supports mdbook 0.5. The 0.7.7 release on
+# crates.io was built for mdbook 0.4 and crashes with "missing field `sections`"
+# under 0.5.x. Tracked as a follow-up before Task 7 chapter authoring lands.
