@@ -2660,6 +2660,8 @@ dependencies = [
  "base64",
  "futures",
  "glob",
+ "insta",
+ "regex",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
