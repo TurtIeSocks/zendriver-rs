@@ -67,6 +67,20 @@ pub(crate) struct TabInner {
     /// here. Subsequent calls return the cached `Frame` clone without
     /// another round-trip.
     pub(crate) main_frame: tokio::sync::OnceCell<Frame>,
+    /// Per-Tab download coordinator. Lazily initialized on the first
+    /// [`Tab::expect_download`] call (gated `expect`) — the constructor
+    /// allocates a tempdir, dispatches `Browser.setDownloadBehavior` once,
+    /// and spawns a long-running `Page.downloadProgress` subscriber. Held
+    /// behind a [`tokio::sync::OnceCell`] so the wiring happens exactly
+    /// once per Tab; subsequent `expect_download` calls reuse the same
+    /// coordinator (and therefore the same tempdir + subscriber).
+    ///
+    /// `Arc` because both the [`Tab`] (via this cell) and the spawned
+    /// progress subscriber task hold references to the same coordinator
+    /// state for the Tab's entire lifetime.
+    #[cfg(feature = "expect")]
+    pub(crate) download_setup:
+        tokio::sync::OnceCell<Arc<crate::expect::download::DownloadCoordinator>>,
     /// Per-Tab frames registry keyed by CDP `frameId`. Populated by the
     /// background subscriber spawned in [`Tab::new`] via
     /// [`crate::frame::lifecycle::run`] which mutates the map in response
@@ -164,6 +178,8 @@ impl Tab {
                 network_tracker,
                 network_cancel,
                 main_frame: tokio::sync::OnceCell::new(),
+                #[cfg(feature = "expect")]
+                download_setup: tokio::sync::OnceCell::new(),
                 frames,
                 frame_lifecycle_cancel,
             }
@@ -844,6 +860,32 @@ impl Tab {
     #[must_use]
     pub fn expect_dialog(&self) -> crate::expect::dialog::DialogExpectation {
         crate::expect::dialog::register(self.session())
+    }
+
+    /// Register a one-shot expectation for the first `Page.downloadWillBegin`
+    /// on this tab.
+    ///
+    /// First call on a Tab also allocates a per-Tab tempdir, dispatches
+    /// `Browser.setDownloadBehavior { behavior: "allowAndName", downloadPath
+    /// }` at browser scope, and spawns a long-running `Page.downloadProgress`
+    /// subscriber. The coordinator is reused across every subsequent
+    /// `expect_download` call on the same tab. `Page.enable` is already on
+    /// per-Tab via P1's `Tab::goto` / the frame lifecycle subscriber, so
+    /// this call does not re-enable.
+    ///
+    /// Returned [`MatchedDownload`](crate::expect::download::MatchedDownload)
+    /// exposes [`path`](crate::expect::download::MatchedDownload::path) /
+    /// [`save_to`](crate::expect::download::MatchedDownload::save_to) for
+    /// reaching the downloaded bytes once Chrome reports completion.
+    ///
+    /// Gated by the `expect` cargo feature.
+    pub async fn expect_download(&self) -> Result<crate::expect::download::DownloadExpectation> {
+        let coord = crate::expect::download::ensure_download_setup(
+            &self.inner.download_setup,
+            self.session(),
+        )
+        .await?;
+        Ok(crate::expect::download::register(self.session(), coord))
     }
 }
 
