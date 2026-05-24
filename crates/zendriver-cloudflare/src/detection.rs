@@ -119,7 +119,10 @@ mod tests {
         .await;
 
         let got = fut.await.unwrap().unwrap();
-        assert!(got, "challenge bbox returned → is_challenge_present == true");
+        assert!(
+            got,
+            "challenge bbox returned → is_challenge_present == true"
+        );
 
         conn.shutdown();
     }

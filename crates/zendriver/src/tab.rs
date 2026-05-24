@@ -889,6 +889,30 @@ impl Tab {
     }
 }
 
+#[cfg(feature = "cloudflare")]
+impl Tab {
+    /// Construct a
+    /// [`CloudflareBypass`](zendriver_cloudflare::CloudflareBypass) bound to
+    /// this tab's session.
+    ///
+    /// Chain
+    /// [`poll_interval`](zendriver_cloudflare::CloudflareBypass::poll_interval)
+    /// to tune the polling cadence, then call
+    /// [`wait_for_clearance`](zendriver_cloudflare::CloudflareBypass::wait_for_clearance)
+    /// to detect the Turnstile checkbox, click it at the canonical 15%
+    /// offset, and poll until either the `cf-turnstile-response` token
+    /// appears, the challenge container disappears, or the supplied timeout
+    /// elapses. Use
+    /// [`is_challenge_present`](zendriver_cloudflare::CloudflareBypass::is_challenge_present)
+    /// for a one-shot probe without driving a click.
+    ///
+    /// Gated by the `cloudflare` cargo feature.
+    #[must_use]
+    pub fn cloudflare(&self) -> zendriver_cloudflare::CloudflareBypass<'_> {
+        zendriver_cloudflare::CloudflareBypass::new(self.session())
+    }
+}
+
 #[cfg(feature = "interception")]
 impl Tab {
     /// Construct a fluent

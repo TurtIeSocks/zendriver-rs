@@ -9,5 +9,5 @@ pub mod click;
 pub mod detection;
 pub mod error;
 
-pub use bypass::{CloudflareBypass, ClearanceOutcome};
+pub use bypass::{ClearanceOutcome, CloudflareBypass};
 pub use error::CloudflareError;

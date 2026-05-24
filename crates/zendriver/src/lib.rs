@@ -45,6 +45,15 @@ pub use zendriver_interception::{
     RequestOverrides, RequestStage, ResourceType, ResponseInfo,
 };
 
+/// Cloudflare Turnstile bypass re-exports.
+///
+/// Gated by the `cloudflare` cargo feature. The driver lives in the
+/// `zendriver-cloudflare` sub-crate; these aliases let downstream code reach
+/// the types without depending on the sub-crate directly. Drive via
+/// [`Tab::cloudflare`].
+#[cfg(feature = "cloudflare")]
+pub use zendriver_cloudflare::{ClearanceOutcome, CloudflareBypass, CloudflareError};
+
 /// Re-export the shared `UrlMatcher` used by the `expect_*` helpers.
 #[cfg(feature = "expect")]
 pub use expect::UrlMatcher;
