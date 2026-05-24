@@ -1,5 +1,9 @@
 //! Chrome for Testing binary downloader.
 //!
+//! See the [Fetcher chapter](https://turtiesocks.github.io/zendriver-rs/fetcher.html)
+//! of the [zendriver-rs user guide](https://turtiesocks.github.io/zendriver-rs/)
+//! for cache-layout details, offline-mode workflows, and CI integration tips.
+//!
 //! Resolves a [`VersionSpec`] + [`Platform`] pair against the
 //! [Chrome for Testing manifest][cft-manifest], downloads the matching zip,
 //! extracts it into an atomic cache layout, and hands back a path to the

@@ -452,7 +452,7 @@ Badges:
 - `https://docs.rs/zendriver/badge.svg`
 - `https://img.shields.io/badge/rustc-1.75+-lightgray.svg`
 - `https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg`
-- `https://github.com/cdpdriver/zendriver-rs/actions/workflows/ci.yml/badge.svg`
+- `https://github.com/TurtIeSocks/zendriver-rs/actions/workflows/ci.yml/badge.svg`
 
 **Verify:** Render README locally (`grip` or just `cat`) to confirm tables format correctly.
 
@@ -635,7 +635,7 @@ If any crate fails dry-run, fix Cargo.toml + retry. Common issues: missing descr
 4. `./scripts/publish.sh` (no --dry-run)
 5. Verify each crate appears on crates.io: `https://crates.io/crates/zendriver` and the 5 sub-crates.
 6. Wait 5-10 minutes; check `https://docs.rs/zendriver/0.1.0` builds successfully.
-7. Verify `https://cdpdriver.github.io/zendriver-rs/` is live (T9 docs.yml deploys to gh-pages).
+7. Verify `https://turtiesocks.github.io/zendriver-rs/` is live (T9 docs.yml deploys to gh-pages).
 8. Smoke test: in a fresh Rust project, `cargo add zendriver --features stealth` + write hello-world example + `cargo run`. Verify it works against real example.com.
 
 If any publish step fails (network, ownership, etc), debug + retry from the failed crate in the topological list.

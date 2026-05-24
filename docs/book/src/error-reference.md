@@ -9,7 +9,7 @@ that flow into it via `#[from]`, with the common cause + the fix.
 [`ZendriverError`]: https://docs.rs/zendriver/latest/zendriver/enum.ZendriverError.html
 
 The enum is `#[non_exhaustive]` — pattern matches should include a `_`
-arm. Per [SEMVER](https://github.com/cdpdriver/zendriver-rs/blob/main/SEMVER.md),
+arm. Per [SEMVER](https://github.com/TurtIeSocks/zendriver-rs/blob/main/SEMVER.md),
 new variants may land in minor releases.
 
 ## Top-level `ZendriverError` variants

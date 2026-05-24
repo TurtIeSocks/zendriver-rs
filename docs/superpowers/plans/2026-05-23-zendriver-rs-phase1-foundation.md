@@ -146,7 +146,7 @@ version = "0.1.0-dev"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/cdpdriver/zendriver-rs"
+repository = "https://github.com/TurtIeSocks/zendriver-rs"
 authors = ["zendriver-rs contributors"]
 
 [workspace.dependencies]

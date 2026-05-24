@@ -6,6 +6,25 @@
 //! every public type maps cleanly to a CDP surface, every action has a
 //! single-call escape hatch, and stealth is on by default.
 //!
+//! See the [user guide / mdBook](https://turtiesocks.github.io/zendriver-rs/)
+//! for end-to-end walkthroughs covering [installation][book-install],
+//! [quickstart][book-quickstart], [stealth][book-stealth],
+//! [multi-tab][book-multi-tab], [frames][book-frames],
+//! [input][book-input], and migration guides from
+//! [Playwright][book-mig-playwright] /
+//! [zendriver (Python)][book-mig-zendriver] /
+//! [nodriver (Python)][book-mig-nodriver].
+//!
+//! [book-install]: https://turtiesocks.github.io/zendriver-rs/install.html
+//! [book-quickstart]: https://turtiesocks.github.io/zendriver-rs/quickstart.html
+//! [book-stealth]: https://turtiesocks.github.io/zendriver-rs/stealth.html
+//! [book-multi-tab]: https://turtiesocks.github.io/zendriver-rs/multi-tab.html
+//! [book-frames]: https://turtiesocks.github.io/zendriver-rs/frames.html
+//! [book-input]: https://turtiesocks.github.io/zendriver-rs/input.html
+//! [book-mig-playwright]: https://turtiesocks.github.io/zendriver-rs/migration-playwright.html
+//! [book-mig-zendriver]: https://turtiesocks.github.io/zendriver-rs/migration-zendriver-python.html
+//! [book-mig-nodriver]: https://turtiesocks.github.io/zendriver-rs/migration-nodriver-python.html
+//!
 //! # Quickstart
 //!
 //! ```no_run

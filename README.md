@@ -4,11 +4,14 @@ Async-first, undetectable browser automation via the Chrome DevTools Protocol.
 
 [![crates.io](https://img.shields.io/crates/v/zendriver.svg)](https://crates.io/crates/zendriver)
 [![docs.rs](https://docs.rs/zendriver/badge.svg)](https://docs.rs/zendriver)
+[![Book](https://img.shields.io/badge/book-mdBook-blue)](https://turtiesocks.github.io/zendriver-rs/)
 [![MSRV 1.75](https://img.shields.io/badge/rustc-1.75+-lightgray.svg)](https://blog.rust-lang.org/2023/12/28/Rust-1.75.0.html)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](#license)
-[![CI](https://github.com/cdpdriver/zendriver-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/cdpdriver/zendriver-rs/actions/workflows/ci.yml)
+[![CI](https://github.com/TurtIeSocks/zendriver-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/TurtIeSocks/zendriver-rs/actions/workflows/ci.yml)
 
 A Rust port of [zendriver](https://github.com/cdpdriver/zendriver). Drives Chrome via raw CDP — no WebDriver, no JS shim — with anti-detection patches baked in by default.
+
+📖 **[User guide & full documentation →](https://turtiesocks.github.io/zendriver-rs/)** · 🦀 **[API reference (docs.rs) →](https://docs.rs/zendriver)**
 
 ## Quick example
 
@@ -79,13 +82,13 @@ Adds request interception, `expect()` matchers, Cloudflare Turnstile bypass, and
 
 ## Phases
 
-Six development phases shipped into the v0.1.0 release. The mdBook covers each surface in depth.
+Six development phases shipped into the v0.1.0 release. The [mdBook](https://turtiesocks.github.io/zendriver-rs/) covers each surface in depth.
 
-1. **Foundation** — CDP transport + minimal `Browser`/`Tab`/`Element`. See [introduction](docs/book/src/introduction.md).
-2. **Stealth** — fingerprint patches + isolated worlds + stealth JS bundle. See [stealth](docs/book/src/stealth.md).
-3. **Element API completeness** — CSS/XPath/text/role selectors, actionability, input controller, screenshots. See [quickstart](docs/book/src/quickstart.md).
-4. **`Tab`/`Browser` completeness** — multi-tab, cookies, storage, frames, nav history, `wait_for_idle`. See [multi-tab](docs/book/src/multi-tab.md) + [frames](docs/book/src/frames.md).
-5. **Optional gated features** — request interception, `expect()` matchers, Cloudflare bypass, Chrome-for-Testing fetcher. See [interception](docs/book/src/interception.md), [expect](docs/book/src/expect.md), [cloudflare](docs/book/src/cloudflare.md), [fetcher](docs/book/src/fetcher.md).
+1. **Foundation** — CDP transport + minimal `Browser`/`Tab`/`Element`. See [introduction](https://turtiesocks.github.io/zendriver-rs/introduction.html).
+2. **Stealth** — fingerprint patches + isolated worlds + stealth JS bundle. See [stealth](https://turtiesocks.github.io/zendriver-rs/stealth.html).
+3. **Element API completeness** — CSS/XPath/text/role selectors, actionability, input controller, screenshots. See [quickstart](https://turtiesocks.github.io/zendriver-rs/quickstart.html).
+4. **`Tab`/`Browser` completeness** — multi-tab, cookies, storage, frames, nav history, `wait_for_idle`. See [multi-tab](https://turtiesocks.github.io/zendriver-rs/multi-tab.html) + [frames](https://turtiesocks.github.io/zendriver-rs/frames.html).
+5. **Optional gated features** — request interception, `expect()` matchers, Cloudflare bypass, Chrome-for-Testing fetcher. See [interception](https://turtiesocks.github.io/zendriver-rs/interception.html), [expect](https://turtiesocks.github.io/zendriver-rs/expect.html), [cloudflare](https://turtiesocks.github.io/zendriver-rs/cloudflare.html), [fetcher](https://turtiesocks.github.io/zendriver-rs/fetcher.html).
 6. **Polish + release** — trait extraction, rustdoc + mdBook, publish to crates.io.
 
 ## Comparison

@@ -85,7 +85,7 @@ a Rust version bump counts as a minor change in the 0.x series and a
 major change post-1.0. See [SEMVER.md] in the repository for the full
 policy.
 
-[SEMVER.md]: https://github.com/cdpdriver/zendriver-rs/blob/main/SEMVER.md
+[SEMVER.md]: https://github.com/TurtIeSocks/zendriver-rs/blob/main/SEMVER.md
 
 ## Platform support
 

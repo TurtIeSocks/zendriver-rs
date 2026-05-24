@@ -5,8 +5,8 @@ language = "en"
 src = "src"
 
 [output.html]
-git-repository-url = "https://github.com/cdpdriver/zendriver-rs"
-edit-url-template = "https://github.com/cdpdriver/zendriver-rs/edit/main/docs/book/{path}"
+git-repository-url = "https://github.com/TurtIeSocks/zendriver-rs"
+edit-url-template = "https://github.com/TurtIeSocks/zendriver-rs/edit/main/docs/book/{path}"
 default-theme = "ayu"
 
 # NOTE: `[output.linkcheck]` re-enabled in Task 7 once mdbook-linkcheck (or the

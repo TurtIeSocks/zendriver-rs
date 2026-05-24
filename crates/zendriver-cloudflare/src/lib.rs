@@ -1,5 +1,9 @@
 //! Cloudflare Turnstile bypass for `zendriver`.
 //!
+//! See the [Cloudflare chapter](https://turtiesocks.github.io/zendriver-rs/cloudflare.html)
+//! of the [zendriver-rs user guide](https://turtiesocks.github.io/zendriver-rs/)
+//! for end-to-end usage, timeout tuning, and detection-failure diagnostics.
+//!
 //! Drives the Turnstile checkbox click flow:
 //!
 //! 1. Detect the Turnstile iframe via a shadow-DOM-aware walk of the page's

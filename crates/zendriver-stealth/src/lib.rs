@@ -1,5 +1,10 @@
 //! Anti-detection profiles and patches for `zendriver`.
 //!
+//! See the [Stealth chapter](https://turtiesocks.github.io/zendriver-rs/stealth.html)
+//! of the [zendriver-rs user guide](https://turtiesocks.github.io/zendriver-rs/)
+//! for profile trade-offs, the sannysoft test matrix, and platform-spoofing
+//! recipes.
+//!
 //! Three stealth modes, exposed via [`StealthProfile`]:
 //!
 //! - [`StealthProfile::off`] — no stealth (stock Chrome launch).

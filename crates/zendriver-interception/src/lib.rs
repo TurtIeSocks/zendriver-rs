@@ -1,5 +1,10 @@
 //! Network interception via the `Fetch` CDP domain.
 //!
+//! See the [Interception chapter](https://turtiesocks.github.io/zendriver-rs/interception.html)
+//! of the [zendriver-rs user guide](https://turtiesocks.github.io/zendriver-rs/)
+//! for narrative examples, glob/regex pattern semantics, and streaming-mode
+//! recipes.
+//!
 //! Two entry points, both built off [`InterceptBuilder`]:
 //!
 //! - **Rule-based** — chain

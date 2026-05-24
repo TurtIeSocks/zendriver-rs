@@ -6,6 +6,10 @@
 //! same SemVer guarantees as `zendriver`; expect minor versions to rearrange
 //! types here freely. See [`SEMVER.md`] in the repo root for the policy.
 //!
+//! For a high-level walkthrough of the actor/observer model see the
+//! [Architecture chapter](https://turtiesocks.github.io/zendriver-rs/architecture.html)
+//! of the [zendriver-rs user guide](https://turtiesocks.github.io/zendriver-rs/).
+//!
 //! # What lives here
 //!
 //! - [`Connection`] — cheap, clonable handle to the actor task. All `Tab`s
@@ -19,7 +23,7 @@
 //! - [`CallError`] / [`TransportError`] — error types surfaced via
 //!   `zendriver`'s `ZendriverError::Transport` / `Cdp` variants.
 //!
-//! [`SEMVER.md`]: https://github.com/cdpdriver/zendriver-rs/blob/main/SEMVER.md
+//! [`SEMVER.md`]: https://github.com/TurtIeSocks/zendriver-rs/blob/main/SEMVER.md
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 

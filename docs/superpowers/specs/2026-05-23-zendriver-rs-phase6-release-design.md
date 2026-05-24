@@ -13,7 +13,7 @@ Last phase before v0.1.0 ships to crates.io. Three big workstreams:
 2. **Documentation buildout.** Rustdoc on every public method/type/field with at least one `no_run` doctest per method that takes args. mdBook docs site hosted on GitHub Pages with chapters: install, quick-start, stealth-tuning, multi-tab+frames, interception, expect(), cloudflare, fetcher, migration-from-Playwright, FAQ.
 3. **Publish workflow.** Version bump `0.1.0-dev → 0.1.0`. CHANGELOG.md synthesized from P1-P5 commits. SEMVER.md policy doc (pre-1.0 churn allowed). README final polish (badges, feature matrix table, install snippet per use case). Workspace publish order resolved (transport → stealth → interception/fetcher → cloudflare → zendriver) with a `cargo-release` config or manual publish script. Dry-run gate then actual `cargo publish` to crates.io.
 
-Phase 6 exit criterion: zendriver 0.1.0 published on crates.io; docs.rs successfully builds the published artifact; mdBook site live at `https://cdpdriver.github.io/zendriver-rs/`; CHANGELOG.md + SEMVER.md committed; tag `v0.1.0` pushed.
+Phase 6 exit criterion: zendriver 0.1.0 published on crates.io; docs.rs successfully builds the published artifact; mdBook site live at `https://turtiesocks.github.io/zendriver-rs/`; CHANGELOG.md + SEMVER.md committed; tag `v0.1.0` pushed.
 
 ## Goals
 
@@ -177,8 +177,8 @@ language = "en"
 src = "src"
 
 [output.html]
-git-repository-url = "https://github.com/cdpdriver/zendriver-rs"
-edit-url-template = "https://github.com/cdpdriver/zendriver-rs/edit/main/docs/book/{path}"
+git-repository-url = "https://github.com/TurtIeSocks/zendriver-rs"
+edit-url-template = "https://github.com/TurtIeSocks/zendriver-rs/edit/main/docs/book/{path}"
 default-theme = "ayu"
 
 [output.linkcheck]

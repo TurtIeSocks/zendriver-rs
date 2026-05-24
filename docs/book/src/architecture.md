@@ -182,7 +182,7 @@ own isolated world (allocated per frame contextId).
 | `zendriver-cloudflare` | Turnstile bypass | yes, gated `cloudflare` |
 | `zendriver-fetcher` | Chrome-for-Testing downloader | yes, gated `fetcher` |
 
-[SEMVER]: https://github.com/cdpdriver/zendriver-rs/blob/main/SEMVER.md
+[SEMVER]: https://github.com/TurtIeSocks/zendriver-rs/blob/main/SEMVER.md
 
 The split lets you take a dep on only what you need (the
 `zendriver-transport` crate is the heaviest; the optional sub-crates

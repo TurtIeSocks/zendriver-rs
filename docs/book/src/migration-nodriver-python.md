@@ -264,7 +264,7 @@ Things nodriver supports that zendriver-rs **doesn't yet**:
   (`el.dispatchEvent(new Event('change'))`).
 
 If you hit a gap that blocks your migration, please file an issue at
-<https://github.com/cdpdriver/zendriver-rs/issues> — pre-1.0
+<https://github.com/TurtIeSocks/zendriver-rs/issues> — pre-1.0
 prioritization is largely driven by reported migration friction.
 
 ## See also
