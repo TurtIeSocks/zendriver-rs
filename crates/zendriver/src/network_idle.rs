@@ -6,8 +6,8 @@
 //!
 //! ## Wiring
 //!
-//! Each [`crate::tab::Tab`] owns one [`InFlightTracker`]. At construction
-//! time, the tab spawns a background task that:
+//! Each [`crate::Tab`] owns one tracker. At construction time, the tab
+//! spawns a background task that:
 //! 1. Sends `Network.enable` once on the tab's session.
 //! 2. Subscribes to the four lifecycle events Chrome emits per request:
 //!    - `Network.requestWillBeSent` — insert `requestId` into the set.

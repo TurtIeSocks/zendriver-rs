@@ -3,31 +3,35 @@
 //! [`CookieJar`] wraps a [`Connection`] and exposes ergonomic CRUD over
 //! Chrome's cookie store. The jar is cheap to clone — internally an `Arc`
 //! over a thin inner struct — so it can be passed around freely and is
-//! suitable as both `Browser::cookies()` (T10) and `Tab::cookies()` (T10).
+//! suitable as both [`crate::Browser::cookies`] and [`crate::Tab::cookies`]
+//! (both bind to the same browser-scope connection, since Chrome's cookie
+//! store is browser-wide).
 //!
-//! ## Serialization choice — snake_case on disk, camelCase on the wire
+//! ```no_run
+//! # async fn ex() -> zendriver::Result<()> {
+//! # let browser = zendriver::Browser::builder().launch().await?;
+//! let jar = browser.cookies();
+//! jar.set(zendriver::Cookie {
+//!     name: "sid".into(),
+//!     value: "abc123".into(),
+//!     domain: ".example.com".into(),
+//!     path: "/".into(),
+//!     expires: None,
+//!     http_only: true,
+//!     secure: true,
+//!     same_site: Some(zendriver::SameSite::Lax),
+//!     url: None,
+//! }).await?;
+//! # Ok(()) }
+//! ```
 //!
-//! Two competing constraints:
+//! ## Serialization — snake_case on disk, camelCase on the wire
 //!
-//! 1. The public [`Cookie`] struct is what end users save to JSON files
-//!    (T9 — `CookieJar::save_to_file` / `load_from_file`). Idiomatic Rust
-//!    JSON shape is `snake_case` (`http_only`, `same_site`), matching the
-//!    Rust field names directly.
-//! 2. CDP wire payloads are `camelCase` (`httpOnly`, `sameSite`), which
-//!    Chrome enforces strictly — any other field name is silently ignored.
-//!
-//! Rather than apply `#[serde(rename_all = "camelCase")]` on the public type
-//! (which would force users' on-disk JSON to also be camelCase), this module
-//! defines a private [`CdpCookie`] mirror with the camelCase rename, plus a
-//! lossless conversion in both directions. Net result: users see clean
-//! snake_case JSON; CDP sees camelCase; neither side has to know the other
-//! exists.
-//!
-//! This split also pays off for [`Cookie::url`] — a field CDP accepts on
-//! `Network.setCookie` but never emits on `Network.getAllCookies`. Keeping
-//! it in the public struct (where users can construct cookies with just a
-//! URL and let Chrome infer domain/path) without leaking it into every
-//! parsed cookie keeps both shapes minimal.
+//! The public [`Cookie`] struct uses idiomatic snake_case for JSON output
+//! (so users' on-disk JSON looks Rust-natural), while a private internal
+//! mirror handles the CDP camelCase rename. Lossless conversion in both
+//! directions; users see clean snake_case JSON, CDP sees camelCase, neither
+//! side has to know the other exists.
 
 pub mod persistence;
 
@@ -51,9 +55,9 @@ pub enum SameSite {
 
 /// A single HTTP cookie.
 ///
-/// Field shape matches the public Rust/JSON contract (snake_case). When
-/// crossing the CDP boundary the [`CdpCookie`] mirror handles the camelCase
-/// rename — see the module-level docs.
+/// Field shape matches the public Rust/JSON contract (snake_case). An
+/// internal mirror handles the CDP camelCase rename — see the module-level
+/// docs.
 ///
 /// - `expires` is a Unix-epoch timestamp in **seconds** (with sub-second
 ///   precision), matching CDP's `Network.TimeSinceEpoch`. `None` means

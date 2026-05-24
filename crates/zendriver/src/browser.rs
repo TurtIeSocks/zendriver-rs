@@ -1,5 +1,22 @@
 //! Browser lifecycle: executable discovery, subprocess spawn, WS attach,
 //! graceful teardown.
+//!
+//! Entry point is [`Browser::builder`] — start there for any zendriver
+//! workflow. The launched [`Browser`] owns the Chrome subprocess and the
+//! transport actor; dropping it terminates Chrome. Spawn additional pages
+//! via [`Browser::new_tab`] and reach the initial page via
+//! [`Browser::main_tab`].
+//!
+//! ```no_run
+//! # async fn ex() -> zendriver::Result<()> {
+//! let browser = zendriver::Browser::builder()
+//!     .headless(true)
+//!     .launch().await?;
+//! let tab = browser.main_tab();
+//! tab.goto("https://example.com").await?;
+//! browser.close().await?;
+//! # Ok(()) }
+//! ```
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -23,7 +40,25 @@ use crate::input::InputController;
 use crate::tab::Tab;
 
 /// Look for a Chromium-family binary on PATH and in conventional locations.
-/// Returns the first path that exists.
+///
+/// Returns the first path that exists. Checks PATH for the canonical
+/// binaries (`google-chrome`, `chromium`, `chrome`) then platform-specific
+/// install locations (macOS `/Applications`, Linux `/usr/bin`, Windows
+/// `Program Files`).
+///
+/// # Errors
+///
+/// Returns [`BrowserError::ExecutableNotFound`] with the full list of
+/// searched paths when no installation is found.
+///
+/// # Examples
+///
+/// ```no_run
+/// match zendriver::browser::find_chrome_executable() {
+///     Ok(p) => println!("found chrome at {}", p.display()),
+///     Err(e) => eprintln!("no chrome installed: {e}"),
+/// }
+/// ```
 pub fn find_chrome_executable() -> Result<PathBuf, BrowserError> {
     let candidates = candidate_paths();
     for c in &candidates {
@@ -115,6 +150,22 @@ pub(crate) fn parse_devtools_line(line: &str) -> Option<String> {
     }
 }
 
+/// Fluent builder for a [`Browser`] launch.
+///
+/// Start with [`Browser::builder`] (seeded with [`zendriver_stealth::StealthProfile::native`]),
+/// chain configuration calls, terminate with [`BrowserBuilder::launch`].
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn ex() -> zendriver::Result<()> {
+/// let browser = zendriver::Browser::builder()
+///     .headless(true)
+///     .arg("--lang=en-US")
+///     .launch().await?;
+/// # browser.close().await?;
+/// # Ok(()) }
+/// ```
 #[derive(Default, Clone)]
 pub struct BrowserBuilder {
     pub(crate) headless: Option<bool>,
@@ -145,9 +196,17 @@ impl std::fmt::Debug for BrowserBuilder {
 }
 
 impl BrowserBuilder {
-    /// Builder seeded with the default `StealthProfile::native()` profile.
+    /// Builder seeded with the default [`StealthProfile::native`] profile.
+    ///
     /// Pass `.stealth(StealthProfile::off())` to opt out, or
     /// `.stealth(StealthProfile::spoofed())` for the full anti-detection set.
+    /// Equivalent to [`Browser::builder`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let builder = zendriver::BrowserBuilder::new();
+    /// ```
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -156,46 +215,124 @@ impl BrowserBuilder {
         }
     }
 
+    /// Toggle headless mode (default: `true`).
+    ///
+    /// When `on`, Chrome runs with `--headless=new --disable-gpu`. Pass
+    /// `false` to launch a visible window (useful for local debugging).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let builder = zendriver::Browser::builder().headless(false);
+    /// ```
     #[must_use]
     pub fn headless(mut self, on: bool) -> Self {
         self.headless = Some(on);
         self
     }
 
+    /// Override the Chrome executable path.
+    ///
+    /// When unset, [`find_chrome_executable`] discovers one at launch time.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let builder = zendriver::Browser::builder()
+    ///     .executable("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
+    /// ```
     #[must_use]
     pub fn executable(mut self, path: impl Into<PathBuf>) -> Self {
         self.executable = Some(path.into());
         self
     }
 
+    /// Override the `--user-data-dir` for the launched Chrome instance.
+    ///
+    /// When unset, a fresh tempdir is created and cleaned up on
+    /// [`Browser::close`] / drop.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let builder = zendriver::Browser::builder()
+    ///     .user_data_dir("/tmp/zendriver-profile");
+    /// ```
     #[must_use]
     pub fn user_data_dir(mut self, path: impl Into<PathBuf>) -> Self {
         self.user_data_dir = Some(path.into());
         self
     }
 
+    /// Append a single command-line flag to the Chrome launch argv.
+    ///
+    /// Flags accumulate; later calls do NOT replace earlier ones.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let builder = zendriver::Browser::builder()
+    ///     .arg("--proxy-server=http://localhost:8080")
+    ///     .arg("--lang=en-US");
+    /// ```
     #[must_use]
     pub fn arg(mut self, flag: impl Into<String>) -> Self {
         self.extra_args.push(flag.into());
         self
     }
 
+    /// Append multiple command-line flags to the Chrome launch argv.
+    ///
+    /// Equivalent to calling [`BrowserBuilder::arg`] for each entry.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let builder = zendriver::Browser::builder().args([
+    ///     "--lang=en-US".to_string(),
+    ///     "--window-size=1280,800".to_string(),
+    /// ]);
+    /// ```
     #[must_use]
     pub fn args(mut self, flags: impl IntoIterator<Item = String>) -> Self {
         self.extra_args.extend(flags);
         self
     }
 
-    /// Override the default `StealthProfile::native()` profile. Pass
-    /// `StealthProfile::off()` to disable stealth entirely.
+    /// Override the default [`StealthProfile::native`] profile.
+    ///
+    /// Pass [`StealthProfile::off`](zendriver_stealth::StealthProfile::off) to
+    /// disable stealth entirely or
+    /// [`StealthProfile::spoofed`](zendriver_stealth::StealthProfile::spoofed)
+    /// for the full anti-detection set.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use zendriver::stealth::StealthProfile;
+    /// let builder = zendriver::Browser::builder().stealth(StealthProfile::spoofed());
+    /// ```
     #[must_use]
     pub fn stealth(mut self, profile: StealthProfile) -> Self {
         self.stealth = Some(profile);
         self
     }
 
-    /// Register an additional `TargetObserver` that fires on each new attached
-    /// page target. The stealth observer (if any) is added before user observers.
+    /// Register an additional [`TargetObserver`].
+    ///
+    /// Observers fire on each new attached page target. The stealth observer
+    /// (if any) is added before user observers; user observers run in the
+    /// order they were registered.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use std::sync::Arc;
+    /// # use zendriver_transport::TargetObserver;
+    /// # fn ex(my_obs: Arc<dyn TargetObserver>) {
+    /// let builder = zendriver::Browser::builder().observer(my_obs);
+    /// # }
+    /// ```
     #[must_use]
     pub fn observer(mut self, obs: Arc<dyn TargetObserver>) -> Self {
         self.extra_observers.push(obs);
@@ -219,6 +356,15 @@ impl BrowserBuilder {
     }
 }
 
+/// A running Chrome instance under zendriver control.
+///
+/// `Browser` is `Clone` (cheap — wraps an `Arc`) and `Send + Sync`, so the
+/// same handle can be passed across `tokio::spawn` boundaries. Dropping
+/// the last clone shuts down the transport and terminates Chrome via
+/// `kill_on_drop` (for a graceful SIGTERM-then-SIGKILL teardown call
+/// [`Browser::close`] explicitly).
+///
+/// Build one via [`Browser::builder`].
 #[derive(Clone, Debug)]
 pub struct Browser {
     pub(crate) inner: Arc<BrowserInner>,
@@ -379,13 +525,30 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 impl BrowserBuilder {
     /// Spawn Chrome and attach. Returns once the main tab is bound.
     ///
-    /// When a `StealthProfile` is set (the default), this:
-    /// 1. Resolves a `Fingerprint` from the resolved Chrome executable.
-    /// 2. Prepends the profile's `StealthObserver` to the observer chain.
+    /// When a [`StealthProfile`] is set (the default), this:
+    /// 1. Resolves a [`zendriver_stealth::Fingerprint`] from the resolved
+    ///    Chrome executable.
+    /// 2. Prepends the profile's [`StealthObserver`] to the observer chain.
     /// 3. Appends the profile's stealth flags to the launch argv.
     /// 4. Sends `Target.setAutoAttach { waitForDebuggerOnStart: true }` at
     ///    browser scope so the actor can route pauses through observers
     ///    before any page script runs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Browser`] when Chrome can't be discovered
+    /// or spawned, [`ZendriverError::Stealth`] when fingerprint resolution
+    /// fails, [`ZendriverError::Transport`] when the WebSocket attach times
+    /// out.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// let browser = zendriver::Browser::builder().launch().await?;
+    /// # browser.close().await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn launch(self) -> Result<Browser, ZendriverError> {
         // 1. Resolve Chrome executable.
         let exe = match self.executable.clone() {
@@ -595,14 +758,58 @@ impl BrowserBuilder {
 }
 
 impl Browser {
+    /// Construct a fresh [`BrowserBuilder`] (with stealth on by default).
+    ///
+    /// Equivalent to [`BrowserBuilder::new`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// let browser = zendriver::Browser::builder().launch().await?;
+    /// # browser.close().await?;
+    /// # Ok(()) }
+    /// ```
+    #[must_use]
     pub fn builder() -> BrowserBuilder {
         BrowserBuilder::new()
     }
 
+    /// Handle for the tab that exists when Chrome launches.
+    ///
+    /// The main tab is registered eagerly at launch time and is the same
+    /// [`Tab`] across every clone of this [`Browser`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// # Ok(()) }
+    /// ```
+    #[must_use]
     pub fn main_tab(&self) -> Tab {
         self.inner.main_tab.clone()
     }
 
+    /// Raw root [`Connection`] for browser-scope CDP commands.
+    ///
+    /// Escape hatch for advanced users who need to send CDP commands at
+    /// browser scope (no `sessionId`) that the high-level API doesn't wrap.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// let conn = browser.cdp();
+    /// let info = conn.call_raw("SystemInfo.getInfo", serde_json::json!({}), None).await?;
+    /// println!("{info}");
+    /// # Ok(()) }
+    /// ```
+    #[must_use]
     pub fn cdp(&self) -> &Connection {
         &self.inner.conn
     }
@@ -620,33 +827,57 @@ impl Browser {
         crate::CookieJar::new(self.inner.conn.clone())
     }
 
-    /// Open a new tab navigated to `about:blank`. Returns once the
-    /// [`TabRegistrar`] has registered the new [`Tab`] in the browser's tab
-    /// registry — typically within a few milliseconds of
-    /// `Target.createTarget`'s response.
+    /// Open a new tab navigated to `about:blank`.
+    ///
+    /// Returns once an internal tab registrar has registered the new [`Tab`]
+    /// in the browser's tab registry — typically within a few milliseconds
+    /// of `Target.createTarget`'s response.
     ///
     /// Internally:
     /// 1. Sends `Target.createTarget { url: "about:blank" }` at browser
     ///    scope (no session_id) — the response includes the new `targetId`.
-    /// 2. Polls [`BrowserInner::tabs`] every 50ms for up to 5s, looking for
-    ///    a [`Tab`] whose [`Tab::target_id`] matches. The
-    ///    [`TabRegistrar`] populates that entry asynchronously when the
-    ///    `Target.attachedToTarget` event arrives (auto-attach + flatten
-    ///    are enabled at launch time).
+    /// 2. Polls the internal tabs registry every 50ms for up to 5s, looking
+    ///    for a [`Tab`] whose [`Tab::target_id`] matches. The tab registrar
+    ///    populates that entry asynchronously when the
+    ///    `Target.attachedToTarget` event arrives.
     /// 3. Returns the matching [`Tab`] on success.
+    ///
+    /// # Errors
     ///
     /// Returns [`ZendriverError::TabNotFound`] if the registrar fails to
     /// register the new tab within the 5s window — usually a sign that
     /// auto-attach is misconfigured or the registrar observer crashed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// let browser = zendriver::Browser::builder().launch().await?;
+    /// let tab = browser.new_tab().await?;
+    /// tab.goto("https://example.com").await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn new_tab(&self) -> Result<Tab, ZendriverError> {
         self.new_tab_at("about:blank").await
     }
 
-    /// Open a new tab navigated to `url`. Behaves identically to
-    /// [`Browser::new_tab`] but with a custom initial URL passed to
-    /// `Target.createTarget`. The returned [`Tab`] handle is ready as soon
-    /// as the [`TabRegistrar`] observer registers it; callers can issue
-    /// `.wait_for_load()` if they need to block on the navigation.
+    /// Open a new tab navigated to `url`.
+    ///
+    /// Behaves identically to [`Browser::new_tab`] but with a custom initial
+    /// URL passed to `Target.createTarget`. The returned [`Tab`] handle is
+    /// ready as soon as the internal tab registrar observer registers it;
+    /// callers can issue `.wait_for_load()` if they need to block on the
+    /// navigation.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// let tab = browser.new_tab_at("https://example.com").await?;
+    /// tab.wait_for_load().await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn new_tab_at(&self, url: impl Into<String>) -> Result<Tab, ZendriverError> {
         let url = url.into();
         let res = self
@@ -680,25 +911,59 @@ impl Browser {
         }
     }
 
-    /// Snapshot of all currently-registered tabs. Order is unspecified
-    /// (the registry is a [`HashMap`] keyed by `sessionId`). Includes the
-    /// main tab plus any tabs opened via [`Browser::new_tab`] or by page
-    /// scripts (e.g. `window.open`) that auto-attach has wired into the
-    /// registrar.
+    /// Snapshot of all currently-registered tabs.
+    ///
+    /// Order is unspecified (the registry is a [`HashMap`] keyed by
+    /// `sessionId`). Includes the main tab plus any tabs opened via
+    /// [`Browser::new_tab`] or by page scripts (e.g. `window.open`) that
+    /// auto-attach has wired into the registrar.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// for tab in browser.tabs().await {
+    ///     println!("tab {}: {}", tab.target_id(), tab.url().await?);
+    /// }
+    /// # Ok(()) }
+    /// ```
     pub async fn tabs(&self) -> Vec<Tab> {
         self.inner.tabs.read().await.values().cloned().collect()
     }
 
-    /// Convenience accessor: count of currently-registered tabs.
-    /// Equivalent to `self.tabs().await.len()` but avoids the
-    /// `Vec` allocation.
+    /// Count of currently-registered tabs.
+    ///
+    /// Equivalent to `self.tabs().await.len()` but avoids the `Vec`
+    /// allocation.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// assert_eq!(browser.tab_count().await, 1);
+    /// # Ok(()) }
+    /// ```
     pub async fn tab_count(&self) -> usize {
         self.inner.tabs.read().await.len()
     }
 
-    /// Graceful shutdown: cancel the transport, send SIGTERM to Chrome,
-    /// wait up to `SHUTDOWN_GRACE`, then SIGKILL on timeout. Cleans up
-    /// user_data_dir.
+    /// Graceful shutdown of the Chrome subprocess.
+    ///
+    /// Cancels the transport, sends SIGTERM to Chrome, waits up to 5s, then
+    /// SIGKILLs on timeout. Cleans up the `user_data_dir` tempdir if one was
+    /// allocated at launch time.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// let browser = zendriver::Browser::builder().launch().await?;
+    /// // ... drive the browser ...
+    /// browser.close().await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn close(self) -> Result<(), ZendriverError> {
         self.inner.conn.shutdown();
         let mut child_guard = self.inner.child.lock().await;

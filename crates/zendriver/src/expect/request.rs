@@ -1,4 +1,4 @@
-//! [`RequestExpectation`] + [`MatchedRequest`] + [`Tab::expect_request`]
+//! [`RequestExpectation`] + [`MatchedRequest`] + [`crate::Tab::expect_request`]
 //! (gated `expect`).
 //!
 //! Registers a one-shot subscription against `Network.requestWillBeSent` on
@@ -6,9 +6,8 @@
 //! matching event via a `oneshot` channel. The subscriber task self-cancels
 //! after sending so each `expect_request` call is observably one-shot.
 //!
-//! `Network.enable` is already on for every Tab via the P4
-//! [`crate::network_idle::InFlightTracker`] spawn, so this module does not
-//! re-enable the domain.
+//! `Network.enable` is already on for every Tab via the per-Tab in-flight
+//! network tracker, so this module does not re-enable the domain.
 
 use std::collections::HashMap;
 use std::future::Future;

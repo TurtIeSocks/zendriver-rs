@@ -1,4 +1,4 @@
-//! [`DialogExpectation`] + [`MatchedDialog`] + [`Tab::expect_dialog`]
+//! [`DialogExpectation`] + [`MatchedDialog`] + [`crate::Tab::expect_dialog`]
 //! (gated `expect`).
 //!
 //! Registers a one-shot subscription against `Page.javascriptDialogOpened`

@@ -176,10 +176,10 @@ impl Frame {
     /// frame** (sandboxed; no page globals visible). Result deserialized into
     /// `T`. Throws [`ZendriverError::JsException`] when the expression raises.
     ///
-    /// Mirrors [`crate::tab::Tab::evaluate`] but at frame granularity: each
-    /// `Frame` carries its own [`IsolatedWorldCache`], so contextIds are
-    /// per-frame and don't collide across sibling frames or between a frame
-    /// and its owning tab's main-frame world.
+    /// Mirrors [`crate::Tab::evaluate`] but at frame granularity: each
+    /// `Frame` carries its own internal isolated-world cache, so contextIds
+    /// are per-frame and don't collide across sibling frames or between a
+    /// frame and its owning tab's main-frame world.
     ///
     /// First call dispatches `Page.createIsolatedWorld { frameId: self.id,
     /// worldName: "zendriver-eval" }` on the frame's session and caches the

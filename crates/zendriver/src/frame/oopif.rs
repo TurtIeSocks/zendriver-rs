@@ -1,8 +1,8 @@
-//! Out-of-process iframe (OOPIF) Frame attach.
+//! Out-of-process iframe (OOPIF) Frame attach — internal.
 //!
-//! Extends the [`crate::browser::TabRegistrar`] observer to handle
+//! Extends the internal tab registrar observer to handle
 //! `Target.attachedToTarget` events where `target_info.kind == "iframe"`,
-//! constructing a [`crate::frame::Frame`] with the new child session and
+//! constructing a [`crate::Frame`] with the new child session and
 //! registering it in the parent tab's frames map.
 //!
 //! ## Parent-tab discovery

@@ -1,36 +1,30 @@
-//! Frame lifecycle event subscriber.
+//! Frame lifecycle event subscriber — internal.
 //!
-//! Spawned at [`crate::tab::Tab::new`] time. Subscribes to
+//! Spawned per [`crate::Tab`] at construction time. Subscribes to
 //! `Page.frameAttached`, `Page.frameDetached`, and `Page.frameNavigated`
-//! events on the owning tab's session and maintains the tab's
-//! [`crate::tab::TabInner::frames`] registry.
+//! events on the owning tab's session and maintains the tab's frames
+//! registry (read via [`crate::Tab::frames`]).
 //!
 //! ## Wiring
 //!
-//! Each [`crate::tab::Tab`] owns one background task spawned by
-//! [`run`]. At construction time the task:
+//! Each [`crate::Tab`] owns one background task. At construction time the
+//! task:
 //! 1. Subscribes to the three `Page.frame*` event streams BEFORE awaiting
-//!    `Page.enable` (mirrors [`crate::network_idle::InFlightTracker::run`] —
-//!    avoids the race where Chrome fires events between the enable reply
-//!    and our subscription registration; also lets the mock test harness
-//!    drive events without replying to the enable call).
+//!    `Page.enable` — avoids the race where Chrome fires events between
+//!    the enable reply and our subscription registration.
 //! 2. Fires `Page.enable` once on the tab's session so Chrome starts
 //!    emitting `Page.frame*` events.
 //! 3. Loops over the merged event stream, mutating the registry:
-//!    - `Page.frameAttached` — construct a new [`crate::frame::Frame`]
-//!      sharing the tab's session (same-origin sub-frame; OOPIF frames
-//!      arrive through the T16 `TargetObserver` path on their own child
-//!      session, NOT this stream) and insert it under `frameId`.
-//!    - `Page.frameNavigated` — update the existing entry's
-//!      [`crate::frame::FrameInner::url`] in place; insert a fresh
-//!      [`crate::frame::Frame`] if no entry exists (Chrome may emit
-//!      `frameNavigated` for the top-level frame before any explicit
-//!      attach event the subscriber observed).
+//!    - `Page.frameAttached` — construct a new [`crate::Frame`] sharing
+//!      the tab's session (same-origin sub-frame; OOPIF frames arrive
+//!      through the [`crate::frame::oopif`] observer path on their own
+//!      child session, NOT this stream) and insert it under `frameId`.
+//!    - `Page.frameNavigated` — update the existing entry's URL in
+//!      place; insert a fresh [`crate::Frame`] if no entry exists.
 //!    - `Page.frameDetached` — remove the entry from the registry.
 //!
-//! The task runs until the supplied [`tokio_util::sync::CancellationToken`]
-//! fires — typically when the owning Tab is dropped (the cancel handle is
-//! stored on `TabInner::frame_lifecycle_cancel` so `Drop` triggers it).
+//! The task runs until its [`tokio_util::sync::CancellationToken`] fires —
+//! typically when the owning Tab is dropped.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};

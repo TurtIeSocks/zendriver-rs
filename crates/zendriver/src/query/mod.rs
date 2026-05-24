@@ -240,13 +240,12 @@ impl<'scope> FindBuilder<'scope> {
         self
     }
 
-    /// Re-target this query at `frame`. The terminal swaps to
-    /// [`QueryScope::Frame`] and dispatches on the frame's own CDP
-    /// session — same as the parent tab's session for same-origin
-    /// sub-frames, a distinct child session for OOPIFs. Element scope
-    /// (if set via [`Element::find`]) still takes precedence; this
-    /// override applies only when the builder started from a Tab or
-    /// another Frame.
+    /// Re-target this query at `frame`. The terminal dispatches on the
+    /// frame's own CDP session — same as the parent tab's session for
+    /// same-origin sub-frames, a distinct child session for OOPIFs.
+    /// Element scope (if set via [`crate::Element::find`]) still takes
+    /// precedence; this override applies only when the builder started
+    /// from a Tab or another Frame.
     ///
     /// The returned builder's lifetime is the intersection of the
     /// original scope's lifetime and the Frame's borrow — so the Frame

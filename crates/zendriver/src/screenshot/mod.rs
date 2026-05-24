@@ -25,8 +25,8 @@
 //!
 //! ## Full-page dispatch sequence
 //!
-//! When [`Self::full_page`] is `true`, [`Self::bytes`] sends an extra
-//! `Page.getLayoutMetrics` first, reads `cssContentSize.{width,height}` from
+//! When [`ScreenshotBuilder::full_page`] is `true`, [`ScreenshotBuilder::bytes`]
+//! sends an extra `Page.getLayoutMetrics` first, reads `cssContentSize.{width,height}` from
 //! the response, and forwards both as a `clip` rect with `scale: 1` plus
 //! `captureBeyondViewport: true` on the subsequent `Page.captureScreenshot`.
 //! Chrome handles the scroll-to-render-each-tile dance internally. With

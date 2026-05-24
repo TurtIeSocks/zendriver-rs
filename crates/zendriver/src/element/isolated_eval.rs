@@ -1,11 +1,9 @@
-//! `Element::evaluate` — true isolated-world evaluation.
+//! [`Element::evaluate`] — true isolated-world evaluation.
 //!
-//! P2 left `Element::evaluate` as a thin delegate to `evaluate_main` because
-//! the proper version needs to re-resolve the element inside the tab's
-//! isolated execution context. P3 lands the real flow:
+//! Flow:
 //!
-//! 1. [`Tab::ensure_isolated_world`] returns the cached `executionContextId`
-//!    of the tab's `zendriver-eval` world (creating it on first call).
+//! 1. Resolve the tab's isolated `executionContextId` (creating it on the
+//!    first call).
 //! 2. `DOM.resolveNode { backendNodeId, executionContextId }` returns a
 //!    fresh `RemoteObject` whose `objectId` is bound to that isolated world.
 //! 3. `Runtime.callFunctionOn { objectId, functionDeclaration, arguments,
@@ -13,12 +11,12 @@
 //!    to the isolated-world handle. Page globals (`window.foo`, monkeypatches
 //!    on `HTMLElement.prototype`, etc.) are NOT visible from inside.
 //! 4. Best-effort `Runtime.releaseObject { objectId }` frees the handle so
-//!    long-running scrapers don't leak isolated-world RemoteObjects.
+//!    long-running scrapers don't leak isolated-world `RemoteObject`s.
 //!
-//! The entire sequence is wrapped in [`Element::with_refresh`] so a stale
-//! `backendNodeId` (post-navigation) auto-retries via the standard refresh
-//! path. `evaluate_main` (page-world, no re-resolution) keeps its P2 shape
-//! and lives in `element/mod.rs`.
+//! Internal refresh-on-stale recovery handles a stale `backendNodeId`
+//! (post-navigation) by re-resolving once and retrying.
+//! [`Element::evaluate_main`] (page-world, no re-resolution) lives in
+//! `element/mod.rs`.
 
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -27,14 +25,32 @@ use crate::element::Element;
 use crate::error::{Result, ZendriverError};
 
 impl Element {
-    /// Re-resolves this element inside the tab's isolated world, then runs
-    /// `function(el){ return (<js>) }` against the isolated-world handle.
-    /// The returned value is deserialized into `T`.
+    /// Re-resolve this element inside the tab's isolated world and run JS.
+    ///
+    /// Wraps `js` as `function(el){ return (<js>) }` against the isolated-
+    /// world handle. The returned value is deserialized into `T`.
     ///
     /// Use this for stealth-safe reads — the isolated world doesn't share
     /// scope with page scripts, so monkeypatched DOM prototypes don't lie
     /// to you. For cases where you need page globals (e.g. reading a custom
     /// element's JS-only state), use [`Element::evaluate_main`] instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::JsException`] when the expression raises;
+    /// [`ZendriverError::Serde`] when the result cannot be decoded.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let h1 = tab.find().css("h1").one().await?;
+    /// let tag: String = h1.evaluate("el.tagName").await?;
+    /// assert_eq!(tag, "H1");
+    /// # Ok(()) }
+    /// ```
     pub async fn evaluate<T: DeserializeOwned>(&self, js: impl AsRef<str>) -> Result<T> {
         let js = js.as_ref();
         self.with_refresh(|| async move {

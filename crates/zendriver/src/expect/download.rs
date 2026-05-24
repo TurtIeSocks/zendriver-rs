@@ -1,4 +1,4 @@
-//! [`DownloadExpectation`] + [`MatchedDownload`] + [`Tab::expect_download`]
+//! [`DownloadExpectation`] + [`MatchedDownload`] + [`crate::Tab::expect_download`]
 //! (gated `expect`).
 //!
 //! Registers a one-shot subscription against `Page.downloadWillBegin` on a
@@ -209,9 +209,9 @@ pub(crate) async fn ensure_download_setup(
 
 /// A download observed via `Page.downloadWillBegin`.
 ///
-/// The [`SharedDownloadState`] is also tracked in the per-Tab
-/// [`DownloadCoordinator`]'s routing map; the long-running progress
-/// subscriber mutates it as `Page.downloadProgress` events arrive.
+/// The internal shared state is tracked in the per-Tab download coordinator's
+/// routing map; the long-running progress subscriber mutates it as
+/// `Page.downloadProgress` events arrive.
 ///
 /// `Debug` is manually implemented since [`SessionHandle`] and
 /// [`tokio::sync::Mutex`] don't have useful default debug renderings.

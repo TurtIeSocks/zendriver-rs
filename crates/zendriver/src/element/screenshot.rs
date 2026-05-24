@@ -1,11 +1,10 @@
-//! `Element::screenshot` — element-scoped PNG capture.
+//! [`Element::screenshot`] — element-scoped PNG capture.
 //!
-//! Dispatch sequence (wrapped in [`Element::with_refresh`] so post-navigation
-//! / post-rerender stale handles transparently re-resolve once and retry):
-//!   1. `wait_actionable` with [`ActionabilityCheck::VISIBLE_ONLY`] — we
-//!      need pixels to capture; overlay occlusion + disabled state are
-//!      irrelevant here, so the gate is the lightest preset.
-//!   2. `bounding_box` — viewport-relative quad of the element.
+//! Dispatch sequence (with internal refresh-on-stale recovery):
+//!   1. Visibility gate — we need pixels to capture; overlay occlusion +
+//!      disabled state are irrelevant here, so the gate is the lightest
+//!      preset.
+//!   2. [`Element::bounding_box`] — viewport-relative quad of the element.
 //!   3. `Page.captureScreenshot { format: "png", clip: { x, y, width,
 //!      height, scale: 1 } }` — crop to the element's bbox at native scale.
 //!   4. base64-decode the `data` field into raw PNG bytes.
@@ -28,13 +27,31 @@ const DEFAULT_ACTIONABILITY_TIMEOUT: Duration = Duration::from_secs(5);
 impl Element {
     /// Capture a PNG screenshot cropped to this element's bounding box.
     ///
-    /// Waits up to 5 s for the element to become visible (via
-    /// [`ActionabilityCheck::VISIBLE_ONLY`]), reads its viewport-relative
-    /// bbox via `DOM.getBoxModel`, then sends `Page.captureScreenshot`
-    /// with a matching `clip` rect (at `scale: 1`). Returns the raw PNG
-    /// bytes.
+    /// Waits up to 5 s for the element to become visible, reads its
+    /// viewport-relative bbox via `DOM.getBoxModel`, then sends
+    /// `Page.captureScreenshot` with a matching `clip` rect (at `scale: 1`).
+    /// Returns the raw PNG bytes.
     ///
-    /// For full-viewport captures, see [`crate::tab::Tab::screenshot`].
+    /// For full-viewport captures, see [`crate::Tab::screenshot`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::NotActionable`] if the element doesn't
+    /// become visible within the 5s gate timeout;
+    /// [`ZendriverError::Navigation`] if Chrome returns no bbox or no
+    /// screenshot data.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let card = tab.find().css(".card").one().await?;
+    /// let png_bytes = card.screenshot().await?;
+    /// tokio::fs::write("card.png", png_bytes).await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn screenshot(&self) -> Result<Vec<u8>> {
         self.with_refresh(|| async move {
             actionability::wait_actionable(
