@@ -1501,4 +1501,143 @@ mod tests {
 
         conn.shutdown();
     }
+
+    /// Regression: the in-flight set going 1 → 0 → 1 within the quiet
+    /// window must NOT cause `wait_for_idle_with` to resolve early. The
+    /// quiet window measures sustained idleness, not a single
+    /// instantaneous touch-of-zero.
+    ///
+    /// Sequence:
+    /// 1. R1 starts (in_flight = 1).
+    /// 2. R1 completes (in_flight = 0). Quiet window starts.
+    /// 3. ~100ms later, well inside the 200ms quiet window, R2 starts
+    ///    (in_flight = 1). Quiet window MUST reset to `None`.
+    /// 4. R2 completes (in_flight = 0). New quiet window starts.
+    /// 5. `wait_for_idle_with` resolves only after R2's quiet window
+    ///    closes.
+    ///
+    /// Assertion: elapsed time from R1's response (step 2) to the future
+    /// resolving is at least `delay-between-completions (~100ms) +
+    /// quiet_window (200ms)`. A buggy implementation that ignored the
+    /// in-window R2 burst would resolve at ~200ms and fail the lower
+    /// bound.
+    #[tokio::test]
+    async fn wait_for_idle_does_not_return_early_if_new_request_arrives_in_quiet_window() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let id_enable =
+            tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Network.enable"))
+                .await
+                .expect("tracker did not send Network.enable within 2s");
+        mock.reply(id_enable, json!({})).await;
+
+        // Insert R1 and wait for the tracker to observe it before
+        // starting wait_for_idle (mirrors the sibling test).
+        mock.emit_event_for_session(
+            "Network.requestWillBeSent",
+            json!({ "requestId": "R1" }),
+            "S1",
+        )
+        .await;
+        for _ in 0..50 {
+            if tab.inner.network_tracker.in_flight.lock().await.len() == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            tab.inner.network_tracker.in_flight.lock().await.len(),
+            1,
+            "R1 did not register before wait_for_idle starts",
+        );
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                // 5s outer timeout: plenty of headroom for the worst-case
+                // scheduling on a loaded CI. 200ms quiet window: small
+                // enough that the test finishes fast, large enough that
+                // the 100ms gap fits comfortably inside it.
+                t.wait_for_idle_with(Duration::from_secs(5), Duration::from_millis(200))
+                    .await
+            }
+        });
+
+        // Drain R1 — quiet window opens here.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let r1_response_at = tokio::time::Instant::now();
+        mock.emit_event_for_session(
+            "Network.responseReceived",
+            json!({ "requestId": "R1" }),
+            "S1",
+        )
+        .await;
+
+        // ~100ms later (still inside the 200ms quiet window), insert R2.
+        // A correct implementation resets quiet_start; a buggy one would
+        // already be near the 200ms threshold and resolve any moment.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        mock.emit_event_for_session(
+            "Network.requestWillBeSent",
+            json!({ "requestId": "R2" }),
+            "S1",
+        )
+        .await;
+        // Wait for the tracker to actually observe the insert before
+        // closing it — otherwise R2 could complete before the tracker
+        // even noticed it started, defeating the test.
+        for _ in 0..50 {
+            if tab
+                .inner
+                .network_tracker
+                .in_flight
+                .lock()
+                .await
+                .contains("R2")
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            tab.inner
+                .network_tracker
+                .in_flight
+                .lock()
+                .await
+                .contains("R2"),
+            "R2 did not register inside quiet window",
+        );
+
+        // Hold R2 in-flight briefly, then close it. A new quiet window
+        // starts from this point — wait_for_idle must wait it out.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        mock.emit_event_for_session(
+            "Network.responseReceived",
+            json!({ "requestId": "R2" }),
+            "S1",
+        )
+        .await;
+
+        let res = tokio::time::timeout(Duration::from_secs(2), fut)
+            .await
+            .expect("wait_for_idle did not resolve within 2s after R2 completed");
+        res.unwrap().unwrap();
+        let total_elapsed = r1_response_at.elapsed();
+
+        // Lower bound: R1-response (T0) → 100ms gap → R2 starts → 50ms
+        // hold → R2 response → 200ms quiet window → resolve. Total ≥
+        // 350ms. A bug that ignored R2's in-window arrival would resolve
+        // at T0 + 200ms = 200ms.
+        assert!(
+            total_elapsed >= Duration::from_millis(330),
+            "wait_for_idle resolved too early ({total_elapsed:?}); R2 inside quiet \
+             window must have reset quiet_start, requiring a fresh post-R2 quiet \
+             window before resolving",
+        );
+
+        conn.shutdown();
+    }
 }
