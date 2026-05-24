@@ -747,6 +747,37 @@ impl Tab {
     }
 }
 
+#[cfg(feature = "expect")]
+impl Tab {
+    /// Register a one-shot expectation for the first
+    /// `Network.requestWillBeSent` whose URL matches `pattern`.
+    ///
+    /// `pattern` is anything convertible to a [`crate::expect::UrlMatcher`]:
+    /// `&str` / `String` build a substring matcher; [`regex::Regex`] builds
+    /// a regex matcher. The returned
+    /// [`RequestExpectation`](crate::expect::request::RequestExpectation)
+    /// is awaitable directly (`expectation.await`) or via the
+    /// Playwright-style `expectation.matched().await`; configure the
+    /// timeout via
+    /// [`timeout`](crate::expect::request::RequestExpectation::timeout)
+    /// before awaiting.
+    ///
+    /// The subscriber task is spawned synchronously inside this call —
+    /// the subscription is live by the time you receive the
+    /// `RequestExpectation`, so a trigger action issued immediately
+    /// after cannot race past us. `Network.enable` is already on per-Tab
+    /// via the P4 in-flight tracker; this call does not re-enable.
+    ///
+    /// Gated by the `expect` cargo feature.
+    #[must_use]
+    pub fn expect_request(
+        &self,
+        pattern: impl Into<crate::expect::UrlMatcher>,
+    ) -> crate::expect::request::RequestExpectation {
+        crate::expect::request::register(self.session(), pattern.into())
+    }
+}
+
 #[cfg(feature = "interception")]
 impl Tab {
     /// Construct a fluent
