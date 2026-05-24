@@ -13,6 +13,7 @@ pub mod input;
 pub(crate) mod isolated_world;
 pub mod network_idle;
 pub mod query;
+pub mod screenshot;
 pub mod storage;
 pub mod tab;
 
@@ -24,6 +25,7 @@ pub use error::{BrowserError, Result, ZendriverError};
 pub use frame::Frame;
 pub use input::{Key, KeyModifiers, MouseButton, SpecialKey};
 pub use query::{AriaRole, BoundingBox, FindBuilder};
+pub use screenshot::{Format, ScreenshotBuilder};
 pub use storage::Storage;
 pub use tab::Tab;
 
