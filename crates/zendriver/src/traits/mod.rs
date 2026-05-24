@@ -1,4 +1,18 @@
-//! Public traits enabling generic code over Tab + Frame + Element.
+//! Traits enabling generic code over Tab + Frame + Element.
+//!
+//! - [`Queryable`] — implemented by [`crate::Tab`], [`crate::Frame`], and
+//!   [`crate::Element`]. Lets a generic function accept any query root.
+//! - [`Evaluable`] — implemented by [`crate::Tab`] and [`crate::Frame`].
+//!   Lets a generic function evaluate JS at either tab or frame
+//!   granularity. [`crate::Element`] has its own `evaluate` shape (binds
+//!   `el`) and is not part of this trait.
+//!
+//! ```no_run
+//! use zendriver::Queryable;
+//! async fn find_button<Q: Queryable + Sync>(q: &Q) -> zendriver::Result<zendriver::Element> {
+//!     q.find().css("button").one().await
+//! }
+//! ```
 
 pub mod evaluable;
 pub mod queryable;

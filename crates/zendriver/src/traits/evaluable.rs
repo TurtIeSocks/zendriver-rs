@@ -7,13 +7,23 @@ use crate::error::Result;
 /// Types that can evaluate JavaScript in their context.
 ///
 /// Implemented by [`crate::Tab`] (main frame) and [`crate::Frame`]
-/// (per-frame contextId). Element evaluation has a different shape
-/// (binds `el` parameter) and has its own
+/// (per-frame contextId). [`crate::Element`] evaluation has a different
+/// shape (binds `el` parameter) and has its own
 /// [`crate::Element::evaluate`] / [`crate::Element::evaluate_main`]
-/// inherent methods.
+/// inherent methods — Element does NOT implement this trait.
+///
+/// # Examples
+///
+/// ```no_run
+/// use zendriver::Evaluable;
+/// async fn get_title<E: Evaluable + Sync>(e: &E) -> zendriver::Result<String> {
+///     e.evaluate_main("document.title").await
+/// }
+/// ```
 #[async_trait::async_trait]
 pub trait Evaluable {
     /// Evaluate JS in an isolated world (sandbox; no page globals visible).
+    ///
     /// Default for stealth-safe execution.
     async fn evaluate<T>(&self, js: &str) -> Result<T>
     where

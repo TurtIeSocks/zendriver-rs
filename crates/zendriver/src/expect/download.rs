@@ -252,13 +252,26 @@ impl std::fmt::Debug for MatchedDownload {
 }
 
 impl MatchedDownload {
-    /// Path to the completed download on disk, or `None` if the transfer
-    /// hasn't finished yet.
+    /// Path to the completed download on disk, or `None` if pending.
     ///
-    /// Locks [`Self::state`] to read the lifecycle marker; the path is only
-    /// returned once `state == Completed`. For canceled or in-progress
-    /// downloads this returns `None` — callers waiting on completion should
-    /// use [`Self::save_to`] which polls under the hood.
+    /// Locks the internal lifecycle state; the path is only returned once
+    /// the download has completed. For canceled or in-progress downloads
+    /// this returns `None` — callers waiting on completion should use
+    /// [`Self::save_to`] which polls under the hood.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let exp = tab.expect_download().await?;
+    /// let dl = exp.await?;
+    /// if let Some(p) = dl.path().await {
+    ///     println!("downloaded to {}", p.display());
+    /// }
+    /// # Ok(()) }
+    /// ```
     pub async fn path(&self) -> Option<PathBuf> {
         let s = self.state.lock().await;
         if s.state == DownloadProgressState::Completed {
@@ -268,16 +281,33 @@ impl MatchedDownload {
         }
     }
 
-    /// Wait for the download to complete, then copy the bytes from the
-    /// per-Tab tempdir to `dest`. Errors if the download is canceled or the
-    /// outer 30s wait elapses without completion.
+    /// Wait for completion, then copy the bytes to `dest`.
     ///
-    /// `dest` is interpreted as a full filename — the caller is responsible
-    /// for joining a directory + [`Self::suggested_filename`] if they want
-    /// to preserve Chrome's name.
+    /// `dest` is interpreted as a full filename — join a directory +
+    /// [`Self::suggested_filename`] if you want to preserve Chrome's name.
     ///
-    /// Polls [`Self::state`] every 100ms. A 30s outer cap protects against
-    /// downloads that hang indefinitely without Chrome reporting progress.
+    /// Polls the internal lifecycle state every 100ms. A 30s outer cap
+    /// protects against downloads that hang indefinitely without Chrome
+    /// reporting progress.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Navigation`] if the download is canceled;
+    /// [`ZendriverError::Timeout`] if the 30s cap elapses;
+    /// [`ZendriverError::Io`] on file-copy failure.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use std::path::PathBuf;
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let exp = tab.expect_download().await?;
+    /// let dl = exp.await?;
+    /// dl.save_to(PathBuf::from("/tmp/downloaded.zip")).await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn save_to(self, dest: PathBuf) -> Result<()> {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         loop {
@@ -322,6 +352,18 @@ pub struct DownloadExpectation {
 
 impl DownloadExpectation {
     /// Override the default 30s timeout.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use std::time::Duration;
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let exp = tab.expect_download().await?.timeout(Duration::from_secs(60));
+    /// # let _ = exp;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn timeout(mut self, dur: Duration) -> Self {
         self.timeout = dur;
@@ -331,8 +373,20 @@ impl DownloadExpectation {
         self
     }
 
-    /// `await` sugar — `expectation.matched().await` reads more like the
-    /// Playwright pattern than `expectation.await`. Functionally identical.
+    /// Playwright-style alias for `.await`.
+    ///
+    /// Functionally identical to awaiting the expectation directly.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let dl = tab.expect_download().await?.matched().await?;
+    /// # let _ = dl;
+    /// # Ok(()) }
+    /// ```
     pub async fn matched(self) -> Result<MatchedDownload> {
         self.await
     }

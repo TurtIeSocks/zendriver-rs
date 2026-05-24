@@ -80,6 +80,25 @@ impl MatchedResponse {
     /// Note: response bodies are only retained by Chrome for a short window
     /// after the response completes — call promptly after the expectation
     /// resolves.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Cdp`] if Chrome returned no body or
+    /// invalid base64.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let exp = tab.expect_response("/api/users");
+    /// // ... trigger the request ...
+    /// let resp = exp.await?;
+    /// let body = resp.body().await?;
+    /// # let _ = body;
+    /// # Ok(()) }
+    /// ```
     pub async fn body(&self) -> Result<Vec<u8>> {
         let res = self
             .session
@@ -128,6 +147,18 @@ pub struct ResponseExpectation {
 
 impl ResponseExpectation {
     /// Override the default 30s timeout.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use std::time::Duration;
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let resp = tab.expect_response("/api/data").timeout(Duration::from_secs(5)).await?;
+    /// # let _ = resp;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn timeout(mut self, dur: Duration) -> Self {
         self.timeout = dur;
@@ -137,8 +168,20 @@ impl ResponseExpectation {
         self
     }
 
-    /// `await` sugar — `expectation.matched().await` reads more like the
-    /// Playwright pattern than `expectation.await`. Functionally identical.
+    /// Playwright-style alias for `.await`.
+    ///
+    /// Functionally identical to awaiting the expectation directly.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let resp = tab.expect_response("/api/data").matched().await?;
+    /// # let _ = resp;
+    /// # Ok(()) }
+    /// ```
     pub async fn matched(self) -> Result<MatchedResponse> {
         self.await
     }

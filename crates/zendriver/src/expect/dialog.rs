@@ -99,11 +99,23 @@ impl std::fmt::Debug for MatchedDialog {
 }
 
 impl MatchedDialog {
-    /// Accept the dialog. For `prompt` dialogs, pass the value to submit via
-    /// `prompt_text`; for alert/confirm/beforeunload, pass `None` (Chrome
-    /// ignores the field but CDP wants a string, so we send `""`).
+    /// Accept the dialog.
     ///
-    /// Dispatches `Page.handleJavaScriptDialog { accept: true, promptText }`.
+    /// For `prompt` dialogs, pass the value to submit via `prompt_text`;
+    /// for alert/confirm/beforeunload, pass `None`. Dispatches
+    /// `Page.handleJavaScriptDialog { accept: true, promptText }`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let dialog = tab.expect_dialog().await?;
+    /// // ... trigger something that opens a prompt ...
+    /// dialog.accept(Some("Alice".into())).await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn accept(self, prompt_text: Option<String>) -> Result<()> {
         let _ = self
             .session
@@ -118,8 +130,20 @@ impl MatchedDialog {
         Ok(())
     }
 
-    /// Dismiss the dialog. Dispatches
-    /// `Page.handleJavaScriptDialog { accept: false }`.
+    /// Dismiss the dialog.
+    ///
+    /// Dispatches `Page.handleJavaScriptDialog { accept: false }`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let dialog = tab.expect_dialog().await?;
+    /// dialog.dismiss().await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn dismiss(self) -> Result<()> {
         let _ = self
             .session
@@ -145,6 +169,18 @@ pub struct DialogExpectation {
 
 impl DialogExpectation {
     /// Override the default 30s timeout.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use std::time::Duration;
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let dialog = tab.expect_dialog().timeout(Duration::from_secs(5)).await?;
+    /// # let _ = dialog;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn timeout(mut self, dur: Duration) -> Self {
         self.timeout = dur;
@@ -154,8 +190,20 @@ impl DialogExpectation {
         self
     }
 
-    /// `await` sugar — `expectation.matched().await` reads more like the
-    /// Playwright pattern than `expectation.await`. Functionally identical.
+    /// Playwright-style alias for `.await`.
+    ///
+    /// Functionally identical to awaiting the expectation directly.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let dialog = tab.expect_dialog().matched().await?;
+    /// dialog.dismiss().await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn matched(self) -> Result<MatchedDialog> {
         self.await
     }
