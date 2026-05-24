@@ -8,6 +8,8 @@ pub mod browser;
 pub mod cookies;
 pub mod element;
 pub mod error;
+#[cfg(feature = "expect")]
+pub mod expect;
 pub mod frame;
 pub mod input;
 pub(crate) mod isolated_world;
@@ -42,6 +44,10 @@ pub use zendriver_interception::{
     AbortReason, InterceptBuilder, InterceptHandle, InterceptionError, PausedRequest, RequestInfo,
     RequestOverrides, RequestStage, ResourceType, ResponseInfo,
 };
+
+/// Re-export the shared `UrlMatcher` used by the `expect_*` helpers.
+#[cfg(feature = "expect")]
+pub use expect::UrlMatcher;
 
 /// Stealth profile + fingerprint configuration re-exported from `zendriver-stealth`.
 pub mod stealth {
