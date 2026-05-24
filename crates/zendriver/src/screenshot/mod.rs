@@ -1,15 +1,26 @@
-//! `ScreenshotBuilder` — chainable, full-featured screenshot capture for a [`Tab`].
+//! Chainable screenshot capture for a [`Tab`].
 //!
-//! P3 shipped [`Tab::screenshot`] as a parameterless full-viewport PNG. P4
-//! generalizes that into a builder so callers can pick PNG / JPEG / WebP,
-//! clip to a rect, capture beyond the viewport (`full_page`), set the JPEG
-//! quality knob, and toggle transparent backgrounds. The terminal
-//! [`ScreenshotBuilder::bytes`] returns raw image bytes;
-//! [`ScreenshotBuilder::save`] is the file-write convenience.
+//! [`ScreenshotBuilder`] lets callers pick PNG / JPEG / WebP, clip to a rect,
+//! capture beyond the viewport (`full_page`), set the JPEG quality knob, and
+//! toggle transparent backgrounds. Terminate with
+//! [`ScreenshotBuilder::bytes`] (raw image bytes) or
+//! [`ScreenshotBuilder::save`] (write to file).
 //!
-//! Constructed via [`Tab::screenshot_builder`] (T21); `ScreenshotBuilder::new`
-//! is `pub` for symmetry with [`crate::CookieJar::new`] / [`crate::Storage`]
-//! but most users go through the Tab accessor.
+//! Construct via [`Tab::screenshot_builder`]; for a parameterless PNG of the
+//! viewport, [`Tab::screenshot`] is the shortcut.
+//!
+//! ```no_run
+//! # async fn ex() -> zendriver::Result<()> {
+//! # let browser = zendriver::Browser::builder().launch().await?;
+//! # let tab = browser.main_tab();
+//! tab.goto("https://example.com").await?;
+//! tab.screenshot_builder()
+//!     .full_page(true)
+//!     .jpeg()
+//!     .quality(85)
+//!     .save("page.jpg").await?;
+//! # Ok(()) }
+//! ```
 //!
 //! ## Quality knob semantics
 //!
@@ -43,18 +54,32 @@ use crate::error::{Result, ZendriverError};
 use crate::query::BoundingBox;
 use crate::tab::Tab;
 
-/// Output image format. Maps 1:1 to CDP `Page.captureScreenshot`'s `format`
-/// enum (`"png"` / `"jpeg"` / `"webp"`).
+/// Output image format.
+///
+/// Maps 1:1 to CDP `Page.captureScreenshot`'s `format` enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
+    /// Lossless PNG. Default. Larger files but no compression artifacts.
     Png,
+    /// JPEG. Smaller files; pair with [`ScreenshotBuilder::quality`].
     Jpeg,
+    /// WebP. Smaller files than JPEG at comparable quality.
     Webp,
 }
 
 impl Format {
-    /// CDP wire string for this format. Cheap (`&'static str`) — the enum
-    /// crosses the FFI boundary as a tag, not a heap allocation per call.
+    /// CDP wire string for this format.
+    ///
+    /// Cheap (`&'static str`) — the enum crosses the FFI boundary as a tag,
+    /// not a heap allocation per call.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use zendriver::Format;
+    /// assert_eq!(Format::Png.as_cdp(), "png");
+    /// assert_eq!(Format::Jpeg.as_cdp(), "jpeg");
+    /// ```
     #[must_use]
     pub fn as_cdp(&self) -> &'static str {
         match self {
@@ -81,8 +106,22 @@ pub struct ScreenshotBuilder<'tab> {
 }
 
 impl<'tab> ScreenshotBuilder<'tab> {
-    /// Construct a fresh builder bound to `tab` with default settings (PNG,
-    /// viewport-sized, no clip, no quality override, opaque background).
+    /// Construct a fresh builder bound to `tab` with default settings.
+    ///
+    /// Default: PNG, viewport-sized, no clip, no quality override, opaque
+    /// background. Most users go through [`Tab::screenshot_builder`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use zendriver::ScreenshotBuilder;
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let bytes = ScreenshotBuilder::new(&tab).bytes().await?;
+    /// # let _ = bytes;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn new(tab: &'tab Tab) -> Self {
         Self {
@@ -95,65 +134,145 @@ impl<'tab> ScreenshotBuilder<'tab> {
         }
     }
 
-    /// Set the output format to PNG (the default). Idempotent; useful when
-    /// the format was previously switched and you want to switch back.
+    /// Set the output format to PNG (the default).
+    ///
+    /// Idempotent; useful when the format was previously switched and you
+    /// want to switch back.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.screenshot_builder().png().save("out.png").await?;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn png(mut self) -> Self {
         self.format = Format::Png;
         self
     }
 
-    /// Set the output format to JPEG. Pair with [`Self::quality`] to control
-    /// compression (1–100); without one, Chrome uses its default (~80).
+    /// Set the output format to JPEG.
+    ///
+    /// Pair with [`Self::quality`] to control compression (1–100); without
+    /// one, Chrome uses its default (~80).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.screenshot_builder().jpeg().quality(70).save("out.jpg").await?;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn jpeg(mut self) -> Self {
         self.format = Format::Jpeg;
         self
     }
 
-    /// Set the output format to WebP. Smaller files than JPEG at comparable
-    /// visual quality; not all downstream tooling reads WebP, so PNG / JPEG
-    /// remain the safer interop choices.
+    /// Set the output format to WebP.
+    ///
+    /// Smaller files than JPEG at comparable visual quality; not all
+    /// downstream tooling reads WebP, so PNG / JPEG remain the safer
+    /// interop choices.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.screenshot_builder().webp().save("out.webp").await?;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn webp(mut self) -> Self {
         self.format = Format::Webp;
         self
     }
 
-    /// Toggle full-page mode. When `on`, [`Self::bytes`] queries
-    /// `Page.getLayoutMetrics` first and passes the document's
-    /// `cssContentSize` as the clip rect plus `captureBeyondViewport: true`,
-    /// producing a single image of the entire scrollable page (not just the
-    /// visible viewport). Mutually exclusive in effect with [`Self::clip`]:
+    /// Toggle full-page mode.
+    ///
+    /// When `on`, [`Self::bytes`] queries `Page.getLayoutMetrics` first and
+    /// passes the document's `cssContentSize` as the clip rect plus
+    /// `captureBeyondViewport: true`, producing a single image of the entire
+    /// scrollable page. Mutually exclusive in effect with [`Self::clip`]:
     /// when both are set, the layout-metrics clip overrides the manual one.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.screenshot_builder().full_page(true).save("full.png").await?;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn full_page(mut self, on: bool) -> Self {
         self.full_page = on;
         self
     }
 
-    /// Crop the capture to `bbox`. Coordinates are CSS pixels relative to
-    /// the viewport top-left (or the document top-left when [`Self::full_page`]
-    /// is set, but in that case the layout-metrics clip wins).
+    /// Crop the capture to `bbox`.
+    ///
+    /// Coordinates are CSS pixels relative to the viewport top-left.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use zendriver::BoundingBox;
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let bbox = BoundingBox { x: 0.0, y: 0.0, width: 800.0, height: 600.0 };
+    /// tab.screenshot_builder().clip(bbox).save("top.png").await?;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn clip(mut self, bbox: BoundingBox) -> Self {
         self.clip = Some(bbox);
         self
     }
 
-    /// Set the JPEG quality (1–100). See the module-level docs for the
-    /// "stored regardless of format" semantics — Chrome ignores this knob on
-    /// PNG / WebP captures, so the value is harmless on non-JPEG formats
-    /// but only meaningful with [`Self::jpeg`].
+    /// Set the JPEG quality (1–100).
+    ///
+    /// Chrome ignores this knob on PNG / WebP captures, so the value is
+    /// harmless on non-JPEG formats but only meaningful with [`Self::jpeg`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.screenshot_builder().jpeg().quality(60).save("out.jpg").await?;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn quality(mut self, q: u8) -> Self {
         self.quality = Some(q);
         self
     }
 
-    /// When `on`, capture with a transparent background (PNG / WebP only —
-    /// JPEG has no alpha channel and Chrome ignores the flag there).
-    /// Maps to `Page.captureScreenshot { omitBackground: true }`.
+    /// Toggle transparent background.
+    ///
+    /// PNG / WebP only — JPEG has no alpha channel and Chrome ignores the
+    /// flag there. Maps to `Page.captureScreenshot { omitBackground: true }`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.screenshot_builder().png().omit_background(true).save("clear.png").await?;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn omit_background(mut self, on: bool) -> Self {
         self.omit_background = on;
@@ -166,12 +285,26 @@ impl<'tab> ScreenshotBuilder<'tab> {
     ///   1. If `full_page`, send `Page.getLayoutMetrics` and read
     ///      `cssContentSize.{width,height}` to build the document-spanning
     ///      clip rect.
-    ///   2. Send `Page.captureScreenshot` with `format`, the chosen `clip`
-    ///      (full-page-derived or user-supplied or omitted), `quality`
-    ///      (when set), `omitBackground` (when `true`), and
-    ///      `captureBeyondViewport: true` for full-page mode.
+    ///   2. Send `Page.captureScreenshot` with the chosen `format`, `clip`,
+    ///      `quality`, `omitBackground`, and `captureBeyondViewport` flags.
     ///   3. Base64-decode the response's `data` field into the returned
     ///      `Vec<u8>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Navigation`] when Chrome returns no
+    /// screenshot data or malformed base64.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let bytes = tab.screenshot_builder().png().bytes().await?;
+    /// tokio::fs::write("out.png", bytes).await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn bytes(self) -> Result<Vec<u8>> {
         let mut params = Map::new();
         params.insert(
@@ -248,8 +381,19 @@ impl<'tab> ScreenshotBuilder<'tab> {
             .map_err(|e| ZendriverError::Navigation(format!("invalid base64 in screenshot: {e}")))
     }
 
-    /// Execute the capture and write the raw image bytes to `path`. Convenience
-    /// wrapper over [`Self::bytes`] + [`tokio::fs::write`].
+    /// Execute the capture and write the raw image bytes to `path`.
+    ///
+    /// Convenience wrapper over [`Self::bytes`] + [`tokio::fs::write`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.screenshot_builder().full_page(true).save("full.png").await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn save(self, path: impl AsRef<Path>) -> Result<()> {
         let bytes = self.bytes().await?;
         tokio::fs::write(path, bytes).await?;

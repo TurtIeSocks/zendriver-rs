@@ -1,17 +1,30 @@
-//! `FindBuilder` — chainable element queries scoped to a `Tab` (or, in T24,
-//! to an existing `Element`'s subtree). Owns the selector kind, the
-//! actionability + timeout knobs, and the poll-loop terminal that materializes
-//! a fresh `Element`.
+//! Element query builders ([`FindBuilder`] / [`FindAllBuilder`]) and the
+//! shared [`AriaRole`] / [`BoundingBox`] types.
 //!
-//! T12 lands the full extension: every selector kind exposed in
-//! `SelectorKind` (CSS / XPath / Text / TextRegex / Role) plus the four
-//! modifiers (`nth`, `visible_only`, `in_frame`, `timeout`). The terminal
-//! `one()` polls `SelectorKind::resolve_many` until a match is found
-//! (within `timeout`), filters by `visible_only` (TODO(T16) — requires
-//! `Element::call_on_main`), picks `nth`, and wraps the resolved
-//! `RemoteRef` in an `Element` via `Element::synthesize_query`. T16
-//! upgraded that constructor to carry full `ElementOrigin` metadata so
-//! T17's `Element::refresh` can re-resolve stale handles.
+//! A query is a chainable selector + modifier + terminal sequence:
+//!
+//! ```no_run
+//! # async fn ex() -> zendriver::Result<()> {
+//! # let browser = zendriver::Browser::builder().launch().await?;
+//! # let tab = browser.main_tab();
+//! tab.goto("https://example.com").await?;
+//! // Single match
+//! let h1 = tab.find().css("h1").one().await?;
+//! // First match by ARIA role + accessible name
+//! use zendriver::AriaRole;
+//! let btn = tab.find().role_named(AriaRole::Button, "Submit").one().await?;
+//! // All matches
+//! let links = tab.find_all().css("a").many_or_empty().await?;
+//! # let _ = (h1, btn, links);
+//! # Ok(()) }
+//! ```
+//!
+//! Selector kinds: `.css`, `.xpath`, `.text`, `.text_exact`, `.text_regex`,
+//! `.text_regex_with_flags`, `.role`, `.role_named`. Modifiers: `.nth`,
+//! `.visible_only`, `.in_frame`, `.timeout`. Terminals on [`FindBuilder`]:
+//! `.one()` (errors on empty), `.one_or_none()` (returns `None`). Terminals
+//! on [`FindAllBuilder`]: `.many()` (errors on empty), `.many_or_empty()`
+//! (returns empty `Vec`).
 
 pub mod actionability;
 pub mod modifiers;
@@ -23,14 +36,19 @@ pub use role::AriaRole;
 use std::time::Duration;
 
 /// Element geometry in CSS pixels relative to the viewport's top-left.
-/// Returned by [`crate::element::Element::bounding_box`] (and consumed by
-/// click target calculations, screenshot clip rects, hover coordinates).
-/// Derived from the `content` quad of `DOM.getBoxModel`.
+///
+/// Returned by [`crate::Element::bounding_box`] (and consumed by click
+/// target calculations, screenshot clip rects, hover coordinates). Derived
+/// from the `content` quad of `DOM.getBoxModel`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BoundingBox {
+    /// Distance from viewport left edge to the box's left edge (CSS px).
     pub x: f64,
+    /// Distance from viewport top edge to the box's top edge (CSS px).
     pub y: f64,
+    /// Box width in CSS px.
     pub width: f64,
+    /// Box height in CSS px.
     pub height: f64,
 }
 
@@ -45,14 +63,25 @@ use crate::tab::Tab;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-/// Chainable element query. Call a selector method (`.css`, `.xpath`,
-/// `.text`, `.text_exact`, `.text_regex`, `.text_regex_with_flags`,
-/// `.role`, `.role_named`), optionally chain modifiers (`.nth`,
-/// `.visible_only`, `.in_frame`, `.timeout`), then terminate with
-/// `.one()` / `.one_or_none()`.
+/// Chainable single-element query builder.
+///
+/// Call a selector method, optionally chain modifiers, then terminate with
+/// [`FindBuilder::one`] or [`FindBuilder::one_or_none`]. See the
+/// [module-level docs](self) for the full surface map.
 ///
 /// Selector kinds are mutually exclusive — calling `.css(...)` after
 /// `.xpath(...)` overwrites the prior selector.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn ex() -> zendriver::Result<()> {
+/// # let browser = zendriver::Browser::builder().launch().await?;
+/// # let tab = browser.main_tab();
+/// let h1 = tab.find().css("h1").one().await?;
+/// # let _ = h1;
+/// # Ok(()) }
+/// ```
 #[derive(Debug)]
 pub struct FindBuilder<'scope> {
     /// Tab whose document is the default query root when neither
@@ -137,21 +166,58 @@ impl<'scope> FindBuilder<'scope> {
 
     // -- Selector methods (mutually exclusive — last call wins) --------
 
+    /// CSS selector (e.g. `button.primary`, `[data-test=submit]`).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let btn = tab.find().css("button.primary").one().await?;
+    /// # let _ = btn;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn css(mut self, selector: impl Into<String>) -> Self {
         self.selector = Some(SelectorKind::Css(selector.into()));
         self
     }
 
+    /// XPath expression.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let h1 = tab.find().xpath("//h1").one().await?;
+    /// # let _ = h1;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn xpath(mut self, expr: impl Into<String>) -> Self {
         self.selector = Some(SelectorKind::Xpath(expr.into()));
         self
     }
 
-    /// Case-insensitive substring text match. Walks the subtree filtering
-    /// elements whose `innerText` (or `textContent` for hidden nodes)
-    /// contains `needle` after lower-casing both sides.
+    /// Case-insensitive substring text match.
+    ///
+    /// Walks the subtree filtering elements whose `innerText` (or
+    /// `textContent` for hidden nodes) contains `needle` after lower-casing
+    /// both sides.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let link = tab.find().text("more information").one().await?;
+    /// # let _ = link;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn text(mut self, needle: impl Into<String>) -> Self {
         self.selector = Some(SelectorKind::Text {
@@ -161,8 +227,20 @@ impl<'scope> FindBuilder<'scope> {
         self
     }
 
-    /// Whitespace-collapsed exact text match. Uses XPath
-    /// `normalize-space(.)=<needle>`.
+    /// Whitespace-collapsed exact text match.
+    ///
+    /// Uses XPath `normalize-space(.)=<needle>`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let btn = tab.find().text_exact("Submit").one().await?;
+    /// # let _ = btn;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn text_exact(mut self, needle: impl Into<String>) -> Self {
         self.selector = Some(SelectorKind::Text {
@@ -172,10 +250,23 @@ impl<'scope> FindBuilder<'scope> {
         self
     }
 
-    /// Text regex match. The supplied `regex::Regex` is serialized to its
-    /// pattern string via `as_str()` and re-parsed on the JS side as
-    /// `new RegExp(pattern, "")`. Use `text_regex_with_flags` to pass
-    /// explicit JS regex flags (e.g. `"i"`, `"im"`).
+    /// Text regex match.
+    ///
+    /// The supplied [`regex::Regex`] is serialized to its pattern string and
+    /// re-parsed on the JS side as `new RegExp(pattern, "")`. Use
+    /// [`Self::text_regex_with_flags`] to pass explicit JS regex flags.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let re = regex::Regex::new(r"^Buy now").unwrap();
+    /// let cta = tab.find().text_regex(re).one().await?;
+    /// # let _ = cta;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn text_regex(mut self, re: regex::Regex) -> Self {
         self.selector = Some(SelectorKind::TextRegex {
@@ -185,10 +276,22 @@ impl<'scope> FindBuilder<'scope> {
         self
     }
 
-    /// Text regex match with explicit JS-flavored flags string (e.g.
-    /// `"i"` for case-insensitive, `"im"` for case-insensitive +
-    /// multiline). The pattern is interpreted on the JS side via
-    /// `new RegExp(pattern, flags)`.
+    /// Text regex match with explicit JS-flavored flags.
+    ///
+    /// Flags follow JS RegExp syntax (e.g. `"i"` for case-insensitive,
+    /// `"im"` for case-insensitive + multiline). The pattern is interpreted
+    /// on the JS side via `new RegExp(pattern, flags)`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let el = tab.find().text_regex_with_flags(r"^accept", "i").one().await?;
+    /// # let _ = el;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn text_regex_with_flags(
         mut self,
@@ -202,17 +305,43 @@ impl<'scope> FindBuilder<'scope> {
         self
     }
 
-    /// ARIA role match. Compiles to a `[role="..."]` CSS attribute
-    /// selector.
+    /// ARIA role match.
+    ///
+    /// Compiles to a `[role="..."]` CSS attribute selector.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use zendriver::AriaRole;
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let btn = tab.find().role(AriaRole::Button).one().await?;
+    /// # let _ = btn;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn role(mut self, role: AriaRole) -> Self {
         self.selector = Some(SelectorKind::Role(role, None));
         self
     }
 
-    /// ARIA role + accessible name match. Post-filters role candidates
-    /// by computed accessible name via `Accessibility.getPartialAXTree`
-    /// (case-insensitive substring).
+    /// ARIA role + accessible name match.
+    ///
+    /// Post-filters role candidates by computed accessible name via
+    /// `Accessibility.getPartialAXTree` (case-insensitive substring).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use zendriver::AriaRole;
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let submit = tab.find().role_named(AriaRole::Button, "Submit").one().await?;
+    /// # let _ = submit;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn role_named(mut self, role: AriaRole, name: impl Into<String>) -> Self {
         self.selector = Some(SelectorKind::Role(role, Some(name.into())));
@@ -221,35 +350,66 @@ impl<'scope> FindBuilder<'scope> {
 
     // -- Modifier methods ----------------------------------------------
 
-    /// Pick the `idx`-th match (0-based) instead of the first. Combined
-    /// with `visible_only`, the index applies AFTER the visibility
-    /// filter.
+    /// Pick the `idx`-th match (0-based) instead of the first.
+    ///
+    /// Combined with [`Self::visible_only`], the index applies AFTER the
+    /// visibility filter.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let second_link = tab.find().css("a").nth(1).one().await?;
+    /// # let _ = second_link;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn nth(mut self, idx: usize) -> Self {
         self.nth = Some(idx);
         self
     }
 
-    /// When `true`, candidates that fail `actionability::check_visible`
-    /// are filtered out before `nth`/first selection. T16 wires the
-    /// actual check; until then this is a no-op (every candidate is
-    /// considered visible).
+    /// Filter candidates by visibility before picking `nth`/first.
+    ///
+    /// When `true`, candidates that fail the visibility check (offscreen,
+    /// `display: none`, etc.) are filtered out.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let visible_btn = tab.find().css("button").visible_only(true).one().await?;
+    /// # let _ = visible_btn;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn visible_only(mut self, on: bool) -> Self {
         self.visible_only = on;
         self
     }
 
-    /// Re-target this query at `frame`. The terminal dispatches on the
-    /// frame's own CDP session — same as the parent tab's session for
-    /// same-origin sub-frames, a distinct child session for OOPIFs.
-    /// Element scope (if set via [`crate::Element::find`]) still takes
-    /// precedence; this override applies only when the builder started
-    /// from a Tab or another Frame.
+    /// Re-target this query at `frame`.
     ///
-    /// The returned builder's lifetime is the intersection of the
-    /// original scope's lifetime and the Frame's borrow — so the Frame
-    /// must outlive the terminal call.
+    /// The terminal dispatches on the frame's own CDP session. Element
+    /// scope (if set via [`crate::Element::find`]) still takes precedence;
+    /// this override applies only when the builder started from a Tab or
+    /// another Frame.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let main = tab.main_frame().await?;
+    /// let el = tab.find().in_frame(&main).css("h1").one().await?;
+    /// # let _ = el;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn in_frame<'a>(self, frame: &'a Frame) -> FindBuilder<'a>
     where
@@ -267,7 +427,19 @@ impl<'scope> FindBuilder<'scope> {
         }
     }
 
-    /// Override the default 10s timeout for `one()`'s poll loop.
+    /// Override the default 10s timeout for the terminal's poll loop.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use std::time::Duration;
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let el = tab.find().css("#slow-load").timeout(Duration::from_secs(30)).one().await?;
+    /// # let _ = el;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn timeout(mut self, dur: Duration) -> Self {
         self.timeout = dur;
@@ -276,8 +448,23 @@ impl<'scope> FindBuilder<'scope> {
 
     // -- Terminals ------------------------------------------------------
 
-    /// Wait for and return the first (or `nth`) matching element. Errors
-    /// with `ElementNotFound` if no element matches within the timeout.
+    /// Wait for and return the first (or `nth`) matching element.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::ElementNotFound`] if no element matches
+    /// within the timeout.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let h1 = tab.find().css("h1").one().await?;
+    /// # let _ = h1;
+    /// # Ok(()) }
+    /// ```
     pub async fn one(self) -> Result<Element> {
         let selector = self.selector.ok_or_else(|| {
             ZendriverError::Navigation(
@@ -329,8 +516,20 @@ impl<'scope> FindBuilder<'scope> {
         }
     }
 
-    /// Like `one()`, but returns `None` instead of erroring when no
+    /// Like [`Self::one`], but returns `None` instead of erroring when no
     /// element matches within the timeout.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// if let Some(banner) = tab.find().css(".cookie-banner").one_or_none().await? {
+    ///     banner.find().css("button").one().await?.click().await?;
+    /// }
+    /// # Ok(()) }
+    /// ```
     pub async fn one_or_none(self) -> Result<Option<Element>> {
         match self.one().await {
             Ok(el) => Ok(Some(el)),
@@ -340,15 +539,26 @@ impl<'scope> FindBuilder<'scope> {
     }
 }
 
-/// Chainable element query returning ALL matches (rather than the first
-/// / `nth`). Mirrors `FindBuilder` selectors + modifiers, minus `nth`
-/// (which doesn't make sense for a "return everything" terminal).
+/// Chainable element query returning ALL matches.
 ///
-/// Selector kinds are mutually exclusive — calling `.css(...)` after
-/// `.xpath(...)` overwrites the prior selector.
+/// Mirrors [`FindBuilder`] selectors + modifiers, minus `nth` (which
+/// doesn't make sense for a "return everything" terminal). Selector kinds
+/// are mutually exclusive — calling `.css(...)` after `.xpath(...)`
+/// overwrites the prior selector.
 ///
-/// Terminals: `.many()` errors when the result is empty;
-/// `.many_or_empty()` returns an empty `Vec` instead.
+/// Terminals: [`FindAllBuilder::many`] errors when the result is empty;
+/// [`FindAllBuilder::many_or_empty`] returns an empty `Vec` instead.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn ex() -> zendriver::Result<()> {
+/// # let browser = zendriver::Browser::builder().launch().await?;
+/// # let tab = browser.main_tab();
+/// let links = tab.find_all().css("a").many_or_empty().await?;
+/// println!("{} links", links.len());
+/// # Ok(()) }
+/// ```
 #[derive(Debug)]
 pub struct FindAllBuilder<'scope> {
     /// Tab whose document is the default query root. `None` when the
@@ -418,21 +628,21 @@ impl<'scope> FindAllBuilder<'scope> {
 
     // -- Selector methods (mutually exclusive — last call wins) --------
 
+    /// CSS selector. See [`FindBuilder::css`].
     #[must_use]
     pub fn css(mut self, selector: impl Into<String>) -> Self {
         self.selector = Some(SelectorKind::Css(selector.into()));
         self
     }
 
+    /// XPath expression. See [`FindBuilder::xpath`].
     #[must_use]
     pub fn xpath(mut self, expr: impl Into<String>) -> Self {
         self.selector = Some(SelectorKind::Xpath(expr.into()));
         self
     }
 
-    /// Case-insensitive substring text match. Walks the subtree filtering
-    /// elements whose `innerText` (or `textContent` for hidden nodes)
-    /// contains `needle` after lower-casing both sides.
+    /// Case-insensitive substring text match. See [`FindBuilder::text`].
     #[must_use]
     pub fn text(mut self, needle: impl Into<String>) -> Self {
         self.selector = Some(SelectorKind::Text {
@@ -442,8 +652,7 @@ impl<'scope> FindAllBuilder<'scope> {
         self
     }
 
-    /// Whitespace-collapsed exact text match. Uses XPath
-    /// `normalize-space(.)=<needle>`.
+    /// Whitespace-collapsed exact text match. See [`FindBuilder::text_exact`].
     #[must_use]
     pub fn text_exact(mut self, needle: impl Into<String>) -> Self {
         self.selector = Some(SelectorKind::Text {
@@ -453,10 +662,7 @@ impl<'scope> FindAllBuilder<'scope> {
         self
     }
 
-    /// Text regex match. The supplied `regex::Regex` is serialized to its
-    /// pattern string via `as_str()` and re-parsed on the JS side as
-    /// `new RegExp(pattern, "")`. Use `text_regex_with_flags` to pass
-    /// explicit JS regex flags (e.g. `"i"`, `"im"`).
+    /// Text regex match. See [`FindBuilder::text_regex`].
     #[must_use]
     pub fn text_regex(mut self, re: regex::Regex) -> Self {
         self.selector = Some(SelectorKind::TextRegex {
@@ -466,10 +672,8 @@ impl<'scope> FindAllBuilder<'scope> {
         self
     }
 
-    /// Text regex match with explicit JS-flavored flags string (e.g.
-    /// `"i"` for case-insensitive, `"im"` for case-insensitive +
-    /// multiline). The pattern is interpreted on the JS side via
-    /// `new RegExp(pattern, flags)`.
+    /// Text regex match with explicit JS-flavored flags.
+    /// See [`FindBuilder::text_regex_with_flags`].
     #[must_use]
     pub fn text_regex_with_flags(
         mut self,
@@ -483,17 +687,14 @@ impl<'scope> FindAllBuilder<'scope> {
         self
     }
 
-    /// ARIA role match. Compiles to a `[role="..."]` CSS attribute
-    /// selector.
+    /// ARIA role match. See [`FindBuilder::role`].
     #[must_use]
     pub fn role(mut self, role: AriaRole) -> Self {
         self.selector = Some(SelectorKind::Role(role, None));
         self
     }
 
-    /// ARIA role + accessible name match. Post-filters role candidates
-    /// by computed accessible name via `Accessibility.getPartialAXTree`
-    /// (case-insensitive substring).
+    /// ARIA role + accessible name match. See [`FindBuilder::role_named`].
     #[must_use]
     pub fn role_named(mut self, role: AriaRole, name: impl Into<String>) -> Self {
         self.selector = Some(SelectorKind::Role(role, Some(name.into())));
@@ -502,18 +703,15 @@ impl<'scope> FindAllBuilder<'scope> {
 
     // -- Modifier methods ----------------------------------------------
 
-    /// When `true`, candidates that fail `actionability::check_visible`
-    /// are filtered out before being returned. T16 wires the actual
-    /// check; until then this is a no-op (every candidate is considered
-    /// visible).
+    /// Filter candidates by visibility before returning.
+    /// See [`FindBuilder::visible_only`].
     #[must_use]
     pub fn visible_only(mut self, on: bool) -> Self {
         self.visible_only = on;
         self
     }
 
-    /// Re-target this query at `frame`. See [`FindBuilder::in_frame`]
-    /// for the precedence rules and lifetime contract.
+    /// Re-target this query at `frame`. See [`FindBuilder::in_frame`].
     #[must_use]
     pub fn in_frame<'a>(self, frame: &'a Frame) -> FindAllBuilder<'a>
     where
@@ -530,10 +728,23 @@ impl<'scope> FindAllBuilder<'scope> {
         }
     }
 
-    /// Override the default 10s timeout for the poll loop. The loop
-    /// returns the first non-empty result it observes; on timeout
-    /// `many()` errors with `ElementNotFound` and `many_or_empty()`
-    /// returns an empty `Vec`.
+    /// Override the default 10s timeout for the poll loop.
+    ///
+    /// The loop returns the first non-empty result it observes; on timeout
+    /// `many()` errors with `ElementNotFound` and `many_or_empty()` returns
+    /// an empty `Vec`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use std::time::Duration;
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let items = tab.find_all().css(".item").timeout(Duration::from_secs(20)).many().await?;
+    /// # let _ = items;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn timeout(mut self, dur: Duration) -> Self {
         self.timeout = dur;
@@ -542,8 +753,23 @@ impl<'scope> FindAllBuilder<'scope> {
 
     // -- Terminals ------------------------------------------------------
 
-    /// Wait for and return ALL matching elements. Errors with
-    /// `ElementNotFound` if no element matches within the timeout.
+    /// Wait for and return ALL matching elements.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::ElementNotFound`] if no element matches
+    /// within the timeout.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let cells = tab.find_all().css("table td").many().await?;
+    /// println!("{} cells", cells.len());
+    /// # Ok(()) }
+    /// ```
     pub async fn many(self) -> Result<Vec<Element>> {
         let selector = self.selector.ok_or_else(|| {
             ZendriverError::Navigation(
@@ -591,8 +817,21 @@ impl<'scope> FindAllBuilder<'scope> {
         }
     }
 
-    /// Like `many()`, but returns an empty `Vec` instead of erroring
+    /// Like [`Self::many`], but returns an empty `Vec` instead of erroring
     /// when no element matches within the timeout.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let warnings = tab.find_all().css(".warning").many_or_empty().await?;
+    /// for w in warnings {
+    ///     eprintln!("{}", w.inner_text().await?);
+    /// }
+    /// # Ok(()) }
+    /// ```
     pub async fn many_or_empty(self) -> Result<Vec<Element>> {
         match self.many().await {
             Ok(els) => Ok(els),
