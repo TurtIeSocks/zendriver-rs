@@ -5,6 +5,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod browser;
+pub mod cookies;
 pub mod element;
 pub mod error;
 pub mod input;
@@ -13,6 +14,7 @@ pub mod query;
 pub mod tab;
 
 pub use browser::{Browser, BrowserBuilder};
+pub use cookies::{Cookie, CookieJar, SameSite};
 pub use element::actions::ClickOptions;
 pub use element::Element;
 pub use error::{BrowserError, Result, ZendriverError};
