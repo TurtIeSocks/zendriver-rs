@@ -359,6 +359,71 @@ impl Tab {
             .await?;
         Ok(())
     }
+
+    /// Navigate one step backward in the tab's session history.
+    ///
+    /// Fetches the history list via `Page.getNavigationHistory`, then dispatches
+    /// `Page.navigateToHistoryEntry { entryId }` for the entry at
+    /// `currentIndex - 1`. Errors with
+    /// [`ZendriverError::HistoryNavigation`] `"no back history"` when
+    /// `currentIndex <= 0`.
+    pub async fn back(&self) -> Result<()> {
+        let history = self.call("Page.getNavigationHistory", json!({})).await?;
+        let current_idx = history["currentIndex"].as_i64().ok_or_else(|| {
+            ZendriverError::HistoryNavigation(
+                "Page.getNavigationHistory missing currentIndex".into(),
+            )
+        })?;
+        if current_idx <= 0 {
+            return Err(ZendriverError::HistoryNavigation("no back history".into()));
+        }
+        let entry_id = history["entries"][(current_idx - 1) as usize]["id"].clone();
+        self.call(
+            "Page.navigateToHistoryEntry",
+            json!({ "entryId": entry_id }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Navigate one step forward in the tab's session history.
+    ///
+    /// Fetches the history list via `Page.getNavigationHistory`, then dispatches
+    /// `Page.navigateToHistoryEntry { entryId }` for the entry at
+    /// `currentIndex + 1`. Errors with
+    /// [`ZendriverError::HistoryNavigation`] `"no forward history"` when
+    /// `currentIndex` is already at the last entry.
+    pub async fn forward(&self) -> Result<()> {
+        let history = self.call("Page.getNavigationHistory", json!({})).await?;
+        let current_idx = history["currentIndex"].as_i64().ok_or_else(|| {
+            ZendriverError::HistoryNavigation(
+                "Page.getNavigationHistory missing currentIndex".into(),
+            )
+        })?;
+        let entries = history["entries"].as_array().ok_or_else(|| {
+            ZendriverError::HistoryNavigation("Page.getNavigationHistory missing entries".into())
+        })?;
+        if (current_idx + 1) as usize >= entries.len() {
+            return Err(ZendriverError::HistoryNavigation(
+                "no forward history".into(),
+            ));
+        }
+        let entry_id = entries[(current_idx + 1) as usize]["id"].clone();
+        self.call(
+            "Page.navigateToHistoryEntry",
+            json!({ "entryId": entry_id }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Reload the tab's current page. Dispatches `Page.reload` with
+    /// `ignoreCache: false` — equivalent to a soft refresh.
+    pub async fn reload(&self) -> Result<()> {
+        self.call("Page.reload", json!({ "ignoreCache": false }))
+            .await?;
+        Ok(())
+    }
 }
 
 impl Tab {
@@ -776,6 +841,89 @@ mod tests {
         .await;
         let s = fut.await.unwrap().unwrap();
         assert_eq!(s, "Hello");
+        conn.shutdown();
+    }
+
+    // --- nav history: back / forward / reload --------------------------
+
+    #[tokio::test]
+    async fn back_dispatches_navigate_to_history_entry_at_prev_index() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.back().await }
+        });
+
+        let id_hist = mock.expect_cmd("Page.getNavigationHistory").await;
+        mock.reply(
+            id_hist,
+            json!({
+                "currentIndex": 1,
+                "entries": [
+                    { "id": 10, "url": "https://a.test" },
+                    { "id": 11, "url": "https://b.test" },
+                ],
+            }),
+        )
+        .await;
+
+        let id_nav = mock.expect_cmd("Page.navigateToHistoryEntry").await;
+        // Should target the entry at currentIndex - 1 (id=10).
+        assert_eq!(mock.last_sent()["params"]["entryId"], 10);
+        mock.reply(id_nav, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn back_errors_when_current_index_is_zero() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.back().await }
+        });
+
+        let id_hist = mock.expect_cmd("Page.getNavigationHistory").await;
+        mock.reply(
+            id_hist,
+            json!({
+                "currentIndex": 0,
+                "entries": [{ "id": 10, "url": "https://a.test" }],
+            }),
+        )
+        .await;
+
+        let res = fut.await.unwrap();
+        match res {
+            Err(ZendriverError::HistoryNavigation(m)) => assert!(m.contains("no back history")),
+            other => panic!("unexpected: {other:?}"),
+        }
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn reload_dispatches_page_reload_with_ignore_cache_false() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.reload().await }
+        });
+
+        let id = mock.expect_cmd("Page.reload").await;
+        assert_eq!(mock.last_sent()["params"]["ignoreCache"], false);
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
         conn.shutdown();
     }
 }
