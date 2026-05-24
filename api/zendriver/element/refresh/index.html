@@ -1,0 +1,24 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Auto-refresh: re-resolve a stale `Element` via its memoized `ElementOrigin` and retry the wrapped CDP op once."><title>zendriver::element::refresh - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="zendriver" data-themes="" data-resource-suffix="" data-rustdoc-version="1.95.0 (59807616e 2026-04-14)" data-channel="1.95.0" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module refresh</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../../zendriver/index.html">zendriver</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><div id="rustdoc-modnav"><h2><a href="../index.html">In zendriver::<wbr>element</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../index.html">zendriver</a>::<wbr><a href="../index.html">element</a></div><h1>Module <span>refresh</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../src/zendriver/element/refresh.rs.html#1-497">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Auto-refresh: re-resolve a stale <code>Element</code> via its memoized
+<code>ElementOrigin</code> and retry the wrapped CDP op once.</p>
+<p>Coverage:</p>
+<ul>
+<li><code>ElementOrigin::Query { scope_kind: TabMain, .. }</code> — re-runs the
+stored <code>SelectorKind::resolve_many</code> against <code>QueryScope::Tab</code> and
+re-picks the <code>nth</code> index.</li>
+<li><code>ElementOrigin::Query { scope_kind: ElementSubtree, .. }</code> —
+<code>NotRefreshable</code>. Refreshing a subtree query requires
+reconstructing the parent element, which would mean carrying the
+parent’s full origin chain; deferred past P4.</li>
+<li><code>ElementOrigin::Traversal { parent, kind }</code> — recursively
+resolves the parent’s origin to a fresh <code>RemoteRef</code>, synthesizes
+a temporary <code>Element</code> from that ref, then re-traverses (Parent
+or NthChild) via <code>Runtime.callFunctionOn</code> against the fresh
+parent. Lands the P3 T17 deferral. Recursion depth = traversal
+chain length; <code>Box&lt;ElementOrigin&gt;</code> keeps storage off the stack.</li>
+<li><code>ElementOrigin::Evaluation</code> — <code>NotRefreshable</code> (no selector to
+replay).</li>
+</ul>
+<p><code>with_refresh(op)</code> retries <code>op</code> exactly once when the first attempt
+errors with a stale-node signature (see <code>is_stale_node_error</code>). The
+second failure surfaces as-is.</p>
+</div></details></section></div></main></body></html>

@@ -1,0 +1,29 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Per-Tab in-flight network request tracker."><title>zendriver::network_idle - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="zendriver" data-themes="" data-resource-suffix="" data-rustdoc-version="1.95.0 (59807616e 2026-04-14)" data-channel="1.95.0" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module network_idle</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../zendriver/index.html">zendriver</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module network_<wbr>idle</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#wiring" title="Wiring">Wiring</a></li><li><a href="#why-a-separate-task-not-poll-on-demand" title="Why a separate task (not poll-on-demand)">Why a separate task (not poll-on-demand)</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate zendriver</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">zendriver</a></div><h1>Module <span>network_<wbr>idle</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/zendriver/network_idle.rs.html#1-238">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Per-Tab in-flight network request tracker.</p>
+<p>Powers <a href="../tab/struct.Tab.html#method.wait_for_idle" title="method zendriver::tab::Tab::wait_for_idle"><code>crate::tab::Tab::wait_for_idle</code></a> / <code>wait_for_idle_with</code> —
+Playwright <code>networkidle</code> semantics: resolve when the set of in-flight
+requests sustains zero for a configurable quiet window (default 500ms).</p>
+<h3 id="wiring"><a class="doc-anchor" href="#wiring">§</a>Wiring</h3>
+<p>Each <a href="../tab/struct.Tab.html" title="struct zendriver::tab::Tab"><code>crate::Tab</code></a> owns one tracker. At construction time, the tab
+spawns a background task that:</p>
+<ol>
+<li>Sends <code>Network.enable</code> once on the tab’s session.</li>
+<li>Subscribes to the four lifecycle events Chrome emits per request:
+<ul>
+<li><code>Network.requestWillBeSent</code> — insert <code>requestId</code> into the set.</li>
+<li><code>Network.responseReceived</code> / <code>loadingFailed</code> / <code>loadingFinished</code>
+— remove <code>requestId</code> from the set.</li>
+</ul>
+</li>
+<li>Notifies the [<code>tokio::sync::Notify</code>] on every membership change so
+waiters can wake instantly rather than poll on a fixed interval.</li>
+</ol>
+<p>The task runs until the supplied [<code>CancellationToken</code>] fires — typically
+when the owning Tab is dropped (P4 wires <code>network_cancel</code> into
+<code>TabInner</code> so <code>Drop</code> triggers cancellation).</p>
+<h3 id="why-a-separate-task-not-poll-on-demand"><a class="doc-anchor" href="#why-a-separate-task-not-poll-on-demand">§</a>Why a separate task (not poll-on-demand)</h3>
+<p><code>wait_for_idle</code> callers need to see the in-flight set’s history, not just
+its instantaneous value. A request that started 200ms ago and is still
+pending when <code>wait_for_idle</code> is called must keep the count &gt;0 until it
+finishes. Tracking continuously lets us answer “has the count been 0 for
+N ms?” without losing events that fired before the call.</p>
+</div></details></section></div></main></body></html>

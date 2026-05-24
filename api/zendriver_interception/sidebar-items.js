@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["actor","builder","error","paused","rule","types","url_pattern"]};

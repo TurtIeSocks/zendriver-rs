@@ -1,0 +1,457 @@
+<!DOCTYPE HTML>
+<html lang="en" class="ayu sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Stealth - zendriver-rs</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "ayu";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('ayu')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">zendriver-rs</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/cdpdriver/zendriver-rs" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/cdpdriver/zendriver-rs/edit/main/docs/book/src/stealth.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="stealth"><a class="header" href="#stealth">Stealth</a></h1>
+<p>zendriver-rs ships with three stealth profiles selecting different
+tradeoffs between launch overhead, detectability, and CSP compatibility.
+Pick the profile that matches your target site's detection layer; tweak
+the fingerprint with builder methods when you need to pin a specific
+identity.</p>
+<h2 id="the-three-profiles"><a class="header" href="#the-three-profiles">The three profiles</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Profile</th><th>Launch flags</th><th>UA scrub</th><th>Emulation overrides</th><th>JS bootstrap</th><th>Bypass CSP</th><th>Use case</th></tr></thead><tbody>
+<tr><td><code>off()</code></td><td>none</td><td>no</td><td>no</td><td>none</td><td>no</td><td>Reproducing issues in vanilla Chrome.</td></tr>
+<tr><td><code>native()</code></td><td>yes</td><td>yes</td><td>yes</td><td>none</td><td>no</td><td>Most sites. Default recommendation.</td></tr>
+<tr><td><code>spoofed()</code></td><td>yes</td><td>yes</td><td>yes</td><td>Navigator JS</td><td>yes (on)</td><td>Sites with active fingerprint detection.</td></tr>
+</tbody></table>
+</div>
+<h3 id="stealthprofileoff"><a class="header" href="#stealthprofileoff"><code>StealthProfile::off()</code></a></h3>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::{Browser, StealthProfile};
+
+<span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span>let browser = Browser::builder()
+    .stealth(StealthProfile::off())
+    .launch()
+    .await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p>No launch flags. No UA scrub. No CDP overrides. <code>Page.setBypassCSP</code> is
+not called. This is what you get from a stock <code>chromiumoxide</code> launch.
+Use this when you're debugging whether a bug reproduces in a vanilla
+Chrome — if it does, the cause is unrelated to zendriver's stealth
+machinery.</p>
+<h3 id="stealthprofilenative"><a class="header" href="#stealthprofilenative"><code>StealthProfile::native()</code></a></h3>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::{Browser, StealthProfile};
+
+<span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span>let browser = Browser::builder()
+    .stealth(StealthProfile::native())
+    .launch()
+    .await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p>The default recommendation. Patches the layer that protocol-level
+fingerprinters see, without touching JS object prototypes:</p>
+<ul>
+<li><strong>Launch flags</strong> — <code>--disable-blink-features=AutomationControlled</code>,
+<code>--disable-features=IsolateOrigins,site-per-process</code> (toggleable),
+and a curated list of flags that turn off the "this browser is
+controlled by automation" infobar plus various leaks.</li>
+<li><strong>UA scrub</strong> — strips the <code>HeadlessChrome</code> segment from the User-Agent
+string and the Sec-CH-UA brand list.</li>
+<li><strong>Emulation overrides</strong> —
+<code>Emulation.setUserAgentOverride</code> /
+<code>Emulation.setHardwareConcurrencyOverride</code> /
+<code>Emulation.setDeviceMetricsOverride</code> set a coherent identity.</li>
+</ul>
+<p>Safe against <code>Function.prototype.toString</code> detection because it patches
+nothing at the JS level — there's no <code>[native code]</code> mismatch to detect.
+Passes most consumer site detectors. Doesn't pass <a href="https://bot.sannysoft.com/">sannysoft</a>'s deeper
+Navigator-prototype checks.</p>
+<h3 id="stealthprofilespoofed"><a class="header" href="#stealthprofilespoofed"><code>StealthProfile::spoofed()</code></a></h3>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::{Browser, StealthProfile};
+
+<span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span>let browser = Browser::builder()
+    .stealth(StealthProfile::spoofed())
+    .launch()
+    .await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p><code>native()</code> plus Navigator-prototype JS patches injected via
+<code>Page.addScriptToEvaluateOnNewDocument</code>. Restores or overrides:</p>
+<ul>
+<li><code>navigator.webdriver</code> (deletes it so <code>'webdriver' in navigator</code> is
+<code>false</code>).</li>
+<li><code>navigator.permissions.query({ name: "notifications" })</code> (returns
+<code>"prompt"</code> instead of the headless-Chrome <code>"denied"</code>).</li>
+<li><code>navigator.plugins</code> + <code>navigator.mimeTypes</code> (returns plausible-length
+arrays).</li>
+<li><code>navigator.chrome</code> (installs the runtime object headless Chrome
+doesn't ship).</li>
+<li>WebGL vendor / renderer (returns <code>"Google Inc. (Intel)"</code> /
+<code>"ANGLE (Intel, Mesa Intel(R) UHD Graphics, OpenGL 4.6)"</code> by
+default).</li>
+<li>ChunkSplit + iframe-contentWindow guards so the patches survive
+cross-realm escape attempts.</li>
+</ul>
+<p>Toggles <code>Page.setBypassCSP</code> <strong>on by default</strong> so the bootstrap script
+can install on pages with strict CSP headers. Pass
+<code>.bypass_csp(false)</code> to opt out when you want to test against a real
+CSP-restricted page.</p>
+<p>Passes <a href="https://bot.sannysoft.com/">sannysoft</a>, <a href="https://arh.antoinevastel.com/bots/areyouheadless">areyouheadless</a>, and most active detectors. Pays
+a small per-navigation cost (the JS bootstrap runs on every new
+document).</p>
+<h2 id="customizing-the-fingerprint"><a class="header" href="#customizing-the-fingerprint">Customizing the fingerprint</a></h2>
+<p>All three profiles return a builder that lets you override individual
+fingerprint fields. The values are validated and clamped at resolve
+time (e.g. <code>memory_gb</code> is clamped to a plausible W3C-rounded value;
+<code>cpu_count</code> is clamped to <code>2..=32</code>).</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::{Browser, StealthProfile};
+use zendriver::stealth::Platform;
+
+<span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span>let profile = StealthProfile::spoofed()
+    .memory_gb(8)               // navigator.deviceMemory
+    .cpu_count(8)               // navigator.hardwareConcurrency
+    .chrome_version(126)        // Chrome major in UA + Sec-CH-UA
+    .platform(Platform::Win32)  // navigator.platform + OS in UA
+    .locale("en-US")            // navigator.language + --lang flag
+    .timezone("America/New_York");
+
+let browser = Browser::builder()
+    .stealth(profile)
+    .launch()
+    .await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p>You can also override the User-Agent string verbatim — useful when
+you need an exact UA that doesn't match the auto-composed one:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::{Browser, StealthProfile};
+
+<span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span>let profile = StealthProfile::native()
+    .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ...");
+
+let browser = Browser::builder()
+    .stealth(profile)
+    .launch()
+    .await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p><code>user_agent()</code> skips the auto-composition step entirely — prefer
+<code>platform()</code> + <code>chrome_version()</code> unless you need a bit-for-bit
+specific UA.</p>
+<h2 id="end-to-end-example"><a class="header" href="#end-to-end-example">End-to-end example</a></h2>
+<p>This example launches with a custom UA, locale, and platform, then
+reads them back via <code>navigator.*</code> to prove the overrides took:</p>
+<pre><pre class="playground"><code class="language-rust no_run">//! Port of `zendriver/examples/set_user_agent.py`.
+//!
+//! Launch Chrome with a custom User-Agent, locale, and platform configured
+//! via [`StealthProfile`], then read them back via `navigator.*` to verify
+//! the override took effect.
+//!
+//! Python `tab.set_user_agent("...", accept_language="de", platform="Win32")`
+//! is a single-call helper that internally drives
+//! `Emulation.setUserAgentOverride`. zendriver-rs lifts that into the
+//! `StealthProfile` builder because the launcher already wires UA overrides
+//! through `StealthObserver`, so per-tab mutation has no equivalent yet.
+//! Setting the UA at launch matches the spec's "no JS-visible drift between
+//! launch and first frame" stealth property.
+//!
+//! `navigator.platform` reads as `Win32` once `Platform::Win32` is set.
+
+use zendriver::stealth::{Platform, StealthProfile};
+use zendriver::Browser;
+
+#[tokio::main]
+#[allow(clippy::result_large_err)] // example boundary; users wrap in their own Error
+async fn main() -&gt; zendriver::Result&lt;()&gt; {
+    tracing_subscriber::fmt::init();
+
+    let profile = StealthProfile::native()
+        .user_agent("My user agent")
+        .locale("de")
+        .platform(Platform::Win32);
+
+    let browser = Browser::builder()
+        .headless(true)
+        .stealth(profile)
+        .launch()
+        .await?;
+    let tab = browser.main_tab();
+    tab.goto("https://example.com").await?;
+    tab.wait_for_load().await?;
+
+    let ua: String = tab.evaluate("navigator.userAgent").await?;
+    let lang: String = tab.evaluate("navigator.language").await?;
+    let platform: String = tab.evaluate("navigator.platform").await?;
+
+    println!("{ua}"); // My user agent
+    println!("{lang}"); // de
+    println!("{platform}"); // Win32
+
+    browser.close().await?;
+    Ok(())
+}</code></pre></pre>
+<p>Expected output:</p>
+<pre><code class="language-text">My user agent
+de
+Win32
+</code></pre>
+<p>The override surface is intentionally narrow — anything that would let
+you set incoherent values (e.g. Linux UA + <code>navigator.platform = Win32</code>)
+goes through the Fingerprint resolver, which composes a coherent
+identity.</p>
+<h2 id="when-to-use-which"><a class="header" href="#when-to-use-which">When to use which</a></h2>
+<ul>
+<li><strong>Headless scraping of public sites</strong> — start with <code>native()</code>. Most
+sites don't actively probe Navigator prototypes; the cheaper profile
+is plenty.</li>
+<li><strong>Sites with active bot detection</strong> (Cloudflare, PerimeterX,
+DataDome, Akamai) — use <code>spoofed()</code>. Pair with the <code>cloudflare</code>
+Cargo feature when you specifically need Turnstile bypass — see
+<a href="./cloudflare.html">Cloudflare</a>.</li>
+<li><strong>Sites with strict CSP</strong> — <code>spoofed()</code> defaults to
+<code>bypass_csp = true</code>, which is normally what you want. If you're
+<em>testing</em> a real CSP, override it with <code>.bypass_csp(false)</code> (and
+expect the JS bootstrap to fail to install).</li>
+<li><strong>Sites that read <code>Function.prototype.toString</code> looking for
+<code>[native code]</code> mismatches</strong> — <code>native()</code> rather than <code>spoofed()</code>,
+because <code>spoofed()</code>'s prototype patches leave detectable
+fingerprints in the function-source readouts. zendriver's bootstrap
+papers over the obvious patches, but a determined adversary will
+still find drift.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="quickstart.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="multi-tab.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="quickstart.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="multi-tab.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

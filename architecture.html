@@ -1,0 +1,412 @@
+<!DOCTYPE HTML>
+<html lang="en" class="ayu sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Architecture - zendriver-rs</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "ayu";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('ayu')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">zendriver-rs</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/cdpdriver/zendriver-rs" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/cdpdriver/zendriver-rs/edit/main/docs/book/src/architecture.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="architecture"><a class="header" href="#architecture">Architecture</a></h1>
+<p>This chapter sketches the layered design that zendriver-rs sits on top
+of. The goal is to give you enough mental model to debug surprises
+("why did my evaluate fail mid-navigation?") and to reason about
+performance ("is interception serializing my requests?").</p>
+<h2 id="the-big-picture"><a class="header" href="#the-big-picture">The big picture</a></h2>
+<pre><code class="language-text">                            ┌─────────────────────────────────┐
+                            │  Your code: Browser/Tab/Element │
+                            │      query / actions / eval     │
+                            └────────────────┬────────────────┘
+                                             │
+              ┌──────────────────────────────┼─────────────────────────────┐
+              │                              │                             │
+              ▼                              ▼                             ▼
+   ┌────────────────────┐       ┌────────────────────────┐    ┌─────────────────────┐
+   │  Stealth (boot JS) │       │  Element auto-refresh  │    │  Isolated-world eval│
+   │  + protocol patch  │       │  + actionability gate  │    │  (sandbox per Tab)  │
+   └─────────┬──────────┘       └───────────┬────────────┘    └──────────┬──────────┘
+             │                              │                            │
+             └──────────────────────────────┴────────────────────────────┘
+                                            │
+                                            ▼
+                            ┌─────────────────────────────────┐
+                            │   CDP Actor (single Tokio task) │
+                            │   – cmd/response routing        │
+                            │   – event fan-out + observers   │
+                            └────────────────┬────────────────┘
+                                             │   JSON-RPC
+                                             ▼
+                            ┌─────────────────────────────────┐
+                            │     Chrome (subprocess)         │
+                            │     CDP over WebSocket          │
+                            └─────────────────────────────────┘
+</code></pre>
+<p>Every public type above the actor is a cheap handle (<code>Arc</code> clone +
+session-id) — the actor is the single source of truth for outbound
+commands and inbound events.</p>
+<h2 id="the-cdp-transport-actor"><a class="header" href="#the-cdp-transport-actor">The CDP transport actor</a></h2>
+<p><code>zendriver-transport</code> runs a single Tokio task that owns the WebSocket
+connection to Chrome. All command sends go through a
+<code>mpsc::UnboundedSender</code>; every public handle holds a <code>Connection</code>
+clone that wraps that sender. The actor task:</p>
+<ol>
+<li>Reads commands from the channel, attaches a monotonically-increasing
+<code>id</code>, and writes them to the socket.</li>
+<li>Reads frames from the socket, decodes them into <code>CdpInbound</code> (either
+a response to a command or an event), and routes them.</li>
+<li>For responses: looks up the pending <code>oneshot::Sender</code> in a
+<code>HashMap&lt;id, oneshot::Sender&lt;Result&lt;Value&gt;&gt;&gt;</code> and resolves it.</li>
+<li>For events: fans them out via a <code>tokio::sync::broadcast</code> so every
+subscriber gets a copy without blocking the actor loop.</li>
+<li>For <code>Target.attachedToTarget</code>: invokes each registered
+<a href="https://docs.rs/zendriver/latest/zendriver/trait.TargetObserver.html"><code>TargetObserver</code></a> (stealth installs JS bootstrap here) <strong>before</strong>
+releasing the debugger pause, so observers run during the gap.</li>
+</ol>
+<p>The actor model gives you exactly-one-reader/writer per socket without
+explicit locking, while keeping the public surface cloneable (<code>Tab</code>,
+<code>Element</code> are <code>Clone + Send + Sync</code>). All concurrency happens in
+user-space Futures handed back from <code>connection.call(...)</code>.</p>
+<h2 id="observer-pattern"><a class="header" href="#observer-pattern">Observer pattern</a></h2>
+<p>Most CDP usage thinks of events as "fire and forget — subscribe if you
+care". zendriver-rs has two layers:</p>
+<ul>
+<li><strong>Broadcast subscribers</strong> — <code>Tab</code> clones a per-target receiver from
+the broadcast channel. Event helpers (<code>expect_request</code>, etc) drop
+into this layer, filter on type + payload, and resolve a oneshot when
+the first match arrives.</li>
+<li><strong>Synchronous observers</strong> — <code>TargetObserver</code> runs on
+<code>Target.attachedToTarget</code> <strong>before</strong> the new target's debugger pause
+is released. Stealth depends on this: the auto-attach observer
+dispatches <code>Page.addScriptToEvaluateOnNewDocument</code> while the page is
+still paused, so the bootstrap script lands before any page script.
+No race; no need for the script to detect its own arrival timing.</li>
+</ul>
+<p>The same observer chain re-applies stealth on every new tab — that's
+why <code>Browser::new_tab()</code> gives you a fully stealth-patched tab without
+extra code.</p>
+<h2 id="auto-refresh-on-stale-handles"><a class="header" href="#auto-refresh-on-stale-handles">Auto-refresh on stale handles</a></h2>
+<p>CDP returns a <code>RemoteObjectId</code> (per-context handle) for every queried
+element. Those handles invalidate when the page re-renders or
+navigates — Chrome will return <code>Cannot find object with given id</code> on the
+next call, which Playwright papers over by re-resolving the locator on
+every action.</p>
+<p>zendriver-rs takes a different bet: cache the <code>RemoteObjectId</code> on the
+<code>Element</code> for speed, but transparently re-run the original query and
+retry the action when the handle goes stale. The trigger:</p>
+<pre><code class="language-text">                      Element::click()
+                            │
+                            ▼
+            ┌─── Runtime.callFunctionOn ───┐
+            │   on cached RemoteObjectId   │
+            └──────────────┬───────────────┘
+                           │
+                  ┌────────┴────────┐
+                  │ success? ──► return │
+                  └────────┬────────┘
+                           │ stale
+                           ▼
+              re-run cached query origin
+                  (find().css("..."))
+                           │
+                           ▼
+              new RemoteObjectId; retry once
+                           │
+                  ┌────────┴────────┐
+                  │ success? ──► return │
+                  └────────┬────────┘
+                           │ stale again
+                           ▼
+                  Err(ZendriverError::ElementStale)
+</code></pre>
+<p>Handles returned from raw <code>evaluate()</code> calls (no underlying query) can't
+be replayed and surface <code>ZendriverError::NotRefreshable</code> on stale. The
+borrow checker tracks the query scope for you — there's no way to use
+an element across browser teardown.</p>
+<h2 id="isolated-world-evaluation"><a class="header" href="#isolated-world-evaluation">Isolated-world evaluation</a></h2>
+<p><code>tab.evaluate(...)</code> runs JS in a sandboxed isolated world per tab: a V8
+context that shares the DOM with the main world but has its own global
+scope. This means:</p>
+<ul>
+<li>The page can't detect your eval via <code>Function.prototype.toString</code>
+drift, <code>window</code>-global mutation, or scope-leak tells.</li>
+<li>Your JS can't see page globals (<code>window.appConfig</code>, jQuery, etc).</li>
+</ul>
+<p>For the main-world escape hatch, use <code>evaluate_main(...)</code>. It dispatches
+the same <code>Runtime.evaluate</code> but targets the page's default context.</p>
+<p>The isolated world is allocated lazily on first <code>evaluate()</code> and cached
+per tab. After navigation Chrome invalidates the context; the next
+<code>evaluate()</code> call re-allocates transparently. Frames each have their
+own isolated world (allocated per frame contextId).</p>
+<h2 id="why-these-choices"><a class="header" href="#why-these-choices">Why these choices</a></h2>
+<ul>
+<li><strong>CDP-direct (no WebDriver shim).</strong> WebDriver's JSON wire serializes
+every command to disk-style protocol overhead — milliseconds per call
+on localhost, plus needing a separate <code>chromedriver</code> process. CDP is
+millisecond-roundtrip over a single socket and exposes the full
+protocol surface (interception, fetch, target tree, etc).
+Anti-detection also requires protocol-level control:
+<code>chromedriver</code> injects its own automation tells that we'd then have
+to scrub back out.</li>
+<li><strong>Single actor task.</strong> Easier reasoning than a connection pool; no
+command-ordering ambiguity. The actor does no parsing past JSON-RPC
+framing, so it's not a CPU bottleneck even under interception load.</li>
+<li><strong>Tokio runtime.</strong> Browser automation is I/O-heavy (every action
+costs at least one round-trip to Chrome); pinning ourselves to Tokio
+gives us the mature <code>tokio::time</code>, <code>tokio::sync</code>, <code>tokio::select</code>
+surface plus the ecosystem (<code>reqwest</code>, etc).</li>
+<li><strong>Auto-refresh by default.</strong> Two-thirds of "flaky test" reports we
+triaged during P3 development were stale-handle races. Making it
+silent + a single retry covers &gt;95% of cases without inviting the
+Playwright-style "every action re-finds, eating round-trips" cost.</li>
+</ul>
+<h2 id="crate-split"><a class="header" href="#crate-split">Crate split</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Crate</th><th>Purpose</th><th>Public?</th></tr></thead><tbody>
+<tr><td><code>zendriver</code></td><td>High-level Browser/Tab/Element + traits</td><td>yes</td></tr>
+<tr><td><code>zendriver-transport</code></td><td>Actor + WebSocket + observers</td><td>yes, but <a href="https://github.com/cdpdriver/zendriver-rs/blob/main/SEMVER.md">SEMVER</a> looser</td></tr>
+<tr><td><code>zendriver-stealth</code></td><td>Fingerprint composition + bootstrap JS</td><td>yes</td></tr>
+<tr><td><code>zendriver-interception</code></td><td><code>Fetch.*</code> actor + rule + stream API</td><td>yes, gated <code>interception</code></td></tr>
+<tr><td><code>zendriver-cloudflare</code></td><td>Turnstile bypass</td><td>yes, gated <code>cloudflare</code></td></tr>
+<tr><td><code>zendriver-fetcher</code></td><td>Chrome-for-Testing downloader</td><td>yes, gated <code>fetcher</code></td></tr>
+</tbody></table>
+</div>
+<p>The split lets you take a dep on only what you need (the
+<code>zendriver-transport</code> crate is the heaviest; the optional sub-crates
+each pull a small additional surface). It also lets future runtime
+backends (e.g. embedding in WASM or smol) replace <code>zendriver-transport</code>
+without touching the high-level types — the actor's public API is the
+seam.</p>
+<h2 id="see-also"><a class="header" href="#see-also">See also</a></h2>
+<ul>
+<li><a href="https://docs.rs/zendriver-transport"><code>zendriver-transport</code> rustdoc</a> — wire types, observer trait, the
+<code>MockConnection</code> test harness.</li>
+<li><a href="./stealth.html">Stealth</a> — what the bootstrap JS actually patches.</li>
+<li><a href="./interception.html">Interception</a> — how the <code>Fetch.*</code> actor sits on
+top of the same transport.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="migration-nodriver-python.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="faq.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="migration-nodriver-python.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="faq.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

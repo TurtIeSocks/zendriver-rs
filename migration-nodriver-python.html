@@ -1,0 +1,460 @@
+<!DOCTYPE HTML>
+<html lang="en" class="ayu sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Migration from nodriver (Python) - zendriver-rs</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "ayu";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('ayu')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">zendriver-rs</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/cdpdriver/zendriver-rs" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/cdpdriver/zendriver-rs/edit/main/docs/book/src/migration-nodriver-python.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="migration-from-nodriver-python"><a class="header" href="#migration-from-nodriver-python">Migration from nodriver (Python)</a></h1>
+<p>If you're coming from <code>nodriver</code> (the original Python CDP wrapper that
+zendriver-py was forked from), you'll find zendriver-rs's shape
+familiar: same locator-style queries, same per-tab handle, same
+isolated-world JS evaluation as a sandbox layer. The Rust port closes a
+few rough edges nodriver carried — explicit <code>Frame</code> types instead of
+flatten-mode juggling, a dedicated Cloudflare driver instead of the
+inline <code>verify_cf</code> helper, and named API surface for the things
+nodriver did through Python's dunder methods. The translation is
+mostly mechanical: swap <code>await</code> for <code>.await?</code>, learn the four query
+terminals, opt into Cargo features for the optional surface.</p>
+<h2 id="crosswalk-table"><a class="header" href="#crosswalk-table">Crosswalk table</a></h2>
+<p>The Python side uses the conventional <code>import nodriver as nd</code> alias.</p>
+<div class="table-wrapper"><table><thead><tr><th>Operation</th><th>Python <code>nodriver</code></th><th>zendriver-rs</th></tr></thead><tbody>
+<tr><td>Launch browser</td><td><code>browser = await nd.start()</code></td><td><code>let browser = Browser::builder().launch().await?;</code></td></tr>
+<tr><td>Launch headless</td><td><code>await nd.start(headless=True)</code></td><td><code>Browser::builder().headless(true).launch().await?</code></td></tr>
+<tr><td>No-sandbox</td><td><code>await nd.start(sandbox=False)</code></td><td><code>Browser::builder().arg("--no-sandbox").launch().await?</code></td></tr>
+<tr><td>Navigate (first tab)</td><td><code>tab = await browser.get(url)</code></td><td><code>let tab = browser.main_tab(); tab.goto(url).await?;</code></td></tr>
+<tr><td>Open new tab</td><td><code>tab = await browser.get(url, new_tab=True)</code></td><td><code>let tab = browser.new_tab_at(url).await?;</code></td></tr>
+<tr><td>Find by text</td><td><code>await tab.find("Submit")</code></td><td><code>tab.find().text("Submit").one().await?</code></td></tr>
+<tr><td>Find by CSS (one)</td><td><code>await tab.select("button.go")</code></td><td><code>tab.find().css("button.go").one().await?</code></td></tr>
+<tr><td>Find by CSS (many)</td><td><code>await tab.select_all("li")</code></td><td><code>tab.find_all().css("li").many().await?</code></td></tr>
+<tr><td>Nth element</td><td><code>(await tab.select_all("li"))[2]</code></td><td><code>tab.find().css("li").nth(2).one().await?</code></td></tr>
+<tr><td>Click</td><td><code>await element.click()</code></td><td><code>element.click().await?</code></td></tr>
+<tr><td>Type text</td><td><code>await element.send_keys("hi")</code></td><td><code>element.type_text("hi").await?</code></td></tr>
+<tr><td>Read text</td><td><code>element.text</code></td><td><code>element.inner_text().await?</code></td></tr>
+<tr><td>Read attribute</td><td><code>element.attrs["href"]</code></td><td><code>element.attr("href").await?</code></td></tr>
+<tr><td>Eval JS</td><td><code>await tab.evaluate("document.title")</code></td><td><code>tab.evaluate_main::&lt;String&gt;("document.title").await?</code></td></tr>
+<tr><td>Eval JS, await promise</td><td><code>tab.evaluate("p()", await_promise=True)</code></td><td><code>tab.evaluate_main::&lt;T&gt;("await p()").await?</code></td></tr>
+<tr><td>Iterate tabs</td><td><code>browser.tabs</code></td><td><code>browser.tabs().await</code></td></tr>
+<tr><td>Cookies</td><td><code>await browser.cookies.get_all()</code></td><td><code>browser.cookies().all().await?</code></td></tr>
+<tr><td>Screenshot</td><td><code>await tab.save_screenshot(path)</code></td><td><code>let png = tab.screenshot().await?; std::fs::write(path, png)?;</code></td></tr>
+<tr><td>Solve Cloudflare</td><td><code>await tab.verify_cf()</code></td><td><code>tab.cloudflare().wait_for_clearance(d).await?</code> (feature <code>cloudflare</code>)</td></tr>
+<tr><td>Close</td><td><code>await browser.stop()</code></td><td><code>browser.close().await?</code></td></tr>
+</tbody></table>
+</div>
+<h2 id="behavioral-differences-worth-knowing"><a class="header" href="#behavioral-differences-worth-knowing">Behavioral differences worth knowing</a></h2>
+<h3 id="iframes-get-a-first-class-frame-type"><a class="header" href="#iframes-get-a-first-class-frame-type">Iframes get a first-class <code>Frame</code> type</a></h3>
+<p>nodriver inherited Chromium's "flatten mode" for nested frames — every
+node from a same-origin iframe appeared in the parent document's tree,
+and you switched into out-of-process iframes (OOPIFs) by attaching to
+the iframe's CDP target manually. zendriver-rs makes <a href="https://docs.rs/zendriver/latest/zendriver/struct.Frame.html"><code>Frame</code></a> a
+first-class type with its own <a href="https://docs.rs/zendriver-transport/latest/zendriver_transport/struct.SessionHandle.html"><code>SessionHandle</code></a>, <code>find</code> / <code>find_all</code> /
+<code>evaluate</code> / <code>evaluate_main</code>, and the same auto-refresh semantics as
+top-level elements:</p>
+<pre><code class="language-rust ignore">let main = tab.main_frame().await?;
+let h1 = main.find().css("h1").one().await?;
+
+// OOPIFs work the same — no manual attach.
+if let Some(yt) = tab.frame_by_url("youtube.com").await? {
+    yt.evaluate::&lt;()&gt;("document.querySelector('video').play()").await?;
+}</code></pre>
+<p>You can also start from the <code>Tab</code> and re-target the query at a <code>Frame</code>
+via <a href="https://docs.rs/zendriver/latest/zendriver/struct.FindBuilder.html#method.in_frame"><code>FindBuilder::in_frame</code></a>. See <a href="./frames.html">Frames</a>.</p>
+<h3 id="cloudflare-bypass-is-a-dedicated-crate"><a class="header" href="#cloudflare-bypass-is-a-dedicated-crate">Cloudflare bypass is a dedicated crate</a></h3>
+<p>nodriver ships a <code>tab.verify_cf()</code> helper that walks the shadow DOM to
+find Turnstile's iframe and dispatches a click at the checkbox's
+expected offset. zendriver-rs lifts that flow into the
+<a href="https://docs.rs/zendriver-cloudflare/"><code>zendriver-cloudflare</code></a> crate (Cargo feature <code>cloudflare</code>), exposed
+via <a href="https://docs.rs/zendriver/latest/zendriver/struct.Tab.html#method.cloudflare"><code>Tab::cloudflare</code></a> → <a href="https://docs.rs/zendriver/latest/zendriver/struct.CloudflareBypass.html#method.wait_for_clearance"><code>CloudflareBypass::wait_for_clearance</code></a>:</p>
+<pre><code class="language-rust ignore">use std::time::Duration;
+use zendriver::CloudflareError;
+
+match tab.cloudflare()
+    .wait_for_clearance(Duration::from_secs(30))
+    .await
+{
+    Ok(_) =&gt; { /* cleared (token acquired or challenge gone) */ }
+    Err(CloudflareError::NoChallenge) =&gt; { /* already clear */ }
+    Err(e) =&gt; return Err(e.into()),
+}</code></pre>
+<p>The driver uses the same shadow-DOM walk approach as nodriver, runs
+the canonical 15%-from-left / 50%-from-top click at the iframe offset,
+and polls the <code>cf-turnstile-response</code> input for a non-empty value.
+Pair with <code>StealthProfile::spoofed()</code> for the best bypass rate. See
+<a href="./cloudflare.html">Cloudflare</a>.</p>
+<h3 id="no-magic-methods--explicit-await-and-nth"><a class="header" href="#no-magic-methods--explicit-await-and-nth">No magic methods — explicit <code>.await</code> and <code>.nth()</code></a></h3>
+<p>nodriver leans on Python dunders to make the API feel imperative:</p>
+<ul>
+<li><code>await tab</code> — <code>__await__</code> waits for the page to be ready.</li>
+<li><code>tab[2]</code> — <code>__getitem__</code> returns the 3rd element of the last query.</li>
+<li><code>for el in elements:</code> — implicit element iteration after a <code>find_all</code>.</li>
+</ul>
+<p>Rust has no equivalent to these — every operation is a named method
+call. The translations:</p>
+<div class="table-wrapper"><table><thead><tr><th>Python idiom</th><th>Rust replacement</th></tr></thead><tbody>
+<tr><td><code>await tab</code></td><td><code>tab.wait_for_load().await?</code></td></tr>
+<tr><td><code>result = await tab.find_all("li"); result[2]</code></td><td><code>tab.find().css("li").nth(2).one().await?</code></td></tr>
+<tr><td><code>for el in await tab.select_all("li"):</code></td><td><code>for el in tab.find_all().css("li").many().await? { ... }</code></td></tr>
+<tr><td><code>tab[2]</code> (last result indexing)</td><td>not supported — capture the <code>Vec&lt;Element&gt;</code> to a <code>let</code> and index it</td></tr>
+</tbody></table>
+</div>
+<p>The verbosity is a one-time tax for code that's easier to grep, easier
+to refactor, and lets <code>rust-analyzer</code> see every callsite.</p>
+<h3 id="evaluate-returns-deserialized-json-not-a-cdp-remoteobject"><a class="header" href="#evaluate-returns-deserialized-json-not-a-cdp-remoteobject"><code>evaluate</code> returns deserialized JSON, not a CDP RemoteObject</a></h3>
+<p>nodriver's <code>tab.evaluate(js, await_promise=False)</code> returns
+Chromium-specific <code>cdp.runtime.RemoteObject</code> wrappers — you fish out
+<code>.value</code> or <code>.description</code>, type-check what you got, and handle the
+"object reference" case manually for non-serializable returns.
+zendriver-rs returns a typed Rust value via <code>serde</code>:</p>
+<pre><code class="language-rust ignore">// Primitives.
+let n: i32 = tab.evaluate_main("[1,2,3].length").await?;
+
+// Strings.
+let title: String = tab.evaluate_main("document.title").await?;
+
+// Dynamic JSON.
+let json: serde_json::Value = tab.evaluate_main("({a: 1, b: [2,3]})").await?;
+
+// Strongly typed (define your own struct).
+#[derive(serde::Deserialize)]
+struct Meta { name: String, count: i32 }
+
+let m: Meta = tab.evaluate_main("({name: 'x', count: 5})").await?;</code></pre>
+<p>For promise return values, await the promise <em>inside</em> the JS string:</p>
+<pre><code class="language-rust ignore">let result: serde_json::Value = tab
+    .evaluate_main("await fetch('/api/me').then(r =&gt; r.json())")
+    .await?;</code></pre>
+<p>Non-serializable returns (DOM nodes, functions) error with
+<code>ZendriverError::JsException</code> — for DOM access prefer <code>tab.find()</code>,
+which returns an <a href="https://docs.rs/zendriver/latest/zendriver/struct.Element.html"><code>Element</code></a> handle that exposes <code>inner_text</code>,
+<code>attr</code>, <code>click</code>, etc.</p>
+<h3 id="errors-are-result-not-exceptions"><a class="header" href="#errors-are-result-not-exceptions">Errors are <code>Result</code>, not exceptions</a></h3>
+<p>Every fallible call returns
+<a href="https://docs.rs/zendriver/latest/zendriver/type.Result.html"><code>Result&lt;T, ZendriverError&gt;</code></a>.
+nodriver raises Python exceptions (<code>NoSuchElementError</code>, <code>TimeoutError</code>,
+plus a few wrappers around chromiumoxide errors). The Rust port flattens
+them all into one
+<a href="https://docs.rs/zendriver/latest/zendriver/enum.ZendriverError.html"><code>ZendriverError</code></a>
+enum with <code>#[from]</code> conversions for the sub-crate errors. See the
+<a href="./error-reference.html">Error Reference</a> for every variant.</p>
+<h3 id="tab--browser-are-cheap-arc-clones"><a class="header" href="#tab--browser-are-cheap-arc-clones">Tab / Browser are cheap <code>Arc</code>-clones</a></h3>
+<p><code>Tab</code> and <code>Browser</code> are <code>Clone + Send + Sync</code> — they're thin
+<code>Arc</code>-wrappers over the underlying CDP session. Clone freely to pass
+into helpers or <code>tokio::spawn</code> blocks. Every clone references the same
+session, so an action on one clone is visible to all.</p>
+<pre><code class="language-rust ignore">let tab = browser.main_tab();
+let probe = tab.clone();
+let handle = tokio::spawn(async move {
+    probe.expect_response("/api/data").await
+});
+tab.goto("https://example.com").await?;
+let _matched = handle.await??;</code></pre>
+<h3 id="isolated-world-is-the-default-eval-target"><a class="header" href="#isolated-world-is-the-default-eval-target">Isolated-world is the default eval target</a></h3>
+<p><code>tab.evaluate()</code> runs in an <strong>isolated world</strong> (sandboxed; no access
+to page globals like <code>document</code> or <code>window.appConfig</code>). The escape
+hatch is <code>tab.evaluate_main()</code> which runs in the page's default
+context — the equivalent of nodriver's <code>tab.evaluate(...)</code>. The
+isolated default keeps the page from detecting your evaluator via
+<code>Function.prototype.toString</code> drift. See
+<a href="./architecture.html#isolated-world-evaluation">Architecture</a>.</p>
+<pre><code class="language-rust ignore">let n: i32 = tab.evaluate("[1,2,3].length").await?;             // sandbox
+let title: String = tab.evaluate_main("document.title").await?; // page globals</code></pre>
+<h2 id="cargo-features"><a class="header" href="#cargo-features">Cargo features</a></h2>
+<p>nodriver is one PyPI package with everything in the box. zendriver-rs
+splits optional capabilities behind Cargo features so you pay only for
+what you use.</p>
+<div class="table-wrapper"><table><thead><tr><th>nodriver capability</th><th>Rust Cargo feature</th><th>What it gates</th></tr></thead><tbody>
+<tr><td><code>tab.add_handler(nd.cdp.fetch.RequestPaused, ...)</code> rewriting</td><td><code>interception</code></td><td><code>Tab::intercept()</code> plus the rule builder (<code>block</code> / <code>redirect</code> / <code>respond</code> / <code>modify_request</code>) and the <code>subscribe()</code> stream.</td></tr>
+<tr><td><code>await tab.expect_request(...)</code> (where supported)</td><td><code>expect</code></td><td>The <code>expect_request</code> / <code>expect_response</code> / <code>expect_dialog</code> / <code>expect_download</code> methods on <code>Tab</code>.</td></tr>
+<tr><td><code>await tab.verify_cf()</code></td><td><code>cloudflare</code></td><td><code>Tab::cloudflare()</code> plus the <code>CloudflareBypass</code> driver. Pulls in <code>interception</code>.</td></tr>
+<tr><td>Chrome auto-download (separate <code>nodriver</code> extras)</td><td><code>fetcher</code></td><td><code>zendriver_fetcher</code> for downloading Chrome for Testing binaries on demand.</td></tr>
+<tr><td>Stealth</td><td>always on</td><td>Profiles via <code>StealthProfile::native()</code> (default recommendation), <code>spoofed()</code>, or <code>off()</code>.</td></tr>
+</tbody></table>
+</div>
+<p>Enable in your <code>Cargo.toml</code>:</p>
+<pre><code class="language-toml">[dependencies]
+zendriver = { version = "0.1", features = ["interception", "expect", "cloudflare"] }
+</code></pre>
+<p>If you're not sure where to start, enable <code>expect</code> (the
+pre-register-then-await pattern saves you from event-handler race
+conditions) and add the rest as you hit them.</p>
+<h2 id="known-gaps-in-v010"><a class="header" href="#known-gaps-in-v010">Known gaps in v0.1.0</a></h2>
+<p>Things nodriver supports that zendriver-rs <strong>doesn't yet</strong>:</p>
+<ul>
+<li><strong>Canvas / WebGL / audio / font fingerprint spoofing.</strong> nodriver's
+bootstrap injects JS randomizers for each of these per launch. The
+Rust port currently ships protocol-level stealth (UA scrub,
+<code>webdriver</code> flag, hardware overrides) plus the <code>spoofed()</code> profile
+that patches the Navigator prototype — but not canvas-noise
+injection. On the post-v0.1 roadmap.</li>
+<li><strong>browserforge fingerprint generation.</strong> nodriver pairs with the
+<code>browserforge</code> library for pre-canned realistic fingerprints. Not
+ported; build a <code>StealthProfile</code> from explicit <code>UserAgentMetadata</code>
+fields by hand.</li>
+<li><strong>OCR helpers.</strong> nodriver bundles <code>easyocr</code> / <code>tesseract</code> wrappers
+for text-in-image extraction. Not ported; pair <code>tab.screenshot()</code>
+with the <code>tesseract-rs</code> or <code>leptess</code> crate.</li>
+<li><strong>Widevine / DRM playback.</strong> nodriver supports loading the Widevine
+CDM for protected video; zendriver-rs launches a vanilla Chrome / CfT
+binary that doesn't ship the CDM.</li>
+<li><strong><code>__await__</code> on <code>tab</code> and <code>flow_to_finish</code>.</strong> nodriver overloads
+<code>await tab</code> for "wait for the page to be ready". Rust call sites are
+always explicit: <code>tab.wait_for_load().await?</code> or <code>tab.wait_for_idle().await?</code>.</li>
+<li><strong><code>__getitem__</code> on element collections.</strong> No <code>tab[2]</code> shortcut —
+call <code>tab.find().css(...).nth(2).one().await?</code> or capture a
+<code>Vec&lt;Element&gt;</code> from <code>.many()</code> and index it via <code>[2]</code>.</li>
+<li><strong><code>Element.children</code> walks.</strong> nodriver exposes parent / child / sibling
+traversal on the element handle. zendriver-rs has limited traversal
+(see <a href="https://docs.rs/zendriver/latest/zendriver/struct.Element.html#method.children"><code>Element::children</code></a>
+and friends in the docs); deeper DOM walks may need a JS <code>evaluate</code>
+call returning the structured shape you need.</li>
+<li><strong><code>tab.send_dom_event</code></strong> — direct DOM event synthesis isn't a
+first-class helper. Use <code>tab.evaluate_main</code> with the corresponding JS
+(<code>el.dispatchEvent(new Event('change'))</code>).</li>
+</ul>
+<p>If you hit a gap that blocks your migration, please file an issue at
+<a href="https://github.com/cdpdriver/zendriver-rs/issues">https://github.com/cdpdriver/zendriver-rs/issues</a> — pre-1.0
+prioritization is largely driven by reported migration friction.</p>
+<h2 id="see-also"><a class="header" href="#see-also">See also</a></h2>
+<ul>
+<li><a href="./migration-zendriver-python.html">Migration from zendriver (Python)</a>
+— the zendriver Python package is a downstream fork of nodriver, so
+most differences from nodriver also apply to it.</li>
+<li><a href="./quickstart.html">Quickstart</a> — the minimal Rust launch / navigate /
+find / read flow, walked line by line.</li>
+<li><a href="./frames.html">Frames</a> — covers <code>Frame</code> semantics and the OOPIF
+auto-attach behavior in detail.</li>
+<li><a href="./cloudflare.html">Cloudflare</a> — full <code>CloudflareBypass</code> documentation
+including the four internal stages, limitations, and stealth pairing.</li>
+<li><a href="./architecture.html">Architecture</a> — the design choices behind the
+isolated-world default, auto-refresh on stale handles, and the
+single-actor CDP transport.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="migration-zendriver-python.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="architecture.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="migration-zendriver-python.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="architecture.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

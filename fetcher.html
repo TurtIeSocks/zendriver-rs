@@ -1,0 +1,413 @@
+<!DOCTYPE HTML>
+<html lang="en" class="ayu sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Fetcher - zendriver-rs</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "ayu";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('ayu')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">zendriver-rs</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/cdpdriver/zendriver-rs" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/cdpdriver/zendriver-rs/edit/main/docs/book/src/fetcher.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="fetcher"><a class="header" href="#fetcher">Fetcher</a></h1>
+<p>The <code>fetcher</code> Cargo feature downloads a Chrome binary from Google's
+<a href="https://googlechromelabs.github.io/chrome-for-testing/">Chrome for Testing</a> (CFT) distribution and hands back a path you
+can pass to <code>BrowserBuilder::executable</code>. Useful in CI runners that
+don't ship Chrome, in containers, or whenever you want a version pinned
+independently of the host's Chrome install.</p>
+<p>Enable it in <code>Cargo.toml</code>:</p>
+<pre><code class="language-toml">[dependencies]
+zendriver = { version = "0.1", features = ["fetcher"] }
+</code></pre>
+<p>Two entry points:</p>
+<div class="table-wrapper"><table><thead><tr><th>Entry point</th><th>When to use</th></tr></thead><tbody>
+<tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.ensure_chrome"><code>BrowserBuilder::ensure_chrome</code></a></td><td>Common case: just download Chrome and launch. One line, no configuration.</td></tr>
+<tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.Fetcher.html"><code>Fetcher</code></a> (builder)</td><td>Pin a version / channel, customize the cache dir, register progress callbacks.</td></tr>
+</tbody></table>
+</div>
+<h2 id="the-one-liner"><a class="header" href="#the-one-liner">The one-liner</a></h2>
+<p>For the common "I just want Chrome" path:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span>let browser = zendriver::Browser::builder()
+    .ensure_chrome().await?
+    .launch().await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p><code>ensure_chrome</code> resolves the latest stable CFT version for the host
+platform, downloads + extracts it on cache miss, and points the
+[<code>BrowserBuilder</code>] at the resulting binary. On a cache hit the call
+returns in milliseconds and skips the network.</p>
+<h2 id="the-full-builder"><a class="header" href="#the-full-builder">The full builder</a></h2>
+<p><a href="https://docs.rs/zendriver/latest/zendriver/struct.Fetcher.html#method.new"><code>Fetcher::new</code></a> returns a builder with sensible defaults. Configure as
+needed, then call <a href="https://docs.rs/zendriver/latest/zendriver/struct.Fetcher.html#method.ensure_chrome"><code>ensure_chrome</code></a>:</p>
+<pre><pre class="playground"><code class="language-rust no_run">//! Demonstrates the P5 [`Fetcher`] — Chrome for Testing binary downloader.
+//!
+//! [`Fetcher::new`] starts a builder; `.version(VersionSpec::Latest)`
+//! pins the version selector to the newest Stable build in the CFT
+//! manifest. `.on_progress(...)` registers a callback that fires through
+//! every phase ([`FetcherPhase::Resolving`] → `Downloading` → `Extracting`
+//! → `Verifying` → `Done`).
+//!
+//! [`Fetcher::ensure_chrome`] resolves the manifest, downloads + extracts
+//! into the OS-conventional cache dir on a cache miss, and returns a
+//! [`PathBuf`] to a runnable Chrome binary. On a cache hit (binary already
+//! extracted under `&lt;cache&gt;/&lt;version&gt;/`), it skips the network entirely
+//! and returns the cached path.
+//!
+//! After resolving the path, you can hand it to a [`Browser`] launch:
+//! `Browser::builder().executable(path).launch().await?` — or use the
+//! one-line shortcut `Browser::builder().ensure_chrome().await?.launch()`,
+//! which wraps this call internally.
+//!
+//! Requires the `fetcher` cargo feature:
+//! `cargo run --example fetcher_demo --features fetcher`.
+
+use zendriver::{Fetcher, VersionSpec};
+
+#[tokio::main]
+#[allow(clippy::result_large_err)] // example boundary; users wrap in their own Error
+async fn main() -&gt; zendriver::Result&lt;()&gt; {
+    tracing_subscriber::fmt::init();
+
+    let path = Fetcher::new()
+        .version(VersionSpec::Latest)
+        .on_progress(|p| println!("{p:?}"))
+        .ensure_chrome()
+        .await?;
+
+    println!("chrome binary: {}", path.display());
+
+    Ok(())
+}</code></pre></pre>
+<p>Customization points:</p>
+<ul>
+<li><strong><code>.version(VersionSpec)</code></strong> — pin a release.
+<ul>
+<li><code>VersionSpec::Latest</code> — the newest entry in the manifest (default).</li>
+<li><code>VersionSpec::Stable</code> — alias for <code>Latest</code> today; will diverge if /
+when CFT exposes a stable-channel JSON.</li>
+<li><code>VersionSpec::Channel(Channel::Stable)</code> — only <code>Stable</code> is fully
+wired in 0.1; <code>Beta</code> / <code>Dev</code> / <code>Canary</code> return
+<a href="https://docs.rs/zendriver/latest/zendriver/enum.FetcherError.html#variant.UnsupportedPlatform"><code>FetcherError::UnsupportedPlatform</code></a> (the CFT endpoint is
+separate).</li>
+<li><code>VersionSpec::Explicit("126.0.6478.182".into())</code> — exact version
+string from the manifest.</li>
+</ul>
+</li>
+<li><strong><code>.platform(Platform)</code></strong> — override <a href="https://docs.rs/zendriver/latest/zendriver/enum.Platform.html#method.auto_detect"><code>Platform::auto_detect</code></a>. Useful
+for cross-compiling docker images for a different host arch.</li>
+<li><strong><code>.cache_dir(path)</code></strong> — override the default cache root. Point at a
+shared CI volume so multiple jobs share one download.</li>
+<li><strong><code>.on_progress(cb)</code></strong> — receive a <a href="https://docs.rs/zendriver/latest/zendriver/struct.FetcherProgress.html"><code>FetcherProgress</code></a> snapshot on
+every phase transition + per-chunk during download.</li>
+</ul>
+<h2 id="cache-layout"><a class="header" href="#cache-layout">Cache layout</a></h2>
+<p>Downloads land in the OS-conventional cache dir under <code>zendriver/chrome</code>:</p>
+<ul>
+<li><strong>Linux</strong> — <code>${XDG_CACHE_HOME:-$HOME/.cache}/zendriver/chrome/</code></li>
+<li><strong>macOS</strong> — <code>~/Library/Caches/zendriver/chrome/</code></li>
+<li><strong>Windows</strong> — <code>%LOCALAPPDATA%\zendriver\chrome\</code></li>
+</ul>
+<p>Inside, each version gets its own subdirectory matching the CFT zip
+layout verbatim:</p>
+<pre><code class="language-text">&lt;cache_dir&gt;/
+  126.0.6478.182/
+    chrome-linux64/
+      chrome                                            (Linux)
+    chrome-win64/
+      chrome.exe                                        (Windows)
+    chrome-mac-arm64/
+      Google Chrome for Testing.app/Contents/MacOS/...  (macOS Apple Silicon)
+</code></pre>
+<p>Writes are atomic. The fetcher downloads + extracts into a
+<code>&lt;version&gt;.tmp/</code> sibling, then a single <code>rename</code> promotes it to
+<code>&lt;version&gt;/</code>. Crashing mid-download leaves a <code>.tmp/</code> that the next run
+detects, deletes, and retries — no half-extracted binaries ever appear
+under the canonical name.</p>
+<h2 id="progress-callbacks"><a class="header" href="#progress-callbacks">Progress callbacks</a></h2>
+<p><a href="https://docs.rs/zendriver/latest/zendriver/struct.FetcherProgress.html"><code>FetcherProgress</code></a> carries:</p>
+<ul>
+<li><code>phase</code> — one of <a href="https://docs.rs/zendriver/latest/zendriver/enum.FetcherPhase.html#variant.Resolving"><code>Resolving</code></a> / <a href="https://docs.rs/zendriver/latest/zendriver/enum.FetcherPhase.html#variant.Downloading"><code>Downloading</code></a> /
+<a href="https://docs.rs/zendriver/latest/zendriver/enum.FetcherPhase.html#variant.Extracting"><code>Extracting</code></a> / <a href="https://docs.rs/zendriver/latest/zendriver/enum.FetcherPhase.html#variant.Verifying"><code>Verifying</code></a> / <a href="https://docs.rs/zendriver/latest/zendriver/enum.FetcherPhase.html#variant.Done"><code>Done</code></a>.</li>
+<li><code>downloaded</code> / <code>total: Option&lt;u64&gt;</code> — bytes for the current phase,
+with <code>total</code> populated during <code>Downloading</code> from the
+<code>Content-Length</code> header.</li>
+</ul>
+<p>The callback runs on Tokio worker threads. Render to a TUI / progress
+bar inside it; heavier work (e.g. logging via I/O) should
+<code>spawn_blocking</code> itself off the runtime to avoid stalling the download
+task.</p>
+<pre><code class="language-rust ignore">use indicatif::{ProgressBar, ProgressStyle};
+use zendriver::{Fetcher, FetcherPhase};
+
+let bar = ProgressBar::new(0);
+let path = Fetcher::new()
+    .on_progress(move |p| {
+        if p.phase == FetcherPhase::Downloading {
+            if let Some(t) = p.total { bar.set_length(t); }
+            bar.set_position(p.downloaded);
+        }
+    })
+    .ensure_chrome()
+    .await?;</code></pre>
+<h2 id="ci-use-case"><a class="header" href="#ci-use-case">CI use case</a></h2>
+<p>The motivating workflow: GitHub Actions / GitLab / etc runners that
+don't have Chrome installed. Skipping Chrome from the system image and
+letting the fetcher download Chrome inside the job has three wins:</p>
+<ol>
+<li><strong>Reproducibility.</strong> Pin <code>VersionSpec::Explicit(...)</code> so the same
+Chrome runs everywhere. No surprises when the runner image bumps.</li>
+<li><strong>Smaller base images.</strong> Don't bake Chrome into a hot container image
+if only a fraction of jobs need it.</li>
+<li><strong>Parallel cache.</strong> Point the fetcher at a runner-side volume (CFT
+binaries are ~150 MB compressed; one download serves every job).</li>
+</ol>
+<p>A minimal <code>.github/workflows/test.yml</code> snippet:</p>
+<pre><code class="language-yaml">- uses: actions/cache@v4
+  with:
+    path: ~/.cache/zendriver/chrome
+    key: zendriver-chrome-${{ runner.os }}-126.0.6478.182
+- run: cargo test --features fetcher
+</code></pre>
+<p><code>actions/cache</code> rehydrates the cache dir; the fetcher detects the cache
+hit and skips the download. First run takes ~30 s on GitHub's free
+runners; cached runs take &lt;1 s in <code>ensure_chrome</code>.</p>
+<h2 id="when-not-to-use-it"><a class="header" href="#when-not-to-use-it">When NOT to use it</a></h2>
+<ul>
+<li><strong>You already have Chrome on the host</strong> and don't care about
+version-pinning — the built-in PATH discovery is faster.</li>
+<li><strong>Network-restricted environments</strong> that can't reach
+<code>https://googlechromelabs.github.io</code> or the CFT CDN — pre-populate
+the cache out-of-band or ship a Docker image with Chrome baked in.</li>
+<li><strong>You need Chrome stable on Linux ARM64</strong> — CFT doesn't ship a
+<code>linux-arm64</code> build today;
+<a href="https://docs.rs/zendriver/latest/zendriver/enum.Platform.html#method.auto_detect"><code>Platform::auto_detect</code></a> returns <code>None</code> on that host and
+<code>ensure_chrome</code> errors out.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="cloudflare.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="migration-playwright.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="cloudflare.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="migration-playwright.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

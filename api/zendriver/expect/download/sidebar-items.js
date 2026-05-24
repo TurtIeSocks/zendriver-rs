@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["DownloadProgressState"],"struct":["DownloadExpectation","DownloadState","MatchedDownload"]};

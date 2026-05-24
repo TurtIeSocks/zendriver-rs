@@ -1,0 +1,372 @@
+<!DOCTYPE HTML>
+<html lang="en" class="ayu sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Migration from Playwright - zendriver-rs</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "ayu";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('ayu')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">zendriver-rs</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/cdpdriver/zendriver-rs" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/cdpdriver/zendriver-rs/edit/main/docs/book/src/migration-playwright.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="migration-from-playwright"><a class="header" href="#migration-from-playwright">Migration from Playwright</a></h1>
+<p>zendriver-rs's surface borrows heavily from Playwright (locator-based
+queries, pre-register expectations, fluent builders) so most flows port
+straightforwardly. This page is a crosswalk for the common operations,
+plus a note on the structural differences that don't have a 1:1 mapping.</p>
+<p>The Playwright side is shown in JavaScript/TypeScript; the Python
+binding is structurally identical (snake_case methods, otherwise the
+same shape).</p>
+<h2 id="crosswalk-table"><a class="header" href="#crosswalk-table">Crosswalk table</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Operation</th><th>Playwright</th><th>zendriver-rs</th></tr></thead><tbody>
+<tr><td>Launch browser</td><td><code>await chromium.launch()</code></td><td><code>Browser::builder().launch().await?</code></td></tr>
+<tr><td>Launch headed</td><td><code>chromium.launch({ headless: false })</code></td><td><code>Browser::builder().headless(false).launch().await?</code></td></tr>
+<tr><td>Open a tab / page</td><td><code>await context.newPage()</code></td><td><code>browser.new_tab().await?</code></td></tr>
+<tr><td>Reuse first tab</td><td><code>(await context.pages())[0]</code></td><td><code>browser.main_tab()</code></td></tr>
+<tr><td>Navigate</td><td><code>await page.goto(url)</code></td><td><code>tab.goto(url).await?</code></td></tr>
+<tr><td>Wait for load</td><td>implicit on <code>goto</code></td><td><code>tab.wait_for_load().await?</code></td></tr>
+<tr><td>Wait for network idle</td><td><code>await page.waitForLoadState("networkidle")</code></td><td><code>tab.wait_for_idle().await?</code></td></tr>
+<tr><td>Find one element (CSS)</td><td><code>page.locator("button").click()</code></td><td><code>tab.find().css("button").one().await?.click().await?</code></td></tr>
+<tr><td>Find by text</td><td><code>page.getByText("Submit")</code></td><td><code>tab.find().text("Submit").one().await?</code></td></tr>
+<tr><td>Find by ARIA role</td><td><code>page.getByRole("button", { name: "Go" })</code></td><td><code>tab.find().role(AriaRole::Button).name("Go").one().await?</code></td></tr>
+<tr><td>Find by XPath</td><td><code>page.locator("xpath=//button")</code></td><td><code>tab.find().xpath("//button").one().await?</code></td></tr>
+<tr><td>Find all</td><td><code>await page.locator("li").all()</code></td><td><code>tab.find().css("li").many().await?</code></td></tr>
+<tr><td>Get nth match</td><td><code>page.locator("li").nth(2)</code></td><td><code>tab.find().css("li").nth(2).one().await?</code></td></tr>
+<tr><td>Click</td><td><code>await locator.click()</code></td><td><code>el.click().await?</code></td></tr>
+<tr><td>Type text</td><td><code>await locator.fill("hello")</code></td><td><code>el.set_value("hello").await?</code> (instant)</td></tr>
+<tr><td>Type with key events</td><td><code>await locator.pressSequentially("hi")</code></td><td><code>el.type_text("hi").await?</code></td></tr>
+<tr><td>Press key</td><td><code>await locator.press("Enter")</code></td><td><code>el.press(Key::Special(SpecialKey::Enter)).await?</code></td></tr>
+<tr><td>Read text</td><td><code>await locator.innerText()</code></td><td><code>el.inner_text().await?</code></td></tr>
+<tr><td>Read attribute</td><td><code>await locator.getAttribute("href")</code></td><td><code>el.attr("href").await?</code></td></tr>
+<tr><td>Check visibility</td><td><code>await locator.isVisible()</code></td><td><code>el.is_visible().await?</code></td></tr>
+<tr><td>Eval JS (page world)</td><td><code>await page.evaluate(() =&gt; document.title)</code></td><td><code>tab.evaluate_main::&lt;String&gt;("document.title").await?</code></td></tr>
+<tr><td>Eval JS (isolated)</td><td>n/a (always main world)</td><td><code>tab.evaluate::&lt;String&gt;("...").await?</code></td></tr>
+<tr><td>Wait for response</td><td><code>await page.waitForResponse("**/api/*")</code></td><td><code>tab.expect_response("/api/").await?</code></td></tr>
+<tr><td>Wait for request</td><td><code>await page.waitForRequest("**/auth")</code></td><td><code>tab.expect_request("/auth").await?</code></td></tr>
+<tr><td>Wait for download</td><td><code>page.waitForEvent("download")</code></td><td><code>tab.expect_download().await?.await?</code></td></tr>
+<tr><td>Handle dialog</td><td><code>page.on("dialog", d =&gt; d.accept())</code></td><td><code>let d = tab.expect_dialog(); ...; d.await?.accept(None).await?</code></td></tr>
+<tr><td>Intercept / block</td><td><code>route.abort()</code> in <code>page.route</code></td><td><code>tab.intercept().block("*/ads/*")?.start()</code></td></tr>
+<tr><td>Modify request</td><td><code>route.continue({headers})</code></td><td><code>tab.intercept().modify_request("...", |req| {...})?.start()</code></td></tr>
+<tr><td>Screenshot</td><td><code>await page.screenshot()</code></td><td><code>tab.screenshot().await?</code></td></tr>
+<tr><td>Cookies (get all)</td><td><code>await context.cookies()</code></td><td><code>browser.cookies().all().await?</code></td></tr>
+<tr><td>LocalStorage</td><td><code>await page.evaluate("...")</code> (no helper)</td><td><code>tab.local_storage().get("k").await?</code></td></tr>
+<tr><td>Close</td><td><code>await browser.close()</code></td><td><code>browser.close().await?</code></td></tr>
+</tbody></table>
+</div>
+<h2 id="structural-differences"><a class="header" href="#structural-differences">Structural differences</a></h2>
+<h3 id="async-runtime-is-tokio-not-the-js-event-loop"><a class="header" href="#async-runtime-is-tokio-not-the-js-event-loop">Async runtime is Tokio, not the JS event loop</a></h3>
+<p>Every <code>await</code> is a Tokio await. Every method that does I/O takes
+<code>&amp;self</code> and returns a <code>Future</code>. You drive it with <code>tokio::main</code>:</p>
+<pre><code class="language-rust ignore">#[tokio::main]
+async fn main() -&gt; zendriver::Result&lt;()&gt; {
+    let browser = zendriver::Browser::builder().launch().await?;
+    // ...
+    Ok(())
+}</code></pre>
+<p>There is no implicit "current page" — every operation takes an explicit
+<a href="https://docs.rs/zendriver/latest/zendriver/struct.Tab.html"><code>Tab</code></a> handle. Multiple tabs run in parallel by cloning the
+<code>Tab</code> and spawning Tokio tasks.</p>
+<h3 id="builder-pattern-instead-of-object-config"><a class="header" href="#builder-pattern-instead-of-object-config">Builder pattern instead of object-config</a></h3>
+<p>Playwright uses option-bag objects:</p>
+<pre><code class="language-js">await page.click("button", { force: true, timeout: 5000 });
+</code></pre>
+<p>zendriver-rs uses fluent builders with terminal methods:</p>
+<pre><code class="language-rust ignore">use std::time::Duration;
+use zendriver::ClickOptions;
+
+let el = tab.find().css("button")
+    .timeout(Duration::from_secs(5))
+    .one()
+    .await?;
+el.click_with(ClickOptions { force: true, ..Default::default() }).await?;</code></pre>
+<p>Builders are checked at compile time — there's no <code>{ tymeout: ... }</code>
+typo that silently uses the default.</p>
+<h3 id="no-global-browser--browsercontext-split"><a class="header" href="#no-global-browser--browsercontext-split">No global <code>Browser</code> / <code>BrowserContext</code> split</a></h3>
+<p>Playwright separates <code>Browser</code> (the process) from <code>BrowserContext</code>
+(an isolated cookie/storage scope). zendriver-rs has only <code>Browser</code>;
+every <code>Tab</code> shares the browser-scope cookie jar and is the equivalent
+of one Playwright page inside the default context.</p>
+<p>If you need multi-context isolation, launch a second <code>Browser</code>. The
+overhead is one extra Chrome subprocess — heavier than a context, but
+the isolation is total (separate user-data-dir, separate cookies,
+separate process). Most testing flows can avoid it.</p>
+<h3 id="find-returns-one-or-many-explicitly"><a class="header" href="#find-returns-one-or-many-explicitly">Find returns one or many, explicitly</a></h3>
+<p>Playwright's <code>locator()</code> lazily evaluates to "zero or more matches"
+until you call a terminal action. zendriver-rs forces the choice at
+query time:</p>
+<div class="table-wrapper"><table><thead><tr><th>Terminal</th><th>Semantic</th></tr></thead><tbody>
+<tr><td><code>.one()</code></td><td>Exactly one match — errors with <code>ElementNotUnique</code> otherwise.</td></tr>
+<tr><td><code>.first()</code></td><td>First match — errors with <code>ElementNotFound</code> if zero.</td></tr>
+<tr><td><code>.many()</code></td><td>All matches — errors with <code>ElementNotFound</code> if zero.</td></tr>
+<tr><td><code>.many_or_empty()</code></td><td>All matches; returns <code>Vec::new()</code> if zero.</td></tr>
+<tr><td><code>.count()</code></td><td>Just the count.</td></tr>
+<tr><td><code>.exists()</code></td><td>Boolean.</td></tr>
+</tbody></table>
+</div>
+<p>Force-picking <code>.first()</code> over <code>.one()</code> is a documented choice when the
+page may legitimately have multiple matching elements. Playwright's
+implicit "first-of-many" can mask bugs.</p>
+<h3 id="element-handles-auto-refresh-on-stale"><a class="header" href="#element-handles-auto-refresh-on-stale">Element handles auto-refresh on stale</a></h3>
+<p>Playwright re-resolves locators on every call by design. zendriver-rs
+caches the CDP <code>RemoteObjectId</code> per <code>Element</code> for speed; if the page
+re-renders and invalidates the handle, the next method call replays the
+original query, gets a fresh handle, and retries silently. Handles
+returned from raw <code>evaluate</code> calls (without an underlying selector)
+error with <code>NotRefreshable</code> instead.</p>
+<p>This means <code>let el = tab.find().css("...").one().await?; el.click().await?;</code>
+is just as safe across navigations as Playwright; you don't need to
+re-find before every action.</p>
+<h3 id="isolated-world-vs-main-world-js"><a class="header" href="#isolated-world-vs-main-world-js">Isolated-world vs main-world JS</a></h3>
+<p>Playwright always evaluates user JS in the main world. zendriver-rs
+defaults to an <strong>isolated world</strong> (sandbox) via <code>evaluate()</code>, which
+means your JS can't see page globals — useful for stealth (the page
+can't detect your eval), risky if you actually need <code>document.title</code>
+etc. <code>evaluate_main()</code> is the main-world escape hatch.</p>
+<pre><code class="language-rust ignore">let title: String = tab.evaluate_main("document.title").await?;     // page globals work
+let n: i32 = tab.evaluate("[1,2,3].length").await?;                  // sandboxed; no DOM</code></pre>
+<h3 id="stealth-is-on-by-default"><a class="header" href="#stealth-is-on-by-default">Stealth is on by default</a></h3>
+<p>Playwright launches with the headless-Chrome <code>HeadlessChrome</code> UA, the
+<code>navigator.webdriver = true</code> tell, and no anti-detection patches.
+zendriver-rs defaults to <code>StealthProfile::native()</code> — the UA scrub plus
+launch-flag set passes most consumer-site detectors. For active
+fingerprint detection (<code>sannysoft</code>, etc), opt into
+<code>StealthProfile::spoofed()</code>. See <a href="./stealth.html">Stealth</a>.</p>
+<h2 id="whats-not-ported"><a class="header" href="#whats-not-ported">What's not ported</a></h2>
+<ul>
+<li><strong>Trace viewer / video recording</strong> — out of scope; integrate with
+<code>tab.screenshot()</code> plus your own ffmpeg pipeline if needed.</li>
+<li><strong>Test runner</strong> (<code>@playwright/test</code>) — use <code>cargo test</code> plus the
+zendriver-rs surface; the <a href="./expect.html"><code>expect</code></a> feature covers the
+pre-register pattern that powers Playwright's <code>expect(locator)</code>
+assertions.</li>
+<li><strong>Codegen</strong> (<code>playwright codegen</code>) — not implemented.</li>
+<li><strong>Mobile emulation</strong> (<code>devices</code>) — set the User-Agent + viewport
+manually via <code>StealthProfile</code>.</li>
+</ul>
+<p>See <a href="./architecture.html">Architecture</a> for why these are out of scope
+rather than not-yet-built.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="fetcher.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="migration-zendriver-python.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="fetcher.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="migration-zendriver-python.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

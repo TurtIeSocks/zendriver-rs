@@ -1,0 +1,468 @@
+<!DOCTYPE HTML>
+<html lang="en" class="ayu sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Input - zendriver-rs</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "ayu";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('ayu')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">zendriver-rs</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/cdpdriver/zendriver-rs" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/cdpdriver/zendriver-rs/edit/main/docs/book/src/input.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="input"><a class="header" href="#input">Input</a></h1>
+<p>Every input method on <a href="https://docs.rs/zendriver/latest/zendriver/struct.Element.html"><code>Element</code></a> comes in two variants:</p>
+<ul>
+<li><strong>Realistic (default)</strong> — Bezier-interpolated cursor moves for the
+mouse, per-character delays with occasional typos for the keyboard.
+Tuned to defeat behavioral fingerprinters.</li>
+<li><strong><code>_fast</code></strong> — single CDP dispatch, no delays, no jitter, no typos.
+Skips the actionability gate. For tests and fast automation flows
+where deterministic timing matters more than realism.</li>
+</ul>
+<p>Both flavors route through the same shared <a href="https://docs.rs/zendriver/latest/zendriver/input/struct.InputController.html"><code>InputController</code></a> on each
+tab, so the OS-level modifier state (Shift, Ctrl, etc.) stays consistent
+across realistic and fast paths.</p>
+<h2 id="realistic-vs-_fast"><a class="header" href="#realistic-vs-_fast">Realistic vs <code>_fast</code></a></h2>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span><span class="boring">let browser = zendriver::Browser::builder().launch().await?;
+</span><span class="boring">let tab = browser.main_tab();
+</span>let btn = tab.find().css("button").one().await?;
+
+// Realistic: Bezier-path cursor approach, hover, then mousedown/up.
+btn.click().await?;
+
+// Fast: single Input.dispatchMouseEvent, no actionability gate.
+btn.click_fast().await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<div class="table-wrapper"><table><thead><tr><th>Method</th><th>Cursor path</th><th>Gate</th><th>Use case</th></tr></thead><tbody>
+<tr><td><code>click()</code></td><td>Bezier</td><td>actionability</td><td>Default. Indistinguishable.</td></tr>
+<tr><td><code>click_fast()</code></td><td>teleport</td><td>skipped</td><td>Tests; trusted automation.</td></tr>
+<tr><td><code>hover()</code></td><td>Bezier</td><td>actionability</td><td>Default. Real cursor approach.</td></tr>
+<tr><td><code>hover_fast()</code></td><td>teleport</td><td>skipped</td><td>Tests; trusted automation.</td></tr>
+<tr><td><code>type_text(s)</code></td><td>per-char + delays</td><td>focus gate</td><td>Default. Sub-keystroke timing.</td></tr>
+<tr><td><code>type_text_fast(s)</code></td><td>per-char, no delay</td><td>focus gate</td><td>Tests; trusted automation.</td></tr>
+</tbody></table>
+</div>
+<p>The realism comes from the active <a href="https://docs.rs/zendriver/latest/zendriver/stealth/struct.StealthProfile.html"><code>StealthProfile</code></a>'s <code>InputProfile</code>:</p>
+<ul>
+<li><code>StealthProfile::native()</code> and <code>::spoofed()</code> install a realistic
+profile by default — Bezier control points with deterministic-but-
+jittered timing, per-character keyboard delays of 30-200 ms,
+occasional 1-2% typo + correction events.</li>
+<li><code>StealthProfile::off()</code> installs a no-op profile — even realistic
+methods just do the dispatch without realism.</li>
+</ul>
+<p>When realism matters but you also want determinism (e.g. snapshots
+inside tests), seed the profile with a fixed RNG — see the
+<a href="https://docs.rs/zendriver_stealth/latest/zendriver_stealth/struct.InputProfile.html"><code>InputProfile</code></a> rustdoc.</p>
+<h2 id="clickoptions-for-fine-control"><a class="header" href="#clickoptions-for-fine-control"><code>ClickOptions</code> for fine control</a></h2>
+<p>Both <code>click()</code> and <code>click_fast()</code> are wrappers around <a href="https://docs.rs/zendriver/latest/zendriver/struct.Element.html#method.click_with"><code>Element::click_with()</code></a>,
+which takes a <a href="https://docs.rs/zendriver/latest/zendriver/struct.ClickOptions.html"><code>ClickOptions</code></a> struct for full control:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::{ClickOptions, MouseButton, KeyModifiers};
+
+<span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span><span class="boring">let browser = zendriver::Browser::builder().launch().await?;
+</span><span class="boring">let tab = browser.main_tab();
+</span>let row = tab.find().css("tr.contact").one().await?;
+
+// Right-click.
+row.click_with(ClickOptions {
+    button: MouseButton::Right,
+    ..Default::default()
+}).await?;
+
+// Ctrl+click (open in new tab).
+let link = tab.find().css("a.external").one().await?;
+link.click_with(ClickOptions {
+    modifiers: KeyModifiers::CTRL,
+    ..Default::default()
+}).await?;
+
+// Double-click.
+let item = tab.find().css(".item").one().await?;
+item.click_with(ClickOptions {
+    click_count: 2,
+    ..Default::default()
+}).await?;
+
+// Click at a specific offset inside the element's bbox.
+let canvas = tab.find().css("canvas").one().await?;
+canvas.click_with(ClickOptions {
+    position: Some((100.0, 50.0)),
+    ..Default::default()
+}).await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p>The full <code>ClickOptions</code> shape:</p>
+<div class="table-wrapper"><table><thead><tr><th>Field</th><th>Type</th><th>Default</th><th>Meaning</th></tr></thead><tbody>
+<tr><td><code>button</code></td><td><code>MouseButton</code></td><td><code>MouseButton::Left</code></td><td>Which button to dispatch.</td></tr>
+<tr><td><code>modifiers</code></td><td><code>KeyModifiers</code></td><td><code>KeyModifiers::empty()</code></td><td>Modifier bits held during dispatch.</td></tr>
+<tr><td><code>click_count</code></td><td><code>u32</code></td><td><code>1</code></td><td><code>clickCount</code> for the dispatch (2 = double-click).</td></tr>
+<tr><td><code>force</code></td><td><code>bool</code></td><td><code>false</code></td><td>Skip the actionability gate. Mirrors Playwright.</td></tr>
+<tr><td><code>realistic</code></td><td><code>bool</code></td><td><code>true</code></td><td>Bezier path vs teleport.</td></tr>
+<tr><td><code>position</code></td><td><code>Option&lt;(f64, f64)&gt;</code></td><td><code>None</code> (bbox center)</td><td>Click offset relative to bbox top-left.</td></tr>
+</tbody></table>
+</div>
+<h2 id="keyboard-key-keymodifiers-specialkey"><a class="header" href="#keyboard-key-keymodifiers-specialkey">Keyboard: <code>Key</code>, <code>KeyModifiers</code>, <code>SpecialKey</code></a></h2>
+<p>For single-key dispatches (Enter, Tab, arrow keys, Ctrl+A, etc.):</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::{Key, KeyModifiers, SpecialKey};
+
+<span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span><span class="boring">let browser = zendriver::Browser::builder().launch().await?;
+</span><span class="boring">let tab = browser.main_tab();
+</span>let input = tab.find().css("input").one().await?;
+
+// Press Enter (named special key).
+input.press(Key::Special(SpecialKey::Enter)).await?;
+
+// Press Tab to move focus.
+input.press(Key::Special(SpecialKey::Tab)).await?;
+
+// Ctrl+A (select all).
+input.press_with(Key::Char('a'), KeyModifiers::CTRL).await?;
+
+// Ctrl+Shift+End.
+input.press_with(
+    Key::Special(SpecialKey::End),
+    KeyModifiers::CTRL | KeyModifiers::SHIFT,
+).await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p><a href="https://docs.rs/zendriver/latest/zendriver/enum.Key.html"><code>Key</code></a> is one of:</p>
+<ul>
+<li><code>Key::Char(char)</code> — any typeable character.</li>
+<li><code>Key::Special(SpecialKey)</code> — named non-character key.</li>
+</ul>
+<p><a href="https://docs.rs/zendriver/latest/zendriver/enum.SpecialKey.html"><code>SpecialKey</code></a> covers Enter, Tab, Escape, Backspace, Delete, Space, all
+four arrows, Home, End, PageUp, PageDown, F1-F12, Insert, CapsLock,
+NumLock, ScrollLock, PrintScreen, Pause, ContextMenu — the full
+non-character keyboard.</p>
+<p><a href="https://docs.rs/zendriver/latest/zendriver/struct.KeyModifiers.html"><code>KeyModifiers</code></a> is a bitflags struct:</p>
+<ul>
+<li><code>KeyModifiers::ALT</code> — Alt (Option on macOS).</li>
+<li><code>KeyModifiers::CTRL</code> — Control.</li>
+<li><code>KeyModifiers::META</code> — Meta (Command on macOS, Windows key on
+Windows).</li>
+<li><code>KeyModifiers::SHIFT</code> — Shift.</li>
+</ul>
+<p>Combine with <code>|</code>: <code>KeyModifiers::CTRL | KeyModifiers::SHIFT</code>.</p>
+<h3 id="press-vs-press_with"><a class="header" href="#press-vs-press_with"><code>press</code> vs <code>press_with</code></a></h3>
+<ul>
+<li><a href="https://docs.rs/zendriver/latest/zendriver/struct.Element.html#method.press"><code>Element::press(key)</code></a> uses whatever modifiers are currently held by
+the <a href="https://docs.rs/zendriver/latest/zendriver/input/struct.InputController.html"><code>InputController</code></a> — useful when you've explicitly tracked
+modifier-held state (e.g. via held-key sequences).</li>
+<li><a href="https://docs.rs/zendriver/latest/zendriver/struct.Element.html#method.press_with"><code>Element::press_with(key, mods)</code></a> passes <code>mods</code> straight through to
+the CDP dispatch for this one call, without mutating the controller's
+tracked state — the safer default when you want a single key event
+with specific modifiers.</li>
+</ul>
+<h2 id="end-to-end-form-fill"><a class="header" href="#end-to-end-form-fill">End-to-end form fill</a></h2>
+<pre><pre class="playground"><code class="language-rust no_run">//! Fill out a small HTML form rendered via `data:` URL — demonstrates the
+//! P3 input surface end-to-end without depending on any third-party site.
+//!
+//! Equivalent in spirit to the form-fill snippets scattered through the
+//! Python `examples/` directory (`network_monitor.py`'s search-and-submit
+//! flow, `imgur_upload_image.py`'s title-field fill). Picks `data:` over
+//! a third-party form so the example stays deterministic across runs.
+//!
+//! Sequence:
+//!   1. CSS-select the inputs and submit button.
+//!   2. [`Element::type_text`] simulates per-character key events with the
+//!      Bezier/jitter realism from the [`StealthProfile`]'s `InputProfile`.
+//!   3. [`Element::click`] dispatches a real `mousedown` + `mouseup` via
+//!      `Input.dispatchMouseEvent` after running the actionability gates.
+//!   4. Read back the form's serialized state via `evaluate_main` to prove
+//!      the inputs took our values.
+
+use zendriver::Browser;
+
+const FORM_HTML: &amp;str = "data:text/html,\
+&lt;!doctype html&gt;&lt;html&gt;&lt;body&gt;\
+&lt;form id='f' onsubmit='window.submitted=true;return false'&gt;\
+&lt;input id='user' name='user' /&gt;\
+&lt;input id='pass' name='pass' type='password' /&gt;\
+&lt;button id='go' type='submit'&gt;Submit&lt;/button&gt;\
+&lt;/form&gt;&lt;/body&gt;&lt;/html&gt;";
+
+#[tokio::main]
+#[allow(clippy::result_large_err)] // example boundary; users wrap in their own Error
+async fn main() -&gt; zendriver::Result&lt;()&gt; {
+    tracing_subscriber::fmt::init();
+
+    let browser = Browser::builder().headless(true).launch().await?;
+    let tab = browser.main_tab();
+    tab.goto(FORM_HTML).await?;
+    tab.wait_for_load().await?;
+
+    let user = tab.find().css("#user").one().await?;
+    user.type_text("rin").await?;
+
+    let pass = tab.find().css("#pass").one().await?;
+    pass.type_text("hunter2").await?;
+
+    let go = tab.find().css("#go").one().await?;
+    go.click().await?;
+
+    let user_val: String = tab
+        .evaluate_main("document.getElementById('user').value")
+        .await?;
+    let submitted: bool = tab.evaluate_main("window.submitted === true").await?;
+    println!("user field = {user_val:?}, submitted = {submitted}");
+
+    browser.close().await?;
+    Ok(())
+}</code></pre></pre>
+<p>Expected output:</p>
+<pre><code class="language-text">user field = "rin", submitted = true
+</code></pre>
+<p>The example demonstrates the realistic input surface end-to-end:
+per-character typing into two inputs, then a single click on the submit
+button. All three calls (<code>type_text</code> + <code>type_text</code> + <code>click</code>) go through
+the actionability gate and the realistic-cursor path.</p>
+<h2 id="when-to-use-_fast-variants"><a class="header" href="#when-to-use-_fast-variants">When to use <code>_fast</code> variants</a></h2>
+<ul>
+<li><strong>Tests</strong> where you only care that the action happened, not how it
+looked to a fingerprinter.</li>
+<li><strong>Trusted automation pipelines</strong> (internal admin tools, scraping
+flows where you already know stealth isn't being checked).</li>
+<li><strong>CI</strong> where every saved millisecond per click compounds across
+thousands of runs.</li>
+<li><strong>Setup steps</strong> (typing a known query into a search box before the
+real interaction starts). Save realism for the moments that matter.</li>
+</ul>
+<p>When in doubt, stick with the realistic defaults — the per-call cost is
+small (typically 50-300 ms per click; a few ms per typed character) and
+it keeps you on the "indistinguishable from a real user" path that the
+rest of the stealth machinery is built around.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="frames.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="interception.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="frames.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="interception.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["AbortReason","RequestStage","ResourceType"],"struct":["RequestInfo","RequestOverrides","ResponseInfo"]};

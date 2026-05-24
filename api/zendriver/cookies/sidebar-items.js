@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["SameSite"],"mod":["persistence"],"struct":["Cookie","CookieJar"]};

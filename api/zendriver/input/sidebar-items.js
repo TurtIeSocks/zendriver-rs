@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["bezier","keyboard","mouse","pointer_state"],"struct":["InputController"]};

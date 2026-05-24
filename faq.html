@@ -1,0 +1,423 @@
+<!DOCTYPE HTML>
+<html lang="en" class="ayu sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>FAQ - zendriver-rs</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "ayu";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('ayu')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">zendriver-rs</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/cdpdriver/zendriver-rs" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/cdpdriver/zendriver-rs/edit/main/docs/book/src/faq.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="faq"><a class="header" href="#faq">FAQ</a></h1>
+<p>Common questions about zendriver-rs. Each entry links into the relevant
+chapter for the long-form answer.</p>
+<h2 id="how-do-i-run-headed-with-a-visible-window"><a class="header" href="#how-do-i-run-headed-with-a-visible-window">How do I run headed (with a visible window)?</a></h2>
+<p>Pass <code>.headless(false)</code> to the builder:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span>let browser = zendriver::Browser::builder()
+    .headless(false)
+    .launch()
+    .await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p>Useful while debugging — you can watch what the script does. Switch
+back to <code>headless(true)</code> for production or CI. There is no "slow-mo" or
+"keep open" flag; if you need the window to stick around after the
+script exits, comment out <code>browser.close().await?</code> and <code>Ctrl+C</code> the
+process.</p>
+<h2 id="why-am-i-getting-notactionable"><a class="header" href="#why-am-i-getting-notactionable">Why am I getting <code>NotActionable</code>?</a></h2>
+<p><a href="https://docs.rs/zendriver/latest/zendriver/enum.ZendriverError.html#variant.NotActionable"><code>ZendriverError::NotActionable</code></a> fires when an element didn't pass the
+actionability checks within the gate timeout. The checks are: visible,
+enabled, stable (not animating), and hit-tested (no overlay blocking
+clicks). The error message includes which check failed.</p>
+<p>Common causes:</p>
+<ul>
+<li><strong>Visibility</strong> — element has <code>display: none</code>, <code>visibility: hidden</code>,
+or zero bounding box. Use <code>tab.find().css("...").visible_only()</code> to
+skip these during the query.</li>
+<li><strong>Hit-test failure</strong> — a modal overlay sits above the element. Close
+the overlay first, or pass <code>ClickOptions { force: true, ..default() }</code>
+to bypass the check.</li>
+<li><strong>Animation</strong> — the element is still moving. Wait for
+<code>tab.wait_for_idle().await?</code> before clicking; the gate retries a few
+frames automatically but won't wait through a 2-second CSS transition.</li>
+</ul>
+<p>If you genuinely want to click an invisible element (e.g. testing
+keyboard nav), use <code>el.click_fast()</code> instead of <code>el.click()</code> — the
+<code>_fast</code> variant skips the realism gate.</p>
+<h2 id="does-this-work-on-apple-silicon--m1"><a class="header" href="#does-this-work-on-apple-silicon--m1">Does this work on Apple Silicon / M1+?</a></h2>
+<p>Yes. Chrome ships native arm64 binaries; zendriver-rs picks them up via
+the standard PATH discovery. The
+<a href="./fetcher.html">Fetcher</a> also has a <code>Platform::MacArm64</code> variant and
+downloads the matching CFT zip on Apple Silicon hosts.</p>
+<h2 id="does-this-work-on-linux-arm64--aarch64"><a class="header" href="#does-this-work-on-linux-arm64--aarch64">Does this work on Linux ARM64 / aarch64?</a></h2>
+<p>The library itself builds cleanly. The Fetcher does <strong>not</strong> download
+Chrome on <code>linux-aarch64</code> because Chrome for Testing doesn't ship a
+linux-arm64 build. Install Chrome through your distro's package
+manager, then let the standard PATH discovery find it.</p>
+<h2 id="can-i-use-a-custom-chrome-binary"><a class="header" href="#can-i-use-a-custom-chrome-binary">Can I use a custom Chrome binary?</a></h2>
+<p>Yes — <code>.executable(path)</code> on the builder:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span>let browser = zendriver::Browser::builder()
+    .executable("/opt/chrome/126/chrome")
+    .launch()
+    .await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p>Useful for pinning a specific Chrome version, running Chromium / Edge,
+or running a custom-built debug Chrome. The binary needs to support
+<code>--remote-debugging-port=0</code> and emit the standard
+<code>DevTools listening on ws://...</code> line — every recent stable Chrome /
+Chromium / Edge does.</p>
+<h2 id="why-is-my-evaluate-not-seeing-windowfoo"><a class="header" href="#why-is-my-evaluate-not-seeing-windowfoo">Why is my <code>evaluate()</code> not seeing <code>window.foo</code>?</a></h2>
+<p><code>tab.evaluate()</code> runs in an <strong>isolated world</strong> by default — a sandbox
+that shares the DOM with the page but has its own globals. Use
+<code>tab.evaluate_main()</code> for page-global access:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span><span class="boring">let browser = zendriver::Browser::builder().launch().await?;
+</span><span class="boring">let tab = browser.main_tab();
+</span>let title: String = tab.evaluate_main("document.title").await?;
+let app_state: serde_json::Value = tab.evaluate_main("JSON.stringify(window.appState)").await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p>The isolated default is a stealth feature — page scripts can't detect
+your eval the way they could if you wrote into the main world. See
+<a href="./architecture.html#isolated-world-evaluation">Architecture</a>.</p>
+<h2 id="how-do-i-detect-bot-detection"><a class="header" href="#how-do-i-detect-bot-detection">How do I detect bot-detection?</a></h2>
+<p>There's no built-in detector. The pragmatic test:</p>
+<ol>
+<li>Run your target site headed with <code>StealthProfile::off()</code> first, then
+<code>native()</code>, then <code>spoofed()</code>. Compare behavior — if a feature works
+off but not native, the issue is in your stealth setup, not the
+anti-bot.</li>
+<li>Hit <a href="https://bot.sannysoft.com/">bot.sannysoft.com</a> and
+<a href="https://arh.antoinevastel.com/bots/areyouheadless">arh.antoinevastel.com</a>
+to see what generic detectors find.</li>
+<li>For Cloudflare specifically, check whether the gate is the visible
+Turnstile checkbox (<code>cloudflare</code> feature can pass it) or the silent
+challenge (which requires better stealth, not bypass tooling).</li>
+<li>If the site blocks you even with <code>spoofed()</code>, the issue is usually
+not headless detection but: TLS JA3 fingerprint (use a real Chrome
+build, not chromiumoxide's), datacenter IP (rotate to residential),
+or rate-limit thresholds.</li>
+</ol>
+<h2 id="whats-the-difference-between-native-and-spoofed-stealth"><a class="header" href="#whats-the-difference-between-native-and-spoofed-stealth">What's the difference between native and spoofed stealth?</a></h2>
+<ul>
+<li><strong><code>StealthProfile::native()</code></strong> — patches only what fingerprinters see
+at the protocol level: UA scrub, launch flags, Emulation overrides.
+No JS bootstrap. Cheap, undetectable via <code>Function.prototype.toString</code>
+drift. Passes most consumer sites.</li>
+<li><strong><code>StealthProfile::spoofed()</code></strong> — <code>native()</code> plus Navigator-prototype
+JS patches injected via <code>Page.addScriptToEvaluateOnNewDocument</code>.
+Restores <code>navigator.webdriver</code> to undefined, fixes <code>navigator.plugins</code>
+/ <code>chrome</code> runtime / WebGL vendor, etc. Required to pass <code>sannysoft</code>
+and other active detectors. Pays a small per-navigation cost (script
+runs on every new document).</li>
+</ul>
+<p>Full table in <a href="./stealth.html">Stealth</a>.</p>
+<h2 id="my-chrome-subprocess-didnt-clean-up-on-ctrlc"><a class="header" href="#my-chrome-subprocess-didnt-clean-up-on-ctrlc">My Chrome subprocess didn't clean up on Ctrl+C</a></h2>
+<p><code>Drop</code> on the last <code>Browser</code> clone sends <code>SIGTERM</code>; the subprocess
+exits within a second on a graceful shutdown. If your process panics
+without unwinding (or aborts), the subprocess may linger. Two fixes:</p>
+<ul>
+<li><strong>Use <code>browser.close().await?</code> explicitly</strong> at the end of your script
+— <code>close</code> waits for the subprocess to exit and surfaces any failure
+via the <code>Result</code>. <code>Drop</code> is a fallback, not the primary path.</li>
+<li><strong>Run zendriver-rs inside <code>tokio::select!</code> with a <code>ctrl_c</code> arm</strong> so
+panics still trigger drop:</li>
+</ul>
+<pre><code class="language-rust ignore">tokio::select! {
+    res = your_main(&amp;browser) =&gt; res?,
+    _ = tokio::signal::ctrl_c() =&gt; {
+        browser.close().await?;
+    }
+}</code></pre>
+<h2 id="how-do-i-share-login-state-across-runs"><a class="header" href="#how-do-i-share-login-state-across-runs">How do I share login state across runs?</a></h2>
+<p>Pass <code>.user_data_dir(path)</code> to the builder. Chrome stores cookies,
+localStorage, IndexedDB, etc under that path; second-and-onwards launches
+inherit the state.</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span>let browser = zendriver::Browser::builder()
+    .user_data_dir("/home/me/.zendriver-state")
+    .launch()
+    .await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p>Caveat: Chrome locks the directory while running. Two simultaneous
+launches against the same <code>user_data_dir</code> will error out. Either
+coordinate access (mutex) or use separate dirs per worker.</p>
+<h2 id="can-i-run-multiple-browsers-in-parallel"><a class="header" href="#can-i-run-multiple-browsers-in-parallel">Can I run multiple browsers in parallel?</a></h2>
+<p>Yes. <code>Browser</code> clones are cheap (<code>Arc</code> underneath) and <code>Send + Sync</code>,
+so you can stash them in any worker pool. Run multiple <strong>independent</strong>
+Chrome subprocesses by calling <code>Browser::builder().launch()</code> more than
+once — each call spawns a separate Chrome. RAM-bound: each Chrome
+instance is ~150-300 MB headless.</p>
+<p>For multi-tab orchestration <em>within</em> one Chrome (cheaper), see
+<a href="./multi-tab.html">Multi-tab</a>.</p>
+<h2 id="how-do-i-capture-network-traffic"><a class="header" href="#how-do-i-capture-network-traffic">How do I capture network traffic?</a></h2>
+<p>Two paths:</p>
+<ul>
+<li><strong>Observe only</strong> — use <a href="./expect.html"><code>expect_request</code></a> /
+<code>expect_response</code> for individual events, or stash a
+<code>tab.intercept().subscribe()</code> stream that auto-<code>continue_()</code>s and logs
+each <code>PausedRequest</code>.</li>
+<li><strong>Modify</strong> — use <a href="./interception.html"><code>Interception</code></a>'s rule API
+(block / redirect / respond / modify_request).</li>
+</ul>
+<p>There's no Playwright-style "trace viewer" output; assemble the data
+you want from those streams.</p>
+<h2 id="why-is-the-first-launch-slow-on-macos"><a class="header" href="#why-is-the-first-launch-slow-on-macos">Why is the first launch slow on macOS?</a></h2>
+<p>The <code>chromedriver</code> framework's notarization check runs the first time
+the OS sees a Chrome binary. Subsequent launches reuse the cached
+result and start in &lt;500 ms. On a fresh CFT download via the
+<a href="./fetcher.html">Fetcher</a> this is more visible because the binary is new
+to the OS.</p>
+<h2 id="whats-the-msrv"><a class="header" href="#whats-the-msrv">What's the MSRV?</a></h2>
+<p>Rust 1.75. We don't aim to track stable bleeding-edge; MSRV bumps
+follow the same SemVer policy as API changes
+(see <a href="https://github.com/cdpdriver/zendriver-rs/blob/main/SEMVER.md"><code>SEMVER.md</code></a>).</p>
+<h2 id="im-getting-zendrivererrorcdp-with-code--32000-what-now"><a class="header" href="#im-getting-zendrivererrorcdp-with-code--32000-what-now">I'm getting <code>ZendriverError::Cdp</code> with code -32000. What now?</a></h2>
+<p>Code <code>-32000</code> ("Cannot find context") usually means the page navigated
+out from under your call. zendriver-rs maps this specifically to
+<a href="https://docs.rs/zendriver/latest/zendriver/enum.ZendriverError.html#variant.Navigation"><code>ZendriverError::Navigation</code></a> rather than the raw Cdp variant — if
+you're seeing the raw <code>Cdp</code> form, you're on a CDP method we haven't
+special-cased. Wait for <code>wait_for_load()</code> / <code>wait_for_idle()</code> before
+the call, or use <a href="./expect.html"><code>expect_response</code></a> to pin the wait to
+the specific event you care about.</p>
+<h2 id="where-do-i-find-the-full-list-of-errors"><a class="header" href="#where-do-i-find-the-full-list-of-errors">Where do I find the full list of errors?</a></h2>
+<p><a href="./error-reference.html">Error Reference</a> — every public variant of
+<code>ZendriverError</code> plus the sub-crate errors that flow into it.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="architecture.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="error-reference.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="architecture.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="error-reference.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

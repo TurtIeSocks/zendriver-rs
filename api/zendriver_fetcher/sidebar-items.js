@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["FetcherPhase"],"mod":["cache","download","error","extract","fetcher","manifest","platform","resolver","version"],"struct":["FetcherProgress"]};

@@ -1,0 +1,461 @@
+<!DOCTYPE HTML>
+<html lang="en" class="ayu sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Interception - zendriver-rs</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "ayu";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('ayu')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">zendriver-rs</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/cdpdriver/zendriver-rs" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/cdpdriver/zendriver-rs/edit/main/docs/book/src/interception.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="interception"><a class="header" href="#interception">Interception</a></h1>
+<p>The <code>interception</code> Cargo feature wraps Chrome's <a href="https://chromedevtools.github.io/devtools-protocol/tot/Fetch/"><code>Fetch</code></a> CDP domain in a
+fluent rule-based API plus a lower-level <code>Stream</code> of paused requests. It
+lets you block, redirect, synthesize, or rewrite any subresource a page
+asks for — useful for ad blocking, response mocking, header injection,
+and offline-replay tests.</p>
+<p>Enable it in <code>Cargo.toml</code>:</p>
+<pre><code class="language-toml">[dependencies]
+zendriver = { version = "0.1", features = ["interception"] }
+</code></pre>
+<p>The entry point is <a href="https://docs.rs/zendriver/latest/zendriver/struct.Tab.html#method.intercept"><code>Tab::intercept</code></a>, which returns an
+<a href="https://docs.rs/zendriver/latest/zendriver/struct.InterceptBuilder.html"><code>InterceptBuilder</code></a> bound to that tab's session. The builder has two
+terminal methods: <a href="https://docs.rs/zendriver/latest/zendriver/struct.InterceptBuilder.html#method.start"><code>start</code></a> activates a background actor with declarative
+rules, and <a href="https://docs.rs/zendriver/latest/zendriver/struct.InterceptBuilder.html#method.subscribe"><code>subscribe</code></a> returns a <code>Stream&lt;Item = PausedRequest&gt;</code> for the
+manual escape-hatch path.</p>
+<h2 id="rule-based-api"><a class="header" href="#rule-based-api">Rule-based API</a></h2>
+<p>The four rule methods chain on the builder and dispatch the matching
+terminal action automatically when the URL pattern fires. Patterns use
+CDP wildcard syntax (<code>*</code> matches any characters; <code>?</code> matches any single
+character).</p>
+<div class="table-wrapper"><table><thead><tr><th>Method</th><th>Action</th><th>Use case</th></tr></thead><tbody>
+<tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.InterceptBuilder.html#method.block"><code>block</code></a></td><td><code>Fetch.failRequest</code> with <code>BlockedByClient</code></td><td>Ad / tracker blocking</td></tr>
+<tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.InterceptBuilder.html#method.redirect"><code>redirect</code></a></td><td><code>Fetch.continueRequest</code> with new URL</td><td>Move an endpoint without page changes</td></tr>
+<tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.InterceptBuilder.html#method.respond"><code>respond</code></a></td><td><code>Fetch.fulfillRequest</code> with synthetic body</td><td>Mock an API for tests</td></tr>
+<tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.InterceptBuilder.html#method.modify_request"><code>modify_request</code></a></td><td><code>Fetch.continueRequest</code> with overrides</td><td>Inject headers, change method/body</td></tr>
+</tbody></table>
+</div>
+<h3 id="blocking-ads"><a class="header" href="#blocking-ads">Blocking ads</a></h3>
+<pre><pre class="playground"><code class="language-rust no_run">//! Demonstrates the P5 interception API by blocking any subresource whose
+//! URL matches `*/ads/*`, then navigating to a real page.
+//!
+//! Sequence:
+//!   1. Build a [`Browser`] in headless mode.
+//!   2. Register a `block` rule on the main tab via the [`InterceptBuilder`]
+//!      fluent API; `start()` spawns the per-tab actor that drives
+//!      `Fetch.enable` + `Fetch.continueRequest` / `Fetch.failRequest` in
+//!      the background. Bind the returned [`InterceptHandle`] — its `Drop`
+//!      tears the actor down, so letting it go out of scope mid-flow would
+//!      silently disable interception.
+//!   3. `goto` + `wait_for_load` example.com. The page itself doesn't load
+//!      anything under `/ads/`, so no rule fires; the example is here to
+//!      show the *shape* of the API, not a hit count. Adapt the URL and
+//!      pattern to whatever you actually want to block.
+//!   4. Print the page title to prove the navigation succeeded with the
+//!      actor in the loop.
+//!
+//! Requires the `interception` cargo feature:
+//! `cargo run --example intercept_block_ads --features interception`.
+
+use zendriver::Browser;
+
+#[tokio::main]
+#[allow(clippy::result_large_err)] // example boundary; users wrap in their own Error
+async fn main() -&gt; zendriver::Result&lt;()&gt; {
+    tracing_subscriber::fmt::init();
+
+    let browser = Browser::builder().headless(true).launch().await?;
+    let tab = browser.main_tab();
+
+    // `start()` returns an `InterceptHandle`; binding it keeps the actor
+    // alive. Letting it drop would tear interception down.
+    let _intercept = tab.intercept().block("*/ads/*")?.start();
+
+    tab.goto("https://example.com").await?;
+    tab.wait_for_load().await?;
+
+    let title = tab.title().await?;
+    println!("title = {title:?}");
+
+    browser.close().await?;
+    Ok(())
+}</code></pre></pre>
+<p><a href="https://docs.rs/zendriver/latest/zendriver/struct.InterceptBuilder.html#method.start"><code>start</code></a> returns an [<code>InterceptHandle</code>]. The handle owns the background
+actor — when you drop it, the actor receives a cancel signal, dispatches
+<code>Fetch.disable</code>, and stops processing events. <strong>Bind the handle to a
+variable; letting it drop immediately silently disables interception.</strong>
+Use <code>let _intercept = ...</code> (note the leading underscore — Rust would warn
+on a plain <code>_</code>, which is a different binding semantics that drops at end
+of statement, not end of scope).</p>
+<h3 id="modifying-headers"><a class="header" href="#modifying-headers">Modifying headers</a></h3>
+<p>CDP semantics for <code>headers</code> on <code>Fetch.continueRequest</code> is <strong>replacement</strong>,
+not merge — every header you want sent must appear in the returned map.
+The <code>modify_request</code> closure receives a [<code>RequestInfo</code>] with the
+original headers; copy them forward before stamping your additions on
+top:</p>
+<pre><pre class="playground"><code class="language-rust no_run">//! Demonstrates the P5 [`InterceptBuilder::modify_request`] rule, which lets
+//! you mutate the outbound headers/method/body for every request whose URL
+//! matches a pattern.
+//!
+//! The closure returns a [`RequestOverrides`] for each matched
+//! [`RequestInfo`]; per CDP semantics, `headers` is *replacement*, not
+//! merge — so we explicitly copy the original header map and stamp our
+//! `X-Custom` header on top before handing it back.
+//!
+//! The example navigates to `https://httpbin.org/headers`, which echoes
+//! every request header back as JSON in the response body. Print the body
+//! to verify `X-Custom: zendriver-demo` made the round-trip.
+//!
+//! Requires the `interception` cargo feature:
+//! `cargo run --example intercept_modify_headers --features interception`.
+
+use zendriver::Browser;
+use zendriver::RequestOverrides;
+
+#[tokio::main]
+#[allow(clippy::result_large_err)] // example boundary; users wrap in their own Error
+async fn main() -&gt; zendriver::Result&lt;()&gt; {
+    tracing_subscriber::fmt::init();
+
+    let browser = Browser::builder().headless(true).launch().await?;
+    let tab = browser.main_tab();
+
+    let _intercept = tab
+        .intercept()
+        .modify_request("*httpbin.org/headers*", |req| {
+            // CDP replaces — not merges — the header set. Copy the originals
+            // forward and stamp our custom header on top. Headers are an
+            // ordered Vec to preserve duplicates / Set-Cookie semantics.
+            let mut headers = req.headers.clone();
+            headers.push(("X-Custom".into(), "zendriver-demo".into()));
+            RequestOverrides {
+                headers: Some(headers),
+                ..Default::default()
+            }
+        })?
+        .start();
+
+    tab.goto("https://httpbin.org/headers").await?;
+    tab.wait_for_load().await?;
+
+    // httpbin renders the response as `&lt;pre&gt;` JSON; grab its text content.
+    let body: String = tab.evaluate_main("document.body.innerText").await?;
+    println!("{body}");
+
+    browser.close().await?;
+    Ok(())
+}</code></pre></pre>
+<p>The closure runs synchronously per-event on the actor task; it should
+not block. Spawn off the runtime if you need to call out to an async
+service before deciding the override.</p>
+<h3 id="redirect-and-synthesize"><a class="header" href="#redirect-and-synthesize">Redirect and synthesize</a></h3>
+<pre><code class="language-rust ignore">let _intercept = tab.intercept()
+    .redirect("*/old-api/*", "https://example.com/new-api/")?
+    .respond(
+        "*/api/health*",
+        200,
+        vec![("content-type".into(), "application/json".into())],
+        b"{\"ok\":true}".to_vec(),
+    )?
+    .start();</code></pre>
+<p>Both <code>redirect</code> and <code>respond</code> reach an internal <code>Fetch.continueRequest</code>
+or <code>Fetch.fulfillRequest</code> — the actor decides per event, so a single
+<code>InterceptHandle</code> can host any mix of the four rule types.</p>
+<h2 id="stream-api"><a class="header" href="#stream-api">Stream API</a></h2>
+<p>When rules are too restrictive — e.g. you need to inspect the upstream
+response body before deciding what to do, or you want to forward events
+to your own pipeline — call <a href="https://docs.rs/zendriver/latest/zendriver/struct.InterceptBuilder.html#method.subscribe"><code>subscribe</code></a> instead of <code>start</code>:</p>
+<pre><code class="language-rust ignore">use futures::StreamExt;
+use zendriver::{AbortReason, RequestStage};
+
+let mut stream = Box::pin(
+    tab.intercept()
+        .at_response()  // pause AFTER headers come back
+        .subscribe()
+);
+
+while let Some(paused) = stream.next().await {
+    let body = paused.body().await?;
+    if body.windows(7).any(|w| w == b"BLOCKED") {
+        paused.abort(AbortReason::BlockedByClient).await?;
+    } else {
+        paused.continue_().await?;
+    }
+}</code></pre>
+<p>Each <a href="https://docs.rs/zendriver/latest/zendriver/struct.PausedRequest.html"><code>PausedRequest</code></a> is consumed by exactly one of
+<a href="https://docs.rs/zendriver/latest/zendriver/struct.PausedRequest.html#method.continue_"><code>continue_</code></a> / <a href="https://docs.rs/zendriver/latest/zendriver/struct.PausedRequest.html#method.abort"><code>abort</code></a> / <a href="https://docs.rs/zendriver/latest/zendriver/struct.InterceptBuilder.html#method.respond"><code>respond</code></a> / <a href="https://docs.rs/zendriver/latest/zendriver/struct.PausedRequest.html#method.modify_and_continue"><code>modify_and_continue</code></a>. The
+<a href="https://docs.rs/zendriver/latest/zendriver/struct.PausedRequest.html#method.body"><code>body</code></a> method is <code>&amp;self</code> and reads the upstream response body
+non-destructively — only useful at the <code>Response</code> stage; at the <code>Request</code>
+stage Chrome has no body yet.</p>
+<p><strong>Forgetting to release a <code>PausedRequest</code> deadlocks the page.</strong> Chrome
+holds the connection open until exactly one of the four terminal methods
+arrives. If your stream consumer panics mid-flow, the actor's <code>Drop</code>
+will dispatch <code>Fetch.disable</code> — every still-paused request fails with
+<code>net::ERR_BLOCKED_BY_CLIENT</code>, which is unpleasant but not silent.</p>
+<h2 id="pattern--stage-filters"><a class="header" href="#pattern--stage-filters">Pattern + stage filters</a></h2>
+<p>By default the builder pauses on every request at the <code>Request</code> stage.
+Restrict it with builder modifiers:</p>
+<pre><code class="language-rust ignore">use zendriver::ResourceType;
+
+let _h = tab.intercept()
+    .pattern("*/static/*")   // URL filter for next-emitted RequestPattern
+    .resource(ResourceType::Image)  // only images
+    .at_response()           // pause after response headers, not before request
+    .block("*/static/*")?
+    .start();</code></pre>
+<p>Each call to <code>pattern()</code> opens a new <code>Fetch.RequestPattern</code>; chained
+<code>resource</code> / <code>at_request</code> / <code>at_response</code> modifiers mutate that most-recent
+pattern. Without a <code>pattern()</code>, the builder synthesizes one matching all
+URLs at the rule-declared stage.</p>
+<h2 id="gotchas"><a class="header" href="#gotchas">Gotchas</a></h2>
+<ul>
+<li><strong><code>Fetch.enable</code> serializes the network.</strong> Chrome routes every matched
+request through the JSON-RPC channel — round-trip per request adds
+latency. On heavy pages, expect 10-30% throughput loss even with a
+no-op <code>continue_</code> handler. Scope patterns tightly; prefer
+resource-type filters over <code>*</code> patterns.</li>
+<li><strong>Each tab carries one actor.</strong> Calling <code>tab.intercept().start()</code> twice
+on the same tab without dropping the first handle leaves the second
+rule set inert — the first actor still has <code>Fetch.enable</code> and the new
+one can't re-enable on the same target.</li>
+<li><strong>CSP-restricted pages.</strong> <code>Fetch.fulfillRequest</code> synthesizes responses
+that may violate a page's <code>Content-Security-Policy</code> (especially for
+scripts). Combine with <code>StealthProfile::spoofed()</code> which sets
+<code>bypass_csp = true</code> if you're synthesizing scripts.</li>
+<li><strong>HTTPS responses can't be re-signed.</strong> <code>respond</code> and <code>modify_request</code>
+work for the wire payload Chrome sees, not for upstream-TLS-signed
+artifacts.</li>
+</ul>
+<h2 id="see-also"><a class="header" href="#see-also">See also</a></h2>
+<ul>
+<li><a href="https://docs.rs/zendriver/latest/zendriver/struct.InterceptBuilder.html"><code>InterceptBuilder</code> rustdoc</a> for every modifier method.</li>
+<li><a href="./expect.html"><code>Expect()</code></a> for the orthogonal "wait for this network
+event" surface — <code>expect_request</code> observes without holding traffic;
+<code>intercept</code> actively rewrites it.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="input.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="expect.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="input.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="expect.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

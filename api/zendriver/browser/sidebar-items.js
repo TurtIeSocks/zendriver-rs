@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["find_chrome_executable"],"struct":["Browser","BrowserBuilder"]};

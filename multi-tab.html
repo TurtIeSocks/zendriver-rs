@@ -1,0 +1,440 @@
+<!DOCTYPE HTML>
+<html lang="en" class="ayu sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Multi-tab - zendriver-rs</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "ayu";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('ayu')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">zendriver-rs</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/cdpdriver/zendriver-rs" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/cdpdriver/zendriver-rs/edit/main/docs/book/src/multi-tab.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="multi-tab"><a class="header" href="#multi-tab">Multi-tab</a></h1>
+<p>Chrome opens with one tab. zendriver-rs treats every additional tab as a
+first-class <a href="https://docs.rs/zendriver/latest/zendriver/struct.Tab.html"><code>Tab</code></a> handle — the same type as the main tab, with the
+same query / input / evaluate surface. Tabs are tracked in a browser-wide
+registry that you can iterate, look up, or close from any clone of the
+<a href="https://docs.rs/zendriver/latest/zendriver/struct.Browser.html"><code>Browser</code></a>.</p>
+<h2 id="opening-tabs"><a class="header" href="#opening-tabs">Opening tabs</a></h2>
+<p>Two constructors:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span><span class="boring">let browser = zendriver::Browser::builder().launch().await?;
+</span>// Open about:blank and return as soon as the registrar sees the new tab.
+let blank = browser.new_tab().await?;
+
+// Open a URL — equivalent to new_tab().await? then goto(url).await?
+let live = browser.new_tab_at("https://example.com").await?;
+live.wait_for_load().await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p><a href="https://docs.rs/zendriver/latest/zendriver/struct.Browser.html#method.new_tab"><code>Browser::new_tab()</code></a> and <a href="https://docs.rs/zendriver/latest/zendriver/struct.Browser.html#method.new_tab_at"><code>Browser::new_tab_at()</code></a> both go through
+<code>Target.createTarget</code> at browser scope (no <code>sessionId</code>). Each returns a
+fully-initialised <a href="https://docs.rs/zendriver/latest/zendriver/struct.Tab.html"><code>Tab</code></a>:</p>
+<ol>
+<li>Page/DOM/Runtime/Network CDP domains enabled.</li>
+<li>Stealth bootstrap re-applied via the auto-attach observer chain.</li>
+<li>Isolated-world ready for <code>evaluate()</code> calls.</li>
+</ol>
+<p>Internally, <code>new_tab*</code> polls the tab registry every 50 ms for up to 5 s
+waiting for the new target to register — typically returns within a few
+milliseconds. If the auto-attach observer crashes or is misconfigured,
+you'll get <a href="https://docs.rs/zendriver/latest/zendriver/enum.ZendriverError.html"><code>ZendriverError::TabNotFound</code></a> after the 5 s window.</p>
+<h2 id="iterating-tabs"><a class="header" href="#iterating-tabs">Iterating tabs</a></h2>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span><span class="boring">let browser = zendriver::Browser::builder().launch().await?;
+</span>for tab in browser.tabs().await {
+    println!("tab {}: {}", tab.target_id(), tab.url().await?);
+}
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p><a href="https://docs.rs/zendriver/latest/zendriver/struct.Browser.html#method.tabs"><code>Browser::tabs()</code></a> returns a snapshot <code>Vec&lt;Tab&gt;</code> covering every
+currently-registered tab, including:</p>
+<ul>
+<li>The main tab (the one Chrome opened with).</li>
+<li>Tabs you opened via <code>new_tab*</code>.</li>
+<li>Tabs page scripts opened via <code>window.open(...)</code> (auto-attach wires
+these into the registrar).</li>
+</ul>
+<p>Order is unspecified — the registry is a <code>HashMap</code> keyed by
+<code>sessionId</code>. Tabs that close concurrently disappear from the snapshot on
+the next call.</p>
+<p><a href="https://docs.rs/zendriver/latest/zendriver/struct.Browser.html#method.tab_count"><code>Browser::tab_count()</code></a> is the cheap len-read on the same registry —
+prefer it over <code>browser.tabs().await.len()</code> when you only need the
+count.</p>
+<h2 id="activating-a-tab"><a class="header" href="#activating-a-tab">Activating a tab</a></h2>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span><span class="boring">let browser = zendriver::Browser::builder().launch().await?;
+</span><span class="boring">let tab = browser.new_tab().await?;
+</span>tab.activate().await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p><a href="https://docs.rs/zendriver/latest/zendriver/struct.Tab.html#method.activate"><code>Tab::activate()</code></a> sends <code>Target.activateTarget</code>, which is what
+"clicking the tab in Chrome's tab strip" does. The activated tab
+becomes the visible tab in headed mode and the receiver of keyboard
+focus events.</p>
+<h3 id="gotcha-inactive-tabs-dont-receive-input-events"><a class="header" href="#gotcha-inactive-tabs-dont-receive-input-events">Gotcha: inactive tabs don't receive input events</a></h3>
+<p>Chrome serializes physical input (mouse moves, key presses) through
+whichever tab currently has OS focus. CDP <code>Input.dispatchMouseEvent</code>
+and <code>Input.dispatchKeyEvent</code> calls <strong>route through the page's render
+process directly</strong>, so they <em>do</em> reach inactive tabs — clicks, typing,
+and the realistic Bezier-mouse path all work without activating first.</p>
+<p>But <strong>events that flow back through the OS layer</strong> — e.g. fullscreen
+requests, clipboard reads, focus-trap behaviors that read
+<code>document.hasFocus()</code> — observe the OS-level active tab. If you hit a
+"works in active tab, breaks in background tab" issue, the cause is
+almost always <code>document.hasFocus()</code> returning <code>false</code> or a feature
+gated on <code>document.visibilityState</code>.</p>
+<p>The fix is to activate the tab before the input sequence:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span><span class="boring">let browser = zendriver::Browser::builder().launch().await?;
+</span><span class="boring">let tab = browser.new_tab_at("https://example.com").await?;
+</span>tab.activate().await?;
+let btn = tab.find().css("button#go").one().await?;
+btn.click().await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p>You can leave any of the <em>other</em> tabs inactive — <code>activate</code> only sets
+the OS focus to a single tab; it doesn't affect anyone else.</p>
+<h2 id="closing-tabs"><a class="header" href="#closing-tabs">Closing tabs</a></h2>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span><span class="boring">let browser = zendriver::Browser::builder().launch().await?;
+</span><span class="boring">let tab = browser.new_tab().await?;
+</span>tab.close().await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p><a href="https://docs.rs/zendriver/latest/zendriver/struct.Tab.html#method.close"><code>Tab::close()</code></a> consumes the <a href="https://docs.rs/zendriver/latest/zendriver/struct.Tab.html"><code>Tab</code></a> handle and sends
+<code>Target.closeTarget</code>. The registrar removes the entry from the
+browser-wide registry on the resulting <code>Target.targetDestroyed</code> event.
+Existing clones of the closed tab will error on their next CDP call
+with [<code>ZendriverError::SessionClosed</code>].</p>
+<p>Closing every tab does <strong>not</strong> close the browser. To shut down the
+whole subprocess, call <a href="https://docs.rs/zendriver/latest/zendriver/struct.Browser.html#method.close"><code>Browser::close()</code></a> (see <a href="./quickstart.html">Quickstart</a>).</p>
+<h2 id="end-to-end-example"><a class="header" href="#end-to-end-example">End-to-end example</a></h2>
+<p>This example opens three tabs at distinct URLs, prints each tab's URL +
+title, then closes the whole browser (which tears down every tab):</p>
+<pre><pre class="playground"><code class="language-rust no_run">//! Open three tabs at distinct URLs, iterate the [`Browser::tabs`] registry,
+//! and print every tab's URL — the canonical P4 multi-tab smoke test.
+//!
+//! Demonstrates:
+//!   - [`Browser::new_tab_at`] (open + navigate in one step).
+//!   - [`Browser::tabs`] (snapshot of every live tab the registrar tracks,
+//!     including the auto-attached `main_tab`).
+//!   - [`Browser::tab_count`] (cheap len read on the same registry).
+//!
+//! Each opened tab is its own session — closing the [`Browser`] tears them
+//! all down via the shared Connection drop path.
+
+use zendriver::Browser;
+
+#[tokio::main]
+#[allow(clippy::result_large_err)] // example boundary; users wrap in their own Error
+async fn main() -&gt; zendriver::Result&lt;()&gt; {
+    tracing_subscriber::fmt::init();
+
+    let browser = Browser::builder().headless(true).launch().await?;
+
+    // `main_tab()` is the about:blank tab Chrome auto-opens at launch.
+    // Drive it to a real URL so the printout is interesting.
+    let main = browser.main_tab();
+    main.goto("https://example.com").await?;
+    main.wait_for_load().await?;
+
+    // Open two more tabs at distinct origins; each call returns a fully
+    // initialised Tab (Page/DOM/Runtime/Network domains enabled, stealth
+    // applied, isolated world ready).
+    let tab_b = browser
+        .new_tab_at("data:text/html,&lt;!doctype html&gt;&lt;title&gt;B&lt;/title&gt;&lt;h1&gt;tab B&lt;/h1&gt;")
+        .await?;
+    tab_b.wait_for_load().await?;
+
+    let tab_c = browser
+        .new_tab_at("data:text/html,&lt;!doctype html&gt;&lt;title&gt;C&lt;/title&gt;&lt;h1&gt;tab C&lt;/h1&gt;")
+        .await?;
+    tab_c.wait_for_load().await?;
+
+    // Pull the live snapshot from the registry and walk it.
+    let tabs = browser.tabs().await;
+    println!("tab_count = {}", browser.tab_count().await);
+    for (i, tab) in tabs.iter().enumerate() {
+        let url = tab.url().await?;
+        let title = tab.title().await?;
+        println!(
+            "  [{i}] target={} url={url} title={title:?}",
+            tab.target_id()
+        );
+    }
+
+    browser.close().await?;
+    Ok(())
+}</code></pre></pre>
+<p>Run it with:</p>
+<pre><code class="language-text">cargo run --example multi_tab -p zendriver
+</code></pre>
+<p>Expected output (target IDs vary):</p>
+<pre><code class="language-text">tab_count = 3
+  [0] target=B... url=data:text/html,... title="B"
+  [1] target=C... url=data:text/html,... title="C"
+  [2] target=A... url=https://example.com/ title="Example Domain"
+</code></pre>
+<h2 id="concurrency-note"><a class="header" href="#concurrency-note">Concurrency note</a></h2>
+<p><a href="https://docs.rs/zendriver/latest/zendriver/struct.Tab.html"><code>Tab</code></a> is <code>Clone + Send + Sync</code>. You can spawn one worker per tab and
+drive them in parallel:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span><span class="boring">let browser = zendriver::Browser::builder().launch().await?;
+</span>let urls = ["https://example.com", "https://example.org", "https://example.net"];
+let mut handles = Vec::new();
+for u in urls {
+    let tab = browser.new_tab().await?;
+    handles.push(tokio::spawn(async move {
+        tab.goto(u).await?;
+        tab.wait_for_load().await?;
+        let title = tab.title().await?;
+        Ok::&lt;_, zendriver::ZendriverError&gt;(title)
+    }));
+}
+for h in handles {
+    println!("{}", h.await.unwrap()?);
+}
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p>The transport actor serializes CDP frames across the WebSocket, so the
+underlying CDP traffic is sequenced — but every <code>await</code> point yields,
+letting other tab workers make progress. The aggregate throughput is
+limited by CDP RTT rather than your spawn count.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="stealth.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="frames.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="stealth.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="frames.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>
