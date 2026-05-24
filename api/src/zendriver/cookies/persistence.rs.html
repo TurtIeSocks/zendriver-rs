@@ -31,7 +31,7 @@
 <a href=#31 id=31 data-nosnippet>31</a><span class="kw">impl </span>CookieJar {
 <a href=#32 id=32 data-nosnippet>32</a>    <span class="doccomment">/// Snapshot the cookie store to a JSON file at `path`.
 <a href=#33 id=33 data-nosnippet>33</a>    ///
-<a href=#34 id=34 data-nosnippet>34</a>    /// Issues a single `Network.getAllCookies` round-trip, then writes the
+<a href=#34 id=34 data-nosnippet>34</a>    /// Issues a single `Storage.getCookies` round-trip, then writes the
 <a href=#35 id=35 data-nosnippet>35</a>    /// pretty-printed array via [`tokio::fs::write`]. The file is
 <a href=#36 id=36 data-nosnippet>36</a>    /// overwritten if it already exists. Parent directories must already
 <a href=#37 id=37 data-nosnippet>37</a>    /// exist — `save_to_file` does not create them.
@@ -59,7 +59,7 @@
 <a href=#59 id=59 data-nosnippet>59</a>    <span class="doccomment">/// Hydrate the browser cookie store from a JSON file at `path`.
 <a href=#60 id=60 data-nosnippet>60</a>    ///
 <a href=#61 id=61 data-nosnippet>61</a>    /// Reads the file, deserializes a `Vec&lt;Cookie&gt;`, and dispatches a
-<a href=#62 id=62 data-nosnippet>62</a>    /// single `Network.setCookies` bulk-set. Existing cookies in the
+<a href=#62 id=62 data-nosnippet>62</a>    /// single `Storage.setCookies` bulk-set. Existing cookies in the
 <a href=#63 id=63 data-nosnippet>63</a>    /// browser are NOT cleared first — call [`CookieJar::clear`] before
 <a href=#64 id=64 data-nosnippet>64</a>    /// this method for a fresh slate.
 <a href=#65 id=65 data-nosnippet>65</a>    ///
@@ -93,8 +93,8 @@
 <a href=#93 id=93 data-nosnippet>93</a>    <span class="kw">use </span><span class="kw">crate</span>::error::ZendriverError;
 <a href=#94 id=94 data-nosnippet>94</a>
 <a href=#95 id=95 data-nosnippet>95</a>    <span class="doccomment">/// End-to-end round-trip: dump the cookie store to disk, then load it back
-<a href=#96 id=96 data-nosnippet>96</a>    /// into a fresh jar. The mock receives `Network.getAllCookies` on save,
-<a href=#97 id=97 data-nosnippet>97</a>    /// then `Network.setCookies` on load — assert the payload preserves both
+<a href=#96 id=96 data-nosnippet>96</a>    /// into a fresh jar. The mock receives `Storage.getCookies` on save,
+<a href=#97 id=97 data-nosnippet>97</a>    /// then `Storage.setCookies` on load — assert the payload preserves both
 <a href=#98 id=98 data-nosnippet>98</a>    /// entries with their CDP camelCase fields intact.
 <a href=#99 id=99 data-nosnippet>99</a>    </span><span class="attr">#[tokio::test]
 <a href=#100 id=100 data-nosnippet>100</a>    </span><span class="kw">async fn </span>save_and_load_roundtrip_preserves_cookies() {
@@ -103,14 +103,14 @@
 <a href=#103 id=103 data-nosnippet>103</a>        <span class="kw">let </span>tmp = tempfile::NamedTempFile::new().unwrap();
 <a href=#104 id=104 data-nosnippet>104</a>        <span class="kw">let </span>path = tmp.path().to_path_buf();
 <a href=#105 id=105 data-nosnippet>105</a>
-<a href=#106 id=106 data-nosnippet>106</a>        <span class="comment">// --- Save half: Network.getAllCookies → write to tempfile.
+<a href=#106 id=106 data-nosnippet>106</a>        <span class="comment">// --- Save half: Storage.getCookies → write to tempfile.
 <a href=#107 id=107 data-nosnippet>107</a>        </span><span class="kw">let </span>save = tokio::spawn({
 <a href=#108 id=108 data-nosnippet>108</a>            <span class="kw">let </span>j = jar.clone();
 <a href=#109 id=109 data-nosnippet>109</a>            <span class="kw">let </span>p = path.clone();
 <a href=#110 id=110 data-nosnippet>110</a>            <span class="kw">async move </span>{ j.save_to_file(p).<span class="kw">await </span>}
 <a href=#111 id=111 data-nosnippet>111</a>        });
 <a href=#112 id=112 data-nosnippet>112</a>
-<a href=#113 id=113 data-nosnippet>113</a>        <span class="kw">let </span>id = mock.expect_cmd(<span class="string">"Network.getAllCookies"</span>).<span class="kw">await</span>;
+<a href=#113 id=113 data-nosnippet>113</a>        <span class="kw">let </span>id = mock.expect_cmd(<span class="string">"Storage.getCookies"</span>).<span class="kw">await</span>;
 <a href=#114 id=114 data-nosnippet>114</a>        mock.reply(
 <a href=#115 id=115 data-nosnippet>115</a>            id,
 <a href=#116 id=116 data-nosnippet>116</a>            <span class="macro">json!</span>({
@@ -149,14 +149,14 @@
 <a href=#149 id=149 data-nosnippet>149</a>        <span class="macro">assert_eq!</span>(arr[<span class="number">0</span>][<span class="string">"same_site"</span>], <span class="string">"Lax"</span>);
 <a href=#150 id=150 data-nosnippet>150</a>        <span class="macro">assert_eq!</span>(arr[<span class="number">1</span>][<span class="string">"name"</span>], <span class="string">"b"</span>);
 <a href=#151 id=151 data-nosnippet>151</a>
-<a href=#152 id=152 data-nosnippet>152</a>        <span class="comment">// --- Load half: read tempfile → Network.setCookies bulk-set.
+<a href=#152 id=152 data-nosnippet>152</a>        <span class="comment">// --- Load half: read tempfile → Storage.setCookies bulk-set.
 <a href=#153 id=153 data-nosnippet>153</a>        </span><span class="kw">let </span>load = tokio::spawn({
 <a href=#154 id=154 data-nosnippet>154</a>            <span class="kw">let </span>j = jar.clone();
 <a href=#155 id=155 data-nosnippet>155</a>            <span class="kw">let </span>p = path.clone();
 <a href=#156 id=156 data-nosnippet>156</a>            <span class="kw">async move </span>{ j.load_from_file(p).<span class="kw">await </span>}
 <a href=#157 id=157 data-nosnippet>157</a>        });
 <a href=#158 id=158 data-nosnippet>158</a>
-<a href=#159 id=159 data-nosnippet>159</a>        <span class="kw">let </span>id = mock.expect_cmd(<span class="string">"Network.setCookies"</span>).<span class="kw">await</span>;
+<a href=#159 id=159 data-nosnippet>159</a>        <span class="kw">let </span>id = mock.expect_cmd(<span class="string">"Storage.setCookies"</span>).<span class="kw">await</span>;
 <a href=#160 id=160 data-nosnippet>160</a>        <span class="kw">let </span>params = <span class="kw-2">&amp;</span>mock.last_sent()[<span class="string">"params"</span>];
 <a href=#161 id=161 data-nosnippet>161</a>        <span class="kw">let </span>cookies = params[<span class="string">"cookies"</span>].as_array().unwrap();
 <a href=#162 id=162 data-nosnippet>162</a>        <span class="macro">assert_eq!</span>(cookies.len(), <span class="number">2</span>);
@@ -195,7 +195,7 @@
 <a href=#195 id=195 data-nosnippet>195</a>        // task. (The pre-existing `_mock` would otherwise stall the call.)
 <a href=#196 id=196 data-nosnippet>196</a>        </span><span class="kw">let </span>reply = tokio::spawn(<span class="kw">async move </span>{
 <a href=#197 id=197 data-nosnippet>197</a>            <span class="kw">let </span><span class="kw-2">mut </span>mock = _mock;
-<a href=#198 id=198 data-nosnippet>198</a>            <span class="kw">let </span>id = mock.expect_cmd(<span class="string">"Network.getAllCookies"</span>).<span class="kw">await</span>;
+<a href=#198 id=198 data-nosnippet>198</a>            <span class="kw">let </span>id = mock.expect_cmd(<span class="string">"Storage.getCookies"</span>).<span class="kw">await</span>;
 <a href=#199 id=199 data-nosnippet>199</a>            mock.reply(id, <span class="macro">json!</span>({ <span class="string">"cookies"</span>: [] })).<span class="kw">await</span>;
 <a href=#200 id=200 data-nosnippet>200</a>        });
 <a href=#201 id=201 data-nosnippet>201</a>
