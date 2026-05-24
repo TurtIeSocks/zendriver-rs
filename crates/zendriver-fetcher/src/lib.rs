@@ -15,6 +15,7 @@ pub mod extract;
 pub mod fetcher;
 pub mod manifest;
 pub mod platform;
+pub mod resolver;
 pub mod version;
 
 pub use error::FetcherError;
