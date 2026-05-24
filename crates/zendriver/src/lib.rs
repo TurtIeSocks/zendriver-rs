@@ -11,6 +11,7 @@ pub mod error;
 pub mod input;
 pub mod network_idle;
 pub mod query;
+pub mod storage;
 pub mod tab;
 
 pub use browser::{Browser, BrowserBuilder};
@@ -20,6 +21,7 @@ pub use element::Element;
 pub use error::{BrowserError, Result, ZendriverError};
 pub use input::{Key, KeyModifiers, MouseButton, SpecialKey};
 pub use query::{AriaRole, BoundingBox, FindBuilder};
+pub use storage::Storage;
 pub use tab::Tab;
 
 // Re-export selected transport types for advanced users.

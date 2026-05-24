@@ -175,12 +175,41 @@ impl Tab {
     /// the live browser's cookie store until the WebSocket is torn down.
     #[must_use]
     pub fn cookies(&self) -> crate::CookieJar {
-        let conn = self
-            .inner
-            .browser
-            .upgrade()
-            .map_or_else(|| self.inner.session.connection().clone(), |b| b.conn.clone());
+        let conn = self.inner.browser.upgrade().map_or_else(
+            || self.inner.session.connection().clone(),
+            |b| b.conn.clone(),
+        );
         crate::CookieJar::new(conn)
+    }
+
+    /// Per-tab `localStorage` accessor. The returned [`crate::Storage`] is
+    /// configured with `is_local: true` and dispatches against this tab's
+    /// session; each operation re-resolves the tab's current origin via a
+    /// [`Tab::url`] round-trip (since DOMStorage is origin-keyed and a
+    /// navigation between calls would shift the target storage area).
+    ///
+    /// `DOMStorage.enable` fires lazily on the first op per handle — held
+    /// behind a [`tokio::sync::OnceCell`] inside the handle — so re-using
+    /// the same handle across many calls pays the enable cost exactly once.
+    #[must_use]
+    pub fn local_storage(&self) -> crate::Storage {
+        crate::Storage::new(
+            self.inner.session.clone(),
+            true,
+            Arc::downgrade(&self.inner),
+        )
+    }
+
+    /// Per-tab `sessionStorage` accessor. Mirror of [`Tab::local_storage`]
+    /// with `is_local: false` — backs the per-tab, per-origin
+    /// `sessionStorage` area instead of the persistent localStorage.
+    #[must_use]
+    pub fn session_storage(&self) -> crate::Storage {
+        crate::Storage::new(
+            self.inner.session.clone(),
+            false,
+            Arc::downgrade(&self.inner),
+        )
     }
 
     /// Helper: call a CDP method on this tab's session, parsing transport
