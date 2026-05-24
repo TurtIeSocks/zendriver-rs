@@ -388,6 +388,31 @@ impl Frame {
     }
 }
 
+impl crate::traits::Queryable for Frame {
+    fn find(&self) -> crate::query::FindBuilder<'_> {
+        Frame::find(self)
+    }
+    fn find_all(&self) -> crate::query::FindAllBuilder<'_> {
+        Frame::find_all(self)
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::traits::Evaluable for Frame {
+    async fn evaluate<T>(&self, js: &str) -> Result<T>
+    where
+        T: DeserializeOwned + Send + 'static,
+    {
+        Frame::evaluate(self, js).await
+    }
+    async fn evaluate_main<T>(&self, js: &str) -> Result<T>
+    where
+        T: DeserializeOwned + Send + 'static,
+    {
+        Frame::evaluate_main(self, js).await
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {

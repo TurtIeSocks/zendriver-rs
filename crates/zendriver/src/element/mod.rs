@@ -252,6 +252,15 @@ impl Element {
     }
 }
 
+impl crate::traits::Queryable for Element {
+    fn find(&self) -> crate::query::FindBuilder<'_> {
+        Element::find(self)
+    }
+    fn find_all(&self) -> crate::query::FindAllBuilder<'_> {
+        Element::find_all(self)
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {

@@ -939,6 +939,31 @@ impl Tab {
     }
 }
 
+impl crate::traits::Queryable for Tab {
+    fn find(&self) -> crate::query::FindBuilder<'_> {
+        Tab::find(self)
+    }
+    fn find_all(&self) -> crate::query::FindAllBuilder<'_> {
+        Tab::find_all(self)
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::traits::Evaluable for Tab {
+    async fn evaluate<T>(&self, js: &str) -> crate::error::Result<T>
+    where
+        T: serde::de::DeserializeOwned + Send + 'static,
+    {
+        Tab::evaluate(self, js).await
+    }
+    async fn evaluate_main<T>(&self, js: &str) -> crate::error::Result<T>
+    where
+        T: serde::de::DeserializeOwned + Send + 'static,
+    {
+        Tab::evaluate_main(self, js).await
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {

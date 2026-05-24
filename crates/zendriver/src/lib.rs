@@ -18,6 +18,7 @@ pub mod query;
 pub mod screenshot;
 pub mod storage;
 pub mod tab;
+pub mod traits;
 
 pub use browser::{Browser, BrowserBuilder};
 pub use cookies::{Cookie, CookieJar, SameSite};
@@ -30,6 +31,7 @@ pub use query::{AriaRole, BoundingBox, FindBuilder};
 pub use screenshot::{Format, ScreenshotBuilder};
 pub use storage::Storage;
 pub use tab::Tab;
+pub use traits::{Evaluable, Queryable};
 
 // Re-export selected transport types for advanced users.
 pub use zendriver_transport::{CallError, Connection, SessionHandle, TransportError};
