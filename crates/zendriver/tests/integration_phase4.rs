@@ -194,10 +194,8 @@ async fn local_storage_set_get_clear() {
     // is per-origin so a real navigation is required before any op
     // (DOMStorage rejects requests on `about:blank` because it has no
     // tangible origin).
-    let mock = fixture_with_html(
-        r#"<!doctype html><html><body><div id="d">x</div></body></html>"#,
-    )
-    .await;
+    let mock =
+        fixture_with_html(r#"<!doctype html><html><body><div id="d">x</div></body></html>"#).await;
     let browser = Browser::builder().headless(true).launch().await.unwrap();
     let tab = browser.main_tab();
     tab.goto(&mock.uri()).await.unwrap();
@@ -225,14 +223,10 @@ async fn back_forward_navigation_history() {
     // Goto A, goto B, back should land on A, forward should land on B.
     // Two distinct fixtures via two MockServer instances so the URLs
     // differ unambiguously.
-    let mock_a = fixture_with_html(
-        r#"<!doctype html><html><body><div id="a">A</div></body></html>"#,
-    )
-    .await;
-    let mock_b = fixture_with_html(
-        r#"<!doctype html><html><body><div id="b">B</div></body></html>"#,
-    )
-    .await;
+    let mock_a =
+        fixture_with_html(r#"<!doctype html><html><body><div id="a">A</div></body></html>"#).await;
+    let mock_b =
+        fixture_with_html(r#"<!doctype html><html><body><div id="b">B</div></body></html>"#).await;
     let browser = Browser::builder().headless(true).launch().await.unwrap();
     let tab = browser.main_tab();
     tab.goto(&mock_a.uri()).await.unwrap();
@@ -265,10 +259,8 @@ async fn reload_dispatches_page_reload() {
     // Reload should re-execute the page; assert by writing a sentinel
     // into the main world, reloading, and confirming the sentinel is gone
     // because the JS environment was thrown away with the document.
-    let mock = fixture_with_html(
-        r#"<!doctype html><html><body><div id="d">x</div></body></html>"#,
-    )
-    .await;
+    let mock =
+        fixture_with_html(r#"<!doctype html><html><body><div id="d">x</div></body></html>"#).await;
     let browser = Browser::builder().headless(true).launch().await.unwrap();
     let tab = browser.main_tab();
     tab.goto(&mock.uri()).await.unwrap();
@@ -286,16 +278,22 @@ async fn reload_dispatches_page_reload() {
     // After a real reload the JS realm is fresh; window.sentinel must
     // be `undefined`, which our null-coalescing eval surfaces as None.
     let after: Option<String> = tab
-        .evaluate_main(
-            "typeof window.sentinel === 'undefined' ? null : window.sentinel",
-        )
+        .evaluate_main("typeof window.sentinel === 'undefined' ? null : window.sentinel")
         .await
         .unwrap();
     assert_eq!(after, None, "reload should have cleared window.sentinel");
 
     // Sanity-check the DOM is still present (so we didn't just navigate
     // away to a blank page).
-    let id: Option<String> = tab.find().css("#d").one().await.unwrap().attr("id").await.unwrap();
+    let id: Option<String> = tab
+        .find()
+        .css("#d")
+        .one()
+        .await
+        .unwrap()
+        .attr("id")
+        .await
+        .unwrap();
     assert_eq!(id.as_deref(), Some("d"));
 
     browser.close().await.unwrap();

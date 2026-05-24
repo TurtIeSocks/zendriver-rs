@@ -44,7 +44,10 @@ async fn main() -> zendriver::Result<()> {
     for (i, tab) in tabs.iter().enumerate() {
         let url = tab.url().await?;
         let title = tab.title().await?;
-        println!("  [{i}] target={} url={url} title={title:?}", tab.target_id());
+        println!(
+            "  [{i}] target={} url={url} title={title:?}",
+            tab.target_id()
+        );
     }
 
     browser.close().await?;

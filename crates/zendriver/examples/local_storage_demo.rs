@@ -37,7 +37,12 @@ async fn main() -> zendriver::Result<()> {
     for (k, v) in entries {
         println!("  {k} = {v}");
     }
-    assert_eq!(all.len(), 3, "expected 3 keys after sets, got {}", all.len());
+    assert_eq!(
+        all.len(),
+        3,
+        "expected 3 keys after sets, got {}",
+        all.len()
+    );
 
     storage.clear().await?;
     let empty = storage.get_all().await?;

@@ -62,7 +62,11 @@ async fn main() -> zendriver::Result<()> {
         .await?;
 
         jar.save_to_file(&path).await?;
-        println!("saved {} cookies to {}", jar.all().await?.len(), path.display());
+        println!(
+            "saved {} cookies to {}",
+            jar.all().await?.len(),
+            path.display()
+        );
 
         browser.close().await?;
     }

@@ -2,12 +2,12 @@
 
 A Rust port of [zendriver](https://github.com/cdpdriver/zendriver) — an undetectable, async-first browser automation library using the Chrome DevTools Protocol directly.
 
-**Status:** Phases 1-3 shipped. Not yet published to crates.io.
+**Status:** Phases 1-4 shipped. Not yet published to crates.io.
 
 ## Example
 
 ```rust
-use zendriver::Browser;
+use zendriver::{Browser, Cookie, SameSite};
 
 #[tokio::main]
 async fn main() -> zendriver::Result<()> {
@@ -25,6 +25,27 @@ async fn main() -> zendriver::Result<()> {
     let title: String = tab.evaluate_main("document.title").await?;
     println!("title: {title}");
 
+    // Open a second tab in parallel — each tab is its own CDP session.
+    let tab2 = browser.new_tab_at("https://example.org").await?;
+    tab2.wait_for_load().await?;
+    println!("now driving {} tabs", browser.tab_count().await);
+
+    // Cookies live at browser scope (shared across all tabs).
+    browser
+        .cookies()
+        .set(Cookie {
+            name: "session".into(),
+            value: "abc123".into(),
+            domain: "example.org".into(),
+            path: "/".into(),
+            expires: None,
+            http_only: true,
+            secure: false,
+            same_site: Some(SameSite::Lax),
+            url: None,
+        })
+        .await?;
+
     browser.close().await?;
     Ok(())
 }
@@ -35,7 +56,7 @@ async fn main() -> zendriver::Result<()> {
 1. **Foundation** **DONE**: transport + minimal `Browser`/`Tab`/`Element`.
 2. **Stealth** **DONE**: fingerprint patches + isolated worlds + stealth JS bundle.
 3. **Element API completeness** **DONE**: selectors (CSS/XPath/text/role), actionability, input controller, screenshots.
-4. `Tab`/`Browser` completeness, cookies, multi-tab, iframes (planned).
+4. **`Tab`/`Browser` completeness** **DONE**: multi-tab + cookies + storage + frames + nav history + `wait_for_idle`.
 5. Optional gated features: interception, Cloudflare bypass, `expect()`, fetcher (planned).
 6. Polish + 0.1 release (planned).
 
