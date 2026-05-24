@@ -1,5 +1,6 @@
 //! Tab — handle to a single CDP target session.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -67,6 +68,24 @@ pub(crate) struct TabInner {
     /// here. Subsequent calls return the cached `Frame` clone without
     /// another round-trip.
     pub(crate) main_frame: tokio::sync::OnceCell<Frame>,
+    /// Per-Tab frames registry keyed by CDP `frameId`. Populated by the
+    /// background subscriber spawned in [`Tab::new`] via
+    /// [`crate::frame::lifecycle::run`] which mutates the map in response
+    /// to `Page.frameAttached` / `Page.frameDetached` /
+    /// `Page.frameNavigated` events on this tab's session. Read by
+    /// [`Tab::frames`] / [`Tab::frame_by_url`] / [`Tab::frame_by_name`].
+    ///
+    /// Same-origin sub-frames go in this map directly; out-of-process
+    /// iframes (OOPIFs) take the `Target.attachedToTarget` path wired in
+    /// T16 and land here only after that observer registers them.
+    pub(crate) frames: Arc<tokio::sync::RwLock<HashMap<String, Frame>>>,
+    /// Cancellation token for the frame lifecycle subscriber task. Mirror
+    /// of [`TabInner::network_cancel`]: fires on [`Drop`] so the spawned
+    /// task exits cleanly when the last clone of this Tab goes away. The
+    /// task selects on this token alongside the three `Page.frame*`
+    /// subscriber streams so cancellation unblocks the select even if no
+    /// events are arriving.
+    pub(crate) frame_lifecycle_cancel: tokio_util::sync::CancellationToken,
 }
 
 impl Drop for TabInner {
@@ -76,6 +95,10 @@ impl Drop for TabInner {
         // streams; cancellation unblocks the select even if no events are
         // arriving. Without this the task would leak per Tab on shutdown.
         self.network_cancel.cancel();
+        // Signal the spawned `frame::lifecycle::run` task to exit. Same
+        // posture as `network_cancel` above — the task selects on this
+        // token alongside the three `Page.frame*` subscriber streams.
+        self.frame_lifecycle_cancel.cancel();
     }
 }
 
@@ -103,8 +126,37 @@ impl Tab {
             }
         });
 
-        Self {
-            inner: Arc::new(TabInner {
+        // Build the per-Tab frames registry + spawn the lifecycle
+        // subscriber. The task calls `Page.enable` once, then mutates the
+        // registry in response to `Page.frameAttached` (insert),
+        // `Page.frameNavigated` (update url / insert if unseen) and
+        // `Page.frameDetached` (remove). The `Arc<RwLock<_>>` lives on
+        // `TabInner::frames` so `Tab::frames` / `frame_by_url` /
+        // `frame_by_name` can take snapshots without going through the
+        // tracker task. The `Weak<TabInner>` is wired in via
+        // `Arc::new_cyclic` below so every `Frame` constructed by the
+        // subscriber can upgrade back to the owning Tab.
+        let frames: Arc<tokio::sync::RwLock<HashMap<String, Frame>>> =
+            Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+        let frame_lifecycle_cancel = tokio_util::sync::CancellationToken::new();
+
+        let inner = Arc::new_cyclic(|weak: &std::sync::Weak<TabInner>| {
+            tokio::spawn({
+                let session_for_task = session.clone();
+                let frames_for_task = frames.clone();
+                let weak_for_task = weak.clone();
+                let cancel_for_task = frame_lifecycle_cancel.clone();
+                async move {
+                    crate::frame::lifecycle::run(
+                        session_for_task,
+                        frames_for_task,
+                        weak_for_task,
+                        cancel_for_task,
+                    )
+                    .await;
+                }
+            });
+            TabInner {
                 session,
                 isolated_world: tokio::sync::Mutex::new(IsolatedWorldCache::default()),
                 browser,
@@ -113,8 +165,12 @@ impl Tab {
                 network_tracker,
                 network_cancel,
                 main_frame: tokio::sync::OnceCell::new(),
-            }),
-        }
+                frames,
+                frame_lifecycle_cancel,
+            }
+        });
+
+        Self { inner }
     }
 
     /// Test-only constructor: builds a `Tab` with a deterministic seeded
@@ -204,6 +260,45 @@ impl Tab {
             })
             .await?;
         Ok(frame.clone())
+    }
+
+    /// Snapshot of all currently-registered frames for this tab.
+    ///
+    /// The registry is maintained by the lifecycle subscriber spawned in
+    /// [`Tab::new`] — see [`crate::frame::lifecycle::run`]. Includes the
+    /// top-level frame (once Chrome has emitted at least one
+    /// `Page.frameAttached` or `Page.frameNavigated` for it) plus every
+    /// same-origin sub-frame. Out-of-process iframes (OOPIFs) land in
+    /// this map via the T16 `TargetObserver` path.
+    ///
+    /// Order is unspecified ([`HashMap`] iteration); callers that need a
+    /// stable order should sort by [`Frame::id`] or [`Frame::url`].
+    pub async fn frames(&self) -> Result<Vec<Frame>> {
+        Ok(self.inner.frames.read().await.values().cloned().collect())
+    }
+
+    /// First frame in [`Tab::frames`] whose URL contains `url_substr`.
+    /// Linear scan over the registry. Useful for picking a frame by its
+    /// origin (`tab.frame_by_url("docs.google.com")`) without knowing the
+    /// exact path. Returns `Ok(None)` if no frame matches; the registry
+    /// lock is released before returning so concurrent updates can land.
+    pub async fn frame_by_url(&self, url_substr: &str) -> Result<Option<Frame>> {
+        let map = self.inner.frames.read().await;
+        for frame in map.values() {
+            if frame.url().await.contains(url_substr) {
+                return Ok(Some(frame.clone()));
+            }
+        }
+        Ok(None)
+    }
+
+    /// First frame in [`Tab::frames`] whose `name` attribute equals
+    /// `name`. Linear scan. Frames without a name attribute (the common
+    /// case for the top-level frame and unnamed iframes) are skipped.
+    /// Returns `Ok(None)` if no frame matches.
+    pub async fn frame_by_name(&self, name: &str) -> Result<Option<Frame>> {
+        let map = self.inner.frames.read().await;
+        Ok(map.values().find(|f| f.name() == Some(name)).cloned())
     }
 
     /// Browser-wide cookie store handle. Convenience accessor that delegates
@@ -1241,6 +1336,80 @@ mod tests {
         // Keep `inner` alive until after the dispatch so the Weak upgrade
         // succeeds — that's the path under test.
         drop(inner);
+        conn.shutdown();
+    }
+
+    // --- frame lifecycle subscriber (P4 T15) ---------------------------
+
+    /// End-to-end: emit `Page.frameAttached` for a new same-origin
+    /// sub-frame; `tab.frames()` should expose it. Then emit
+    /// `Page.frameDetached` for the same `frameId` and assert the
+    /// registry shrinks back to empty.
+    ///
+    /// Mirrors the [`InFlightTracker`] test pattern — synchronize on the
+    /// subscriber's outbound `Page.enable` call before driving events,
+    /// then poll the registry shape (the lifecycle task processes events
+    /// asynchronously).
+    #[tokio::test]
+    async fn frame_lifecycle_attach_then_detach_round_trip() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        // Synchronize: wait until the background lifecycle task has run
+        // far enough to issue `Page.enable`. Once that command lands in
+        // the mock's outbound queue, the three `Page.frame*` subscriptions
+        // are already registered, so any subsequent
+        // `emit_event_for_session` will be routed to them.
+        let id_enable =
+            tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Page.enable"))
+                .await
+                .expect("frame lifecycle did not send Page.enable within 2s");
+        mock.reply(id_enable, json!({})).await;
+
+        // Emit a Page.frameAttached event for a child frame.
+        mock.emit_event_for_session(
+            "Page.frameAttached",
+            json!({
+                "frameId": "FCHILD",
+                "parentFrameId": "FROOT",
+            }),
+            "S1",
+        )
+        .await;
+
+        // Poll until the subscriber processes the event (async).
+        for _ in 0..50 {
+            if !tab.inner.frames.read().await.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let frames = tab.frames().await.unwrap();
+        assert_eq!(frames.len(), 1, "expected one frame after attach event");
+        let attached = &frames[0];
+        assert_eq!(attached.id(), "FCHILD");
+        assert_eq!(attached.parent_id(), Some("FROOT"));
+        assert!(!attached.is_main());
+
+        // Emit a Page.frameDetached for the same frame.
+        mock.emit_event_for_session("Page.frameDetached", json!({ "frameId": "FCHILD" }), "S1")
+            .await;
+
+        for _ in 0..50 {
+            if tab.inner.frames.read().await.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let frames_after = tab.frames().await.unwrap();
+        assert!(
+            frames_after.is_empty(),
+            "expected registry to drain after detach event",
+        );
+
         conn.shutdown();
     }
 
