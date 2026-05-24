@@ -61,6 +61,20 @@ impl Platform {
             Platform::Win64 => "win64",
         }
     }
+
+    /// Top-level directory inside a CfT zip for this platform — e.g.
+    /// `"chrome-linux64"`, `"chrome-mac-arm64"`. Every entry in a
+    /// well-formed CfT archive lives under this directory; the extractor
+    /// rejects archives that violate the layout as a tamper guard.
+    pub(crate) fn cft_top_dir(&self) -> &'static str {
+        match self {
+            Platform::LinuxX64 => "chrome-linux64",
+            Platform::MacX64 => "chrome-mac-x64",
+            Platform::MacArm64 => "chrome-mac-arm64",
+            Platform::Win32 => "chrome-win32",
+            Platform::Win64 => "chrome-win64",
+        }
+    }
 }
 
 #[cfg(test)]

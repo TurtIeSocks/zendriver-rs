@@ -166,16 +166,32 @@ struct PollResult {
 
 /// In-page evaluator. Returns:
 /// - `{ done: true, token: "<non-empty>" }` once Turnstile populates the
-///   hidden `cf-turnstile-response` input.
+///   hidden `cf-turnstile-response` (modern) or `cf_challenge_response`
+///   (legacy / pre-Turnstile) input.
 /// - `{ done: true, token: null }` if the challenge iframe is no longer
 ///   mounted (cleared without a token — e.g. clearance cookie path).
 /// - `{ done: false, token: null }` otherwise (poll again).
 ///
-/// The walker mirrors `detect.js` — recursively descend the document and
-/// every shadow root looking for `challenges.cloudflare.com` iframes.
+/// ## Light-DOM assumption
+///
+/// The token input is queried via `document.querySelector` (light DOM
+/// only). Cloudflare's canonical Turnstile placement keeps the
+/// `<input name="cf-turnstile-response">` in the parent page's light DOM
+/// even though the challenge iframe itself lives inside a shadow root —
+/// this is by design so page JS can read the token to submit forms.
+/// Sites that custom-host Turnstile inside a closed shadow root would
+/// defeat this lookup; we treat that as out of scope (it would also
+/// break the site's own form-submission code).
+///
+/// The iframe walker, in contrast, is shadow-aware: it recursively
+/// descends every open shadow root looking for the
+/// `challenges.cloudflare.com` iframe so the "challenge gone" signal
+/// stays accurate even when the iframe is hosted in a shadow tree.
 const POLL_JS: &str = r#"
 (function () {
-    var input = document.querySelector('[name="cf-turnstile-response"]');
+    var input =
+        document.querySelector('[name="cf-turnstile-response"]') ||
+        document.querySelector('[name="cf_challenge_response"]');
     if (input && input.value) {
         return { done: true, token: input.value };
     }

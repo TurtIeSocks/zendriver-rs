@@ -8,6 +8,18 @@
 //! The on-disk shape is the pretty-printed [`Vec<Cookie>`] (snake_case JSON
 //! per the module-level docs in [`crate::cookies`]) — straightforward to
 //! diff, edit by hand, or feed to other tools.
+//!
+//! ## Lossless round-trip
+//!
+//! The `url` field on [`crate::cookies::Cookie`] is input-only: CDP uses
+//! it on `.set()` to infer `domain` / `path` / `secure`, but never emits
+//! it on reads. `.save_to_file()` therefore serializes whatever
+//! `.all()` returned — `url` always `None`, omitted by serde — and
+//! `.load_from_file()` reads back the same shape. `domain` / `path` /
+//! `secure` are populated explicitly on every cookie from `.all()`, so
+//! `.set_many()` after a load reconstructs the store without needing
+//! `url` re-inference. If you hand-author a JSON file with a non-null
+//! `url`, it round-trips faithfully too (serde preserves `Some` values).
 
 use std::path::Path;
 

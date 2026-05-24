@@ -139,10 +139,7 @@ impl PausedRequest {
         headers: Vec<(String, String)>,
         body: Vec<u8>,
     ) -> Result<(), InterceptionError> {
-        let response_headers: Vec<Value> = headers
-            .into_iter()
-            .map(|(name, value)| json!({ "name": name, "value": value }))
-            .collect();
+        let response_headers = crate::actor::headers_to_cdp(&headers);
         self.session
             .call(
                 "Fetch.fulfillRequest",
@@ -177,11 +174,10 @@ impl PausedRequest {
             params.insert("method".into(), Value::String(method));
         }
         if let Some(headers) = overrides.headers {
-            let arr: Vec<Value> = headers
-                .into_iter()
-                .map(|(name, value)| json!({ "name": name, "value": value }))
-                .collect();
-            params.insert("headers".into(), Value::Array(arr));
+            params.insert(
+                "headers".into(),
+                Value::Array(crate::actor::headers_to_cdp(&headers)),
+            );
         }
         if let Some(post_data) = overrides.post_data {
             params.insert("postData".into(), Value::String(BASE64.encode(&post_data)));
@@ -231,7 +227,6 @@ impl PausedRequest {
 mod tests {
     use super::*;
     use crate::types::ResourceType;
-    use std::collections::HashMap;
     use zendriver_transport::testing::MockConnection;
     use zendriver_transport::SessionHandle;
 
@@ -239,7 +234,7 @@ mod tests {
         RequestInfo {
             url: "https://example.test/widget".into(),
             method: "GET".into(),
-            headers: HashMap::new(),
+            headers: Vec::new(),
             post_data: None,
             resource_type: ResourceType::XHR,
         }

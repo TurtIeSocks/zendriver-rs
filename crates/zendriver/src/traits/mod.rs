@@ -13,6 +13,17 @@
 //!     q.find().css("button").one().await
 //! }
 //! ```
+//!
+//! ## Inherent methods + trait impls — by design
+//!
+//! Each of [`crate::Tab`] / [`crate::Frame`] / [`crate::Element`] exposes
+//! `find()` / `find_all()` / `evaluate()` / `evaluate_main()` as both
+//! inherent methods and trait methods. The inherent methods carry the
+//! authoritative docs + examples and don't require a `use` import; the
+//! trait methods unlock generic helpers (`fn check<Q: Queryable>(q: &Q)`).
+//! This duplication is intentional — removing the inherent shape would
+//! force every call site to add `use zendriver::Queryable;` for what is
+//! the high-frequency entry point of the library.
 
 pub mod evaluable;
 pub mod queryable;

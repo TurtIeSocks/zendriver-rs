@@ -604,7 +604,12 @@ impl Tab {
     ///
     /// If the cached isolated-world execution context was destroyed (e.g. by
     /// a page navigation), the cache is invalidated and the evaluation is
-    /// retried once.
+    /// retried once. One retry is enough: the failure mode this guards
+    /// against is "navigation happened between cache-fetch and `Runtime.evaluate`",
+    /// which is a one-shot race — recreating the world for the new context
+    /// and re-issuing the call clears it. If the same call fails the
+    /// second attempt the page has a real problem (target gone, isolated
+    /// world refused to recreate) and further retries would only mask it.
     ///
     /// # Errors
     ///
@@ -1105,6 +1110,17 @@ impl Tab {
         let deadline = tokio::time::Instant::now() + timeout;
         let mut quiet_start: Option<tokio::time::Instant> = None;
         loop {
+            // Arm the notification interest BEFORE reading the in-flight set
+            // so a notification fired between the read and the `select!`
+            // below is still delivered. `Notify::notified()` only catches
+            // notifications fired after the future has been `enable()`d, so
+            // doing it the other way around would let a request that started
+            // *and finished* inside the quiet window slip past us with a
+            // sustained count of 0 — `wait_for_idle` would return early.
+            let notif = tracker.notifier.notified();
+            tokio::pin!(notif);
+            notif.as_mut().enable();
+
             let in_flight_count = tracker.in_flight.lock().await.len();
             if in_flight_count == 0 {
                 let now = tokio::time::Instant::now();
@@ -1123,7 +1139,13 @@ impl Tab {
             }
             tokio::select! {
                 () = tokio::time::sleep(Duration::from_millis(50)) => {}
-                () = tracker.notifier.notified() => {}
+                () = notif => {
+                    // A membership change fired since we armed `notif`. Reset
+                    // the quiet window — even if the set is back to zero by
+                    // the next iteration, real activity occurred during this
+                    // window so it doesn't count as "idle".
+                    quiet_start = None;
+                }
             }
         }
     }
@@ -1937,6 +1959,7 @@ mod tests {
                 _user_data: None,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
+                tabs_changed: tokio::sync::Notify::new(),
             }
         });
         let tab = inner.main_tab.clone();
@@ -2265,6 +2288,77 @@ mod tests {
             "wait_for_idle resolved too early ({total_elapsed:?}); R2 inside quiet \
              window must have reset quiet_start, requiring a fresh post-R2 quiet \
              window before resolving",
+        );
+
+        conn.shutdown();
+    }
+
+    /// Regression for the "burst within tick" race: a request that fires
+    /// *and finishes* inside one 50ms poll tick takes the in-flight set
+    /// 0 → 1 → 0 without ever being observed at a >0 read. A naive
+    /// implementation that only checks the set len would see sustained
+    /// 0 and resolve early. The fix arms a `Notify::notified()` future
+    /// before each count read so the two membership events from the burst
+    /// both hit an armed waker; on the next iteration we wake via the
+    /// notifier arm and reset `quiet_start`.
+    #[tokio::test]
+    async fn wait_for_idle_burst_inside_tick_resets_quiet_window() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let id_enable =
+            tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Network.enable"))
+                .await
+                .expect("tracker did not send Network.enable within 2s");
+        mock.reply(id_enable, json!({})).await;
+
+        // Start with the set already at 0 — wait_for_idle should accumulate
+        // a quiet window from T0.
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                t.wait_for_idle_with(Duration::from_secs(5), Duration::from_millis(300))
+                    .await
+            }
+        });
+        let started_at = tokio::time::Instant::now();
+
+        // Let the wait_for_idle loop tick once on an empty set so
+        // `quiet_start` is firmly armed.
+        tokio::time::sleep(Duration::from_millis(75)).await;
+
+        // Burst: fire R-burst's requestWillBeSent + responseReceived
+        // back-to-back. The tracker should observe both transitions and
+        // notify on each; the wait_for_idle loop should wake on the notif
+        // arm and reset quiet_start even though the set's instantaneous
+        // value returns to 0.
+        mock.emit_event_for_session(
+            "Network.requestWillBeSent",
+            json!({ "requestId": "Rburst" }),
+            "S1",
+        )
+        .await;
+        mock.emit_event_for_session(
+            "Network.responseReceived",
+            json!({ "requestId": "Rburst" }),
+            "S1",
+        )
+        .await;
+
+        let res = tokio::time::timeout(Duration::from_secs(2), fut)
+            .await
+            .expect("wait_for_idle did not resolve within 2s");
+        res.unwrap().unwrap();
+
+        // Lower bound: 75ms initial sleep + 300ms quiet window after the
+        // burst's last notification = 375ms. A bug that ignored the burst
+        // would resolve at started_at + 300ms = 300ms.
+        let elapsed = started_at.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(355),
+            "wait_for_idle resolved too early ({elapsed:?}); 0→1→0 burst inside \
+             quiet window must reset quiet_start",
         );
 
         conn.shutdown();

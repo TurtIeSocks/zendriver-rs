@@ -64,25 +64,26 @@ pub(crate) async fn move_realistic(
     target_x: f64,
     target_y: f64,
 ) -> Result<()> {
-    let (start, path, modifiers, segment_delay) = {
-        let mut state = input.state.lock().await;
-        let start = (state.pointer_x, state.pointer_y);
-        let modifiers = state.modifiers_held;
-        let path = BezierPath::build(
-            start,
-            (target_x, target_y),
-            input.profile.jitter_amplitude_px,
-            &mut state.rng,
-        );
-        let segment_delay = if input.profile.mouse_speed_px_per_ms > 0.0 {
-            Duration::from_micros(((5.0 / input.profile.mouse_speed_px_per_ms) * 1000.0) as u64)
-        } else {
-            Duration::ZERO
-        };
-        (start, path, modifiers, segment_delay)
+    // Hold the lock across the full dispatch + state-update sequence so a
+    // concurrent `move_*` from another task can't slip in between our last
+    // `mouseMoved` and the `pointer_{x,y}` write and leave the cached
+    // cursor position out of sync with the page's actual cursor.
+    // InputController is per-Tab so this only serializes input on this Tab,
+    // which matches Chrome's per-page input model.
+    let mut state = input.state.lock().await;
+    let start = (state.pointer_x, state.pointer_y);
+    let modifier_bits = state.modifiers_held.cdp_bits();
+    let path = BezierPath::build(
+        start,
+        (target_x, target_y),
+        input.profile.jitter_amplitude_px,
+        &mut state.rng,
+    );
+    let segment_delay = if input.profile.mouse_speed_px_per_ms > 0.0 {
+        Duration::from_micros(((5.0 / input.profile.mouse_speed_px_per_ms) * 1000.0) as u64)
+    } else {
+        Duration::ZERO
     };
-    let _ = start;
-    let modifier_bits = modifiers.cdp_bits();
     for &(x, y) in &path.points {
         tab.session()
             .call(
@@ -97,7 +98,6 @@ pub(crate) async fn move_realistic(
             tokio::time::sleep(segment_delay).await;
         }
     }
-    let mut state = input.state.lock().await;
     state.pointer_x = target_x;
     state.pointer_y = target_y;
     Ok(())
@@ -111,10 +111,9 @@ pub(crate) async fn move_raw(
     target_x: f64,
     target_y: f64,
 ) -> Result<()> {
-    let modifier_bits = {
-        let s = input.state.lock().await;
-        s.modifiers_held.cdp_bits()
-    };
+    // Same per-Tab serialization rationale as `move_realistic`.
+    let mut state = input.state.lock().await;
+    let modifier_bits = state.modifiers_held.cdp_bits();
     tab.session()
         .call(
             "Input.dispatchMouseEvent",
@@ -124,7 +123,6 @@ pub(crate) async fn move_raw(
             }),
         )
         .await?;
-    let mut state = input.state.lock().await;
     state.pointer_x = target_x;
     state.pointer_y = target_y;
     Ok(())

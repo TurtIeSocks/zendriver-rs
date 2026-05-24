@@ -209,4 +209,47 @@ mod auto_trait_assertions {
         assert_send_sync::<DownloadState>();
         assert_send_sync::<DownloadProgressState>();
     }
+
+    #[cfg(feature = "interception")]
+    #[test]
+    fn interception_surface_is_send_sync() {
+        assert_send_sync::<InterceptBuilder>();
+        assert_send_sync::<InterceptHandle>();
+        assert_send_sync::<InterceptionError>();
+        assert_send_sync::<PausedRequest>();
+        assert_send_sync::<RequestInfo>();
+        assert_send_sync::<RequestOverrides>();
+        assert_send_sync::<ResponseInfo>();
+        assert_send_sync::<RequestStage>();
+        assert_send_sync::<ResourceType>();
+        assert_send_sync::<AbortReason>();
+    }
+
+    #[cfg(feature = "cloudflare")]
+    #[test]
+    fn cloudflare_surface_is_send_sync() {
+        assert_send_sync::<CloudflareBypass>();
+        assert_send_sync::<CloudflareError>();
+        assert_send_sync::<ClearanceOutcome>();
+    }
+
+    #[cfg(feature = "fetcher")]
+    #[test]
+    fn fetcher_surface_is_send_sync() {
+        assert_send_sync::<Fetcher>();
+        assert_send_sync::<FetcherError>();
+        assert_send_sync::<FetcherPhase>();
+        assert_send_sync::<FetcherProgress>();
+        assert_send_sync::<Platform>();
+        assert_send_sync::<VersionSpec>();
+        assert_send_sync::<Channel>();
+    }
+
+    #[test]
+    fn stealth_surface_is_send_sync() {
+        assert_send_sync::<stealth::Fingerprint>();
+        assert_send_sync::<stealth::Platform>();
+        assert_send_sync::<stealth::StealthProfile>();
+        assert_send_sync::<stealth::UserAgentMetadata>();
+    }
 }

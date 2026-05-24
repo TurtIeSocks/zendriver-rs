@@ -153,7 +153,11 @@ impl Storage {
     /// ```
     pub async fn get_all(&self) -> Result<HashMap<String, String>> {
         self.ensure_enabled().await?;
-        let storage_id = self.storage_id().await?;
+        // Hold a strong ref to the Tab across the full op so the session
+        // can't be torn down between the `storage_id` URL fetch and the
+        // `DOMStorage.*` call.
+        let tab = self.upgraded_tab()?;
+        let storage_id = self.build_storage_id(&tab).await?;
         let resp = self
             .inner
             .session
@@ -162,6 +166,7 @@ impl Storage {
                 json!({ "storageId": storage_id }),
             )
             .await?;
+        drop(tab);
         parse_entries(&resp)
     }
 
@@ -182,7 +187,8 @@ impl Storage {
     /// ```
     pub async fn set(&self, key: &str, value: &str) -> Result<()> {
         self.ensure_enabled().await?;
-        let storage_id = self.storage_id().await?;
+        let tab = self.upgraded_tab()?;
+        let storage_id = self.build_storage_id(&tab).await?;
         self.inner
             .session
             .call(
@@ -194,6 +200,7 @@ impl Storage {
                 }),
             )
             .await?;
+        drop(tab);
         Ok(())
     }
 
@@ -239,7 +246,8 @@ impl Storage {
     /// ```
     pub async fn remove(&self, key: &str) -> Result<()> {
         self.ensure_enabled().await?;
-        let storage_id = self.storage_id().await?;
+        let tab = self.upgraded_tab()?;
+        let storage_id = self.build_storage_id(&tab).await?;
         self.inner
             .session
             .call(
@@ -247,6 +255,7 @@ impl Storage {
                 json!({ "storageId": storage_id, "key": key }),
             )
             .await?;
+        drop(tab);
         Ok(())
     }
 
@@ -266,11 +275,13 @@ impl Storage {
     /// ```
     pub async fn clear(&self) -> Result<()> {
         self.ensure_enabled().await?;
-        let storage_id = self.storage_id().await?;
+        let tab = self.upgraded_tab()?;
+        let storage_id = self.build_storage_id(&tab).await?;
         self.inner
             .session
             .call("DOMStorage.clear", json!({ "storageId": storage_id }))
             .await?;
+        drop(tab);
         Ok(())
     }
 
@@ -310,17 +321,24 @@ impl Storage {
         Ok(())
     }
 
-    /// Build the CDP `StorageId` payload — `{ securityOrigin, isLocalStorage }`
-    /// — from the tab's current URL. Fetches the URL via the cached
-    /// [`Weak<TabInner>`] upgrade; errors with [`ZendriverError::Storage`]
-    /// if the owning tab has been dropped.
-    async fn storage_id(&self) -> Result<Value> {
+    /// Upgrade the cached [`Weak<TabInner>`] into a strong [`crate::Tab`]
+    /// handle. The caller is expected to hold the returned `Tab` across
+    /// the full storage op so the underlying session can't be torn down
+    /// between the origin lookup and the `DOMStorage.*` dispatch.
+    fn upgraded_tab(&self) -> Result<crate::tab::Tab> {
         let tab_inner = self
             .inner
             .tab
             .upgrade()
             .ok_or_else(|| ZendriverError::Storage("owning tab has been dropped".into()))?;
-        let tab = crate::tab::Tab { inner: tab_inner };
+        Ok(crate::tab::Tab { inner: tab_inner })
+    }
+
+    /// Build the CDP `StorageId` payload — `{ securityOrigin, isLocalStorage }`
+    /// — from the supplied tab's current URL. The caller passes a live
+    /// `&Tab` (typically the one held by [`Self::upgraded_tab`]) so the
+    /// URL read and any follow-on CDP call see the same session.
+    async fn build_storage_id(&self, tab: &crate::tab::Tab) -> Result<Value> {
         let url = tab.url().await?;
         let origin = url.origin().ascii_serialization();
         Ok(json!({

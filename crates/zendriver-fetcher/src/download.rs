@@ -15,10 +15,8 @@ use crate::error::FetcherError;
 use crate::{FetcherPhase, FetcherProgress};
 
 /// Bytes between forced progress emissions (in addition to time throttling).
-#[allow(dead_code, reason = "consumed by Fetcher::ensure_chrome in Task 21")]
 const PROGRESS_BYTES_INTERVAL: u64 = 100 * 1024;
 /// Wall-clock interval between forced progress emissions.
-#[allow(dead_code, reason = "consumed by Fetcher::ensure_chrome in Task 21")]
 const PROGRESS_TIME_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Streams `url` to `dest_path`, emitting [`FetcherProgress`] callbacks
@@ -28,7 +26,6 @@ const PROGRESS_TIME_INTERVAL: Duration = Duration::from_millis(100);
 /// [`PROGRESS_BYTES_INTERVAL`] bytes *or* once per
 /// [`PROGRESS_TIME_INTERVAL`], whichever happens first, with the
 /// final emission always fired regardless of throttle.
-#[allow(dead_code, reason = "consumed by Fetcher::ensure_chrome in Task 21")]
 pub(crate) async fn download(
     url: &str,
     dest_path: &Path,

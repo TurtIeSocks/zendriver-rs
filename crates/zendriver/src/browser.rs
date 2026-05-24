@@ -395,6 +395,12 @@ pub(crate) struct BrowserInner {
     /// the [`Tab`] handle for a freshly-created page target and by
     /// `Browser::tabs` / `Browser::tab_count` for snapshot reads.
     pub(crate) tabs: tokio::sync::RwLock<HashMap<String, Tab>>,
+    /// Fires every time the [`TabRegistrar`] observer mutates [`Self::tabs`]
+    /// (insert on attach, remove on detach). [`Browser::new_tab_at`] waits
+    /// on this in lieu of the previous 50ms polling loop — it arms the
+    /// notification before reading the map so a fire that lands between
+    /// the read and the wait is still delivered.
+    pub(crate) tabs_changed: tokio::sync::Notify,
 }
 
 /// [`TargetObserver`] that maintains [`BrowserInner::tabs`] in step with
@@ -491,6 +497,8 @@ impl TargetObserver for TabRegistrar {
                     .write()
                     .await
                     .insert(session.session_id.to_string(), tab);
+                // Wake any `new_tab_at` callers waiting on this insert.
+                browser.tabs_changed.notify_waiters();
                 Ok(())
             }
             _ => {
@@ -513,7 +521,11 @@ impl TargetObserver for TabRegistrar {
         // If it was an OOPIF (no matching tab), fall through to the OOPIF
         // sweep which walks each tab's frames map.
         let removed_tab = browser.tabs.write().await.remove(session_id).is_some();
-        if !removed_tab {
+        if removed_tab {
+            // Mirror the insert-side notify so any future watchers (e.g.
+            // a `wait_for_tab_count` helper) can listen on the same channel.
+            browser.tabs_changed.notify_waiters();
+        } else {
             let _ = crate::frame::oopif::deregister_oopif_frame(&browser, session_id).await;
         }
     }
@@ -715,6 +727,7 @@ impl BrowserBuilder {
                 _user_data: owned_tmp,
                 stealth_input_profile: input_profile,
                 tabs: tokio::sync::RwLock::new(HashMap::new()),
+                tabs_changed: tokio::sync::Notify::new(),
             }
         });
 
@@ -900,21 +913,35 @@ impl Browser {
             })?
             .to_string();
 
-        // Poll the registrar-maintained tabs map for the new Tab.
-        // The 5s window covers the typical CDP roundtrip + observer chain
-        // (stealth → tab-registrar) latency with comfortable headroom.
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        // Wait for the TabRegistrar observer to insert the new Tab.
+        // The 5s outer bound covers the typical CDP roundtrip + observer
+        // chain latency (stealth → tab-registrar) with comfortable
+        // headroom; instead of polling, we wait on
+        // `BrowserInner::tabs_changed`, which the registrar fires on every
+        // tabs-map mutation. The notification is `enable()`d before each
+        // read so a notify that lands between the read and the wait is
+        // still delivered.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
+            let notif = self.inner.tabs_changed.notified();
+            tokio::pin!(notif);
+            notif.as_mut().enable();
+
             {
                 let tabs = self.inner.tabs.read().await;
                 if let Some(tab) = tabs.values().find(|t| t.target_id() == target_id) {
                     return Ok(tab.clone());
                 }
             }
-            if std::time::Instant::now() >= deadline {
+
+            if tokio::time::Instant::now() >= deadline {
                 return Err(ZendriverError::TabNotFound(target_id));
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            tokio::select! {
+                () = notif => {}
+                () = tokio::time::sleep_until(deadline) => {}
+            }
         }
     }
 
@@ -1004,6 +1031,20 @@ impl Browser {
     }
 }
 
+/// Hard-shutdown fallback. `Drop` cannot be async, so it cannot perform the
+/// SIGTERM-then-wait-then-SIGKILL dance [`Browser::close`] runs. Instead:
+///
+/// 1. [`Connection::shutdown`] signals the transport actor to stop reading;
+///    pending CDP calls fail with a transport error.
+/// 2. The child [`std::process::Child`] is dropped via tokio's
+///    `kill_on_drop(true)` (set at spawn time), which sends `SIGKILL`
+///    immediately — Chrome gets no grace period to flush state.
+/// 3. The optional `user_data_dir` [`TempDir`] is dropped, deleting the
+///    profile.
+///
+/// In short: dropping the [`Browser`] is the panic-safety / scope-exit path.
+/// For a graceful shutdown that flushes Chrome state cleanly, call
+/// [`Browser::close`] explicitly before the [`Browser`] goes out of scope.
 impl Drop for BrowserInner {
     fn drop(&mut self) {
         self.conn.shutdown();
@@ -1138,6 +1179,7 @@ mod tests {
                 _user_data: None,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
+                tabs_changed: tokio::sync::Notify::new(),
             }
         });
         registrar.set_browser(Arc::downgrade(&inner));
@@ -1220,6 +1262,7 @@ mod tests {
                 _user_data: None,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
+                tabs_changed: tokio::sync::Notify::new(),
             }
         });
         registrar.set_browser(Arc::downgrade(&inner));
@@ -1325,6 +1368,7 @@ mod tests {
                 _user_data: None,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
+                tabs_changed: tokio::sync::Notify::new(),
             }
         });
         registrar.set_browser(Arc::downgrade(&inner));
@@ -1383,6 +1427,7 @@ mod tests {
                 _user_data: None,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
+                tabs_changed: tokio::sync::Notify::new(),
             }
         });
         let browser = Browser { inner };
@@ -1437,6 +1482,7 @@ mod tests {
                 _user_data: None,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
+                tabs_changed: tokio::sync::Notify::new(),
             }
         });
         let browser = Browser { inner };
@@ -1487,6 +1533,7 @@ mod tests {
                 _user_data: None,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
+                tabs_changed: tokio::sync::Notify::new(),
             }
         });
         registrar.set_browser(Arc::downgrade(&inner));
@@ -1614,6 +1661,7 @@ mod tests {
                 _user_data: None,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
+                tabs_changed: tokio::sync::Notify::new(),
             }
         });
         registrar.set_browser(Arc::downgrade(&inner));

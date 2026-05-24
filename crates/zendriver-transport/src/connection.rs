@@ -21,6 +21,14 @@ use crate::observer::TargetObserver;
 /// indefinitely; a misbehaving one trips the timeout and the debugger releases.
 pub(crate) const DEFAULT_OBSERVER_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Internal JSON-RPC code stamped onto drained pendings when the transport
+/// actor shuts down. Mapped back to [`TransportError::Shutdown`] by
+/// [`Connection::call_raw`]. Picked from the reserved internal range
+/// (-32000 to -32099 per JSON-RPC) and chosen far enough from
+/// [`CdpRpcError`] codes Chrome actually emits that an unambiguous code
+/// check suffices — no message-string match required.
+pub(crate) const SHUTDOWN_DRAIN_CODE: i32 = -32001;
+
 /// Cheap-to-clone handle to the connection actor. All `Tab`s and `Element`s
 /// hold one of these (via `Arc<...>`); the actor itself runs in a separate
 /// tokio task.
@@ -69,7 +77,9 @@ impl Connection {
             Ok(Err(rpc_err)) => {
                 // Preserve the transport-shutdown sentinel for shutdown-drained
                 // pendings; everything else surfaces as a typed RPC error.
-                if rpc_err.code == -32001 && rpc_err.message.contains("shut down") {
+                // The sentinel code is reserved internally — Chrome never
+                // emits it — so a code-only check is unambiguous.
+                if rpc_err.code == SHUTDOWN_DRAIN_CODE {
                     Err(CallError::Transport(TransportError::Shutdown))
                 } else {
                     Err(CallError::Rpc(rpc_err.code, rpc_err.message, rpc_err.data))

@@ -268,6 +268,14 @@ pub(crate) fn register(session: &SessionHandle) -> DialogExpectation {
                 message: ev.message,
                 // CDP sends an empty string for non-prompt dialogs; normalize
                 // to None so the field is meaningful only for `prompt`.
+                //
+                // Note: this collapses two distinct CDP states into one:
+                // (a) `defaultPrompt` field absent (alert/confirm), and
+                // (b) `defaultPrompt: ""` (a prompt with empty default).
+                // The protocol carries no signal that distinguishes them
+                // either — Chrome sends "" in both cases — so the
+                // collapse loses nothing observable and gives users one
+                // less invariant to track.
                 default_prompt: ev.default_prompt.filter(|s| !s.is_empty()),
                 url: ev.url,
                 session: session_for_dialog,

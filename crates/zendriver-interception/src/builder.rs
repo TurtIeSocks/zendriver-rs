@@ -162,7 +162,6 @@ impl<'tab> InterceptBuilder<'tab> {
     /// Compiles `pattern` eagerly; an invalid pattern fails the builder chain
     /// with [`InterceptionError::InvalidPattern`] returned as `Err(Self)` via
     /// the `Result` wrapper.
-    #[allow(clippy::result_large_err)] // Bubbles up InterceptionError shape from url_pattern.rs.
     pub fn block(mut self, pattern: impl Into<String>) -> Result<Self, InterceptionError> {
         self.rules.push(Rule::Block {
             pattern: UrlPattern::new(pattern)?,
@@ -171,7 +170,6 @@ impl<'tab> InterceptBuilder<'tab> {
     }
 
     /// Register a [`Rule::Redirect`] that rewrites `from` → `to`.
-    #[allow(clippy::result_large_err)]
     pub fn redirect(
         mut self,
         from: impl Into<String>,
@@ -185,7 +183,6 @@ impl<'tab> InterceptBuilder<'tab> {
     }
 
     /// Register a [`Rule::Respond`] serving a synthesized response.
-    #[allow(clippy::result_large_err)]
     pub fn respond(
         mut self,
         pattern: impl Into<String>,
@@ -206,7 +203,6 @@ impl<'tab> InterceptBuilder<'tab> {
     ///
     /// The closure runs on the actor task per matching request — it must be
     /// `Send + Sync` and `'static`. Wrap shared state in `Arc` if needed.
-    #[allow(clippy::result_large_err)]
     pub fn modify_request<F>(
         mut self,
         pattern: impl Into<String>,
@@ -522,7 +518,12 @@ mod tests {
         assert_eq!(paused.request.url, "https://example.test/widget.json");
         assert_eq!(paused.request.method, "GET");
         assert_eq!(
-            paused.request.headers.get("accept").map(String::as_str),
+            paused
+                .request
+                .headers
+                .iter()
+                .find(|(k, _)| k == "accept")
+                .map(|(_, v)| v.as_str()),
             Some("application/json"),
         );
         assert!(

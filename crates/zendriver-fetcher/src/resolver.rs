@@ -21,7 +21,6 @@ use crate::version::{Channel, VersionSpec};
 /// - [`FetcherError::UnsupportedPlatform`] if the manifest has no download
 ///   for `platform`, or if a non-stable channel is requested (the
 ///   `latest-versions-per-milestone.json` endpoint is not wired in P5).
-#[allow(dead_code, reason = "consumed by Fetcher::ensure_chrome in Task 21")]
 pub(crate) async fn resolve_download_url(
     manifest: &KnownGoodVersionsResponse,
     spec: &VersionSpec,

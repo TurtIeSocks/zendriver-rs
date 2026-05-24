@@ -203,6 +203,17 @@ impl<'tab> ScreenshotBuilder<'tab> {
     /// scrollable page. Mutually exclusive in effect with [`Self::clip`]:
     /// when both are set, the layout-metrics clip overrides the manual one.
     ///
+    /// ## Atomicity
+    ///
+    /// The two CDP calls (`Page.getLayoutMetrics` and
+    /// `Page.captureScreenshot`) are not atomic with respect to the page
+    /// itself: page-driven navigation, dynamic content insertion, or a
+    /// resize fired by JS between the two calls will leave the captured
+    /// image clipped to stale metrics. For deterministic full-page
+    /// screenshots, pause page activity before calling [`Self::bytes`]
+    /// (e.g. await [`crate::tab::Tab::wait_for_idle`] first).
+
+    ///
     /// # Examples
     ///
     /// ```no_run

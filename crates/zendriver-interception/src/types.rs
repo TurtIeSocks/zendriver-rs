@@ -7,8 +7,6 @@
 //! - [`RequestInfo`] / [`ResponseInfo`] / [`RequestOverrides`] carry the
 //!   payloads surfaced to user code via the rule + stream APIs.
 
-use std::collections::HashMap;
-
 /// The lifecycle stage at which Chrome pauses an intercepted request.
 ///
 /// Maps to the `stage` field of CDP's `Fetch.RequestPattern`.
@@ -142,29 +140,40 @@ impl std::fmt::Display for AbortReason {
 
 /// Information about an intercepted request, surfaced to rule closures and
 /// stream consumers.
+///
+/// Headers are a `Vec<(name, value)>` rather than a `HashMap` so duplicates
+/// (multiple `Set-Cookie`, multi-value `Cookie`, etc.) and Chrome's emission
+/// order survive the round-trip into user code and back through
+/// [`RequestOverrides`]. CDP's underlying wire shape is a `[{name, value}]`
+/// array; this type matches that shape.
 #[derive(Debug, Clone)]
 pub struct RequestInfo {
     /// Full request URL (post-redirect resolution by Chrome).
     pub url: String,
     /// HTTP method (`GET`, `POST`, ...).
     pub method: String,
-    /// Request headers as Chrome reported them.
-    pub headers: HashMap<String, String>,
-    /// Request body, if any (raw bytes; Chrome base64-decodes on our behalf).
+    /// Request headers as Chrome reported them. Order is Chrome's emission
+    /// order; duplicates are preserved.
+    pub headers: Vec<(String, String)>,
+    /// Request body, if any. Sourced from `postDataEntries` (binary-safe)
+    /// when present, otherwise the UTF-8 bytes of `postData`.
     pub post_data: Option<Vec<u8>>,
     /// Chrome's classification of the request's resource type.
     pub resource_type: ResourceType,
 }
 
 /// Information about a response paused at the `Response` stage.
+///
+/// Headers are a `Vec<(name, value)>` so duplicate-keyed response headers
+/// (notably `Set-Cookie`) are not silently merged into a single value.
 #[derive(Debug, Clone)]
 pub struct ResponseInfo {
     /// HTTP status code.
     pub status: u16,
     /// HTTP status line text (e.g. `"OK"`, `"Not Found"`).
     pub status_text: String,
-    /// Response headers.
-    pub headers: HashMap<String, String>,
+    /// Response headers in Chrome's emission order; duplicates preserved.
+    pub headers: Vec<(String, String)>,
 }
 
 /// Per-field overrides for `Fetch.continueRequest`.
@@ -178,8 +187,9 @@ pub struct RequestOverrides {
     /// Replace the HTTP method.
     pub method: Option<String>,
     /// Replace the full header set (CDP semantics: this is *replacement*, not
-    /// merge — include every header you want sent).
-    pub headers: Option<HashMap<String, String>>,
+    /// merge — include every header you want sent). Order is preserved
+    /// on the wire.
+    pub headers: Option<Vec<(String, String)>>,
     /// Replace the request body.
     pub post_data: Option<Vec<u8>>,
 }

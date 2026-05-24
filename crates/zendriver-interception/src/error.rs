@@ -1,10 +1,17 @@
 //! Interception-layer errors.
 
+/// Errors surfaced by the interception API.
+///
+/// The [`Self::Call`] variant is boxed so the enum stays small
+/// (`size_of::<usize>()` for the heavy arm). Without boxing, every
+/// `Result<T, InterceptionError>` would carry the full
+/// `zendriver_transport::CallError` payload — large enough to trip
+/// clippy's `result_large_err` lint at every fallible call site.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum InterceptionError {
     #[error("call failed: {0}")]
-    Call(#[from] zendriver_transport::CallError),
+    Call(Box<zendriver_transport::CallError>),
 
     #[error("invalid url pattern: {0}")]
     InvalidPattern(String),
@@ -20,6 +27,12 @@ pub enum InterceptionError {
 
     #[error("invalid response from CDP: {0}")]
     InvalidResponse(String),
+}
+
+impl From<zendriver_transport::CallError> for InterceptionError {
+    fn from(e: zendriver_transport::CallError) -> Self {
+        Self::Call(Box::new(e))
+    }
 }
 
 #[cfg(test)]

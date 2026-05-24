@@ -165,8 +165,24 @@ impl StealthProfile {
     }
     /// Override the reported `navigator.deviceMemory` (in GB).
     ///
-    /// Per W3C, the reported value is rounded to one of `0.25, 0.5, 1, 2,
-    /// 4, 8`; the resolver caps at 8 and floors at 4 for plausibility.
+    /// Per the [HTML Device Memory spec][spec] the value Chrome reports
+    /// is one of `{1, 2, 4, 8}` (Chrome does not expose fractional values
+    /// to JS). The resolver snaps `gb` to the nearest valid integer at
+    /// or below it:
+    ///
+    /// | Input `gb` | Reported |
+    /// |-----------:|---------:|
+    /// | `0` or `1` | `1`      |
+    /// | `2` or `3` | `2`      |
+    /// | `4`–`7`    | `4`      |
+    /// | `8`+       | `8`      |
+    ///
+    /// Snap-down (not nearest-round) matches Chrome's own behavior and
+    /// avoids inflating the reported value above what the host plausibly
+    /// has. Anything outside `{1, 2, 4, 8}` is itself a stealth tell
+    /// because real browsers never report it.
+    ///
+    /// [spec]: https://www.w3.org/TR/device-memory/
     #[must_use]
     pub fn memory_gb(mut self, gb: u32) -> Self {
         self.per_field.memory_gb = Some(gb);
@@ -277,12 +293,31 @@ impl StealthProfile {
             fp.cpu_count = n.clamp(2, 32);
         }
         if let Some(g) = self.per_field.memory_gb {
-            fp.memory_gb = if g >= 8 { 8 } else { 4 };
+            // Snap-down to the nearest spec-valid value Chrome exposes
+            // to JS — see `memory_gb` doc table.
+            let snapped = match g {
+                0..=1 => 1,
+                2..=3 => 2,
+                4..=7 => 4,
+                _ => 8,
+            };
+            if snapped != g {
+                tracing::debug!(
+                    requested = g,
+                    chosen = snapped,
+                    "stealth memory_gb snapped to nearest navigator.deviceMemory spec value",
+                );
+            }
+            fp.memory_gb = snapped;
         }
+        // Always recompose so `ua_metadata.{platform_version, architecture,
+        // bitness}` track any `platform` / `chrome_major` overrides applied
+        // above. Then, if the user supplied an explicit UA string, replace
+        // the freshly composed `ua_string` with it (UAM remains coherent
+        // with the overridden platform).
+        fp.recompose();
         if let Some(ref ua) = self.per_field.ua_string {
             fp.ua_string = ua.clone();
-        } else {
-            fp.recompose();
         }
         if let Some(ref tz) = self.per_field.timezone {
             fp.timezone = Some(tz.clone());

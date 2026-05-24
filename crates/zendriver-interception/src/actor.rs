@@ -127,10 +127,25 @@ pub(crate) struct RequestPayload {
     pub(crate) method: String,
     #[serde(default)]
     pub(crate) headers: HashMap<String, String>,
+    /// Chrome's text representation of the request body. For multipart /
+    /// binary uploads this can be lossy — Chrome rebuilds via UTF-8 best
+    /// effort. Prefer [`Self::post_data_entries`] when present.
     #[serde(rename = "postData", default)]
     pub(crate) post_data: Option<String>,
     #[serde(rename = "hasPostData", default)]
     _has_post_data: Option<bool>,
+    /// Per-chunk base64-encoded bytes. Chrome emits this for binary /
+    /// multipart bodies where the text representation would be lossy.
+    /// When present, it is the canonical source of truth for the body.
+    #[serde(rename = "postDataEntries", default)]
+    pub(crate) post_data_entries: Option<Vec<PostDataEntry>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct PostDataEntry {
+    /// Base64-encoded body bytes. Per CDP `Network.PostDataEntry`.
+    #[serde(default)]
+    pub(crate) bytes: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -279,18 +294,51 @@ pub(crate) fn serialize_pattern(p: &RequestPattern) -> Value {
 }
 
 /// Build a [`RequestInfo`] from the decoded event for `Modify` closures.
+///
+/// Body precedence: `postDataEntries` (canonical, base64-decoded + concatenated)
+/// when present, else `postData` interpreted as UTF-8 bytes. The string
+/// fallback is necessarily lossy for binary bodies — Chrome only emits
+/// `postDataEntries` when it knows the text form would mangle the bytes.
+///
+/// Headers come from `Network.Request.headers` (CDP object) so we materialize
+/// them as a `Vec<(name, value)>` on the boundary; the upstream HashMap may
+/// have collapsed duplicates already, but for the request side CDP also
+/// pre-merges so this is faithful.
 pub(crate) fn build_request_info(ev: &RequestPausedEvent) -> RequestInfo {
     RequestInfo {
         url: ev.request.url.clone(),
         method: ev.request.method.clone(),
-        headers: ev.request.headers.clone(),
-        post_data: ev
+        headers: ev
             .request
-            .post_data
-            .as_deref()
-            .map(|s| s.as_bytes().to_vec()),
+            .headers
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+        post_data: decode_post_data(&ev.request),
         resource_type: parse_resource_type(ev.resource_type.as_deref()),
     }
+}
+
+fn decode_post_data(req: &RequestPayload) -> Option<Vec<u8>> {
+    use base64::engine::general_purpose::STANDARD as BASE64;
+    use base64::Engine as _;
+
+    if let Some(entries) = req.post_data_entries.as_ref() {
+        let mut buf = Vec::new();
+        for entry in entries {
+            let Some(b64) = entry.bytes.as_deref() else {
+                continue;
+            };
+            match BASE64.decode(b64) {
+                Ok(bytes) => buf.extend_from_slice(&bytes),
+                Err(e) => {
+                    tracing::warn!(error = %e, "interception: bad base64 in postDataEntries; skipping entry");
+                }
+            }
+        }
+        return Some(buf);
+    }
+    req.post_data.as_deref().map(|s| s.as_bytes().to_vec())
 }
 
 /// Build a [`ResponseInfo`] from the decoded event when Chrome paused at the
@@ -302,7 +350,7 @@ pub(crate) fn build_request_info(ev: &RequestPausedEvent) -> RequestInfo {
 pub(crate) fn build_response_info(ev: &RequestPausedEvent) -> Option<ResponseInfo> {
     let status = ev.response_status_code?;
     let status_text = ev.response_status_text.clone().unwrap_or_default();
-    let headers = ev
+    let headers: Vec<(String, String)> = ev
         .response_headers
         .as_ref()
         .map(|hs| {
@@ -316,6 +364,16 @@ pub(crate) fn build_response_info(ev: &RequestPausedEvent) -> Option<ResponseInf
         status_text,
         headers,
     })
+}
+
+/// Serialize a `[(name, value)]` slice into CDP's `[{name, value}]` JSON
+/// array shape used by `Fetch.continueRequest.headers` and
+/// `Fetch.fulfillRequest.responseHeaders`.
+pub(crate) fn headers_to_cdp(headers: &[(String, String)]) -> Vec<Value> {
+    headers
+        .iter()
+        .map(|(name, value)| json!({ "name": name, "value": value }))
+        .collect()
 }
 
 /// Best-effort parse of a CDP `Network.ResourceType` string into our enum.
@@ -405,11 +463,7 @@ async fn continue_with_overrides(
         params.insert("method".into(), Value::String(method));
     }
     if let Some(headers) = overrides.headers {
-        let arr: Vec<Value> = headers
-            .into_iter()
-            .map(|(name, value)| json!({ "name": name, "value": value }))
-            .collect();
-        params.insert("headers".into(), Value::Array(arr));
+        params.insert("headers".into(), Value::Array(headers_to_cdp(&headers)));
     }
     if let Some(post_data) = overrides.post_data {
         params.insert("postData".into(), Value::String(BASE64.encode(&post_data)));
@@ -427,10 +481,7 @@ async fn fulfill_request(
     headers: &[(String, String)],
     body: &[u8],
 ) -> Result<(), InterceptionError> {
-    let response_headers: Vec<Value> = headers
-        .iter()
-        .map(|(name, value)| json!({ "name": name, "value": value }))
-        .collect();
+    let response_headers = headers_to_cdp(headers);
     session
         .call(
             "Fetch.fulfillRequest",

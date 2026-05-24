@@ -33,23 +33,30 @@ pub(crate) fn default_cache_dir() -> PathBuf {
 ///
 /// Matches the Chrome for Testing zip layout — see module docs.
 pub(crate) fn binary_path(cache_dir: &Path, version: &str, platform: Platform) -> PathBuf {
-    let version_dir = cache_dir.join(version);
+    cache_dir.join(version).join(binary_subpath(platform))
+}
+
+/// Path to the Chrome binary *relative* to the version directory.
+///
+/// Used by both [`binary_path`] (against the published `<cache>/<version>/`
+/// layout) and the fetcher's permission-fix step (against the in-progress
+/// `<cache>/<version>.tmp/` staging dir, so the binary is executable
+/// *before* it is atomically renamed into place).
+pub(crate) fn binary_subpath(platform: Platform) -> PathBuf {
     match platform {
-        Platform::LinuxX64 => version_dir.join("chrome-linux64").join("chrome"),
-        Platform::MacX64 => version_dir
-            .join("chrome-mac-x64")
+        Platform::LinuxX64 => PathBuf::from("chrome-linux64").join("chrome"),
+        Platform::MacX64 => PathBuf::from("chrome-mac-x64")
             .join("Google Chrome for Testing.app")
             .join("Contents")
             .join("MacOS")
             .join("Google Chrome for Testing"),
-        Platform::MacArm64 => version_dir
-            .join("chrome-mac-arm64")
+        Platform::MacArm64 => PathBuf::from("chrome-mac-arm64")
             .join("Google Chrome for Testing.app")
             .join("Contents")
             .join("MacOS")
             .join("Google Chrome for Testing"),
-        Platform::Win32 => version_dir.join("chrome-win32").join("chrome.exe"),
-        Platform::Win64 => version_dir.join("chrome-win64").join("chrome.exe"),
+        Platform::Win32 => PathBuf::from("chrome-win32").join("chrome.exe"),
+        Platform::Win64 => PathBuf::from("chrome-win64").join("chrome.exe"),
     }
 }
 

@@ -38,6 +38,15 @@ const DEFAULT_EXPECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// retained so [`Self::body`] can issue `Network.getResponseBody` against the
 /// same target the response arrived on.
 ///
+/// # Lifetime contract
+///
+/// `MatchedResponse` does not extend the lifetime of the owning
+/// [`crate::Browser`] / [`crate::Tab`]. Once those are dropped, the
+/// underlying session is torn down and [`Self::body`] returns a
+/// [`ZendriverError`] sourced from the transport layer. In practice the
+/// pattern is: await the expectation, immediately call `.body()` (or copy
+/// the field you need), then it is safe to drop the originating handles.
+///
 /// `Debug` is manually implemented since [`SessionHandle`] does not derive
 /// it; the session is rendered as a placeholder.
 #[derive(Clone)]
@@ -53,8 +62,11 @@ pub struct MatchedResponse {
     /// CDP `requestId` — used by [`Self::body`] when fetching the payload.
     pub request_id: String,
     /// Session this response arrived on. Retained so [`Self::body`] dispatches
-    /// `Network.getResponseBody` against the correct target.
-    pub session: SessionHandle,
+    /// `Network.getResponseBody` against the correct target. Crate-private
+    /// because the lifetime contract above requires the field to flow
+    /// through `Self::body` (which surfaces transport errors when the
+    /// session is gone), not direct user dispatch.
+    pub(crate) session: SessionHandle,
 }
 
 impl std::fmt::Debug for MatchedResponse {
@@ -81,10 +93,19 @@ impl MatchedResponse {
     /// after the response completes — call promptly after the expectation
     /// resolves.
     ///
+    /// # Lifetime
+    ///
+    /// `MatchedResponse` does not keep the owning [`crate::Browser`] /
+    /// [`crate::Tab`] alive — if they have been dropped before this call,
+    /// the underlying session is torn down and the error surfaces from the
+    /// transport layer as [`ZendriverError`]. Call `body()` before dropping
+    /// the Browser / Tab.
+    ///
     /// # Errors
     ///
     /// Returns [`ZendriverError::Cdp`] if Chrome returned no body or
-    /// invalid base64.
+    /// invalid base64. Returns a transport error if the originating session
+    /// has been torn down (see "Lifetime" above).
     ///
     /// # Examples
     ///

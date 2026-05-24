@@ -173,11 +173,53 @@ pub(crate) async fn run_actor<S>(
                                     if let Ok(ev) =
                                         serde_json::from_value::<TargetDetached>(params.clone())
                                     {
+                                        // Mirror the `attachedToTarget` path:
+                                        // observers can panic in user code, so
+                                        // wrap each call in AssertUnwindSafe +
+                                        // catch_unwind and a soft timeout. We
+                                        // can't tear down the session on
+                                        // failure (it's already detaching),
+                                        // but logging gives users a fighting
+                                        // chance to find a regression instead
+                                        // of dropping the panic silently.
+                                        let timeout_dur = if let Some(strong) =
+                                            weak_inner.upgrade()
+                                        {
+                                            Connection { inner: strong }.observer_timeout()
+                                        } else {
+                                            // Connection has dropped — pick a
+                                            // short default so the task can't
+                                            // hang forever.
+                                            Duration::from_secs(5)
+                                        };
                                         for obs in &observers {
                                             let obs2 = obs.clone();
                                             let sid = ev.session_id.clone();
+                                            let name = obs2.name();
                                             tokio::spawn(async move {
-                                                obs2.on_target_detached(&sid).await;
+                                                let fut = obs2.on_target_detached(&sid);
+                                                match tokio::time::timeout(
+                                                    timeout_dur,
+                                                    AssertUnwindSafe(fut).catch_unwind(),
+                                                )
+                                                .await
+                                                {
+                                                    Ok(Ok(())) => {}
+                                                    Ok(Err(panic)) => {
+                                                        let msg = panic_payload(&panic);
+                                                        error!(
+                                                            observer = name,
+                                                            session_id = %sid,
+                                                            panic = %msg,
+                                                            "detached-target observer panicked",
+                                                        );
+                                                    }
+                                                    Err(_) => warn!(
+                                                        observer = name,
+                                                        session_id = %sid,
+                                                        "detached-target observer timed out",
+                                                    ),
+                                                }
                                             });
                                         }
                                     } else {
@@ -201,10 +243,13 @@ pub(crate) async fn run_actor<S>(
         }
     }
 
-    // Drain pending into shutdown errors so callers don't hang.
+    // Drain pending into shutdown errors so callers don't hang. The code
+    // is a reserved sentinel matched by `Connection::call_raw` so the
+    // drained pendings surface as `TransportError::Shutdown` rather than
+    // a generic `Rpc` error.
     for (_id, reply) in pending.drain() {
         let _ = reply.send(Err(CdpRpcError {
-            code: -32001,
+            code: crate::connection::SHUTDOWN_DRAIN_CODE,
             message: "connection shut down".into(),
             data: None,
         }));
@@ -218,6 +263,18 @@ pub(crate) async fn run_actor<S>(
 /// panics — we detach via `Target.detachFromTarget` and return without
 /// releasing, or (c) an observer exceeds `observer_timeout` — we log and fall
 /// through to release the debugger so Chrome doesn't hang indefinitely.
+///
+/// ## Cancellation
+///
+/// `AssertUnwindSafe + catch_unwind` covers panics inside the observer
+/// future, not cancellation of the outer task. In practice this function
+/// runs inside a `tokio::spawn`'d task that has no `JoinHandle` retained
+/// by the actor loop — the spawned task therefore cannot be cancelled by
+/// the actor dropping. The task owns the [`Connection`] via the moved
+/// `conn` field below, so the underlying transport stays alive at least
+/// until the task completes naturally. The only way for in-flight CDP
+/// calls to orphan is a runtime-wide shutdown, in which case the entire
+/// process is tearing down and the calls are moot.
 async fn handle_target_attached(
     conn: Connection,
     ev: TargetAttached,
