@@ -5,7 +5,7 @@ dispatch exactly one of <a href="struct.PausedRequest.html#method.continue_" tit
 request open until one of these arrives. <a href="struct.PausedRequest.html#method.body" title="method zendriver_interception::paused::PausedRequest::body"><code>body</code></a> is a read-only side-call
 usable at the <code>Response</code> stage to inspect the upstream body before deciding
 what to do; it does not release the pause.</p>
-<p>Internally <code>PausedRequest</code> carries a <a href="../../zendriver_transport/session/struct.SessionHandle.html" title="struct zendriver_transport::session::SessionHandle"><code>SessionHandle</code></a> (not a full <code>Tab</code>)
+<p>Internally <code>PausedRequest</code> carries a [<code>SessionHandle</code>] (not a full <code>Tab</code>)
 so the type lives in this crate without a reverse dependency on
 <code>zendriver</code>. The builder in T6/T7 constructs each instance from the actor
 loop’s session + the decoded event payload.</p>

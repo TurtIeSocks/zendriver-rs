@@ -2374,123 +2374,127 @@
 <a href=#2374 id=2374 data-nosnippet>2374</a>        mock.reply(id_enable, <span class="macro">json!</span>({})).<span class="kw">await</span>;
 <a href=#2375 id=2375 data-nosnippet>2375</a>
 <a href=#2376 id=2376 data-nosnippet>2376</a>        <span class="comment">// Start with the set already at 0 — wait_for_idle should accumulate
-<a href=#2377 id=2377 data-nosnippet>2377</a>        // a quiet window from T0.
-<a href=#2378 id=2378 data-nosnippet>2378</a>        </span><span class="kw">let </span>fut = tokio::spawn({
-<a href=#2379 id=2379 data-nosnippet>2379</a>            <span class="kw">let </span>t = tab.clone();
-<a href=#2380 id=2380 data-nosnippet>2380</a>            <span class="kw">async move </span>{
-<a href=#2381 id=2381 data-nosnippet>2381</a>                t.wait_for_idle_with(Duration::from_secs(<span class="number">5</span>), Duration::from_millis(<span class="number">300</span>))
-<a href=#2382 id=2382 data-nosnippet>2382</a>                    .<span class="kw">await
-<a href=#2383 id=2383 data-nosnippet>2383</a>            </span>}
-<a href=#2384 id=2384 data-nosnippet>2384</a>        });
-<a href=#2385 id=2385 data-nosnippet>2385</a>        <span class="kw">let </span>started_at = tokio::time::Instant::now();
-<a href=#2386 id=2386 data-nosnippet>2386</a>
-<a href=#2387 id=2387 data-nosnippet>2387</a>        <span class="comment">// Let the wait_for_idle loop tick once on an empty set so
-<a href=#2388 id=2388 data-nosnippet>2388</a>        // `quiet_start` is firmly armed.
-<a href=#2389 id=2389 data-nosnippet>2389</a>        </span>tokio::time::sleep(Duration::from_millis(<span class="number">75</span>)).<span class="kw">await</span>;
+<a href=#2377 id=2377 data-nosnippet>2377</a>        // a quiet window from T0. The inner `wait_for_idle_with` timeout is
+<a href=#2378 id=2378 data-nosnippet>2378</a>        // deliberately generous (30s) so a slow / loaded CI runner doesn't
+<a href=#2379 id=2379 data-nosnippet>2379</a>        // flake the test; the correctness assertion below uses a strict
+<a href=#2380 id=2380 data-nosnippet>2380</a>        // lower bound on `elapsed` and an outer 10s tokio::time::timeout to
+<a href=#2381 id=2381 data-nosnippet>2381</a>        // catch a too-early resolve or a hang.
+<a href=#2382 id=2382 data-nosnippet>2382</a>        </span><span class="kw">let </span>fut = tokio::spawn({
+<a href=#2383 id=2383 data-nosnippet>2383</a>            <span class="kw">let </span>t = tab.clone();
+<a href=#2384 id=2384 data-nosnippet>2384</a>            <span class="kw">async move </span>{
+<a href=#2385 id=2385 data-nosnippet>2385</a>                t.wait_for_idle_with(Duration::from_secs(<span class="number">30</span>), Duration::from_millis(<span class="number">300</span>))
+<a href=#2386 id=2386 data-nosnippet>2386</a>                    .<span class="kw">await
+<a href=#2387 id=2387 data-nosnippet>2387</a>            </span>}
+<a href=#2388 id=2388 data-nosnippet>2388</a>        });
+<a href=#2389 id=2389 data-nosnippet>2389</a>        <span class="kw">let </span>started_at = tokio::time::Instant::now();
 <a href=#2390 id=2390 data-nosnippet>2390</a>
-<a href=#2391 id=2391 data-nosnippet>2391</a>        <span class="comment">// Burst: fire R-burst's requestWillBeSent + responseReceived
-<a href=#2392 id=2392 data-nosnippet>2392</a>        // back-to-back. The tracker should observe both transitions and
-<a href=#2393 id=2393 data-nosnippet>2393</a>        // notify on each; the wait_for_idle loop should wake on the notif
-<a href=#2394 id=2394 data-nosnippet>2394</a>        // arm and reset quiet_start even though the set's instantaneous
-<a href=#2395 id=2395 data-nosnippet>2395</a>        // value returns to 0.
-<a href=#2396 id=2396 data-nosnippet>2396</a>        </span>mock.emit_event_for_session(
-<a href=#2397 id=2397 data-nosnippet>2397</a>            <span class="string">"Network.requestWillBeSent"</span>,
-<a href=#2398 id=2398 data-nosnippet>2398</a>            <span class="macro">json!</span>({ <span class="string">"requestId"</span>: <span class="string">"Rburst" </span>}),
-<a href=#2399 id=2399 data-nosnippet>2399</a>            <span class="string">"S1"</span>,
-<a href=#2400 id=2400 data-nosnippet>2400</a>        )
-<a href=#2401 id=2401 data-nosnippet>2401</a>        .<span class="kw">await</span>;
-<a href=#2402 id=2402 data-nosnippet>2402</a>        mock.emit_event_for_session(
-<a href=#2403 id=2403 data-nosnippet>2403</a>            <span class="string">"Network.responseReceived"</span>,
-<a href=#2404 id=2404 data-nosnippet>2404</a>            <span class="macro">json!</span>({ <span class="string">"requestId"</span>: <span class="string">"Rburst" </span>}),
-<a href=#2405 id=2405 data-nosnippet>2405</a>            <span class="string">"S1"</span>,
-<a href=#2406 id=2406 data-nosnippet>2406</a>        )
-<a href=#2407 id=2407 data-nosnippet>2407</a>        .<span class="kw">await</span>;
-<a href=#2408 id=2408 data-nosnippet>2408</a>
-<a href=#2409 id=2409 data-nosnippet>2409</a>        <span class="comment">// Outer timeout deliberately generous (10s) so a slow / loaded
-<a href=#2410 id=2410 data-nosnippet>2410</a>        // CI runner doesn't flake the test. The correctness assertion
-<a href=#2411 id=2411 data-nosnippet>2411</a>        // below uses a strict lower bound on `elapsed` to catch a
-<a href=#2412 id=2412 data-nosnippet>2412</a>        // too-early resolve regardless of how long the slack window is.
-<a href=#2413 id=2413 data-nosnippet>2413</a>        </span><span class="kw">let </span>res = tokio::time::timeout(Duration::from_secs(<span class="number">10</span>), fut)
-<a href=#2414 id=2414 data-nosnippet>2414</a>            .<span class="kw">await
-<a href=#2415 id=2415 data-nosnippet>2415</a>            </span>.expect(<span class="string">"wait_for_idle did not resolve within 10s"</span>);
-<a href=#2416 id=2416 data-nosnippet>2416</a>        res.unwrap().unwrap();
-<a href=#2417 id=2417 data-nosnippet>2417</a>
-<a href=#2418 id=2418 data-nosnippet>2418</a>        <span class="comment">// Lower bound: 75ms initial sleep + 300ms quiet window after the
-<a href=#2419 id=2419 data-nosnippet>2419</a>        // burst's last notification = 375ms. A bug that ignored the burst
-<a href=#2420 id=2420 data-nosnippet>2420</a>        // would resolve at started_at + 300ms = 300ms.
-<a href=#2421 id=2421 data-nosnippet>2421</a>        </span><span class="kw">let </span>elapsed = started_at.elapsed();
-<a href=#2422 id=2422 data-nosnippet>2422</a>        <span class="macro">assert!</span>(
-<a href=#2423 id=2423 data-nosnippet>2423</a>            elapsed &gt;= Duration::from_millis(<span class="number">355</span>),
-<a href=#2424 id=2424 data-nosnippet>2424</a>            <span class="string">"wait_for_idle resolved too early ({elapsed:?}); 0→1→0 burst inside \
-<a href=#2425 id=2425 data-nosnippet>2425</a>             quiet window must reset quiet_start"</span>,
-<a href=#2426 id=2426 data-nosnippet>2426</a>        );
-<a href=#2427 id=2427 data-nosnippet>2427</a>
-<a href=#2428 id=2428 data-nosnippet>2428</a>        conn.shutdown();
-<a href=#2429 id=2429 data-nosnippet>2429</a>    }
-<a href=#2430 id=2430 data-nosnippet>2430</a>
-<a href=#2431 id=2431 data-nosnippet>2431</a>    <span class="comment">// --- Tab::intercept (P5 T7, feature = "interception") -------------
-<a href=#2432 id=2432 data-nosnippet>2432</a>
-<a href=#2433 id=2433 data-nosnippet>2433</a>    </span><span class="doccomment">/// `tab.intercept().block("*").start()` should spawn the rule actor on
-<a href=#2434 id=2434 data-nosnippet>2434</a>    /// the tab's session: assert `Fetch.enable` lands and a matching
-<a href=#2435 id=2435 data-nosnippet>2435</a>    /// `Fetch.requestPaused` triggers `Fetch.failRequest`. Verifies the
-<a href=#2436 id=2436 data-nosnippet>2436</a>    /// `Tab::intercept` shim plumbs into `InterceptBuilder` end-to-end.
-<a href=#2437 id=2437 data-nosnippet>2437</a>    </span><span class="attr">#[cfg(feature = <span class="string">"interception"</span>)]
-<a href=#2438 id=2438 data-nosnippet>2438</a>    #[tokio::test]
-<a href=#2439 id=2439 data-nosnippet>2439</a>    </span><span class="kw">async fn </span>intercept_block_all_dispatches_fail_request_via_tab_shim() {
-<a href=#2440 id=2440 data-nosnippet>2440</a>        <span class="kw">let </span>(<span class="kw-2">mut </span>mock, conn) = MockConnection::pair();
-<a href=#2441 id=2441 data-nosnippet>2441</a>        <span class="kw">let </span>sess = SessionHandle::new(conn.clone(), <span class="string">"S1"</span>);
-<a href=#2442 id=2442 data-nosnippet>2442</a>        <span class="kw">let </span>tab = Tab::new_for_test(sess);
-<a href=#2443 id=2443 data-nosnippet>2443</a>
-<a href=#2444 id=2444 data-nosnippet>2444</a>        <span class="kw">let </span>handle = tab.intercept().block(<span class="string">"*"</span>).unwrap().start();
-<a href=#2445 id=2445 data-nosnippet>2445</a>
-<a href=#2446 id=2446 data-nosnippet>2446</a>        <span class="comment">// Side-task `Fetch.enable` must land first; default match-all
-<a href=#2447 id=2447 data-nosnippet>2447</a>        // pattern is injected when none was registered explicitly.
-<a href=#2448 id=2448 data-nosnippet>2448</a>        </span><span class="kw">let </span>enable_id =
-<a href=#2449 id=2449 data-nosnippet>2449</a>            tokio::time::timeout(Duration::from_secs(<span class="number">2</span>), mock.expect_cmd(<span class="string">"Fetch.enable"</span>))
-<a href=#2450 id=2450 data-nosnippet>2450</a>                .<span class="kw">await
-<a href=#2451 id=2451 data-nosnippet>2451</a>                </span>.expect(<span class="string">"intercept did not send Fetch.enable within 2s"</span>);
-<a href=#2452 id=2452 data-nosnippet>2452</a>        <span class="kw">let </span>enable_params = mock.last_sent()[<span class="string">"params"</span>].clone();
-<a href=#2453 id=2453 data-nosnippet>2453</a>        <span class="macro">assert_eq!</span>(enable_params[<span class="string">"handleAuthRequests"</span>], <span class="bool-val">false</span>);
-<a href=#2454 id=2454 data-nosnippet>2454</a>        <span class="macro">assert_eq!</span>(enable_params[<span class="string">"patterns"</span>][<span class="number">0</span>][<span class="string">"urlPattern"</span>], <span class="string">"*"</span>);
-<a href=#2455 id=2455 data-nosnippet>2455</a>        mock.reply(enable_id, <span class="macro">json!</span>({})).<span class="kw">await</span>;
-<a href=#2456 id=2456 data-nosnippet>2456</a>
-<a href=#2457 id=2457 data-nosnippet>2457</a>        <span class="comment">// Any paused URL matches the `block("*")` rule.
-<a href=#2458 id=2458 data-nosnippet>2458</a>        </span>mock.emit_event_for_session(
-<a href=#2459 id=2459 data-nosnippet>2459</a>            <span class="string">"Fetch.requestPaused"</span>,
-<a href=#2460 id=2460 data-nosnippet>2460</a>            <span class="macro">json!</span>({
-<a href=#2461 id=2461 data-nosnippet>2461</a>                <span class="string">"requestId"</span>: <span class="string">"REQ-1"</span>,
-<a href=#2462 id=2462 data-nosnippet>2462</a>                <span class="string">"request"</span>: {
-<a href=#2463 id=2463 data-nosnippet>2463</a>                    <span class="string">"url"</span>: <span class="string">"https://any.test/whatever"</span>,
-<a href=#2464 id=2464 data-nosnippet>2464</a>                    <span class="string">"method"</span>: <span class="string">"GET"</span>,
-<a href=#2465 id=2465 data-nosnippet>2465</a>                    <span class="string">"headers"</span>: {},
-<a href=#2466 id=2466 data-nosnippet>2466</a>                },
-<a href=#2467 id=2467 data-nosnippet>2467</a>                <span class="string">"resourceType"</span>: <span class="string">"Document"</span>,
-<a href=#2468 id=2468 data-nosnippet>2468</a>            }),
-<a href=#2469 id=2469 data-nosnippet>2469</a>            <span class="string">"S1"</span>,
-<a href=#2470 id=2470 data-nosnippet>2470</a>        )
-<a href=#2471 id=2471 data-nosnippet>2471</a>        .<span class="kw">await</span>;
-<a href=#2472 id=2472 data-nosnippet>2472</a>
-<a href=#2473 id=2473 data-nosnippet>2473</a>        <span class="kw">let </span>fail_id =
-<a href=#2474 id=2474 data-nosnippet>2474</a>            tokio::time::timeout(Duration::from_secs(<span class="number">2</span>), mock.expect_cmd(<span class="string">"Fetch.failRequest"</span>))
-<a href=#2475 id=2475 data-nosnippet>2475</a>                .<span class="kw">await
-<a href=#2476 id=2476 data-nosnippet>2476</a>                </span>.expect(<span class="string">"actor did not send Fetch.failRequest within 2s"</span>);
-<a href=#2477 id=2477 data-nosnippet>2477</a>        <span class="kw">let </span>fail_params = mock.last_sent()[<span class="string">"params"</span>].clone();
-<a href=#2478 id=2478 data-nosnippet>2478</a>        <span class="macro">assert_eq!</span>(fail_params[<span class="string">"requestId"</span>], <span class="string">"REQ-1"</span>);
-<a href=#2479 id=2479 data-nosnippet>2479</a>        <span class="macro">assert_eq!</span>(fail_params[<span class="string">"errorReason"</span>], <span class="string">"BlockedByClient"</span>);
-<a href=#2480 id=2480 data-nosnippet>2480</a>        mock.reply(fail_id, <span class="macro">json!</span>({})).<span class="kw">await</span>;
-<a href=#2481 id=2481 data-nosnippet>2481</a>
-<a href=#2482 id=2482 data-nosnippet>2482</a>        <span class="kw">let </span>stop_fut = tokio::spawn(handle.stop());
-<a href=#2483 id=2483 data-nosnippet>2483</a>        <span class="kw">let </span>disable_id =
-<a href=#2484 id=2484 data-nosnippet>2484</a>            tokio::time::timeout(Duration::from_secs(<span class="number">2</span>), mock.expect_cmd(<span class="string">"Fetch.disable"</span>))
-<a href=#2485 id=2485 data-nosnippet>2485</a>                .<span class="kw">await
-<a href=#2486 id=2486 data-nosnippet>2486</a>                </span>.expect(<span class="string">"actor did not send Fetch.disable on stop()"</span>);
-<a href=#2487 id=2487 data-nosnippet>2487</a>        mock.reply(disable_id, <span class="macro">json!</span>({})).<span class="kw">await</span>;
-<a href=#2488 id=2488 data-nosnippet>2488</a>        stop_fut
-<a href=#2489 id=2489 data-nosnippet>2489</a>            .<span class="kw">await
-<a href=#2490 id=2490 data-nosnippet>2490</a>            </span>.expect(<span class="string">"stop() task panicked"</span>)
-<a href=#2491 id=2491 data-nosnippet>2491</a>            .expect(<span class="string">"stop() returned Err"</span>);
-<a href=#2492 id=2492 data-nosnippet>2492</a>
-<a href=#2493 id=2493 data-nosnippet>2493</a>        conn.shutdown();
-<a href=#2494 id=2494 data-nosnippet>2494</a>    }
-<a href=#2495 id=2495 data-nosnippet>2495</a>}
+<a href=#2391 id=2391 data-nosnippet>2391</a>        <span class="comment">// Let the wait_for_idle loop tick once on an empty set so
+<a href=#2392 id=2392 data-nosnippet>2392</a>        // `quiet_start` is firmly armed.
+<a href=#2393 id=2393 data-nosnippet>2393</a>        </span>tokio::time::sleep(Duration::from_millis(<span class="number">75</span>)).<span class="kw">await</span>;
+<a href=#2394 id=2394 data-nosnippet>2394</a>
+<a href=#2395 id=2395 data-nosnippet>2395</a>        <span class="comment">// Burst: fire R-burst's requestWillBeSent + responseReceived
+<a href=#2396 id=2396 data-nosnippet>2396</a>        // back-to-back. The tracker should observe both transitions and
+<a href=#2397 id=2397 data-nosnippet>2397</a>        // notify on each; the wait_for_idle loop should wake on the notif
+<a href=#2398 id=2398 data-nosnippet>2398</a>        // arm and reset quiet_start even though the set's instantaneous
+<a href=#2399 id=2399 data-nosnippet>2399</a>        // value returns to 0.
+<a href=#2400 id=2400 data-nosnippet>2400</a>        </span>mock.emit_event_for_session(
+<a href=#2401 id=2401 data-nosnippet>2401</a>            <span class="string">"Network.requestWillBeSent"</span>,
+<a href=#2402 id=2402 data-nosnippet>2402</a>            <span class="macro">json!</span>({ <span class="string">"requestId"</span>: <span class="string">"Rburst" </span>}),
+<a href=#2403 id=2403 data-nosnippet>2403</a>            <span class="string">"S1"</span>,
+<a href=#2404 id=2404 data-nosnippet>2404</a>        )
+<a href=#2405 id=2405 data-nosnippet>2405</a>        .<span class="kw">await</span>;
+<a href=#2406 id=2406 data-nosnippet>2406</a>        mock.emit_event_for_session(
+<a href=#2407 id=2407 data-nosnippet>2407</a>            <span class="string">"Network.responseReceived"</span>,
+<a href=#2408 id=2408 data-nosnippet>2408</a>            <span class="macro">json!</span>({ <span class="string">"requestId"</span>: <span class="string">"Rburst" </span>}),
+<a href=#2409 id=2409 data-nosnippet>2409</a>            <span class="string">"S1"</span>,
+<a href=#2410 id=2410 data-nosnippet>2410</a>        )
+<a href=#2411 id=2411 data-nosnippet>2411</a>        .<span class="kw">await</span>;
+<a href=#2412 id=2412 data-nosnippet>2412</a>
+<a href=#2413 id=2413 data-nosnippet>2413</a>        <span class="comment">// Outer timeout deliberately generous (10s) so a slow / loaded
+<a href=#2414 id=2414 data-nosnippet>2414</a>        // CI runner doesn't flake the test. The correctness assertion
+<a href=#2415 id=2415 data-nosnippet>2415</a>        // below uses a strict lower bound on `elapsed` to catch a
+<a href=#2416 id=2416 data-nosnippet>2416</a>        // too-early resolve regardless of how long the slack window is.
+<a href=#2417 id=2417 data-nosnippet>2417</a>        </span><span class="kw">let </span>res = tokio::time::timeout(Duration::from_secs(<span class="number">10</span>), fut)
+<a href=#2418 id=2418 data-nosnippet>2418</a>            .<span class="kw">await
+<a href=#2419 id=2419 data-nosnippet>2419</a>            </span>.expect(<span class="string">"wait_for_idle did not resolve within 10s"</span>);
+<a href=#2420 id=2420 data-nosnippet>2420</a>        res.unwrap().unwrap();
+<a href=#2421 id=2421 data-nosnippet>2421</a>
+<a href=#2422 id=2422 data-nosnippet>2422</a>        <span class="comment">// Lower bound: 75ms initial sleep + 300ms quiet window after the
+<a href=#2423 id=2423 data-nosnippet>2423</a>        // burst's last notification = 375ms. A bug that ignored the burst
+<a href=#2424 id=2424 data-nosnippet>2424</a>        // would resolve at started_at + 300ms = 300ms.
+<a href=#2425 id=2425 data-nosnippet>2425</a>        </span><span class="kw">let </span>elapsed = started_at.elapsed();
+<a href=#2426 id=2426 data-nosnippet>2426</a>        <span class="macro">assert!</span>(
+<a href=#2427 id=2427 data-nosnippet>2427</a>            elapsed &gt;= Duration::from_millis(<span class="number">355</span>),
+<a href=#2428 id=2428 data-nosnippet>2428</a>            <span class="string">"wait_for_idle resolved too early ({elapsed:?}); 0→1→0 burst inside \
+<a href=#2429 id=2429 data-nosnippet>2429</a>             quiet window must reset quiet_start"</span>,
+<a href=#2430 id=2430 data-nosnippet>2430</a>        );
+<a href=#2431 id=2431 data-nosnippet>2431</a>
+<a href=#2432 id=2432 data-nosnippet>2432</a>        conn.shutdown();
+<a href=#2433 id=2433 data-nosnippet>2433</a>    }
+<a href=#2434 id=2434 data-nosnippet>2434</a>
+<a href=#2435 id=2435 data-nosnippet>2435</a>    <span class="comment">// --- Tab::intercept (P5 T7, feature = "interception") -------------
+<a href=#2436 id=2436 data-nosnippet>2436</a>
+<a href=#2437 id=2437 data-nosnippet>2437</a>    </span><span class="doccomment">/// `tab.intercept().block("*").start()` should spawn the rule actor on
+<a href=#2438 id=2438 data-nosnippet>2438</a>    /// the tab's session: assert `Fetch.enable` lands and a matching
+<a href=#2439 id=2439 data-nosnippet>2439</a>    /// `Fetch.requestPaused` triggers `Fetch.failRequest`. Verifies the
+<a href=#2440 id=2440 data-nosnippet>2440</a>    /// `Tab::intercept` shim plumbs into `InterceptBuilder` end-to-end.
+<a href=#2441 id=2441 data-nosnippet>2441</a>    </span><span class="attr">#[cfg(feature = <span class="string">"interception"</span>)]
+<a href=#2442 id=2442 data-nosnippet>2442</a>    #[tokio::test]
+<a href=#2443 id=2443 data-nosnippet>2443</a>    </span><span class="kw">async fn </span>intercept_block_all_dispatches_fail_request_via_tab_shim() {
+<a href=#2444 id=2444 data-nosnippet>2444</a>        <span class="kw">let </span>(<span class="kw-2">mut </span>mock, conn) = MockConnection::pair();
+<a href=#2445 id=2445 data-nosnippet>2445</a>        <span class="kw">let </span>sess = SessionHandle::new(conn.clone(), <span class="string">"S1"</span>);
+<a href=#2446 id=2446 data-nosnippet>2446</a>        <span class="kw">let </span>tab = Tab::new_for_test(sess);
+<a href=#2447 id=2447 data-nosnippet>2447</a>
+<a href=#2448 id=2448 data-nosnippet>2448</a>        <span class="kw">let </span>handle = tab.intercept().block(<span class="string">"*"</span>).unwrap().start();
+<a href=#2449 id=2449 data-nosnippet>2449</a>
+<a href=#2450 id=2450 data-nosnippet>2450</a>        <span class="comment">// Side-task `Fetch.enable` must land first; default match-all
+<a href=#2451 id=2451 data-nosnippet>2451</a>        // pattern is injected when none was registered explicitly.
+<a href=#2452 id=2452 data-nosnippet>2452</a>        </span><span class="kw">let </span>enable_id =
+<a href=#2453 id=2453 data-nosnippet>2453</a>            tokio::time::timeout(Duration::from_secs(<span class="number">2</span>), mock.expect_cmd(<span class="string">"Fetch.enable"</span>))
+<a href=#2454 id=2454 data-nosnippet>2454</a>                .<span class="kw">await
+<a href=#2455 id=2455 data-nosnippet>2455</a>                </span>.expect(<span class="string">"intercept did not send Fetch.enable within 2s"</span>);
+<a href=#2456 id=2456 data-nosnippet>2456</a>        <span class="kw">let </span>enable_params = mock.last_sent()[<span class="string">"params"</span>].clone();
+<a href=#2457 id=2457 data-nosnippet>2457</a>        <span class="macro">assert_eq!</span>(enable_params[<span class="string">"handleAuthRequests"</span>], <span class="bool-val">false</span>);
+<a href=#2458 id=2458 data-nosnippet>2458</a>        <span class="macro">assert_eq!</span>(enable_params[<span class="string">"patterns"</span>][<span class="number">0</span>][<span class="string">"urlPattern"</span>], <span class="string">"*"</span>);
+<a href=#2459 id=2459 data-nosnippet>2459</a>        mock.reply(enable_id, <span class="macro">json!</span>({})).<span class="kw">await</span>;
+<a href=#2460 id=2460 data-nosnippet>2460</a>
+<a href=#2461 id=2461 data-nosnippet>2461</a>        <span class="comment">// Any paused URL matches the `block("*")` rule.
+<a href=#2462 id=2462 data-nosnippet>2462</a>        </span>mock.emit_event_for_session(
+<a href=#2463 id=2463 data-nosnippet>2463</a>            <span class="string">"Fetch.requestPaused"</span>,
+<a href=#2464 id=2464 data-nosnippet>2464</a>            <span class="macro">json!</span>({
+<a href=#2465 id=2465 data-nosnippet>2465</a>                <span class="string">"requestId"</span>: <span class="string">"REQ-1"</span>,
+<a href=#2466 id=2466 data-nosnippet>2466</a>                <span class="string">"request"</span>: {
+<a href=#2467 id=2467 data-nosnippet>2467</a>                    <span class="string">"url"</span>: <span class="string">"https://any.test/whatever"</span>,
+<a href=#2468 id=2468 data-nosnippet>2468</a>                    <span class="string">"method"</span>: <span class="string">"GET"</span>,
+<a href=#2469 id=2469 data-nosnippet>2469</a>                    <span class="string">"headers"</span>: {},
+<a href=#2470 id=2470 data-nosnippet>2470</a>                },
+<a href=#2471 id=2471 data-nosnippet>2471</a>                <span class="string">"resourceType"</span>: <span class="string">"Document"</span>,
+<a href=#2472 id=2472 data-nosnippet>2472</a>            }),
+<a href=#2473 id=2473 data-nosnippet>2473</a>            <span class="string">"S1"</span>,
+<a href=#2474 id=2474 data-nosnippet>2474</a>        )
+<a href=#2475 id=2475 data-nosnippet>2475</a>        .<span class="kw">await</span>;
+<a href=#2476 id=2476 data-nosnippet>2476</a>
+<a href=#2477 id=2477 data-nosnippet>2477</a>        <span class="kw">let </span>fail_id =
+<a href=#2478 id=2478 data-nosnippet>2478</a>            tokio::time::timeout(Duration::from_secs(<span class="number">2</span>), mock.expect_cmd(<span class="string">"Fetch.failRequest"</span>))
+<a href=#2479 id=2479 data-nosnippet>2479</a>                .<span class="kw">await
+<a href=#2480 id=2480 data-nosnippet>2480</a>                </span>.expect(<span class="string">"actor did not send Fetch.failRequest within 2s"</span>);
+<a href=#2481 id=2481 data-nosnippet>2481</a>        <span class="kw">let </span>fail_params = mock.last_sent()[<span class="string">"params"</span>].clone();
+<a href=#2482 id=2482 data-nosnippet>2482</a>        <span class="macro">assert_eq!</span>(fail_params[<span class="string">"requestId"</span>], <span class="string">"REQ-1"</span>);
+<a href=#2483 id=2483 data-nosnippet>2483</a>        <span class="macro">assert_eq!</span>(fail_params[<span class="string">"errorReason"</span>], <span class="string">"BlockedByClient"</span>);
+<a href=#2484 id=2484 data-nosnippet>2484</a>        mock.reply(fail_id, <span class="macro">json!</span>({})).<span class="kw">await</span>;
+<a href=#2485 id=2485 data-nosnippet>2485</a>
+<a href=#2486 id=2486 data-nosnippet>2486</a>        <span class="kw">let </span>stop_fut = tokio::spawn(handle.stop());
+<a href=#2487 id=2487 data-nosnippet>2487</a>        <span class="kw">let </span>disable_id =
+<a href=#2488 id=2488 data-nosnippet>2488</a>            tokio::time::timeout(Duration::from_secs(<span class="number">2</span>), mock.expect_cmd(<span class="string">"Fetch.disable"</span>))
+<a href=#2489 id=2489 data-nosnippet>2489</a>                .<span class="kw">await
+<a href=#2490 id=2490 data-nosnippet>2490</a>                </span>.expect(<span class="string">"actor did not send Fetch.disable on stop()"</span>);
+<a href=#2491 id=2491 data-nosnippet>2491</a>        mock.reply(disable_id, <span class="macro">json!</span>({})).<span class="kw">await</span>;
+<a href=#2492 id=2492 data-nosnippet>2492</a>        stop_fut
+<a href=#2493 id=2493 data-nosnippet>2493</a>            .<span class="kw">await
+<a href=#2494 id=2494 data-nosnippet>2494</a>            </span>.expect(<span class="string">"stop() task panicked"</span>)
+<a href=#2495 id=2495 data-nosnippet>2495</a>            .expect(<span class="string">"stop() returned Err"</span>);
+<a href=#2496 id=2496 data-nosnippet>2496</a>
+<a href=#2497 id=2497 data-nosnippet>2497</a>        conn.shutdown();
+<a href=#2498 id=2498 data-nosnippet>2498</a>    }
+<a href=#2499 id=2499 data-nosnippet>2499</a>}
 </code></pre></div></section></main></body></html>

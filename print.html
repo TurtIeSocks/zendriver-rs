@@ -145,7 +145,7 @@
                         <a href="print.html" title="Print this book" aria-label="Print this book">
                             <i id="print-button" class="fa fa-print"></i>
                         </a>
-                        <a href="https://github.com/cdpdriver/zendriver-rs" title="Git repository" aria-label="Git repository">
+                        <a href="https://github.com/TurtIeSocks/zendriver-rs" title="Git repository" aria-label="Git repository">
                             <i id="git-repository-button" class="fa fa-github"></i>
                         </a>
 
@@ -325,7 +325,7 @@ need a type the prelude doesn't surface.</p>
 <h2 id="msrv"><a class="header" href="#msrv">MSRV</a></h2>
 <p>zendriver targets <strong>Rust 1.75 minimum</strong>. The MSRV bumps follow SemVer —
 a Rust version bump counts as a minor change in the 0.x series and a
-major change post-1.0. See <a href="https://github.com/cdpdriver/zendriver-rs/blob/main/SEMVER.md">SEMVER.md</a> in the repository for the full
+major change post-1.0. See <a href="https://github.com/TurtIeSocks/zendriver-rs/blob/main/SEMVER.md">SEMVER.md</a> in the repository for the full
 policy.</p>
 <h2 id="platform-support"><a class="header" href="#platform-support">Platform support</a></h2>
 <div class="table-wrapper"><table><thead><tr><th>Platform</th><th>Supported</th><th>Notes</th></tr></thead><tbody>
@@ -2443,7 +2443,7 @@ binding it doesn't add a turn to your code.</li>
 use <code>text_regex(...)</code> with a permissive regex.</li>
 </ul>
 <p>If you hit a gap that blocks your migration, please file an issue at
-<a href="https://github.com/cdpdriver/zendriver-rs/issues">https://github.com/cdpdriver/zendriver-rs/issues</a> — pre-1.0 prioritization
+<a href="https://github.com/TurtIeSocks/zendriver-rs/issues">https://github.com/TurtIeSocks/zendriver-rs/issues</a> — pre-1.0 prioritization
 is largely driven by reported migration friction.</p>
 <h2 id="see-also-1"><a class="header" href="#see-also-1">See also</a></h2>
 <ul>
@@ -2664,7 +2664,7 @@ first-class helper. Use <code>tab.evaluate_main</code> with the corresponding JS
 (<code>el.dispatchEvent(new Event('change'))</code>).</li>
 </ul>
 <p>If you hit a gap that blocks your migration, please file an issue at
-<a href="https://github.com/cdpdriver/zendriver-rs/issues">https://github.com/cdpdriver/zendriver-rs/issues</a> — pre-1.0
+<a href="https://github.com/TurtIeSocks/zendriver-rs/issues">https://github.com/TurtIeSocks/zendriver-rs/issues</a> — pre-1.0
 prioritization is largely driven by reported migration friction.</p>
 <h2 id="see-also-2"><a class="header" href="#see-also-2">See also</a></h2>
 <ul>
@@ -2836,7 +2836,7 @@ Playwright-style "every action re-finds, eating round-trips" cost.</li>
 <h2 id="crate-split"><a class="header" href="#crate-split">Crate split</a></h2>
 <div class="table-wrapper"><table><thead><tr><th>Crate</th><th>Purpose</th><th>Public?</th></tr></thead><tbody>
 <tr><td><code>zendriver</code></td><td>High-level Browser/Tab/Element + traits</td><td>yes</td></tr>
-<tr><td><code>zendriver-transport</code></td><td>Actor + WebSocket + observers</td><td>yes, but <a href="https://github.com/cdpdriver/zendriver-rs/blob/main/SEMVER.md">SEMVER</a> looser</td></tr>
+<tr><td><code>zendriver-transport</code></td><td>Actor + WebSocket + observers</td><td>yes, but <a href="https://github.com/TurtIeSocks/zendriver-rs/blob/main/SEMVER.md">SEMVER</a> looser</td></tr>
 <tr><td><code>zendriver-stealth</code></td><td>Fingerprint composition + bootstrap JS</td><td>yes</td></tr>
 <tr><td><code>zendriver-interception</code></td><td><code>Fetch.*</code> actor + rule + stream API</td><td>yes, gated <code>interception</code></td></tr>
 <tr><td><code>zendriver-cloudflare</code></td><td>Turnstile bypass</td><td>yes, gated <code>cloudflare</code></td></tr>
@@ -3032,7 +3032,7 @@ to the OS.</p>
 <h2 id="whats-the-msrv"><a class="header" href="#whats-the-msrv">What's the MSRV?</a></h2>
 <p>Rust 1.75. We don't aim to track stable bleeding-edge; MSRV bumps
 follow the same SemVer policy as API changes
-(see <a href="https://github.com/cdpdriver/zendriver-rs/blob/main/SEMVER.md"><code>SEMVER.md</code></a>).</p>
+(see <a href="https://github.com/TurtIeSocks/zendriver-rs/blob/main/SEMVER.md"><code>SEMVER.md</code></a>).</p>
 <h2 id="im-getting-zendrivererrorcdp-with-code--32000-what-now"><a class="header" href="#im-getting-zendrivererrorcdp-with-code--32000-what-now">I'm getting <code>ZendriverError::Cdp</code> with code -32000. What now?</a></h2>
 <p>Code <code>-32000</code> ("Cannot find context") usually means the page navigated
 out from under your call. zendriver-rs maps this specifically to
@@ -3051,7 +3051,7 @@ an alias for <code>std::result::Result&lt;T, ZendriverError&gt;</code>. This pag
 every public variant of <a href="https://docs.rs/zendriver/latest/zendriver/enum.ZendriverError.html"><code>ZendriverError</code></a> plus the sub-crate errors
 that flow into it via <code>#[from]</code>, with the common cause + the fix.</p>
 <p>The enum is <code>#[non_exhaustive]</code> — pattern matches should include a <code>_</code>
-arm. Per <a href="https://github.com/cdpdriver/zendriver-rs/blob/main/SEMVER.md">SEMVER</a>,
+arm. Per <a href="https://github.com/TurtIeSocks/zendriver-rs/blob/main/SEMVER.md">SEMVER</a>,
 new variants may land in minor releases.</p>
 <h2 id="top-level-zendrivererror-variants"><a class="header" href="#top-level-zendrivererror-variants">Top-level <code>ZendriverError</code> variants</a></h2>
 <div class="table-wrapper"><table><thead><tr><th>Variant</th><th>Common cause</th><th>Fix</th></tr></thead><tbody>
