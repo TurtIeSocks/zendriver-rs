@@ -215,54 +215,57 @@
 <a href=#215 id=215 data-nosnippet>215</a>        {
 <a href=#216 id=216 data-nosnippet>216</a>            <span class="kw">let </span><span class="kw-2">mut </span>writer = zip::ZipWriter::new(<span class="kw-2">&amp;mut </span>buf);
 <a href=#217 id=217 data-nosnippet>217</a>            writer
-<a href=#218 id=218 data-nosnippet>218</a>                .start_file(<span class="string">"not-chrome/chrome"</span>, zip::write::SimpleFileOptions::default())
-<a href=#219 id=219 data-nosnippet>219</a>                .unwrap();
-<a href=#220 id=220 data-nosnippet>220</a>            writer.write_all(<span class="string">b"x"</span>).unwrap();
-<a href=#221 id=221 data-nosnippet>221</a>            writer.finish().unwrap();
-<a href=#222 id=222 data-nosnippet>222</a>        }
-<a href=#223 id=223 data-nosnippet>223</a>        std::fs::write(<span class="kw-2">&amp;</span>zip_path, buf.into_inner()).unwrap();
-<a href=#224 id=224 data-nosnippet>224</a>
-<a href=#225 id=225 data-nosnippet>225</a>        <span class="kw">let </span>err = extract(<span class="kw-2">&amp;</span>zip_path, <span class="kw-2">&amp;</span>dest_dir, <span class="prelude-val">Some</span>(<span class="string">"chrome-linux64"</span>))
-<a href=#226 id=226 data-nosnippet>226</a>            .<span class="kw">await
-<a href=#227 id=227 data-nosnippet>227</a>            </span>.unwrap_err();
-<a href=#228 id=228 data-nosnippet>228</a>        <span class="kw">let </span>msg = err.to_string();
-<a href=#229 id=229 data-nosnippet>229</a>        <span class="macro">assert!</span>(
-<a href=#230 id=230 data-nosnippet>230</a>            msg.contains(<span class="string">"expected top-level"</span>),
-<a href=#231 id=231 data-nosnippet>231</a>            <span class="string">"unexpected error: {msg}"
-<a href=#232 id=232 data-nosnippet>232</a>        </span>);
-<a href=#233 id=233 data-nosnippet>233</a>    }
-<a href=#234 id=234 data-nosnippet>234</a>
-<a href=#235 id=235 data-nosnippet>235</a>    <span class="doccomment">/// A symlink entry (Unix mode bits include `S_IFLNK`) is rejected even
-<a href=#236 id=236 data-nosnippet>236</a>    /// when its name is a safe relative path. CfT archives never use them.
-<a href=#237 id=237 data-nosnippet>237</a>    </span><span class="attr">#[cfg(unix)]
-<a href=#238 id=238 data-nosnippet>238</a>    #[tokio::test]
-<a href=#239 id=239 data-nosnippet>239</a>    </span><span class="kw">async fn </span>extract_rejects_symlink_entries() {
-<a href=#240 id=240 data-nosnippet>240</a>        <span class="kw">use </span>zip::write::SimpleFileOptions;
-<a href=#241 id=241 data-nosnippet>241</a>        <span class="kw">let </span>dir = tempfile::tempdir().unwrap();
-<a href=#242 id=242 data-nosnippet>242</a>        <span class="kw">let </span>zip_path = dir.path().join(<span class="string">"symlink.zip"</span>);
-<a href=#243 id=243 data-nosnippet>243</a>        <span class="kw">let </span>dest_dir = dir.path().join(<span class="string">"out"</span>);
-<a href=#244 id=244 data-nosnippet>244</a>        std::fs::create_dir_all(<span class="kw-2">&amp;</span>dest_dir).unwrap();
-<a href=#245 id=245 data-nosnippet>245</a>
-<a href=#246 id=246 data-nosnippet>246</a>        <span class="kw">let </span><span class="kw-2">mut </span>buf = std::io::Cursor::new(Vec::new());
-<a href=#247 id=247 data-nosnippet>247</a>        {
-<a href=#248 id=248 data-nosnippet>248</a>            <span class="kw">let </span><span class="kw-2">mut </span>writer = zip::ZipWriter::new(<span class="kw-2">&amp;mut </span>buf);
-<a href=#249 id=249 data-nosnippet>249</a>            <span class="comment">// 0o120_000 | 0o777 marks the entry as a symlink in the
-<a href=#250 id=250 data-nosnippet>250</a>            // archive's Unix mode bits.
-<a href=#251 id=251 data-nosnippet>251</a>            </span><span class="kw">let </span>opts = SimpleFileOptions::default().unix_permissions(<span class="number">0o777</span>);
-<a href=#252 id=252 data-nosnippet>252</a>            writer
-<a href=#253 id=253 data-nosnippet>253</a>                .add_symlink(<span class="string">"chrome-linux64/link"</span>, <span class="string">"../escape"</span>, opts)
-<a href=#254 id=254 data-nosnippet>254</a>                .unwrap();
-<a href=#255 id=255 data-nosnippet>255</a>            writer.finish().unwrap();
-<a href=#256 id=256 data-nosnippet>256</a>        }
-<a href=#257 id=257 data-nosnippet>257</a>        std::fs::write(<span class="kw-2">&amp;</span>zip_path, buf.into_inner()).unwrap();
-<a href=#258 id=258 data-nosnippet>258</a>
-<a href=#259 id=259 data-nosnippet>259</a>        <span class="kw">let </span>err = extract(<span class="kw-2">&amp;</span>zip_path, <span class="kw-2">&amp;</span>dest_dir, <span class="prelude-val">Some</span>(<span class="string">"chrome-linux64"</span>))
-<a href=#260 id=260 data-nosnippet>260</a>            .<span class="kw">await
-<a href=#261 id=261 data-nosnippet>261</a>            </span>.unwrap_err();
-<a href=#262 id=262 data-nosnippet>262</a>        <span class="macro">assert!</span>(
-<a href=#263 id=263 data-nosnippet>263</a>            err.to_string().contains(<span class="string">"symlink"</span>),
-<a href=#264 id=264 data-nosnippet>264</a>            <span class="string">"unexpected error: {err}"
-<a href=#265 id=265 data-nosnippet>265</a>        </span>);
-<a href=#266 id=266 data-nosnippet>266</a>    }
-<a href=#267 id=267 data-nosnippet>267</a>}
+<a href=#218 id=218 data-nosnippet>218</a>                .start_file(
+<a href=#219 id=219 data-nosnippet>219</a>                    <span class="string">"not-chrome/chrome"</span>,
+<a href=#220 id=220 data-nosnippet>220</a>                    zip::write::SimpleFileOptions::default(),
+<a href=#221 id=221 data-nosnippet>221</a>                )
+<a href=#222 id=222 data-nosnippet>222</a>                .unwrap();
+<a href=#223 id=223 data-nosnippet>223</a>            writer.write_all(<span class="string">b"x"</span>).unwrap();
+<a href=#224 id=224 data-nosnippet>224</a>            writer.finish().unwrap();
+<a href=#225 id=225 data-nosnippet>225</a>        }
+<a href=#226 id=226 data-nosnippet>226</a>        std::fs::write(<span class="kw-2">&amp;</span>zip_path, buf.into_inner()).unwrap();
+<a href=#227 id=227 data-nosnippet>227</a>
+<a href=#228 id=228 data-nosnippet>228</a>        <span class="kw">let </span>err = extract(<span class="kw-2">&amp;</span>zip_path, <span class="kw-2">&amp;</span>dest_dir, <span class="prelude-val">Some</span>(<span class="string">"chrome-linux64"</span>))
+<a href=#229 id=229 data-nosnippet>229</a>            .<span class="kw">await
+<a href=#230 id=230 data-nosnippet>230</a>            </span>.unwrap_err();
+<a href=#231 id=231 data-nosnippet>231</a>        <span class="kw">let </span>msg = err.to_string();
+<a href=#232 id=232 data-nosnippet>232</a>        <span class="macro">assert!</span>(
+<a href=#233 id=233 data-nosnippet>233</a>            msg.contains(<span class="string">"expected top-level"</span>),
+<a href=#234 id=234 data-nosnippet>234</a>            <span class="string">"unexpected error: {msg}"
+<a href=#235 id=235 data-nosnippet>235</a>        </span>);
+<a href=#236 id=236 data-nosnippet>236</a>    }
+<a href=#237 id=237 data-nosnippet>237</a>
+<a href=#238 id=238 data-nosnippet>238</a>    <span class="doccomment">/// A symlink entry (Unix mode bits include `S_IFLNK`) is rejected even
+<a href=#239 id=239 data-nosnippet>239</a>    /// when its name is a safe relative path. CfT archives never use them.
+<a href=#240 id=240 data-nosnippet>240</a>    </span><span class="attr">#[cfg(unix)]
+<a href=#241 id=241 data-nosnippet>241</a>    #[tokio::test]
+<a href=#242 id=242 data-nosnippet>242</a>    </span><span class="kw">async fn </span>extract_rejects_symlink_entries() {
+<a href=#243 id=243 data-nosnippet>243</a>        <span class="kw">use </span>zip::write::SimpleFileOptions;
+<a href=#244 id=244 data-nosnippet>244</a>        <span class="kw">let </span>dir = tempfile::tempdir().unwrap();
+<a href=#245 id=245 data-nosnippet>245</a>        <span class="kw">let </span>zip_path = dir.path().join(<span class="string">"symlink.zip"</span>);
+<a href=#246 id=246 data-nosnippet>246</a>        <span class="kw">let </span>dest_dir = dir.path().join(<span class="string">"out"</span>);
+<a href=#247 id=247 data-nosnippet>247</a>        std::fs::create_dir_all(<span class="kw-2">&amp;</span>dest_dir).unwrap();
+<a href=#248 id=248 data-nosnippet>248</a>
+<a href=#249 id=249 data-nosnippet>249</a>        <span class="kw">let </span><span class="kw-2">mut </span>buf = std::io::Cursor::new(Vec::new());
+<a href=#250 id=250 data-nosnippet>250</a>        {
+<a href=#251 id=251 data-nosnippet>251</a>            <span class="kw">let </span><span class="kw-2">mut </span>writer = zip::ZipWriter::new(<span class="kw-2">&amp;mut </span>buf);
+<a href=#252 id=252 data-nosnippet>252</a>            <span class="comment">// 0o120_000 | 0o777 marks the entry as a symlink in the
+<a href=#253 id=253 data-nosnippet>253</a>            // archive's Unix mode bits.
+<a href=#254 id=254 data-nosnippet>254</a>            </span><span class="kw">let </span>opts = SimpleFileOptions::default().unix_permissions(<span class="number">0o777</span>);
+<a href=#255 id=255 data-nosnippet>255</a>            writer
+<a href=#256 id=256 data-nosnippet>256</a>                .add_symlink(<span class="string">"chrome-linux64/link"</span>, <span class="string">"../escape"</span>, opts)
+<a href=#257 id=257 data-nosnippet>257</a>                .unwrap();
+<a href=#258 id=258 data-nosnippet>258</a>            writer.finish().unwrap();
+<a href=#259 id=259 data-nosnippet>259</a>        }
+<a href=#260 id=260 data-nosnippet>260</a>        std::fs::write(<span class="kw-2">&amp;</span>zip_path, buf.into_inner()).unwrap();
+<a href=#261 id=261 data-nosnippet>261</a>
+<a href=#262 id=262 data-nosnippet>262</a>        <span class="kw">let </span>err = extract(<span class="kw-2">&amp;</span>zip_path, <span class="kw-2">&amp;</span>dest_dir, <span class="prelude-val">Some</span>(<span class="string">"chrome-linux64"</span>))
+<a href=#263 id=263 data-nosnippet>263</a>            .<span class="kw">await
+<a href=#264 id=264 data-nosnippet>264</a>            </span>.unwrap_err();
+<a href=#265 id=265 data-nosnippet>265</a>        <span class="macro">assert!</span>(
+<a href=#266 id=266 data-nosnippet>266</a>            err.to_string().contains(<span class="string">"symlink"</span>),
+<a href=#267 id=267 data-nosnippet>267</a>            <span class="string">"unexpected error: {err}"
+<a href=#268 id=268 data-nosnippet>268</a>        </span>);
+<a href=#269 id=269 data-nosnippet>269</a>    }
+<a href=#270 id=270 data-nosnippet>270</a>}
 </code></pre></div></section></main></body></html>
