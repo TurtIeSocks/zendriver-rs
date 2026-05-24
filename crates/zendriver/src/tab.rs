@@ -25,10 +25,12 @@ pub struct Tab {
 pub(crate) struct TabInner {
     pub(crate) session: SessionHandle,
     pub(crate) isolated_world: tokio::sync::Mutex<IsolatedWorldCache>,
-    /// Weak ref to the owning `BrowserInner`. Used by future P4 tasks to
-    /// reach Browser-wide resources (CookieJar, tabs registry). `Weak`
-    /// breaks the Browser→Tab→Browser cycle.
-    #[allow(dead_code)]
+    /// Weak ref to the owning `BrowserInner`. Used by [`Tab::cookies`] to
+    /// hand back a [`crate::CookieJar`] bound to the browser's root
+    /// connection (Chrome's cookie store is browser-scoped, so per-tab jars
+    /// would all dispatch the same way). Reserved for future P4 tasks
+    /// (tabs registry walks, storage). `Weak` breaks the Browser→Tab→Browser
+    /// cycle.
     pub(crate) browser: std::sync::Weak<crate::browser::BrowserInner>,
     /// Per-Tab input controller. Each tab owns its own cursor + held-modifier
     /// state — distinct tabs in the same Browser have independent pointers.
@@ -157,6 +159,28 @@ impl Tab {
     /// CDP commands the high-level API doesn't expose.
     pub fn session(&self) -> &SessionHandle {
         &self.inner.session
+    }
+
+    /// Browser-wide cookie store handle. Convenience accessor that delegates
+    /// to the owning [`crate::Browser`]'s root [`zendriver_transport::Connection`]
+    /// via the cached [`std::sync::Weak<crate::browser::BrowserInner>`] — Chrome's
+    /// cookie store is browser-scoped, so this jar is functionally identical
+    /// to [`crate::Browser::cookies`] for the same browser.
+    ///
+    /// If the owning Browser has already been dropped (which shouldn't happen
+    /// in practice because Drop ordering keeps it alive while any Tab clone
+    /// exists, but is handled defensively here), the jar falls back to the
+    /// Tab's session-level connection. The session connection points at the
+    /// same Chrome process, so the resulting jar still dispatches against
+    /// the live browser's cookie store until the WebSocket is torn down.
+    #[must_use]
+    pub fn cookies(&self) -> crate::CookieJar {
+        let conn = self
+            .inner
+            .browser
+            .upgrade()
+            .map_or_else(|| self.inner.session.connection().clone(), |b| b.conn.clone());
+        crate::CookieJar::new(conn)
     }
 
     /// Helper: call a CDP method on this tab's session, parsing transport
@@ -1030,6 +1054,71 @@ mod tests {
         mock.reply(id, json!({})).await;
 
         fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    // --- Tab::cookies (P4 T10) ----------------------------------------
+
+    /// [`Tab::cookies`] returns a [`crate::CookieJar`] bound to the owning
+    /// browser's root connection — discovered via the cached `Weak<BrowserInner>`
+    /// upgrade. The test builds a synthetic `BrowserInner` with a known
+    /// connection, attaches a Tab whose Weak ref points at it, and asserts
+    /// that calling `.set(...)` dispatches `Network.setCookie` on that
+    /// browser-level connection (not the Tab's session channel).
+    #[tokio::test]
+    async fn tab_cookies_dispatches_through_browser_connection_via_weak_upgrade() {
+        use crate::browser::BrowserInner;
+        use crate::cookies::Cookie;
+        use std::collections::HashMap;
+        use std::sync::{Arc, Weak};
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let (mut mock, conn) = MockConnection::pair();
+
+        let inner = Arc::new_cyclic(|weak: &Weak<BrowserInner>| {
+            let main_session = SessionHandle::new(conn.clone(), "S1");
+            let main_input = crate::input::InputController::new(input_profile.clone());
+            let main_tab = Tab::new(main_session, weak.clone(), main_input, "T1".to_string());
+            let mut map = HashMap::new();
+            map.insert("S1".to_string(), main_tab.clone());
+            BrowserInner {
+                conn: conn.clone(),
+                main_tab,
+                child: tokio::sync::Mutex::new(None),
+                _user_data: None,
+                stealth_input_profile: input_profile.clone(),
+                tabs: tokio::sync::RwLock::new(map),
+            }
+        });
+        let tab = inner.main_tab.clone();
+        let jar = tab.cookies();
+
+        let fut = tokio::spawn(async move {
+            jar.set(Cookie {
+                name: "sid".into(),
+                value: "abc".into(),
+                domain: ".example.com".into(),
+                path: "/".into(),
+                expires: None,
+                http_only: false,
+                secure: false,
+                same_site: None,
+                url: None,
+            })
+            .await
+        });
+
+        let id = mock.expect_cmd("Network.setCookie").await;
+        assert_eq!(mock.last_sent()["params"]["name"], "sid");
+        // Browser-scope command — no session_id (jar dispatches against
+        // the browser's connection, not the tab's session).
+        assert!(mock.last_sent().get("sessionId").is_none());
+        mock.reply(id, json!({ "success": true })).await;
+
+        fut.await.unwrap().unwrap();
+        // Keep `inner` alive until after the dispatch so the Weak upgrade
+        // succeeds — that's the path under test.
+        drop(inner);
         conn.shutdown();
     }
 

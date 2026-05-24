@@ -538,6 +538,19 @@ impl Browser {
         &self.inner.conn
     }
 
+    /// Browser-wide cookie store handle. Cookies in Chrome are stored once
+    /// per profile and shared across all tabs, so the jar binds to the
+    /// browser's root [`Connection`] and dispatches `Network.*Cookies*`
+    /// commands at browser scope (no `sessionId`).
+    ///
+    /// Cheap to call — [`crate::CookieJar`] is an `Arc`-backed handle, and
+    /// each invocation constructs a fresh wrapper around the cloned
+    /// connection.
+    #[must_use]
+    pub fn cookies(&self) -> crate::CookieJar {
+        crate::CookieJar::new(self.inner.conn.clone())
+    }
+
     /// Open a new tab navigated to `about:blank`. Returns once the
     /// [`TabRegistrar`] has registered the new [`Tab`] in the browser's tab
     /// registry — typically within a few milliseconds of
@@ -999,6 +1012,63 @@ mod tests {
         assert!(!tabs.contains_key("S2"), "detached tab removed");
 
         drop(tabs);
+        conn.shutdown();
+    }
+
+    // ----- Browser::cookies (P4 T10) -------------------------------------
+
+    /// [`Browser::cookies`] returns a [`crate::CookieJar`] bound to the
+    /// browser's root [`zendriver_transport::Connection`]. A `.set(...)` call
+    /// must dispatch `Network.setCookie` on that connection — confirming the
+    /// jar shares the browser's CDP channel (not a per-tab session channel).
+    #[tokio::test]
+    async fn browser_cookies_returns_jar_bound_to_browser_connection() {
+        use crate::cookies::Cookie;
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let (mut mock, conn) = MockConnection::pair();
+
+        let inner = Arc::new_cyclic(|weak: &Weak<BrowserInner>| {
+            let main_session = SessionHandle::new(conn.clone(), "S1");
+            let main_input = InputController::new(input_profile.clone());
+            let main_tab = Tab::new(main_session, weak.clone(), main_input, "T1".to_string());
+            let mut map = HashMap::new();
+            map.insert("S1".to_string(), main_tab.clone());
+            BrowserInner {
+                conn: conn.clone(),
+                main_tab,
+                child: tokio::sync::Mutex::new(None),
+                _user_data: None,
+                stealth_input_profile: input_profile.clone(),
+                tabs: tokio::sync::RwLock::new(map),
+            }
+        });
+        let browser = Browser { inner };
+        let jar = browser.cookies();
+
+        let fut = tokio::spawn(async move {
+            jar.set(Cookie {
+                name: "sid".into(),
+                value: "abc".into(),
+                domain: ".example.com".into(),
+                path: "/".into(),
+                expires: None,
+                http_only: false,
+                secure: false,
+                same_site: None,
+                url: None,
+            })
+            .await
+        });
+
+        let id = mock.expect_cmd("Network.setCookie").await;
+        assert_eq!(mock.last_sent()["params"]["name"], "sid");
+        // Browser-scope command — no session_id.
+        assert!(mock.last_sent().get("sessionId").is_none());
+        mock.reply(id, json!({ "success": true })).await;
+
+        fut.await.unwrap().unwrap();
         conn.shutdown();
     }
 
