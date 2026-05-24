@@ -122,12 +122,20 @@ impl TargetObserver for StealthObserver {
                     .call("Page.setBypassCSP", json!({ "enabled": true }))
                     .await?;
             }
+            // Inject into the MAIN world (no `worldName`). The bootstrap's
+            // patches mutate `Navigator.prototype`, `window.chrome`,
+            // `WebGLRenderingContext.prototype`, etc. — every isolated
+            // world gets its own copy of these prototypes, so a patch
+            // applied in a named/isolated world is invisible to the
+            // page's own scripts (and to `evaluate_main`, the surface
+            // detection sites probe). Running the bootstrap in the main
+            // world is the only way these prototype mutations actually
+            // affect the document under test.
             session
                 .call(
                     "Page.addScriptToEvaluateOnNewDocument",
                     json!({
                         "source": &self.bootstrap,
-                        "worldName": "zendriver-stealth",
                         "includeCommandLineAPI": false,
                         "runImmediately": true,
                     }),

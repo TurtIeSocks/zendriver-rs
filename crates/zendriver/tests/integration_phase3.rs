@@ -26,7 +26,9 @@ async fn fixture_with_html(html: &str) -> MockServer {
     let mock = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(html))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(html.as_bytes().to_vec(), "text/html"),
+        )
         .mount(&mock)
         .await;
     mock

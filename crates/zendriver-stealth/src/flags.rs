@@ -38,7 +38,21 @@ fn shared_stealth_flags() -> Vec<String> {
 pub fn flags_for_profile(kind: ProfileKind) -> Vec<String> {
     match kind {
         ProfileKind::Off => Vec::new(),
-        ProfileKind::Native | ProfileKind::Spoofed => shared_stealth_flags(),
+        ProfileKind::Native => shared_stealth_flags(),
+        ProfileKind::Spoofed => {
+            let mut v = shared_stealth_flags();
+            // Stop Blink from injecting `navigator.webdriver` (a native
+            // getter that returns `true`). Without this flag Chrome's
+            // own AutomationControlled hook overwrites whichever
+            // `Object.defineProperty(Navigator.prototype, 'webdriver',
+            // ...)` patch we install via
+            // `Page.addScriptToEvaluateOnNewDocument`, because the
+            // hook runs at context-start AFTER our bootstrap script.
+            // Disabling the feature removes the native injection and
+            // lets our shim's prototype getter stick.
+            v.push("--disable-blink-features=AutomationControlled".into());
+            v
+        }
     }
 }
 

@@ -35,8 +35,9 @@ async fn interception_block_rule_prevents_request() {
     let mock = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(
-            r#"<!doctype html><html><body>
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(
+                r#"<!doctype html><html><body>
               <script>
                 window.fetchErr = null;
                 fetch('/blocked/x.json')
@@ -44,8 +45,12 @@ async fn interception_block_rule_prevents_request() {
                   .then(t => { window.fetchResult = t; })
                   .catch(e => { window.fetchErr = String(e); });
               </script>
-            </body></html>"#,
-        ))
+            </body></html>"#
+                    .as_bytes()
+                    .to_vec(),
+                "text/html",
+            ),
+        )
         .mount(&mock)
         .await;
     Mock::given(method("GET"))
@@ -95,14 +100,19 @@ async fn interception_respond_serves_fake_body() {
     let mock = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(
-            r#"<!doctype html><html><body>
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(
+                r#"<!doctype html><html><body>
               <script>
                 window.r = null;
                 fetch('/api/health').then(r => r.text()).then(t => { window.r = t; });
               </script>
-            </body></html>"#,
-        ))
+            </body></html>"#
+                    .as_bytes()
+                    .to_vec(),
+                "text/html",
+            ),
+        )
         .mount(&mock)
         .await;
 
@@ -158,13 +168,18 @@ async fn expect_response_returns_matched() {
         .await;
     Mock::given(method("GET"))
         .and(path("/"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(
-            r#"<!doctype html><html><body>
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(
+                r#"<!doctype html><html><body>
               <script>
                 setTimeout(() => { fetch('/api/data'); }, 200);
               </script>
-            </body></html>"#,
-        ))
+            </body></html>"#
+                    .as_bytes()
+                    .to_vec(),
+                "text/html",
+            ),
+        )
         .mount(&mock)
         .await;
 
@@ -200,11 +215,16 @@ async fn expect_dialog_resolves_on_alert() {
     let mock = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(
-            r#"<!doctype html><html><body>
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(
+                r#"<!doctype html><html><body>
               <script>setTimeout(() => alert('hi'), 100);</script>
-            </body></html>"#,
-        ))
+            </body></html>"#
+                    .as_bytes()
+                    .to_vec(),
+                "text/html",
+            ),
+        )
         .mount(&mock)
         .await;
 
@@ -236,8 +256,12 @@ async fn cloudflare_is_challenge_present_returns_false_on_normal_page() {
     Mock::given(method("GET"))
         .and(path("/"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(r#"<!doctype html><html><body><h1>plain page</h1></body></html>"#),
+            ResponseTemplate::new(200).set_body_raw(
+                r#"<!doctype html><html><body><h1>plain page</h1></body></html>"#
+                    .as_bytes()
+                    .to_vec(),
+                "text/html",
+            ),
         )
         .mount(&mock)
         .await;

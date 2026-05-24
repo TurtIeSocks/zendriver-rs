@@ -656,9 +656,16 @@ impl BrowserBuilder {
     /// ```
     pub async fn launch(self) -> Result<Browser, ZendriverError> {
         // 1. Resolve Chrome executable.
+        // Precedence: explicit `.executable(...)` > `CHROME_BIN` env var >
+        // platform discovery. The env-var hop lets CI (and local devs
+        // pointing at Canary / a downloaded Chrome-for-Testing build)
+        // override the discovery path without code changes.
         let exe = match self.executable.clone() {
             Some(p) => p,
-            None => find_chrome_executable()?,
+            None => match std::env::var("CHROME_BIN").ok().filter(|s| !s.is_empty()) {
+                Some(p) => PathBuf::from(p),
+                None => find_chrome_executable()?,
+            },
         };
 
         // 2. Resolve the per-tab InputProfile from the active StealthProfile
@@ -714,6 +721,20 @@ impl BrowserBuilder {
 
         let mut flags = self.build_flags(&user_data_path);
         flags.extend(extra_flags);
+        // CI-friendly defaults: when running under CI (the runner sets
+        // `CI=true`), Chrome's user-namespace sandbox refuses to start
+        // because the GitHub-Actions / Docker container runs as root,
+        // and the small /dev/shm in the container OOMs the renderer on
+        // real workloads. Auto-add `--no-sandbox` and
+        // `--disable-dev-shm-usage` unless the caller already supplied
+        // them (so explicit user opt-in still wins).
+        if std::env::var("CI").is_ok() {
+            for needed in ["--no-sandbox", "--disable-dev-shm-usage"] {
+                if !flags.iter().any(|f| f == needed) {
+                    flags.push(needed.into());
+                }
+            }
+        }
         info!(executable = %exe.display(), "launching chrome");
 
         // 6. Spawn chrome + parse WS URL.

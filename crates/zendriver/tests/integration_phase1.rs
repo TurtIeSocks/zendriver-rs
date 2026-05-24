@@ -30,18 +30,11 @@ async fn click_dispatches_event_to_dom_listener() {
         .mount(&mock)
         .await;
 
-    let mut b = Browser::builder()
+    let browser = Browser::builder()
         .headless(true)
-        // GitHub Actions runs as root in the runner container; Chromium's
-        // user-namespace sandbox refuses to start without `--no-sandbox`,
-        // and the small `/dev/shm` (~64 MB) in the runner makes the
-        // renderer crash unless `/tmp` is used instead.
-        .arg("--no-sandbox")
-        .arg("--disable-dev-shm-usage");
-    if let Ok(p) = std::env::var("CHROME_BIN") {
-        b = b.executable(p);
-    }
-    let browser = b.launch().await.expect("launch failed");
+        .launch()
+        .await
+        .expect("launch failed");
     let tab = browser.main_tab();
     tab.goto(&mock.uri()).await.expect("goto");
     tab.wait_for_load().await.expect("wait_for_load");

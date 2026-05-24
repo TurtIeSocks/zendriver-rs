@@ -2401,9 +2401,13 @@ mod tests {
         )
         .await;
 
-        let res = tokio::time::timeout(Duration::from_secs(2), fut)
+        // Outer timeout deliberately generous (10s) so a slow / loaded
+        // CI runner doesn't flake the test. The correctness assertion
+        // below uses a strict lower bound on `elapsed` to catch a
+        // too-early resolve regardless of how long the slack window is.
+        let res = tokio::time::timeout(Duration::from_secs(10), fut)
             .await
-            .expect("wait_for_idle did not resolve within 2s");
+            .expect("wait_for_idle did not resolve within 10s");
         res.unwrap().unwrap();
 
         // Lower bound: 75ms initial sleep + 300ms quiet window after the
