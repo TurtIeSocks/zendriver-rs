@@ -76,6 +76,19 @@ pub use expect::download::{
     DownloadExpectation, DownloadProgressState, DownloadState, MatchedDownload,
 };
 
+/// Chrome-for-Testing fetcher re-exports.
+///
+/// Gated by the `fetcher` cargo feature. The driver lives in the
+/// `zendriver-fetcher` sub-crate; these aliases let downstream code reach the
+/// types without depending on the sub-crate directly. Drive via
+/// [`BrowserBuilder::ensure_chrome`] for the common "just download Chrome"
+/// case, or instantiate [`Fetcher`] directly for version/channel/cache
+/// customization.
+#[cfg(feature = "fetcher")]
+pub use zendriver_fetcher::{
+    Channel, Fetcher, FetcherError, FetcherPhase, FetcherProgress, Platform, VersionSpec,
+};
+
 /// Stealth profile + fingerprint configuration re-exported from `zendriver-stealth`.
 pub mod stealth {
     pub use zendriver_stealth::{Fingerprint, Platform, StealthProfile, UserAgentMetadata};

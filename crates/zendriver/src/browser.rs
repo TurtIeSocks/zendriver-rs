@@ -553,6 +553,27 @@ impl BrowserBuilder {
     }
 }
 
+#[cfg(feature = "fetcher")]
+impl BrowserBuilder {
+    /// Ensure Chrome is downloaded + cached, then use its path as the
+    /// executable. Equivalent to:
+    ///
+    /// ```ignore
+    /// let path = zendriver_fetcher::Fetcher::new().ensure_chrome().await?;
+    /// builder.executable(path)
+    /// ```
+    ///
+    /// The default [`zendriver_fetcher::Fetcher`] resolves the latest stable
+    /// Chrome for Testing build for the host platform and caches it under the
+    /// OS-conventional cache dir. For custom version pinning, channel
+    /// selection, or cache placement, build a [`zendriver_fetcher::Fetcher`]
+    /// directly and call `.executable(path)` yourself.
+    pub async fn ensure_chrome(self) -> Result<Self, ZendriverError> {
+        let path = zendriver_fetcher::Fetcher::new().ensure_chrome().await?;
+        Ok(self.executable(path))
+    }
+}
+
 impl Browser {
     pub fn builder() -> BrowserBuilder {
         BrowserBuilder::new()
