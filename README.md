@@ -2,7 +2,7 @@
 
 A Rust port of [zendriver](https://github.com/cdpdriver/zendriver) — an undetectable, async-first browser automation library using the Chrome DevTools Protocol directly.
 
-**Status:** Phases 1-4 shipped. Not yet published to crates.io.
+**Status:** Phases 1-5 shipped. Not yet published to crates.io.
 
 ## Example
 
@@ -57,8 +57,39 @@ async fn main() -> zendriver::Result<()> {
 2. **Stealth** **DONE**: fingerprint patches + isolated worlds + stealth JS bundle.
 3. **Element API completeness** **DONE**: selectors (CSS/XPath/text/role), actionability, input controller, screenshots.
 4. **`Tab`/`Browser` completeness** **DONE**: multi-tab + cookies + storage + frames + nav history + `wait_for_idle`.
-5. Optional gated features: interception, Cloudflare bypass, `expect()`, fetcher (planned).
+5. **Optional gated features** **DONE**: request interception, `expect()` matchers, Cloudflare bypass, and Chrome-for-Testing fetcher — all behind opt-in feature flags (`interception`, `expect`, `cloudflare`, `fetcher`).
 6. Polish + 0.1 release (planned).
+
+### Gated feature example
+
+```rust,ignore
+// Cargo.toml: zendriver = { version = "...", features = ["interception", "expect"] }
+use std::time::Duration;
+use zendriver::Browser;
+
+#[tokio::main]
+async fn main() -> zendriver::Result<()> {
+    let browser = Browser::builder().headless(true).launch().await?;
+    let tab = browser.main_tab();
+
+    // Block tracking requests before they hit the wire.
+    let _block = tab
+        .intercept()
+        .block("*/analytics/*")?
+        .start();
+
+    // Arm an expectation, then trigger navigation — the matcher is live before goto.
+    let api = tab
+        .expect_response("*/api/data*")
+        .timeout(Duration::from_secs(5));
+    tab.goto("https://example.com").await?;
+    let matched = api.await?;
+    println!("api status: {}", matched.status);
+
+    browser.close().await?;
+    Ok(())
+}
+```
 
 See `docs/superpowers/specs/` for per-phase design documents.
 

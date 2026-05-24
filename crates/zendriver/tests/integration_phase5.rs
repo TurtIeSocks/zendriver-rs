@@ -73,10 +73,7 @@ async fn interception_block_rule_prevents_request() {
 
     // The fetch should have rejected with a network error since Chrome
     // refused the request via `Fetch.failRequest { BlockedByClient }`.
-    let err: Option<String> = tab
-        .evaluate_main("window.fetchErr")
-        .await
-        .unwrap_or(None);
+    let err: Option<String> = tab.evaluate_main("window.fetchErr").await.unwrap_or(None);
     assert!(
         err.is_some(),
         "fetch to /blocked/x.json should have errored; got window.fetchErr = {err:?}"
@@ -176,7 +173,9 @@ async fn expect_response_returns_matched() {
 
     // Register expectation first so the `Network.responseReceived`
     // subscriber is in place before the navigation triggers the fetch.
-    let expectation = tab.expect_response("/api/data").timeout(Duration::from_secs(5));
+    let expectation = tab
+        .expect_response("/api/data")
+        .timeout(Duration::from_secs(5));
 
     tab.goto(&mock.uri()).await.unwrap();
 
@@ -236,9 +235,10 @@ async fn cloudflare_is_challenge_present_returns_false_on_normal_page() {
     let mock = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(
-            r#"<!doctype html><html><body><h1>plain page</h1></body></html>"#,
-        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"<!doctype html><html><body><h1>plain page</h1></body></html>"#),
+        )
         .mount(&mock)
         .await;
 
