@@ -314,13 +314,25 @@ impl Tab {
             .map_err(|e| ZendriverError::Navigation(format!("invalid base64 in screenshot: {e}")))
     }
 
-    /// Detach the target session for this tab.
+    /// Close this tab in Chrome.
+    ///
+    /// Sends `Target.closeTarget { targetId }` at browser scope (no
+    /// `session_id`) using the cached [`TabInner::target_id`]. Chrome
+    /// destroys the page target, which in turn produces a
+    /// `Target.detachedFromTarget` event whose
+    /// [`crate::browser::TabRegistrar::on_target_detached`] handler removes
+    /// this tab from the [`crate::browser::BrowserInner::tabs`] registry.
+    ///
+    /// P1 shipped this as `Target.detachFromTarget` only, which severed the
+    /// CDP session but left the underlying page target alive in Chrome. P4
+    /// upgrades to a real close so multi-tab workflows reclaim memory and
+    /// the registry stays in sync with browser state.
     pub async fn close(self) -> Result<()> {
-        let sid = self.inner.session.session_id().to_string();
+        let target_id = self.target_id().to_string();
         self.inner
             .session
             .connection()
-            .call_raw("Target.detachFromTarget", json!({ "sessionId": sid }), None)
+            .call_raw("Target.closeTarget", json!({ "targetId": target_id }), None)
             .await?;
         Ok(())
     }
@@ -653,19 +665,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn close_sends_target_detach_with_session_id() {
+    async fn close_sends_target_close_target_with_target_id() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S42");
+        // `Tab::new_for_test` derives a deterministic target_id from the
+        // session_id: `test-target-S42` here.
         let tab = Tab::new_for_test(sess);
+        assert_eq!(tab.target_id(), "test-target-S42");
 
         let fut = tokio::spawn({
             let t = tab.clone();
             async move { t.close().await }
         });
 
-        let id = mock.expect_cmd("Target.detachFromTarget").await;
-        assert_eq!(mock.last_sent()["params"]["sessionId"], "S42");
-        mock.reply(id, json!({})).await;
+        let id = mock.expect_cmd("Target.closeTarget").await;
+        assert_eq!(mock.last_sent()["params"]["targetId"], "test-target-S42");
+        // Browser-scope command — no session_id.
+        assert!(mock.last_sent().get("sessionId").is_none());
+        mock.reply(id, json!({ "success": true })).await;
         fut.await.unwrap().unwrap();
         conn.shutdown();
     }

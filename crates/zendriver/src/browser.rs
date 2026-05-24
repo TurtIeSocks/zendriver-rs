@@ -939,6 +939,69 @@ mod tests {
         conn.shutdown();
     }
 
+    /// Mock-drive a `Target.detachedFromTarget` event with the second tab's
+    /// `sessionId` and assert the [`TabRegistrar::on_target_detached`]
+    /// handler removes it from the browser-wide tabs registry. Counterpart
+    /// to the attach-event test above; together they cover the registry's
+    /// full lifecycle wired through actor → observer.
+    #[tokio::test]
+    async fn tab_registrar_removes_session_on_detached_event() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+
+        // Seed `BrowserInner` with two tabs (S1/T1 = main, S2/T2 = extra).
+        let inner = Arc::new_cyclic(|weak: &Weak<BrowserInner>| {
+            let main_session = SessionHandle::new(conn.clone(), "S1");
+            let main_input = InputController::new(input_profile.clone());
+            let main_tab = Tab::new(main_session, weak.clone(), main_input, "T1".to_string());
+            let extra_session = SessionHandle::new(conn.clone(), "S2");
+            let extra_input = InputController::new(input_profile.clone());
+            let extra_tab = Tab::new(extra_session, weak.clone(), extra_input, "T2".to_string());
+            let mut map = HashMap::new();
+            map.insert("S1".to_string(), main_tab.clone());
+            map.insert("S2".to_string(), extra_tab);
+            BrowserInner {
+                conn: conn.clone(),
+                main_tab,
+                child: tokio::sync::Mutex::new(None),
+                _user_data: None,
+                stealth_input_profile: input_profile.clone(),
+                tabs: tokio::sync::RwLock::new(map),
+            }
+        });
+        registrar.set_browser(Arc::downgrade(&inner));
+
+        assert_eq!(inner.tabs.read().await.len(), 2);
+
+        // The actor dispatches `on_target_detached` from a background
+        // `tokio::spawn`, so emit the event then poll until the registry
+        // shrinks (same pattern as the attach test above).
+        mock.emit_event(
+            "Target.detachedFromTarget",
+            json!({ "sessionId": "S2", "targetId": "T2" }),
+        )
+        .await;
+
+        for _ in 0..50 {
+            if inner.tabs.read().await.len() == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let tabs = inner.tabs.read().await;
+        assert_eq!(tabs.len(), 1, "expected S2 to be removed from registry");
+        assert!(tabs.contains_key("S1"), "main tab still registered");
+        assert!(!tabs.contains_key("S2"), "detached tab removed");
+
+        drop(tabs);
+        conn.shutdown();
+    }
+
     /// Smoke test for the empty-tabs case: [`Browser::tabs`] returns a
     /// (typically 1-entry) snapshot and [`Browser::tab_count`] agrees.
     #[tokio::test]
