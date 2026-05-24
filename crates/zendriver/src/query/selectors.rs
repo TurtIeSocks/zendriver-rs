@@ -316,9 +316,28 @@ async fn resolve_xpath_many(scope: &QueryScope<'_>, expr: &str) -> Result<Vec<Re
 // non-empty `textContent`).
 
 fn build_text_substring_js_tab(needle: &str) -> String {
-    // `Array.from(document.querySelectorAll('*')).filter(...)`.
+    // Narrowest-match filter: every element whose own text contains the
+    // needle, MINUS any element that also has a descendant whose text
+    // contains the needle. Without the narrowing step, the naive filter
+    // returns `[html, body, ...ancestors..., target]` in document
+    // order — `.one()` then picks `<html>` and the caller's
+    // `el.attr("id")` returns None even though the test's `<button id=…>`
+    // matched the needle.
     format!(
-        "Array.from(document.querySelectorAll('*')).filter(function(el){{var n={n};var t=el.innerText||el.textContent||'';return t.toLowerCase().includes(n.toLowerCase());}})",
+        "(function(){{\
+            var n={n};\
+            var lc=n.toLowerCase();\
+            var matches=Array.from(document.querySelectorAll('*')).filter(function(el){{\
+                var t=el.innerText||el.textContent||'';\
+                return t.toLowerCase().includes(lc);\
+            }});\
+            return matches.filter(function(el){{\
+                return !Array.from(el.querySelectorAll('*')).some(function(c){{\
+                    var t=c.innerText||c.textContent||'';\
+                    return t.toLowerCase().includes(lc);\
+                }});\
+            }});\
+        }})()",
         n = json!(needle),
     )
 }
@@ -326,7 +345,20 @@ fn build_text_substring_js_tab(needle: &str) -> String {
 fn build_text_substring_fn_body() -> &'static str {
     // Element scope: `this` is the scope element. Used via
     // `Runtime.callFunctionOn` with the needle as the sole argument.
-    "function(n){return Array.from(this.querySelectorAll('*')).filter(function(el){var t=el.innerText||el.textContent||'';return t.toLowerCase().includes(n.toLowerCase());});}"
+    // Same narrowing semantics as the tab/frame path above.
+    "function(n){\
+        var lc=n.toLowerCase();\
+        var matches=Array.from(this.querySelectorAll('*')).filter(function(el){\
+            var t=el.innerText||el.textContent||'';\
+            return t.toLowerCase().includes(lc);\
+        });\
+        return matches.filter(function(el){\
+            return !Array.from(el.querySelectorAll('*')).some(function(c){\
+                var t=c.innerText||c.textContent||'';\
+                return t.toLowerCase().includes(lc);\
+            });\
+        });\
+    }"
 }
 
 fn build_text_exact_xpath_js_tab(needle: &str, snapshot: bool) -> String {
