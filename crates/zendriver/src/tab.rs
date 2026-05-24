@@ -36,6 +36,13 @@ pub(crate) struct TabInner {
     /// dispatch helpers; the shared mutex inside `InputController` serializes
     /// per-tab writes without crossing tab boundaries.
     pub(crate) input: Arc<InputController>,
+    /// CDP `targetId` for the page target this tab wraps. Cached at Tab
+    /// construction time (from `Target.attachedToTarget`'s `target_info`)
+    /// so multi-tab orchestration (`Browser::new_tab` correlation,
+    /// `Tab::activate`, `Tab::close`'s `Target.closeTarget` upgrade) can
+    /// dispatch by `targetId` without re-querying `Target.getTargetInfo`
+    /// per call.
+    pub(crate) target_id: String,
 }
 
 #[derive(Default)]
@@ -49,6 +56,7 @@ impl Tab {
         session: SessionHandle,
         browser: std::sync::Weak<crate::browser::BrowserInner>,
         input: Arc<InputController>,
+        target_id: String,
     ) -> Self {
         Self {
             inner: Arc::new(TabInner {
@@ -56,6 +64,7 @@ impl Tab {
                 isolated_world: tokio::sync::Mutex::new(IsolatedWorldCache::default()),
                 browser,
                 input,
+                target_id,
             }),
         }
     }
@@ -66,8 +75,12 @@ impl Tab {
     /// pattern that paired with `Tab::input() -> Option<_>`; now that
     /// `Tab::input()` returns `&Arc<InputController>` unconditionally, tests
     /// must seed a controller at construction time.
+    ///
+    /// The synthetic `target_id` is derived from the session_id — tests that
+    /// need a specific `targetId` should use [`Tab::new_for_test_with_target`].
     #[cfg(test)]
     pub(crate) fn new_for_test(session: SessionHandle) -> Self {
+        let target_id = format!("test-target-{}", session.session_id());
         Self::new(
             session,
             std::sync::Weak::new(),
@@ -75,7 +88,17 @@ impl Tab {
                 zendriver_stealth::InputProfile::native(),
                 42,
             ),
+            target_id,
         )
+    }
+
+    /// The CDP `targetId` for the page target this tab wraps. Stable for
+    /// the lifetime of the underlying target — used by `Browser::new_tab`
+    /// to correlate a `Target.createTarget` response with the [`Tab`] that
+    /// the [`crate::browser::TabRegistrar`] subsequently registers.
+    #[must_use]
+    pub fn target_id(&self) -> &str {
+        &self.inner.target_id
     }
 
     /// The per-Tab [`InputController`]. Each tab carries its own cursor +

@@ -299,7 +299,12 @@ impl TargetObserver for TabRegistrar {
         let new_session = SessionHandle::new(conn, session.session_id.to_string());
         let input = InputController::new(self.input_profile.clone());
         let weak_inner = Arc::downgrade(&browser);
-        let tab = Tab::new(new_session, weak_inner, input);
+        let tab = Tab::new(
+            new_session,
+            weak_inner,
+            input,
+            session.target_info.target_id.clone(),
+        );
 
         browser
             .tabs
@@ -482,10 +487,16 @@ impl BrowserBuilder {
         // tabs registry); the per-Tab `InputController` is constructed
         // inline here from the cached `input_profile`.
         let session_id_for_registry = session_id.clone();
+        let target_id_for_main_tab = target_id.clone();
         let inner = Arc::new_cyclic(|weak: &std::sync::Weak<BrowserInner>| {
             let session = SessionHandle::new(conn.clone(), session_id);
             let main_tab_input = InputController::new(input_profile.clone());
-            let main_tab = Tab::new(session, weak.clone(), main_tab_input);
+            let main_tab = Tab::new(
+                session,
+                weak.clone(),
+                main_tab_input,
+                target_id_for_main_tab,
+            );
             BrowserInner {
                 conn,
                 main_tab,
@@ -525,6 +536,82 @@ impl Browser {
 
     pub fn cdp(&self) -> &Connection {
         &self.inner.conn
+    }
+
+    /// Open a new tab navigated to `about:blank`. Returns once the
+    /// [`TabRegistrar`] has registered the new [`Tab`] in the browser's tab
+    /// registry — typically within a few milliseconds of
+    /// `Target.createTarget`'s response.
+    ///
+    /// Internally:
+    /// 1. Sends `Target.createTarget { url: "about:blank" }` at browser
+    ///    scope (no session_id) — the response includes the new `targetId`.
+    /// 2. Polls [`BrowserInner::tabs`] every 50ms for up to 5s, looking for
+    ///    a [`Tab`] whose [`Tab::target_id`] matches. The
+    ///    [`TabRegistrar`] populates that entry asynchronously when the
+    ///    `Target.attachedToTarget` event arrives (auto-attach + flatten
+    ///    are enabled at launch time).
+    /// 3. Returns the matching [`Tab`] on success.
+    ///
+    /// Returns [`ZendriverError::TabNotFound`] if the registrar fails to
+    /// register the new tab within the 5s window — usually a sign that
+    /// auto-attach is misconfigured or the registrar observer crashed.
+    pub async fn new_tab(&self) -> Result<Tab, ZendriverError> {
+        self.new_tab_at("about:blank").await
+    }
+
+    /// Open a new tab navigated to `url`. Behaves identically to
+    /// [`Browser::new_tab`] but with a custom initial URL passed to
+    /// `Target.createTarget`. The returned [`Tab`] handle is ready as soon
+    /// as the [`TabRegistrar`] observer registers it; callers can issue
+    /// `.wait_for_load()` if they need to block on the navigation.
+    pub async fn new_tab_at(&self, url: impl Into<String>) -> Result<Tab, ZendriverError> {
+        let url = url.into();
+        let res = self
+            .inner
+            .conn
+            .call_raw("Target.createTarget", json!({ "url": url }), None)
+            .await?;
+        let target_id = res
+            .get("targetId")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                ZendriverError::Navigation("Target.createTarget returned no targetId".into())
+            })?
+            .to_string();
+
+        // Poll the registrar-maintained tabs map for the new Tab.
+        // The 5s window covers the typical CDP roundtrip + observer chain
+        // (stealth → tab-registrar) latency with comfortable headroom.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            {
+                let tabs = self.inner.tabs.read().await;
+                if let Some(tab) = tabs.values().find(|t| t.target_id() == target_id) {
+                    return Ok(tab.clone());
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(ZendriverError::TabNotFound(target_id));
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// Snapshot of all currently-registered tabs. Order is unspecified
+    /// (the registry is a [`HashMap`] keyed by `sessionId`). Includes the
+    /// main tab plus any tabs opened via [`Browser::new_tab`] or by page
+    /// scripts (e.g. `window.open`) that auto-attach has wired into the
+    /// registrar.
+    pub async fn tabs(&self) -> Vec<Tab> {
+        self.inner.tabs.read().await.values().cloned().collect()
+    }
+
+    /// Convenience accessor: count of currently-registered tabs.
+    /// Equivalent to `self.tabs().await.len()` but avoids the
+    /// `Vec` allocation.
+    pub async fn tab_count(&self) -> usize {
+        self.inner.tabs.read().await.len()
     }
 
     /// Graceful shutdown: cancel the transport, send SIGTERM to Chrome,
@@ -687,7 +774,7 @@ mod tests {
         let inner = Arc::new_cyclic(|weak: &Weak<BrowserInner>| {
             let main_session = SessionHandle::new(conn.clone(), "S1");
             let main_input = InputController::new(input_profile.clone());
-            let main_tab = Tab::new(main_session, weak.clone(), main_input);
+            let main_tab = Tab::new(main_session, weak.clone(), main_input, "T1".to_string());
             let mut map = HashMap::new();
             map.insert("S1".to_string(), main_tab.clone());
             BrowserInner {
@@ -746,6 +833,145 @@ mod tests {
         assert!(tabs.contains_key("S2"), "new tab registered by observer");
 
         drop(tabs);
+        conn.shutdown();
+    }
+
+    // ----- Browser::new_tab + tabs + tab_count (P4 T3) -------------------
+
+    /// End-to-end mock-drive of [`Browser::new_tab`]: send `Target.createTarget`,
+    /// emit the corresponding `Target.attachedToTarget`, and assert the
+    /// returned [`Tab`] matches the target_id from the create response while
+    /// [`Browser::tabs`] grows to 2 entries.
+    #[tokio::test]
+    async fn new_tab_creates_target_then_returns_registered_tab() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+
+        // Same launch-step-12 shape as the T2 test: synthetic main tab seeded
+        // under S1/T1 so the registry starts at len=1.
+        let inner = Arc::new_cyclic(|weak: &Weak<BrowserInner>| {
+            let main_session = SessionHandle::new(conn.clone(), "S1");
+            let main_input = InputController::new(input_profile.clone());
+            let main_tab = Tab::new(main_session, weak.clone(), main_input, "T1".to_string());
+            let mut map = HashMap::new();
+            map.insert("S1".to_string(), main_tab.clone());
+            BrowserInner {
+                conn: conn.clone(),
+                main_tab,
+                child: tokio::sync::Mutex::new(None),
+                _user_data: None,
+                stealth_input_profile: input_profile.clone(),
+                tabs: tokio::sync::RwLock::new(map),
+            }
+        });
+        registrar.set_browser(Arc::downgrade(&inner));
+        let browser = Browser {
+            inner: inner.clone(),
+        };
+
+        // Drive `Browser::new_tab` from a spawned task so we can satisfy
+        // both the `Target.createTarget` reply AND the
+        // `Runtime.runIfWaitingForDebugger` reply from this thread.
+        let fut = tokio::spawn({
+            let b = browser.clone();
+            async move { b.new_tab().await }
+        });
+
+        // Satisfy Target.createTarget with the targetId we will use in the
+        // attach event below.
+        let create_id = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            mock.expect_cmd("Target.createTarget"),
+        )
+        .await
+        .expect("Target.createTarget not sent within 2s");
+        assert_eq!(mock.last_sent()["params"]["url"], "about:blank");
+        mock.reply(create_id, json!({ "targetId": "T2" })).await;
+
+        // Emit the attach event for the new target — this fires the
+        // TabRegistrar observer which inserts T2 into `inner.tabs`.
+        mock.emit_event(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": "S2",
+                "targetInfo": {
+                    "targetId": "T2",
+                    "type": "page",
+                    "url": "about:blank",
+                    "attached": true,
+                },
+                "waitingForDebugger": true,
+            }),
+        )
+        .await;
+
+        // Actor releases the debugger after the observer returns Ok.
+        let release_id = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            mock.expect_cmd("Runtime.runIfWaitingForDebugger"),
+        )
+        .await
+        .expect("debugger-release did not fire within 2s");
+        mock.reply(release_id, json!({})).await;
+
+        // `Browser::new_tab` polls every 50ms — give it up to 2s wall-clock
+        // to observe the registrar insertion. In practice it lands on the
+        // first or second poll.
+        let new_tab = tokio::time::timeout(std::time::Duration::from_secs(2), fut)
+            .await
+            .expect("new_tab future did not resolve within 2s")
+            .expect("spawned task panicked")
+            .expect("new_tab returned Err");
+
+        assert_eq!(new_tab.target_id(), "T2");
+        assert_eq!(browser.tab_count().await, 2);
+        let all = browser.tabs().await;
+        assert_eq!(all.len(), 2);
+        let target_ids: std::collections::HashSet<_> =
+            all.iter().map(|t| t.target_id().to_string()).collect();
+        assert!(target_ids.contains("T1"));
+        assert!(target_ids.contains("T2"));
+
+        conn.shutdown();
+    }
+
+    /// Smoke test for the empty-tabs case: [`Browser::tabs`] returns a
+    /// (typically 1-entry) snapshot and [`Browser::tab_count`] agrees.
+    #[tokio::test]
+    async fn tabs_and_tab_count_agree_on_initial_state() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (_mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+
+        let inner = Arc::new_cyclic(|weak: &Weak<BrowserInner>| {
+            let main_session = SessionHandle::new(conn.clone(), "S1");
+            let main_input = InputController::new(input_profile.clone());
+            let main_tab = Tab::new(main_session, weak.clone(), main_input, "T1".to_string());
+            let mut map = HashMap::new();
+            map.insert("S1".to_string(), main_tab.clone());
+            BrowserInner {
+                conn: conn.clone(),
+                main_tab,
+                child: tokio::sync::Mutex::new(None),
+                _user_data: None,
+                stealth_input_profile: input_profile.clone(),
+                tabs: tokio::sync::RwLock::new(map),
+            }
+        });
+        let browser = Browser { inner };
+
+        assert_eq!(browser.tab_count().await, 1);
+        let tabs = browser.tabs().await;
+        assert_eq!(tabs.len(), 1);
+        assert_eq!(tabs[0].target_id(), "T1");
+
         conn.shutdown();
     }
 }
