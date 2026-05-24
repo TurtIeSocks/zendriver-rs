@@ -336,6 +336,29 @@ impl Tab {
             .await?;
         Ok(())
     }
+
+    /// Bring this tab to the foreground in Chrome.
+    ///
+    /// Sends `Target.activateTarget { targetId }` at browser scope (no
+    /// `session_id`) using the cached [`TabInner::target_id`]. Chrome
+    /// focuses the page target so it becomes the visible/active tab.
+    ///
+    /// Unlike `close`, this consumes `&self` — the tab remains usable
+    /// after activation. Useful in multi-tab workflows where you want to
+    /// surface a specific tab without tearing it down.
+    pub async fn activate(&self) -> Result<()> {
+        let target_id = self.target_id().to_string();
+        self.inner
+            .session
+            .connection()
+            .call_raw(
+                "Target.activateTarget",
+                json!({ "targetId": target_id }),
+                None,
+            )
+            .await?;
+        Ok(())
+    }
 }
 
 impl Tab {
@@ -683,6 +706,29 @@ mod tests {
         // Browser-scope command — no session_id.
         assert!(mock.last_sent().get("sessionId").is_none());
         mock.reply(id, json!({ "success": true })).await;
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn activate_sends_target_activate_target_with_target_id() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S99");
+        // `Tab::new_for_test` derives a deterministic target_id from the
+        // session_id: `test-target-S99` here.
+        let tab = Tab::new_for_test(sess);
+        assert_eq!(tab.target_id(), "test-target-S99");
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.activate().await }
+        });
+
+        let id = mock.expect_cmd("Target.activateTarget").await;
+        assert_eq!(mock.last_sent()["params"]["targetId"], "test-target-S99");
+        // Browser-scope command — no session_id.
+        assert!(mock.last_sent().get("sessionId").is_none());
+        mock.reply(id, json!({})).await;
         fut.await.unwrap().unwrap();
         conn.shutdown();
     }
