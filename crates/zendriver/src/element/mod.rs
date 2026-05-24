@@ -1,4 +1,29 @@
-//! `Element` — handle to a DOM node via CDP `RemoteObjectId` / `BackendNodeId`.
+//! Handle to a DOM node via CDP `RemoteObjectId` / `BackendNodeId`.
+//!
+//! [`Element`] is the result of a [`crate::Tab::find`] /
+//! [`crate::Tab::find_all`] / [`crate::Element::find`] query (or any of the
+//! traversal helpers). Actions sit on submodules:
+//!
+//! - [`mod@actions`] — click / hover / focus / scroll / set_value / clear /
+//!   upload_files.
+//! - [`mod@input`] — type_text / type_text_fast / press / press_with.
+//! - [`mod@reads`] — attribute access, innerText, outerHTML, bounding box,
+//!   visibility / enabled state.
+//! - [`mod@traversal`] — parent / nth_child.
+//! - [`mod@isolated_eval`] — true isolated-world `evaluate` (with the
+//!   element bound as `el`).
+//! - [`mod@screenshot`] — element-scoped PNG capture.
+//! - [`mod@refresh`] — auto-refresh-on-stale-handle support.
+//!
+//! ```no_run
+//! # async fn ex() -> zendriver::Result<()> {
+//! # let browser = zendriver::Browser::builder().launch().await?;
+//! # let tab = browser.main_tab();
+//! tab.goto("https://example.com").await?;
+//! let h1 = tab.find().css("h1").one().await?;
+//! assert_eq!(h1.inner_text().await?, "Example Domain");
+//! # Ok(()) }
+//! ```
 
 pub mod actions;
 pub mod input;
@@ -18,6 +43,14 @@ use crate::error::{Result, ZendriverError};
 use crate::query::selectors::{QueryScope, RemoteRef, SelectorKind};
 use crate::tab::Tab;
 
+/// Handle to a DOM node in a [`Tab`].
+///
+/// `Element` is `Clone` (cheap — wraps an `Arc`) and `Send + Sync`. Methods
+/// are grouped into thematic submodules — see the [module-level docs](self)
+/// for the map.
+///
+/// Get one via [`Tab::find`](crate::Tab::find) / [`Tab::find_all`](crate::Tab::find_all),
+/// frame queries, or element traversal helpers.
 #[derive(Clone, Debug)]
 pub struct Element {
     pub(crate) inner: Arc<ElementInner>,
@@ -157,7 +190,19 @@ impl Element {
         }
     }
 
-    /// Accessor for the parent `Tab` this element was queried from.
+    /// The parent [`Tab`] this element was queried from.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let el = tab.find().css("button").one().await?;
+    /// let _: &zendriver::Tab = el.tab();
+    /// # Ok(()) }
+    /// ```
+    #[must_use]
     pub fn tab(&self) -> &Tab {
         &self.inner.tab
     }
@@ -241,10 +286,31 @@ impl Element {
         self.call_on(function, Value::Array(full_args)).await
     }
 
-    /// Evaluate a JS expression in the main world where `el` is bound to this
-    /// element handle. Uses `Runtime.callFunctionOn` against the element's
-    /// remote object, which lives in whatever world it was created in (main
-    /// world if found via `document.querySelector`).
+    /// Evaluate a JS expression in the main world with `el` bound to this
+    /// element handle.
+    ///
+    /// Uses `Runtime.callFunctionOn` against the element's remote object,
+    /// which lives in whatever world it was created in (main world if found
+    /// via `document.querySelector`).
+    ///
+    /// For stealth-safe isolated-world evaluation, see [`Element::evaluate`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::JsException`] when the expression raises;
+    /// [`ZendriverError::Serde`] when the result cannot be decoded into `T`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let el = tab.find().css("input").one().await?;
+    /// let value: String = el.evaluate_main("el.value").await?;
+    /// # let _ = value;
+    /// # Ok(()) }
+    /// ```
     pub async fn evaluate_main<T: DeserializeOwned>(&self, js: impl AsRef<str>) -> Result<T> {
         let function = format!("function(el){{ return ({}) }}", js.as_ref());
         let result = self.call_on_main(&function, json!([])).await?;

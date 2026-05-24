@@ -34,11 +34,32 @@ use crate::tab::Tab;
 
 impl Element {
     /// Re-resolve this element's underlying CDP handle via its origin.
-    /// Updates `backend_node_id` + `remote_object_id` in place on success.
     ///
-    /// Returns `NotRefreshable` for `Evaluation` and
-    /// `Query { ElementSubtree, .. }` origins. `Traversal` origins
-    /// recursively re-resolve their parent chain.
+    /// Updates the cached node id + remote object id in place on success.
+    /// Called automatically by element actions when a CDP call fails with a
+    /// stale-node error — most users will never need to invoke this
+    /// directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::NotRefreshable`] for elements obtained
+    /// from a raw JS evaluation (no selector to replay).
+    /// [`ZendriverError::ElementStale`] when the parent chain can't be
+    /// re-resolved.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let el = tab.find().css("button").one().await?;
+    /// tab.reload().await?;
+    /// // Manually re-resolve after a navigation if a subsequent action
+    /// // is about to bypass the auto-refresh path.
+    /// el.refresh().await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn refresh(&self) -> Result<()> {
         let r = resolve_origin(&self.inner.origin, &self.inner.tab).await?;
         *self.inner.backend_node_id.lock().await = Some(r.backend_node_id);

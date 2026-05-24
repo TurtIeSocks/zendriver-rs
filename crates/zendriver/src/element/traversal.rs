@@ -1,12 +1,9 @@
-//! `Element` traversal: walk to parents + children, preserving origin so
-//! P4's chain-refresh can re-resolve the result against its parent.
+//! [`Element`] traversal: walk to parents + children.
 //!
-//! Both methods bypass `Element::call_on_main` (which forces
-//! `returnByValue: true`) and dispatch `Runtime.callFunctionOn` with
-//! `returnByValue: false` so the result carries an `objectId` we can
-//! follow up on. The reused `extract_node_ref` / `extract_array_refs`
-//! helpers from `query::selectors` handle the standard
-//! `objectId → DOM.describeNode → backendNodeId` dance.
+//! Both methods preserve origin so the auto-refresh chain can re-resolve
+//! the result against its parent. They dispatch `Runtime.callFunctionOn`
+//! with `returnByValue: false` so the result carries an `objectId` we can
+//! follow up on.
 
 use serde_json::json;
 
@@ -15,13 +12,25 @@ use crate::error::Result;
 use crate::query::selectors::{extract_array_refs, extract_node_ref};
 
 impl Element {
-    /// Return this element's `parentElement`, or `Ok(None)` if it has no
-    /// parent (root `<html>`, detached, or a text node with no parent).
+    /// Return this element's `parentElement`, or `Ok(None)` if absent.
     ///
-    /// The returned `Element` is constructed with
-    /// `ElementOrigin::Traversal { parent: <self.origin>, kind: Parent }`
-    /// so once P4 lands the full chain-refresh, a stale parent will
-    /// recursively re-resolve via this element's `Element::refresh`.
+    /// Returns `None` for the root `<html>`, detached nodes, or text nodes
+    /// with no parent. The returned `Element`'s origin tracks back to this
+    /// element so a stale parent will recursively re-resolve via
+    /// [`Element::refresh`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let el = tab.find().css("h1").one().await?;
+    /// if let Some(parent) = el.parent().await? {
+    ///     println!("parent: {}", parent.inner_text().await?);
+    /// }
+    /// # Ok(()) }
+    /// ```
     pub async fn parent(&self) -> Result<Option<Element>> {
         self.with_refresh(|| async move {
             let object_id = self.remote_object_id_cloned().await?;
@@ -57,33 +66,69 @@ impl Element {
     }
 
     /// Begin a subtree-scoped chainable query against this element.
-    /// Pick a selector kind (`.css`, `.xpath`, `.text`, `.text_exact`,
-    /// `.text_regex`, `.text_regex_with_flags`, `.role`, `.role_named`),
-    /// optionally apply modifiers (`.nth`, `.visible_only`, `.in_frame`,
-    /// `.timeout`), then terminate with `.one()` / `.one_or_none()`.
     ///
-    /// Resolution runs as `this.querySelector(...)` (CSS) or the
-    /// equivalent element-relative form for other selector kinds —
-    /// matches outside this element's subtree are not considered. The
-    /// terminal dispatches `Runtime.callFunctionOn` against this
-    /// element's remote object, distinguishing it from `Tab::find` which
-    /// dispatches `Runtime.evaluate` against the whole document.
+    /// Pick a selector kind, optionally apply modifiers, then terminate
+    /// with `.one()` or `.one_or_none()`. Matches outside this element's
+    /// subtree are not considered. The terminal dispatches
+    /// `Runtime.callFunctionOn` against this element's remote object,
+    /// distinguishing it from [`crate::Tab::find`] which scans the whole
+    /// document.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let card = tab.find().css(".card").one().await?;
+    /// let title = card.find().css("h2").one().await?;
+    /// # let _ = title;
+    /// # Ok(()) }
+    /// ```
     pub fn find(&self) -> crate::query::FindBuilder<'_> {
         crate::query::FindBuilder::new_for_element(self)
     }
 
-    /// Begin a subtree-scoped chainable query that returns ALL matches
-    /// within this element. Mirrors [`Element::find`] selectors +
-    /// modifiers (no `.nth`); terminate with `.many()` (errors on empty)
-    /// or `.many_or_empty()` (returns an empty `Vec`).
+    /// Begin a subtree-scoped chainable query that returns ALL matches.
+    ///
+    /// Mirrors [`Element::find`] selectors + modifiers (no `.nth`);
+    /// terminate with `.many()` (errors on empty) or `.many_or_empty()`
+    /// (returns an empty `Vec`).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let list = tab.find().css("ul").one().await?;
+    /// let items = list.find_all().css("li").many_or_empty().await?;
+    /// println!("{} items", items.len());
+    /// # Ok(()) }
+    /// ```
     pub fn find_all(&self) -> crate::query::FindAllBuilder<'_> {
         crate::query::FindAllBuilder::new_for_element(self)
     }
 
-    /// Return this element's `children` (HTMLCollection materialized via
-    /// `Array.from`) as `Element`s tagged with `TraversalKind::NthChild(i)`
-    /// so P4's chain-refresh can re-pick the same index after a
-    /// re-render. Empty children yield an empty `Vec`, not an error.
+    /// Return this element's child elements as a `Vec<Element>`.
+    ///
+    /// HTMLCollection is materialized via `Array.from`. The returned
+    /// elements are tagged with `NthChild(i)` so auto-refresh can re-pick
+    /// the same index after a re-render. Empty children yield an empty
+    /// `Vec`, not an error.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let nav = tab.find().css("nav").one().await?;
+    /// for link in nav.children().await? {
+    ///     println!("{}", link.inner_text().await?);
+    /// }
+    /// # Ok(()) }
+    /// ```
     pub async fn children(&self) -> Result<Vec<Element>> {
         self.with_refresh(|| async move {
             let object_id = self.remote_object_id_cloned().await?;

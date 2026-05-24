@@ -1,14 +1,21 @@
-//! Frame — handle to a single document frame within a [`crate::tab::Tab`].
+//! Handle to a single document frame within a [`crate::Tab`].
 //!
 //! A [`Frame`] wraps the CDP `frameId` plus the [`zendriver_transport::SessionHandle`]
 //! that should be used to dispatch commands against that frame. For the
 //! main frame the session is the owning tab's session (same-process); for
 //! out-of-process iframes (OOPIFs) it's a distinct child session attached
-//! via `Target.attachedToTarget` (wired in T16).
+//! via `Target.attachedToTarget`.
 //!
-//! P4 Task 12 ships the bare struct + accessors + main-frame discovery via
-//! [`crate::tab::Tab::main_frame`]. Evaluate / find / lifecycle / OOPIF /
-//! navigation land in T13–T18.
+//! ```no_run
+//! # async fn ex() -> zendriver::Result<()> {
+//! # let browser = zendriver::Browser::builder().launch().await?;
+//! # let tab = browser.main_tab();
+//! tab.goto("https://example.com").await?;
+//! let main = tab.main_frame().await?;
+//! let title: String = main.evaluate_main("document.title").await?;
+//! # let _ = title;
+//! # Ok(()) }
+//! ```
 
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -112,7 +119,20 @@ impl Frame {
         }
     }
 
-    /// The frame's CDP `frameId`. Stable for the lifetime of the frame.
+    /// The frame's CDP `frameId`.
+    ///
+    /// Stable for the lifetime of the frame.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let main = tab.main_frame().await?;
+    /// let _: &str = main.id();
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn id(&self) -> &str {
         &self.inner.frame_id
@@ -142,55 +162,114 @@ impl Frame {
         self.inner.tab.upgrade().map(|inner| Tab { inner })
     }
 
-    /// The frame's parent CDP `frameId`. `None` iff this is the main
-    /// (top-level) frame for the owning tab.
+    /// The frame's parent CDP `frameId`.
+    ///
+    /// `None` iff this is the main (top-level) frame for the owning tab.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// for f in tab.frames().await? {
+    ///     if let Some(parent) = f.parent_id() {
+    ///         println!("frame {} is a child of {parent}", f.id());
+    ///     }
+    /// }
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn parent_id(&self) -> Option<&str> {
         self.inner.parent_frame_id.as_deref()
     }
 
-    /// The frame's `name` attribute (`<iframe name="...">`). `None` for
-    /// frames without an explicit name (including the main frame in most
-    /// cases).
+    /// The frame's `name` attribute (`<iframe name="...">`).
+    ///
+    /// `None` for frames without an explicit name (including the main frame
+    /// in most cases).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// for f in tab.frames().await? {
+    ///     println!("name: {:?}", f.name());
+    /// }
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn name(&self) -> Option<&str> {
         self.inner.name.as_deref()
     }
 
-    /// `true` iff this is the main (top-level) frame for its owning tab —
-    /// equivalent to `parent_id().is_none()`.
+    /// `true` iff this is the main (top-level) frame for its owning tab.
+    ///
+    /// Equivalent to `parent_id().is_none()`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let main = tab.main_frame().await?;
+    /// assert!(main.is_main());
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn is_main(&self) -> bool {
         self.inner.parent_frame_id.is_none()
     }
 
-    /// The frame's current document URL. Snapshot under an `RwLock`; cheap
-    /// to clone the resulting `String`. The lifecycle subscriber (T15)
-    /// keeps this fresh on `Page.frameNavigated` events; until T15 lands
-    /// the value reflects the construction-time URL only.
+    /// The frame's current document URL.
+    ///
+    /// Snapshot under an `RwLock`; kept fresh by the frame lifecycle
+    /// subscriber as `Page.frameNavigated` events arrive.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let main = tab.main_frame().await?;
+    /// println!("{}", main.url().await);
+    /// # Ok(()) }
+    /// ```
     pub async fn url(&self) -> String {
         self.inner.url.read().await.clone()
     }
 
-    /// Evaluate a JavaScript expression in an isolated world bound to **this
-    /// frame** (sandboxed; no page globals visible). Result deserialized into
-    /// `T`. Throws [`ZendriverError::JsException`] when the expression raises.
+    /// Evaluate JS in an isolated world bound to **this frame**.
     ///
+    /// Sandboxed — no page globals visible. Result deserialized into `T`.
     /// Mirrors [`crate::Tab::evaluate`] but at frame granularity: each
     /// `Frame` carries its own internal isolated-world cache, so contextIds
-    /// are per-frame and don't collide across sibling frames or between a
-    /// frame and its owning tab's main-frame world.
+    /// are per-frame and don't collide across sibling frames.
     ///
-    /// First call dispatches `Page.createIsolatedWorld { frameId: self.id,
-    /// worldName: "zendriver-eval" }` on the frame's session and caches the
-    /// returned `executionContextId`. Subsequent calls reuse the cached id
-    /// and go straight to `Runtime.evaluate`.
+    /// First call dispatches `Page.createIsolatedWorld { frameId, worldName:
+    /// "zendriver-eval" }` on the frame's session and caches the returned
+    /// `executionContextId`. Subsequent calls reuse the cached id.
     ///
-    /// Unlike `Tab::evaluate`, this does *not* currently retry on
-    /// `-32000 Cannot find context with specified id` — frame-level context
-    /// invalidation is handled by the lifecycle subscriber (T15) clearing
-    /// the cache on `Page.frameNavigated`. Retry-on-stale parity with the
-    /// Tab path can be added once lifecycle is in.
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::JsException`] when the expression raises;
+    /// [`ZendriverError::Serde`] when the result cannot be decoded.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let frame = tab.main_frame().await?;
+    /// let url: String = frame.evaluate("location.href").await?;
+    /// # let _ = url;
+    /// # Ok(()) }
+    /// ```
     pub async fn evaluate<T: DeserializeOwned>(&self, js: impl AsRef<str>) -> Result<T> {
         let ctx_id = self.ensure_isolated_world().await?;
         let res = self
@@ -209,16 +288,28 @@ impl Frame {
         Self::extract_value(&res)
     }
 
-    /// Evaluate a JavaScript expression in this frame's **main world** (page
-    /// globals visible). Escape hatch when isolated-world semantics don't
-    /// fit. Result deserialized into `T`. Throws
-    /// [`ZendriverError::JsException`] when the expression raises.
+    /// Evaluate JS in this frame's **main world** (page globals visible).
     ///
-    /// Dispatches `Runtime.evaluate` *without* a `contextId` on the frame's
-    /// session. For the main frame and same-origin sub-frames this targets
-    /// the parent tab's session (which routes to the frame's main world);
-    /// for OOPIFs (T16) the frame's session is a distinct child session,
-    /// so `Runtime.evaluate` lands in the OOPIF's own main world.
+    /// Escape hatch when isolated-world semantics don't fit. Dispatches
+    /// `Runtime.evaluate` *without* a `contextId` on the frame's session.
+    /// For OOPIFs the frame's session is a distinct child session, so this
+    /// lands in the OOPIF's own main world.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::JsException`] when the expression raises.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let frame = tab.main_frame().await?;
+    /// let title: String = frame.evaluate_main("document.title").await?;
+    /// # let _ = title;
+    /// # Ok(()) }
+    /// ```
     pub async fn evaluate_main<T: DeserializeOwned>(&self, js: impl AsRef<str>) -> Result<T> {
         let res = self
             .inner
@@ -235,28 +326,50 @@ impl Frame {
         Self::extract_value(&res)
     }
 
-    /// The frame's current document HTML (serialized
-    /// `document.documentElement.outerHTML`).
+    /// The frame's current document HTML.
     ///
-    /// Backed by [`Frame::evaluate_main`] — runs in the frame's main world
-    /// so the serializer sees the actual DOM nodes, not an isolated-world
-    /// proxy view. For OOPIFs this returns the OOPIF's *own* HTML, not the
-    /// parent page's.
+    /// Returns the serialized `document.documentElement.outerHTML`. Backed
+    /// by [`Frame::evaluate_main`]. For OOPIFs this returns the OOPIF's
+    /// *own* HTML, not the parent page's.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let frame = tab.main_frame().await?;
+    /// let html = frame.content().await?;
+    /// assert!(html.contains("<html"));
+    /// # Ok(()) }
+    /// ```
     pub async fn content(&self) -> Result<String> {
         self.evaluate_main("document.documentElement.outerHTML")
             .await
     }
 
-    /// Navigate **this frame** to the given URL. Only supported for the main
-    /// frame — sub-frame navigation must be driven by mutating the parent
-    /// document's `<iframe src>` (see error message). Does NOT wait for the
-    /// load to complete; pair with [`Frame::wait_for_load`].
+    /// Navigate **this frame** to `url`.
     ///
-    /// Mirrors [`crate::tab::Tab::goto`]: enables the `Page` domain on the
-    /// frame's session so subsequent `wait_for_load` sees
-    /// `Page.frameStoppedLoading`, then dispatches `Page.navigate { url }`
-    /// and forwards Chrome's `errorText` (e.g. `net::ERR_NAME_NOT_RESOLVED`)
-    /// as [`ZendriverError::Navigation`] when present.
+    /// Only supported for the main frame — sub-frame navigation must be
+    /// driven by mutating the parent document's `<iframe src>`. Does NOT
+    /// wait for the load to complete; pair with [`Frame::wait_for_load`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Navigation`] when called on a sub-frame
+    /// or when Chrome reports `errorText` on the response.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let main = tab.main_frame().await?;
+    /// main.goto("https://example.org").await?;
+    /// main.wait_for_load().await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn goto(&self, url: impl AsRef<str>) -> Result<()> {
         if !self.is_main() {
             return Err(ZendriverError::Navigation(
@@ -280,10 +393,26 @@ impl Frame {
     }
 
     /// Wait until **this frame's** `Page.frameStoppedLoading` fires.
+    ///
     /// Subscribes on the frame's session and filters events by `frameId` so
     /// load notifications for sibling frames in the same tab don't satisfy
-    /// the wait. Default timeout matches [`crate::tab::Tab::wait_for_load`]
-    /// (30s); on expiry returns [`ZendriverError::Timeout`].
+    /// the wait. Default timeout matches [`crate::Tab::wait_for_load`] (30s).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Timeout`] on expiry.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let main = tab.main_frame().await?;
+    /// main.goto("https://example.com").await?;
+    /// main.wait_for_load().await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn wait_for_load(&self) -> Result<()> {
         let mut stream = self
             .inner
@@ -310,24 +439,43 @@ impl Frame {
     }
 
     /// Begin a chainable element query against this frame's document.
-    /// Mirrors [`crate::tab::Tab::find`] (`.css`, `.xpath`, `.text`,
-    /// `.text_exact`, `.text_regex`, `.text_regex_with_flags`, `.role`,
-    /// `.role_named`, plus `.nth`, `.visible_only`, `.in_frame`,
-    /// `.timeout`) and terminates with `.one()` / `.one_or_none()`.
     ///
-    /// Queries dispatch on **this frame's** CDP session — same as the
-    /// parent tab's session for same-origin frames, a distinct child
-    /// session for out-of-process iframes (OOPIFs). The query root is
-    /// the frame's own `document`; matches in sibling frames or the
-    /// parent document are not considered.
+    /// Mirrors [`crate::Tab::find`]. Queries dispatch on **this frame's**
+    /// CDP session; the query root is the frame's own `document` (matches
+    /// in sibling frames or the parent document are not considered).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let frame = tab.main_frame().await?;
+    /// let h1 = frame.find().css("h1").one().await?;
+    /// # let _ = h1;
+    /// # Ok(()) }
+    /// ```
     pub fn find(&self) -> crate::query::FindBuilder<'_> {
         crate::query::FindBuilder::new_for_frame(self)
     }
 
-    /// Begin a chainable element query against this frame's document
-    /// that returns ALL matches. Mirror of [`Frame::find`] selectors +
-    /// modifiers (minus `.nth`), terminated with `.many()` (errors on
-    /// empty) or `.many_or_empty()` (returns empty `Vec`).
+    /// Begin a chainable element query against this frame's document that
+    /// returns ALL matches.
+    ///
+    /// Mirror of [`Frame::find`] (no `.nth`); terminate with `.many()` or
+    /// `.many_or_empty()`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let frame = tab.main_frame().await?;
+    /// let links = frame.find_all().css("a").many_or_empty().await?;
+    /// # let _ = links;
+    /// # Ok(()) }
+    /// ```
     pub fn find_all(&self) -> crate::query::FindAllBuilder<'_> {
         crate::query::FindAllBuilder::new_for_frame(self)
     }
