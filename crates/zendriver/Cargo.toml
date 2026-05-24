@@ -111,3 +111,23 @@ required-features = []
 [[example]]
 name = "nav_history"
 required-features = []
+
+[[example]]
+name = "intercept_block_ads"
+required-features = ["interception"]
+
+[[example]]
+name = "intercept_modify_headers"
+required-features = ["interception"]
+
+[[example]]
+name = "expect_login_response"
+required-features = ["expect"]
+
+[[example]]
+name = "cloudflare_bypass"
+required-features = ["cloudflare"]
+
+[[example]]
+name = "fetcher_demo"
+required-features = ["fetcher"]
