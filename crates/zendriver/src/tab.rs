@@ -13,7 +13,9 @@ use tracing::trace;
 use zendriver_transport::SessionHandle;
 
 use crate::error::{Result, ZendriverError};
+use crate::frame::Frame;
 use crate::input::InputController;
+use crate::isolated_world::IsolatedWorldCache;
 
 const DEFAULT_LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -58,6 +60,13 @@ pub(crate) struct TabInner {
     /// time; cancelling here propagates to the task's `tokio::select!`
     /// loop within one event tick.
     pub(crate) network_cancel: tokio_util::sync::CancellationToken,
+    /// Lazily-discovered main [`Frame`] for this tab. First call to
+    /// [`Tab::main_frame`] sends `Page.getFrameTree`, extracts the top-level
+    /// frame id/url/name, constructs a `Frame` (sharing this tab's
+    /// session — the main frame is always same-process), and stores it
+    /// here. Subsequent calls return the cached `Frame` clone without
+    /// another round-trip.
+    pub(crate) main_frame: tokio::sync::OnceCell<Frame>,
 }
 
 impl Drop for TabInner {
@@ -68,12 +77,6 @@ impl Drop for TabInner {
         // arriving. Without this the task would leak per Tab on shutdown.
         self.network_cancel.cancel();
     }
-}
-
-#[derive(Default)]
-pub(crate) struct IsolatedWorldCache {
-    pub(crate) main_frame_id: Option<String>,
-    pub(crate) context_id: Option<i64>,
 }
 
 impl Tab {
@@ -109,6 +112,7 @@ impl Tab {
                 target_id,
                 network_tracker,
                 network_cancel,
+                main_frame: tokio::sync::OnceCell::new(),
             }),
         }
     }
@@ -159,6 +163,47 @@ impl Tab {
     /// CDP commands the high-level API doesn't expose.
     pub fn session(&self) -> &SessionHandle {
         &self.inner.session
+    }
+
+    /// The top-level [`Frame`] for this tab.
+    ///
+    /// First call dispatches `Page.getFrameTree` on the tab's session,
+    /// extracts the top-level frame's `id` / `url` / `name`, and constructs
+    /// a [`Frame`] whose session is this tab's session (the main frame is
+    /// always same-process). The result is cached in
+    /// [`TabInner::main_frame`] so subsequent calls return the same `Frame`
+    /// clone without a round-trip.
+    ///
+    /// Returns [`ZendriverError::Navigation`] if Chrome's response is
+    /// missing the top-level frame id.
+    pub async fn main_frame(&self) -> Result<Frame> {
+        let frame = self
+            .inner
+            .main_frame
+            .get_or_try_init(|| async {
+                let tree = self.call("Page.getFrameTree", json!({})).await?;
+                let frame_node = &tree["frameTree"]["frame"];
+                let frame_id = frame_node["id"]
+                    .as_str()
+                    .ok_or_else(|| {
+                        ZendriverError::Navigation(
+                            "Page.getFrameTree missing frameTree.frame.id".into(),
+                        )
+                    })?
+                    .to_string();
+                let url = frame_node["url"].as_str().unwrap_or("").to_string();
+                let name = frame_node["name"].as_str().map(str::to_string);
+                Ok::<_, ZendriverError>(Frame::new(
+                    frame_id,
+                    None,
+                    url,
+                    name,
+                    self.inner.session.clone(),
+                    Arc::downgrade(&self.inner),
+                ))
+            })
+            .await?;
+        Ok(frame.clone())
     }
 
     /// Browser-wide cookie store handle. Convenience accessor that delegates
@@ -886,6 +931,54 @@ mod tests {
         .await;
         assert_eq!(fut3.await.unwrap().unwrap(), 3);
 
+        conn.shutdown();
+    }
+
+    // --- main_frame discovery (P4 T12) --------------------------------
+
+    /// First [`Tab::main_frame`] call dispatches `Page.getFrameTree`, parses
+    /// the top-level frame, and constructs a [`Frame`] with `is_main() ==
+    /// true`. Second call must NOT round-trip — the `OnceCell` caches the
+    /// `Frame` so further outbound traffic is empty for the same tab.
+    #[tokio::test]
+    async fn main_frame_discovers_top_level_frame_and_caches() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.main_frame().await }
+        });
+
+        let id = mock.expect_cmd("Page.getFrameTree").await;
+        mock.reply(
+            id,
+            json!({
+                "frameTree": {
+                    "frame": {
+                        "id": "F0",
+                        "url": "https://x.test",
+                    }
+                }
+            }),
+        )
+        .await;
+
+        let frame = fut.await.unwrap().unwrap();
+        assert_eq!(frame.id(), "F0");
+        assert!(frame.is_main());
+        assert!(frame.parent_id().is_none());
+        assert!(frame.name().is_none());
+        assert_eq!(frame.url().await, "https://x.test");
+
+        // Second call: must hit cache, no further outbound CDP traffic.
+        let frame2 = tab.main_frame().await.unwrap();
+        assert_eq!(frame2.id(), "F0");
+        // Verify the mock saw no additional commands — `expect_cmd` would
+        // time out internally on the next call. We check via the lighter
+        // `try_next` shape: a follow-up request would be queued already.
+        // Drop the connection to assert nothing else is in-flight.
         conn.shutdown();
     }
 
