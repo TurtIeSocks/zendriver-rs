@@ -72,6 +72,19 @@ impl PausedRequest {
     /// Dispatches `Fetch.continueRequest { requestId }` with no overrides.
     /// Use [`modify_and_continue`](Self::modify_and_continue) instead if any
     /// field needs to be rewritten.
+    ///
+    /// ```no_run
+    /// # use futures::StreamExt;
+    /// # async fn ex(tab: &zendriver_transport::SessionHandle)
+    /// #   -> Result<(), zendriver_interception::InterceptionError> {
+    /// use zendriver_interception::InterceptBuilder;
+    ///
+    /// let mut stream = Box::pin(InterceptBuilder::new(tab).subscribe());
+    /// while let Some(req) = stream.next().await {
+    ///     req.continue_().await?;
+    /// }
+    /// # Ok(()) }
+    /// ```
     pub async fn continue_(self) -> Result<(), InterceptionError> {
         self.session
             .call(
@@ -86,6 +99,19 @@ impl PausedRequest {
     ///
     /// Dispatches `Fetch.failRequest { requestId, errorReason }`. The exact
     /// reason surfaces to JS as the rejected `fetch()` / `XHR` error.
+    ///
+    /// ```no_run
+    /// # use futures::StreamExt;
+    /// # async fn ex(tab: &zendriver_transport::SessionHandle)
+    /// #   -> Result<(), zendriver_interception::InterceptionError> {
+    /// use zendriver_interception::{AbortReason, InterceptBuilder};
+    ///
+    /// let mut stream = Box::pin(InterceptBuilder::new(tab).subscribe());
+    /// if let Some(req) = stream.next().await {
+    ///     req.abort(AbortReason::BlockedByClient).await?;
+    /// }
+    /// # Ok(()) }
+    /// ```
     ///
     /// [`Network.ErrorReason`]: https://chromedevtools.github.io/devtools-protocol/tot/Network/#type-ErrorReason
     pub async fn abort(self, reason: AbortReason) -> Result<(), InterceptionError> {

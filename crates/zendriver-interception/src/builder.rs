@@ -95,6 +95,17 @@ impl<'tab> InterceptBuilder<'tab> {
     /// shim) can construct it from a `&SessionHandle` without going through
     /// a trait. End users go through `Tab::intercept()` rather than calling
     /// this directly.
+    ///
+    /// ```no_run
+    /// # async fn ex(tab: &zendriver_transport::SessionHandle)
+    /// #   -> Result<(), zendriver_interception::InterceptionError> {
+    /// use zendriver_interception::InterceptBuilder;
+    ///
+    /// let _handle = InterceptBuilder::new(tab)
+    ///     .block("*/tracker.js")?
+    ///     .start();
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn new(tab: &'tab SessionHandle) -> Self {
         Self {
@@ -213,8 +224,8 @@ impl<'tab> InterceptBuilder<'tab> {
 
     /// Activate the rule-based interception loop.
     ///
-    /// Spawns the background [`run_actor`] task with the registered rules and
-    /// CDP `RequestPattern` list, and returns an [`InterceptHandle`] whose
+    /// Spawns the background actor task with the registered rules and CDP
+    /// `RequestPattern` list, and returns an [`InterceptHandle`] whose
     /// [`Drop`] (or explicit [`stop`](InterceptHandle::stop)) tears the
     /// actor down.
     ///

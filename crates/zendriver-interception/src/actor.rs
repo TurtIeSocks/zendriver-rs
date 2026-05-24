@@ -1,16 +1,16 @@
 //! Background interception actor.
 //!
-//! [`run_actor`] is the rule-driven loop spawned by
-//! [`InterceptBuilder::start`](crate::builder::InterceptBuilder::start) in
-//! Task 7. It owns a single tab's `Fetch.*` interception lifecycle:
+//! The crate-private `run_actor` is the rule-driven loop spawned by
+//! [`InterceptBuilder::start`](crate::builder::InterceptBuilder::start). It
+//! owns a single tab's `Fetch.*` interception lifecycle:
 //!
 //! 1. Subscribes to `Fetch.requestPaused` on the supplied [`SessionHandle`]
-//!    **before** firing `Fetch.enable`. Mirrors the P4 subscriber pattern
-//!    (see [`zendriver::frame::lifecycle`] /
-//!    [`zendriver::network_idle::InFlightTracker`]) — events Chrome fires
-//!    between the enable round-trip and our subscription would otherwise
-//!    be dropped, and the [`MockConnection`](zendriver_transport::testing::MockConnection)
-//!    test harness never replies to fire-and-forget enables anyway.
+//!    **before** firing `Fetch.enable`. Mirrors the subscriber pattern used
+//!    by the zendriver core's frame-lifecycle and network-idle trackers —
+//!    events Chrome fires between the enable round-trip and our subscription
+//!    would otherwise be dropped, and the `MockConnection` test harness in
+//!    `zendriver-transport` (gated `feature = "testing"`) never replies to
+//!    fire-and-forget enables anyway.
 //! 2. Sends `Fetch.enable { patterns, handleAuthRequests: false }` with the
 //!    explicit pattern list supplied by the builder.
 //! 3. Per `Fetch.requestPaused` event: walks `rules` in registration order,

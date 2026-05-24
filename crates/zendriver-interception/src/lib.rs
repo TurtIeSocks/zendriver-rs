@@ -1,9 +1,33 @@
-//! Network interception via the Fetch CDP domain.
+//! Network interception via the `Fetch` CDP domain.
 //!
-//! Two entry points:
-//! - Rule-based: register declarative block/redirect/respond rules via
-//!   `InterceptBuilder` and start a background actor.
-//! - Stream: subscribe to paused requests and drive them manually.
+//! Two entry points, both built off [`InterceptBuilder`]:
+//!
+//! - **Rule-based** — chain
+//!   [`block`](builder::InterceptBuilder::block) /
+//!   [`redirect`](builder::InterceptBuilder::redirect) /
+//!   [`respond`](builder::InterceptBuilder::respond) /
+//!   [`modify_request`](builder::InterceptBuilder::modify_request) and call
+//!   [`start`](builder::InterceptBuilder::start). The returned
+//!   [`InterceptHandle`] tears the actor down on drop.
+//! - **Stream** — call
+//!   [`subscribe`](builder::InterceptBuilder::subscribe) to get a `Stream` of
+//!   [`PausedRequest`]; release each pause by calling one of
+//!   [`continue_`](PausedRequest::continue_), [`abort`](PausedRequest::abort),
+//!   [`respond`](PausedRequest::respond), or
+//!   [`modify_and_continue`](PausedRequest::modify_and_continue).
+//!
+//! ```no_run
+//! # async fn ex(tab: &zendriver_transport::SessionHandle)
+//! #   -> Result<(), zendriver_interception::InterceptionError> {
+//! use zendriver_interception::InterceptBuilder;
+//!
+//! let _handle = InterceptBuilder::new(tab)
+//!     .block("*/ads/*")?
+//!     .redirect("*/old/*", "https://example.com/new/")?
+//!     .start();
+//! // _handle stays in scope -> interception live.
+//! # Ok(()) }
+//! ```
 
 pub mod actor;
 pub mod builder;
