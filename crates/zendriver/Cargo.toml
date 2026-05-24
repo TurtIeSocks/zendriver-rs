@@ -19,6 +19,9 @@ integration-tests = ["dep:wiremock", "dep:serial_test", "interception", "expect"
 # Nightly stealth tests against external sites (sannysoft, areyouheadless).
 # Separate from integration-tests because external sites flake.
 stealth-tests = ["integration-tests"]
+# Nightly cloudflare bypass tests against external demos (nopecha).
+# Separate from integration-tests because external sites flake.
+cloudflare-tests = ["cloudflare", "integration-tests"]
 # Re-exports the MockConnection testing helper for downstream users.
 testing = ["zendriver-transport/testing"]
 # Network interception via the Fetch CDP domain.

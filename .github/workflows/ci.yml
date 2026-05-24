@@ -6,6 +6,7 @@ on:
   pull_request:
   schedule:
     - cron: '0 6 * * *'
+    - cron: '0 7 * * *'
 
 env:
   CARGO_TERM_COLOR: always
@@ -58,7 +59,7 @@ jobs:
       - run: cargo test --workspace --features integration-tests --test '*' --locked -- --test-threads=1
 
   nightly-stealth-tests:
-    if: github.event_name == 'schedule'
+    if: github.event_name == 'schedule' && github.event.schedule == '0 6 * * *'
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -68,3 +69,16 @@ jobs:
       - name: Install Chromium
         run: sudo apt-get update && sudo apt-get install -y chromium-browser
       - run: cargo test --workspace --features stealth-tests --test stealth_phase2 --locked -- --test-threads=1
+
+  nightly-cloudflare-tests:
+    if: github.event_name == 'schedule' && github.event.schedule == '0 7 * * *'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Chromium
+        run: sudo apt-get update && sudo apt-get install -y chromium-browser
+      - run: cargo test --workspace --features cloudflare-tests --test cloudflare_phase5 --locked -- --test-threads=1
+
