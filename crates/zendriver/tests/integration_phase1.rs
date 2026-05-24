@@ -27,6 +27,12 @@ async fn click_dispatches_event_to_dom_listener() {
 
     let browser = Browser::builder()
         .headless(true)
+        // GitHub Actions runs as root in the runner container; Chromium's
+        // user-namespace sandbox refuses to start without `--no-sandbox`,
+        // and the small `/dev/shm` (~64 MB) in the runner makes the
+        // renderer crash unless `/tmp` is used instead.
+        .arg("--no-sandbox")
+        .arg("--disable-dev-shm-usage")
         .launch()
         .await
         .expect("launch failed");
