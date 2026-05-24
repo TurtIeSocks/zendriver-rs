@@ -7,6 +7,15 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+readme = "../../README.md"
+homepage = "https://github.com/cdpdriver/zendriver-rs"
+documentation = "https://docs.rs/zendriver-stealth"
+keywords = ["stealth", "anti-detection", "browser", "cdp", "zendriver"]
+categories = ["web-programming"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [lints]
 workspace = true
