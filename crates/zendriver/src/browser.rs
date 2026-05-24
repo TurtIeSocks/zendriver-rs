@@ -429,7 +429,9 @@ impl BrowserBuilder {
         // See cdpdriver/zendriver#13.
         v.push("--password-store=basic".to_string());
         v.push("--disable-save-password-bubble".to_string());
-        v.push("--disable-features=PasswordManagerOnboarding,AutofillServerCommunication".to_string());
+        v.push(
+            "--disable-features=PasswordManagerOnboarding,AutofillServerCommunication".to_string(),
+        );
         if self.headless.unwrap_or(true) {
             v.push("--headless=new".to_string());
             v.push("--disable-gpu".to_string());
@@ -491,8 +493,7 @@ pub(crate) struct BrowserInner {
     /// cdpdriver/zendriver#208.
     #[cfg(feature = "interception")]
     #[allow(dead_code)]
-    pub(crate) proxy_auth_handle:
-        std::sync::OnceLock<zendriver_interception::InterceptHandle>,
+    pub(crate) proxy_auth_handle: std::sync::OnceLock<zendriver_interception::InterceptHandle>,
 }
 
 /// [`TargetObserver`] that maintains [`BrowserInner::tabs`] in step with

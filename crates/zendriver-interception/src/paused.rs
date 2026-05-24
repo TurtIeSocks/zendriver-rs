@@ -256,10 +256,7 @@ impl Drop for PausedRequest {
         let request_id = std::mem::take(&mut self.request_id);
         tokio::spawn(async move {
             if let Err(e) = session
-                .call(
-                    "Fetch.continueRequest",
-                    json!({ "requestId": request_id }),
-                )
+                .call("Fetch.continueRequest", json!({ "requestId": request_id }))
                 .await
             {
                 tracing::debug!(

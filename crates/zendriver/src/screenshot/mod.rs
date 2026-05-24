@@ -212,7 +212,6 @@ impl<'tab> ScreenshotBuilder<'tab> {
     /// image clipped to stale metrics. For deterministic full-page
     /// screenshots, pause page activity before calling [`Self::bytes`]
     /// (e.g. await [`crate::tab::Tab::wait_for_idle`] first).
-
     ///
     /// # Examples
     ///

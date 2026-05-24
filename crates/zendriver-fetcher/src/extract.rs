@@ -215,7 +215,10 @@ mod tests {
         {
             let mut writer = zip::ZipWriter::new(&mut buf);
             writer
-                .start_file("not-chrome/chrome", zip::write::SimpleFileOptions::default())
+                .start_file(
+                    "not-chrome/chrome",
+                    zip::write::SimpleFileOptions::default(),
+                )
                 .unwrap();
             writer.write_all(b"x").unwrap();
             writer.finish().unwrap();

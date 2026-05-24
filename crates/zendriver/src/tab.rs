@@ -128,6 +128,12 @@ pub(crate) struct TabInner {
     /// subscriber streams so cancellation unblocks the select even if no
     /// events are arriving.
     pub(crate) frame_lifecycle_cancel: tokio_util::sync::CancellationToken,
+    /// Oneshot receiver published by [`Tab::goto`] (subscribes to
+    /// `Page.frameStoppedLoading` BEFORE issuing `Page.navigate` so the
+    /// event can't race past) and consumed by [`Tab::wait_for_load`].
+    /// `None` when there is no pending navigation — `wait_for_load` falls
+    /// back to a fresh subscribe + `document.readyState` short-circuit.
+    pub(crate) pending_load: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
 }
 
 impl Drop for TabInner {
@@ -211,6 +217,7 @@ impl Tab {
                 download_setup: tokio::sync::OnceCell::new(),
                 frames,
                 frame_lifecycle_cancel,
+                pending_load: tokio::sync::Mutex::new(None),
             }
         });
 
@@ -552,6 +559,25 @@ impl Tab {
     pub async fn goto(&self, url: impl AsRef<str>) -> Result<()> {
         // Enable Page domain so we get FrameStoppedLoading events.
         self.call("Page.enable", json!({})).await?;
+        // Subscribe to Page.frameStoppedLoading BEFORE issuing Page.navigate.
+        // The transport's event bus is a tokio broadcast channel, so a
+        // subscriber created after the event has already been published can
+        // never observe it. By subscribing first, then handing a oneshot to
+        // `wait_for_load`, we guarantee the next load event lands in our
+        // receiver regardless of how fast the page loads (e.g. localhost
+        // wiremock fixtures in CI).
+        let mut stream = self
+            .inner
+            .session
+            .subscribe::<Value>("Page.frameStoppedLoading");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            if stream.next().await.is_some() {
+                let _ = tx.send(());
+            }
+        });
+        *self.inner.pending_load.lock().await = Some(rx);
+
         let url_s = url.as_ref().to_string();
         let res = self.call("Page.navigate", json!({ "url": url_s })).await?;
         if let Some(err) = res.get("errorText").and_then(|v| v.as_str()) {
@@ -584,12 +610,39 @@ impl Tab {
     /// # Ok(()) }
     /// ```
     pub async fn wait_for_load(&self) -> Result<()> {
-        // Subscribe before any `goto` to avoid missing the event; in P1 we
-        // accept that callers may have a small race. P3+ revisits.
+        // Preferred path: consume the oneshot stashed by `goto`, which
+        // subscribed to `Page.frameStoppedLoading` BEFORE the navigation
+        // request — guaranteed delivery.
+        if let Some(rx) = self.inner.pending_load.lock().await.take() {
+            timeout(DEFAULT_LOAD_TIMEOUT, rx)
+                .await
+                .map_err(|_| ZendriverError::Timeout(DEFAULT_LOAD_TIMEOUT))?
+                .map_err(|_| ZendriverError::Navigation("page event stream closed".into()))?;
+            return Ok(());
+        }
+        // Fallback: no pending navigation (e.g. caller invoked
+        // `wait_for_load` without a preceding `goto`, or after the page
+        // navigated itself). Subscribe + short-circuit on the current
+        // `document.readyState` so an already-loaded page returns
+        // immediately rather than blocking on a missed event.
         let mut stream = self
             .inner
             .session
             .subscribe::<Value>("Page.frameStoppedLoading");
+        let ready: Option<String> = self
+            .call(
+                "Runtime.evaluate",
+                json!({
+                    "expression": "document.readyState",
+                    "returnByValue": true,
+                }),
+            )
+            .await
+            .ok()
+            .and_then(|v| v.get("result")?.get("value")?.as_str().map(str::to_owned));
+        if ready.as_deref() == Some("complete") {
+            return Ok(());
+        }
         timeout(DEFAULT_LOAD_TIMEOUT, stream.next())
             .await
             .map_err(|_| ZendriverError::Timeout(DEFAULT_LOAD_TIMEOUT))?

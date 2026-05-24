@@ -33,7 +33,7 @@ pub enum ZendriverError {
 
     /// Lower-level transport (WebSocket) failure.
     #[error("transport: {0}")]
-    Transport(#[from] zendriver_transport::TransportError),
+    Transport(Box<zendriver_transport::TransportError>),
 
     /// Chrome returned a CDP RPC error (a method call returned `error.code` /
     /// `error.message`).
@@ -112,28 +112,61 @@ pub enum ZendriverError {
 
     /// Stealth fingerprint resolution failed.
     #[error("stealth: {0}")]
-    Stealth(#[from] zendriver_stealth::StealthError),
+    Stealth(Box<zendriver_stealth::StealthError>),
 
     /// Request-interception sub-crate error. Gated by feature `interception`.
     #[cfg(feature = "interception")]
     #[error("interception: {0}")]
-    Interception(#[from] zendriver_interception::InterceptionError),
+    Interception(Box<zendriver_interception::InterceptionError>),
 
     /// Cloudflare bypass sub-crate error. Gated by feature `cloudflare`.
     #[cfg(feature = "cloudflare")]
     #[error("cloudflare: {0}")]
-    Cloudflare(#[from] zendriver_cloudflare::CloudflareError),
+    Cloudflare(Box<zendriver_cloudflare::CloudflareError>),
 
     /// Chrome-for-Testing fetcher error. Gated by feature `fetcher`.
     #[cfg(feature = "fetcher")]
     #[error("fetcher: {0}")]
-    Fetcher(#[from] zendriver_fetcher::FetcherError),
+    Fetcher(Box<zendriver_fetcher::FetcherError>),
+}
+
+impl From<zendriver_transport::TransportError> for ZendriverError {
+    fn from(e: zendriver_transport::TransportError) -> Self {
+        Self::Transport(Box::new(e))
+    }
+}
+
+impl From<zendriver_stealth::StealthError> for ZendriverError {
+    fn from(e: zendriver_stealth::StealthError) -> Self {
+        Self::Stealth(Box::new(e))
+    }
+}
+
+#[cfg(feature = "interception")]
+impl From<zendriver_interception::InterceptionError> for ZendriverError {
+    fn from(e: zendriver_interception::InterceptionError) -> Self {
+        Self::Interception(Box::new(e))
+    }
+}
+
+#[cfg(feature = "cloudflare")]
+impl From<zendriver_cloudflare::CloudflareError> for ZendriverError {
+    fn from(e: zendriver_cloudflare::CloudflareError) -> Self {
+        Self::Cloudflare(Box::new(e))
+    }
+}
+
+#[cfg(feature = "fetcher")]
+impl From<zendriver_fetcher::FetcherError> for ZendriverError {
+    fn from(e: zendriver_fetcher::FetcherError) -> Self {
+        Self::Fetcher(Box::new(e))
+    }
 }
 
 impl From<CallError> for ZendriverError {
     fn from(e: CallError) -> Self {
         match e {
-            CallError::Transport(t) => ZendriverError::Transport(t),
+            CallError::Transport(t) => ZendriverError::Transport(Box::new(t)),
             CallError::Rpc(code, message, data) => {
                 // Special-case: Chrome returns -32000 "Cannot find context in
                 // which to perform call" when the page navigated out from
