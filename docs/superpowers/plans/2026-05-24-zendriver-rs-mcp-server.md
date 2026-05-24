@@ -12,6 +12,140 @@
 
 ---
 
+## API Reality (supersedes task code where conflict)
+
+Recon against live source (rmcp v1.7.0 at `/Users/rin/GitHub/rust-sdk`, zendriver at `crates/zendriver/src/`) found gaps between plan code blocks and actual APIs. **When task code conflicts with anything below, the truth below wins** — adapt the task code to match.
+
+### rmcp v1.7.0 — server pattern is MACRO-based, not method-call
+
+The plan's `server.tool(name, desc, handler)` pattern is wrong. Real rmcp uses `#[tool_router]` on an impl block, `#[tool]` on methods, and emits `#[tool_handler] impl ServerHandler` for you.
+
+**Cargo features:** `["server", "macros", "schemars", "transport-streamable-http-server"]`. `schemars` **1.0+** (not 0.8 as plan said).
+
+**Canonical pattern (use as template for all tool modules):**
+
+```rust
+use rmcp::{handler::server::wrapper::Parameters, tool_router, schemars, ServiceExt, transport::stdio, ErrorData};
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct OpenInput { headless: bool }
+
+#[derive(Clone)]
+pub struct ZendriverServer {
+    pub state: std::sync::Arc<tokio::sync::Mutex<crate::state::SessionState>>,
+}
+
+#[tool_router(server_handler)]
+impl ZendriverServer {
+    #[tool(description = "Launch Chrome with stealth defaults.")]
+    async fn browser_open(&self, Parameters(input): Parameters<OpenInput>) -> Result<String, ErrorData> {
+        let mut s = self.state.lock().await;
+        // ... call zendriver, populate s.browser ...
+        Ok("opened".into())
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let handler = ZendriverServer { state: std::sync::Arc::new(tokio::sync::Mutex::new(crate::state::SessionState::new())) };
+    let service = handler.serve(stdio()).await?;
+    service.waiting().await?;
+    Ok(())
+}
+```
+
+**Implications:**
+- Drop the plan's per-module `pub fn register(server, state)` pattern. Instead, every tool is a `#[tool]` method on `ZendriverServer` (one big struct).
+- Tools that mutate state lock `self.state` (already an `Arc<Mutex<_>>`).
+- For 51 tools in one impl block: it works (rmcp's calculator example has many) but split via `impl` blocks per category if it grows unwieldy. **Multiple `#[tool_router]` impls on the same struct are NOT supported** — keep tools in one impl OR use sub-modules each with their own state-wrapper struct (overkill for v0).
+- Recommended: keep tools as standalone async fns in `tools/*.rs` for organization, and have the canonical `#[tool_router]` impl block in `server.rs` call into them. The impl block delegates:
+  ```rust
+  #[tool_router(server_handler)]
+  impl ZendriverServer {
+      #[tool(description = "Launch Chrome with stealth defaults.")]
+      async fn browser_open(&self, p: Parameters<lifecycle::OpenInput>) -> Result<Json<lifecycle::OpenOutput>, ErrorData> {
+          crate::tools::lifecycle::open(self.state.clone(), p.0).await.map(Json)
+      }
+      // ... 50 more delegators ...
+  }
+  ```
+
+**Structured output:** wrap returns in `rmcp::Json<T>` (T: Serialize + JsonSchema). Plain strings auto-wrap as text content. For images use `Content::image(base64_data, "image/png")`.
+
+**Error type:** `rmcp::ErrorData` (re-exported from `rmcp::model::ErrorData`). Constructors `ErrorData::invalid_request(msg, Some(json))`, `invalid_params`, `internal_error`. The `data: Option<Value>` slot carries our `_meta.suggested_next` payload.
+
+**stdio:** `handler.serve(rmcp::transport::stdio()).await?.waiting().await?`. `stdio()` returns `(Stdin, Stdout)`.
+
+**HTTP server:** `rmcp::transport::streamable_http_server::StreamableHttpService::new(factory, LocalSessionManager::default().into(), StreamableHttpServerConfig::default())`. Factory is `Fn() -> Result<H, _>` — called once per session, returns a fresh `ZendriverServer { state: fresh Arc<Mutex<SessionState>> }`. Mount under axum: `axum::Router::new().nest_service("/mcp", service)`.
+
+**Server identity / capabilities:** override `get_info()` in a separate `impl ServerHandler` (or rely on `#[tool_handler]` defaults that auto-pick name+version from `CARGO_PKG_*` env). Capabilities are auto-emitted by `#[tool_handler]` for tools.
+
+**Client (for tests):** `().serve(TokioChildProcess::new(Command::new(bin)))` over stdio; `().serve(StreamableHttpClientTransport::new(uri)?)` over HTTP. Then `client.peer().list_tools(Default::default()).await` and `client.peer().call_tool(CallToolRequestParams::new(name).with_arguments(json))`.
+
+### zendriver API corrections
+
+| Plan said | Reality |
+|---|---|
+| `Browser::version() / Browser::headless()` accessors | **do not exist** — drop from `browser_status` output |
+| `b.tabs()` sync | `b.tabs(&self).await -> Vec<Tab>` async |
+| `b.new_tab(url)` | `b.new_tab()` no-arg; `b.new_tab_at(url)` |
+| `Tab::url() -> String` sync | `tab.url(&self).await -> Result<url::Url>` async; `.to_string()` to coerce |
+| `Tab::title() -> String` sync | `tab.title(&self).await -> Result<String>` async |
+| `Tab::frames() -> Vec<Frame>` sync | `tab.frames(&self).await -> Result<Vec<Frame>>` async |
+| `Tab::frame(id)` lookup-by-id | only `frame_by_url(substr)` and `frame_by_name(name)`; loop `tab.frames().await` + match `f.id() == id` for ID lookup |
+| `Tab::accessibility_tree()` | **does not exist** — use `tab.evaluate_main::<serde_json::Value>("...")` against the `chrome.runtime` AX bridge OR call raw CDP `Accessibility.getFullAXTree` via `tab.session()`; simplest for v0 is to derive a tree from `document.body.innerHTML` + a JS walker, then format |
+| `Tab::wait_for_idle(Duration)` | `wait_for_idle()` uses defaults; `wait_for_idle_with(idle_time, timeout)` for custom |
+| `Element::text()` | `element.inner_text(&self).await -> Result<String>` |
+| `Element::tag_name()` | **does not exist** — derive via `element.attr("nodeName").await` or eval `el => el.tagName` |
+| `Storage::all()` | `storage.get_all(&self).await -> Result<HashMap<String, String>>` |
+| `Storage::delete(key)` | `storage.remove(&self, key).await -> Result<()>` |
+| `CookieJar::set_all(&[CookieParams])` | `cookies.set_many(Vec<Cookie>).await -> Result<()>`; `set(Cookie)` for single |
+| `CookieJar::for_url(url)` takes `&str` | takes `&url::Url` — parse with `url::Url::parse(s)?` |
+| `CookieJar::delete(name, url)` | `cookies.delete(&self, name, domain: Option<&str>, path: Option<&str>).await` |
+| `CookieJar::save_to_file / load_from_file` | **not in lib** — implement at MCP layer: `cookies.all().await?` → `serde_json::to_writer`; load = `serde_json::from_reader` → `cookies.set_many(...)` |
+| `CookieParams` separate from `Cookie` | one `Cookie` struct — fields `name, value, domain, path, expires, http_only, secure, same_site, url` |
+| `ZendriverError::NoTab / BrowserNotOpen` | **don't exist** — actual variants: `Browser, Transport, Cdp, ElementNotFound, Timeout, Navigation, JsException, ElementStale, NotRefreshable, NotActionable, FrameNotFound, TabNotFound, Cookie, Storage, HistoryNavigation, Serde, Io, Stealth, Interception(feat), Cloudflare(feat), Fetcher(feat)`. Use `TabNotFound` for missing tab; add a custom **MCP-layer** error enum for "browser not open" + "expectation not found" + "feature disabled". Don't try to extend `ZendriverError`. |
+| `FindBuilder::role(impl Into<String>)` | takes typed `zendriver::AriaRole` enum. Selector arg's `role: String` must map to `AriaRole` via `AriaRole::from_str`. |
+| `FindBuilder::role_named(role: String, name)` | `(AriaRole, name)`. Same enum mapping. |
+| `FindBuilder::text_regex(String)` | takes parsed `regex::Regex`. Compile from string at handler entry: `regex::Regex::new(&pattern).map_err(...)` |
+| `FindBuilder::visible_only()` unary | `visible_only(bool)` — pass `sel.visible_only` directly |
+| `FindBuilder::one_or_none()` | exists — use this instead of catching ElementNotFound to return `found: false` |
+| `FindAllBuilder::many_or_empty()` | exists — for `browser_find_all` (avoids ElementNotFound on empty result) |
+| `Element::press(impl Into<String>)` | takes typed `zendriver::Key` enum. Map `key: String` ("Enter", "Tab", etc.) via `Key::from_str` or match. |
+| `Element::click_with(ClickOptions)` | `ClickOptions { button: MouseButton, click_count: u32, ... }` — confirm exact fields in `crates/zendriver/src/element/actions.rs` |
+| `Element::upload_files(&[paths])` | takes `&[impl AsRef<Path>]` — `&[&str]` works |
+| `ScreenshotBuilder::capture()` / `clip_element(&el)` | `.bytes() -> Result<Vec<u8>>`; clipping is `.clip(BoundingBox)` — fetch el's bbox first via `element.bounding_box().await?` |
+| `Tab::screenshot()` builder via method | use `tab.screenshot_builder()` for the builder; `tab.screenshot()` is a convenience returning bytes directly with defaults |
+| `Frame::frame_id() / is_oopif()` | `frame.id() -> &str`; **no `is_oopif`** — drop from `FrameSummary`. Use `frame.is_main()` if needed. `frame.url()` returns plain `String`, not `Result`. |
+| `Tab::expect_*` register/await pattern | already in lib: `tab.expect_request(matcher).timeout(d).matched().await -> Result<MatchedRequest>` (one-call await). For MCP we still need the 3-tool split (register → await later) but the lib's matcher type is `impl Into<UrlMatcher>`. Inside `browser_expect_register`, spawn a tokio task holding the `RequestExpectation::matched()` future and pipe result through a `tokio::sync::oneshot` channel keyed by expectation_id. `browser_expect_await` consumes the receiver. |
+| Cloudflare API | `tab.cloudflare() -> CloudflareBypass<'_>`, then `.wait_for_clearance(timeout).await -> Result<ClearanceOutcome, CloudflareError>`. **`ClearanceOutcome` variants: `TokenAcquired(String)`, `ChallengeGone`** — no `Solved`, no `Timeout` (timeout is `Err(CloudflareError)`). Map MCP `outcome` enum accordingly: timeout-error → `Outcome::Timeout`, `TokenAcquired(_)` → `Outcome::Solved`, `ChallengeGone` → `Outcome::ChallengeGone`. |
+| Interception API | `tab.intercept() -> InterceptBuilder` with chained `.pattern("...").at_request().block()? / .redirect(pat, repl) / .respond(pat, ResponseInfo) / .modify_request(pat, f)` then `.start() -> InterceptHandle`. **There's no per-rule remove** — handle drops to stop interception. MCP layer must wrap: store the `InterceptHandle` keyed by a generated `rule_id` UUID; `browser_intercept_remove_rule` drops the handle from the map. **One handle per "rule" simplification** — if user wants multiple rules they get multiple handles (each `tab.intercept()...start()`). |
+| Fetcher API | `Fetcher::new()` not `::builder()`. Methods: `.cache_dir(p) / .version(VersionSpec) / .platform(p) / .on_progress(cb) / .manifest_url(url) / .expected_sha256(sha) / .ensure_chrome().await -> Result<PathBuf>`. **`ensure_chrome` returns `PathBuf` only, no version metadata** — derive version by inspecting the path or by storing `VersionSpec` separately. **No `cache::list` for listing installed Chromes** — drop `browser_list_installed_chromes` or implement by reading the cache dir directly. |
+| `StealthProfile` enum `Auto/Native/Spoofed` | actually `StealthProfile::off() / native() / spoofed()` constructors with builder modifiers (`.fingerprint() / .memory_gb() / .cpu_count() / .chrome_version() / .platform() / .locale() / .timezone() / .user_agent() / .bypass_csp() / .arg() / .args()`). For MCP, the `stealth_profile_choice` enum stays as `Auto/Native/SpoofMacos/SpoofLinux/SpoofWindows` at the wire level, but the handler maps to `StealthProfile`: `Auto → StealthProfile::native()` (sysinfo auto-detect happens inside `native()`), `SpoofMacos → StealthProfile::spoofed().platform(Platform::Mac)`, etc. |
+
+### Net plan-level deltas
+
+1. **Server architecture:** one `ZendriverServer` struct in `server.rs` carrying `Arc<Mutex<SessionState>>`. One `#[tool_router(server_handler)] impl ZendriverServer { ... }` block delegating to per-module async fns in `tools/*.rs`. The `tools/` module structure stays; the `register()` fn pattern goes.
+2. **Custom error layer:** add `errors::McpServerError` (or just have `map_error` return `ErrorData` and map MCP-specific cases inline before reaching `ZendriverError`).
+3. **`Tab::accessibility_tree()` is fake** — for `browser_snapshot`, derive AX-equivalent via `tab.evaluate_main::<serde_json::Value>("(() => buildAxTree(document.body))()")` with a JS walker bundled into the snapshot module, OR drop the AX-tree story for v0 and ship only `browser_html` + `browser_screenshot`. **Recommendation:** drop AX tree for v0; ship `browser_html` (trimmed) as the "see structure" tool. Smaller surface, real backing.
+4. **Cookie persist:** implement at MCP layer (`serde_json` round-trip of `Vec<Cookie>` to disk).
+5. **Storage method names:** `get_all`/`remove`, not `all`/`delete`.
+6. **Frame model:** drop `is_oopif` from `FrameSummary`. Use `is_main` + `parent_id` instead.
+7. **Selectors role:** map MCP `role: String` to `zendriver::AriaRole` enum (and surface a clean error if unknown role string).
+8. **Selectors regex:** parse `text_regex: String` to `regex::Regex` in `resolve()`.
+9. **Key enum:** map MCP `key: String` for `browser_press` to `zendriver::Key` enum.
+10. **Url type:** `Tab::url()` returns `url::Url` — `.as_str().to_string()` to get a `String` for output.
+11. **Async tabs():** `Browser::tabs()` is async — handlers needing the tab list must `.await`.
+12. **Element discovery:** no `Element::tag_name()`. For `ElementDescriptor.tag`, do `let tag: String = el.evaluate("el => el.tagName.toLowerCase()").await?;` or skip the `tag` field for v0 (use attrs instead).
+13. **Interception simplification:** v0 supports one-rule-per-handle. No multi-rule per InterceptBuilder. `browser_intercept_add_rule` creates one handle per call. `_clear_rules` drops all handles in `s.rules`.
+14. **Fetcher list tool:** drop `browser_list_installed_chromes` (no lib support); add later if useful. Drops total tool count from 51 → 50.
+
+### Updated total tool count
+
+50 (was 51) after dropping `browser_list_installed_chromes`. Also reconsider `browser_snapshot` (drop AX tree → -1 = 49) but keep `browser_html` + `browser_screenshot` for "see the page" — net 49 tools for v0.
+
+---
+
 ## File structure
 
 See spec section "File layout" for the full tree. New paths:
