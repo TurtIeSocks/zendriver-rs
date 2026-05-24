@@ -86,6 +86,16 @@ pub struct StealthProfile {
 
 impl StealthProfile {
     /// No stealth: stock browser launch.
+    ///
+    /// Use this when you want a bare-bones Chrome with none of the launch
+    /// flags or CDP overrides applied — e.g. when verifying that a problem
+    /// reproduces in vanilla Chrome.
+    ///
+    /// ```
+    /// use zendriver_stealth::StealthProfile;
+    /// let p = StealthProfile::off();
+    /// assert!(p.build_flags().is_empty());
+    /// ```
     #[must_use]
     pub fn off() -> Self {
         Self {
@@ -99,7 +109,15 @@ impl StealthProfile {
     }
 
     /// Launch flags + UA scrub + Emulation overrides. No JS bootstrap.
-    /// Safe against `Function.prototype.toString` detection. Default.
+    ///
+    /// Safe against `Function.prototype.toString` detection (it doesn't
+    /// patch any prototype getter). The default when stealth is requested.
+    ///
+    /// ```
+    /// use zendriver_stealth::StealthProfile;
+    /// let p = StealthProfile::native();
+    /// assert!(!p.build_flags().is_empty());
+    /// ```
     #[must_use]
     pub fn native() -> Self {
         Self {
@@ -112,7 +130,17 @@ impl StealthProfile {
         }
     }
 
-    /// Native + Navigator-prototype JS patches. Passes sannysoft.
+    /// `native` + Navigator-prototype JS patches. Passes the sannysoft
+    /// detection battery.
+    ///
+    /// Sets [`bypass_csp`](Self::bypass_csp) on by default so the bootstrap
+    /// script can install on pages with strict CSP headers.
+    ///
+    /// ```
+    /// use zendriver_stealth::StealthProfile;
+    /// let p = StealthProfile::spoofed();
+    /// assert!(p.bypass_csp_enabled());
+    /// ```
     #[must_use]
     pub fn spoofed() -> Self {
         Self {
@@ -125,56 +153,87 @@ impl StealthProfile {
         }
     }
 
+    /// Override the auto-detected [`Fingerprint`] wholesale.
+    ///
+    /// Use this when you need to pin a specific Chrome version / platform /
+    /// hardware combination across runs (e.g. to keep request fingerprints
+    /// stable across CI invocations).
     #[must_use]
     pub fn fingerprint(mut self, f: Fingerprint) -> Self {
         self.fingerprint_override = Some(f);
         self
     }
+    /// Override the reported `navigator.deviceMemory` (in GB).
+    ///
+    /// Per W3C, the reported value is rounded to one of `0.25, 0.5, 1, 2,
+    /// 4, 8`; the resolver caps at 8 and floors at 4 for plausibility.
     #[must_use]
     pub fn memory_gb(mut self, gb: u32) -> Self {
         self.per_field.memory_gb = Some(gb);
         self
     }
+    /// Override the reported `navigator.hardwareConcurrency` (CPU count).
+    ///
+    /// Clamped to `2..=32` at resolve time — values outside that range are
+    /// implausibly low/high and trip simple heuristics.
     #[must_use]
     pub fn cpu_count(mut self, n: u32) -> Self {
         self.per_field.cpu_count = Some(n);
         self
     }
+    /// Override the reported Chrome major version (e.g. `125`).
     #[must_use]
     pub fn chrome_version(mut self, major: u32) -> Self {
         self.per_field.chrome_major = Some(major);
         self
     }
+    /// Override the reported [`Platform`] (`navigator.platform` + UA OS
+    /// token + UAM `platform`).
     #[must_use]
     pub fn platform(mut self, p: Platform) -> Self {
         self.per_field.platform = Some(p);
         self
     }
+    /// Override the reported locale (e.g. `"en-US"`, `"fr-FR"`).
+    ///
+    /// Sends `Emulation.setLocaleOverride` and adds `--lang=...` to the
+    /// launch flags.
     #[must_use]
     pub fn locale(mut self, l: impl Into<String>) -> Self {
         self.per_field.locale = Some(l.into());
         self
     }
+    /// Override the reported timezone via `Emulation.setTimezoneOverride`
+    /// (IANA name, e.g. `"America/Los_Angeles"`).
     #[must_use]
     pub fn timezone(mut self, tz: impl Into<String>) -> Self {
         self.per_field.timezone = Some(tz.into());
         self
     }
+    /// Override the reported User-Agent string verbatim.
+    ///
+    /// Skips the composed-from-fingerprint step — prefer
+    /// [`platform`](Self::platform) + [`chrome_version`](Self::chrome_version)
+    /// unless you need an exact UA string.
     #[must_use]
     pub fn user_agent(mut self, ua: impl Into<String>) -> Self {
         self.per_field.ua_string = Some(ua.into());
         self
     }
+    /// Toggle `Page.setBypassCSP`. Default `true` for [`spoofed`](Self::spoofed),
+    /// `false` for [`native`](Self::native) / [`off`](Self::off).
     #[must_use]
     pub fn bypass_csp(mut self, on: bool) -> Self {
         self.bypass_csp = on;
         self
     }
+    /// Add a single extra Chrome launch flag (e.g. `"--proxy-server=..."`).
     #[must_use]
     pub fn arg(mut self, flag: impl Into<String>) -> Self {
         self.extra_flags.push(flag.into());
         self
     }
+    /// Add a batch of Chrome launch flags.
     #[must_use]
     pub fn args(mut self, flags: impl IntoIterator<Item = String>) -> Self {
         self.extra_flags.extend(flags);
@@ -187,8 +246,18 @@ impl StealthProfile {
         self.kind
     }
 
-    /// Resolve final Fingerprint: explicit override or auto-detect, with
-    /// per-field tweaks applied on top.
+    /// Resolve the final [`Fingerprint`]: either the explicit override or an
+    /// auto-detected baseline, with per-field tweaks (`platform`, `locale`,
+    /// `memory_gb`, …) applied on top.
+    ///
+    /// `chrome_exe` is invoked with `--version` to probe the Chrome major;
+    /// the probe failing falls back to a baked-in default so the resolver
+    /// never errors solely on Chrome being unavailable.
+    ///
+    /// # Errors
+    /// Returns [`StealthError::ChromeVersionDetect`] when the Chrome probe
+    /// fails *and* no override is provided, and [`StealthError::SystemInfo`]
+    /// when total-RAM detection fails.
     // `StealthError` is large because `PatchFailed` wraps `CallError` (~152B).
     // Boxing it would cross the Task 5 file scope; bypass per-fn instead.
     #[allow(clippy::result_large_err)]
@@ -224,7 +293,15 @@ impl StealthProfile {
         Ok(fp)
     }
 
-    /// Composed launch flag list: per-profile defaults + extras.
+    /// Composed Chrome launch flag list: per-profile defaults plus any
+    /// extras added via [`arg`](Self::arg) / [`args`](Self::args), with a
+    /// `--lang=<locale>` flag injected when [`locale`](Self::locale) is set.
+    ///
+    /// ```
+    /// use zendriver_stealth::StealthProfile;
+    /// let flags = StealthProfile::native().locale("fr-FR").build_flags();
+    /// assert!(flags.iter().any(|f| f == "--lang=fr-FR"));
+    /// ```
     pub fn build_flags(&self) -> Vec<String> {
         let mut flags = crate::flags::flags_for_profile(self.kind);
         if let Some(ref locale) = self.per_field.locale {
@@ -234,6 +311,9 @@ impl StealthProfile {
         flags
     }
 
+    /// Whether `Page.setBypassCSP` will be sent for this profile. Defaults
+    /// to `true` for [`spoofed`](Self::spoofed) and `false` otherwise; the
+    /// [`bypass_csp`](Self::bypass_csp) setter toggles it explicitly.
     pub fn bypass_csp_enabled(&self) -> bool {
         self.bypass_csp
     }

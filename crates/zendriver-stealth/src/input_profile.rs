@@ -1,5 +1,21 @@
 //! Input realism tunables — typing typo rate, mouse jitter, etc.
 
+/// Per-profile tunables controlling how realistic synthesized keyboard and
+/// mouse input should look.
+///
+/// Two presets ship by default — [`InputProfile::native`] is fast and
+/// deterministic, [`InputProfile::spoofed`] mimics human-paced typing and
+/// jittery mouse motion. Use the field setters on a struct literal if you
+/// need a custom mix.
+///
+/// ```
+/// use zendriver_stealth::InputProfile;
+/// let fast = InputProfile::native();
+/// let slow = InputProfile::spoofed();
+/// assert_eq!(fast.typo_rate, 0.0);
+/// assert!(slow.typo_rate > 0.0);
+/// assert!(fast.mouse_speed_px_per_ms > slow.mouse_speed_px_per_ms);
+/// ```
 #[derive(Debug, Clone)]
 pub struct InputProfile {
     /// Probability per character of injecting a typo + backspace. 0.0–1.0.

@@ -1,4 +1,33 @@
-//! Anti-detection profiles and patches for zendriver.
+//! Anti-detection profiles and patches for `zendriver`.
+//!
+//! Three stealth modes, exposed via [`StealthProfile`]:
+//!
+//! - [`StealthProfile::off`] — no stealth (stock Chrome launch).
+//! - [`StealthProfile::native`] — launch flags + UA scrub + CDP `Emulation`
+//!   overrides. Safe against `Function.prototype.toString` probes; the
+//!   default.
+//! - [`StealthProfile::spoofed`] — `native` plus a Navigator-prototype JS
+//!   bootstrap script that passes the [sannysoft][sannysoft] battery.
+//!
+//! Most users go through `zendriver`'s `BrowserBuilder::stealth(...)`:
+//!
+//! ```
+//! use zendriver_stealth::{Platform, StealthProfile};
+//!
+//! let profile = StealthProfile::spoofed()
+//!     .platform(Platform::MacIntel)
+//!     .locale("en-US")
+//!     .timezone("America/Los_Angeles");
+//!
+//! assert!(profile.bypass_csp_enabled());
+//! assert!(!profile.build_flags().is_empty());
+//! ```
+//!
+//! The [`StealthObserver`] type plugs into `zendriver-transport`'s observer
+//! chain and applies the resolved [`Fingerprint`] / bootstrap to every newly
+//! attached page target before Chrome releases the debugger.
+//!
+//! [sannysoft]: https://bot.sannysoft.com/
 
 pub mod error;
 pub mod fingerprint;
