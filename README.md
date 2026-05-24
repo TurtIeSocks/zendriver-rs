@@ -1,18 +1,25 @@
 # zendriver-rs
 
-A Rust port of [zendriver](https://github.com/cdpdriver/zendriver) — an undetectable, async-first browser automation library using the Chrome DevTools Protocol directly.
+Async-first, undetectable browser automation via the Chrome DevTools Protocol.
 
-**Status:** Phases 1-5 shipped. Not yet published to crates.io.
+[![crates.io](https://img.shields.io/crates/v/zendriver.svg)](https://crates.io/crates/zendriver)
+[![docs.rs](https://docs.rs/zendriver/badge.svg)](https://docs.rs/zendriver)
+[![MSRV 1.75](https://img.shields.io/badge/rustc-1.75+-lightgray.svg)](https://blog.rust-lang.org/2023/12/28/Rust-1.75.0.html)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](#license)
+[![CI](https://github.com/cdpdriver/zendriver-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/cdpdriver/zendriver-rs/actions/workflows/ci.yml)
 
-## Example
+A Rust port of [zendriver](https://github.com/cdpdriver/zendriver). Drives Chrome via raw CDP — no WebDriver, no JS shim — with anti-detection patches baked in by default.
 
-```rust
-use zendriver::{Browser, Cookie, SameSite};
+## Quick example
+
+```rust,no_run
+use zendriver::Browser;
 
 #[tokio::main]
 async fn main() -> zendriver::Result<()> {
     let browser = Browser::builder().headless(true).launch().await?;
     let tab = browser.main_tab();
+
     tab.goto("https://example.com").await?;
     tab.wait_for_load().await?;
 
@@ -21,87 +28,76 @@ async fn main() -> zendriver::Result<()> {
     link.click().await?;
     tab.wait_for_load().await?;
 
-    // Evaluate in the page's main world.
+    // Read back from the page's main world.
     let title: String = tab.evaluate_main("document.title").await?;
     println!("title: {title}");
 
-    // Open a second tab in parallel — each tab is its own CDP session.
-    let tab2 = browser.new_tab_at("https://example.org").await?;
-    tab2.wait_for_load().await?;
-    println!("now driving {} tabs", browser.tab_count().await);
-
-    // Cookies live at browser scope (shared across all tabs).
-    browser
-        .cookies()
-        .set(Cookie {
-            name: "session".into(),
-            value: "abc123".into(),
-            domain: "example.org".into(),
-            path: "/".into(),
-            expires: None,
-            http_only: true,
-            secure: false,
-            same_site: Some(SameSite::Lax),
-            url: None,
-        })
-        .await?;
-
     browser.close().await?;
     Ok(())
 }
 ```
+
+More working examples in [`crates/zendriver/examples/`](crates/zendriver/examples/).
+
+## Feature matrix
+
+| Feature        | Default? | Use case                                                       | Extra deps                           |
+|----------------|----------|----------------------------------------------------------------|--------------------------------------|
+| `stealth`      | yes      | Anti-detection: spoofed UA/platform, isolated worlds, JS shim  | (built-in to `zendriver`)            |
+| `interception` | no       | Block/modify requests via CDP `Fetch.*`; rule-based + streams  | `zendriver-interception`             |
+| `expect`       | no       | Playwright-style `expect_response()` / `expect_request()`      | (in-tree, no extra crate)            |
+| `cloudflare`   | no       | Solve Cloudflare Turnstile challenges                          | `zendriver-cloudflare`               |
+| `fetcher`      | no       | Auto-download a pinned Chrome for Testing build                | `zendriver-fetcher` + `reqwest`/`zip`|
+
+## Install
+
+Pick the use case that matches what you're building.
+
+**Just browse:**
+```bash
+cargo add zendriver
+```
+Default stealth is on.
+
+**Stealth scraping (explicit):**
+```bash
+cargo add zendriver --features stealth
+```
+Same as above — only spell out the feature if you want it visible in `Cargo.toml`.
+
+**Everything:**
+```bash
+cargo add zendriver --features "interception expect cloudflare fetcher"
+```
+Adds request interception, `expect()` matchers, Cloudflare Turnstile bypass, and the Chrome for Testing fetcher.
 
 ## Phases
 
-1. **Foundation** **DONE**: transport + minimal `Browser`/`Tab`/`Element`.
-2. **Stealth** **DONE**: fingerprint patches + isolated worlds + stealth JS bundle.
-3. **Element API completeness** **DONE**: selectors (CSS/XPath/text/role), actionability, input controller, screenshots.
-4. **`Tab`/`Browser` completeness** **DONE**: multi-tab + cookies + storage + frames + nav history + `wait_for_idle`.
-5. **Optional gated features** **DONE**: request interception, `expect()` matchers, Cloudflare bypass, and Chrome-for-Testing fetcher — all behind opt-in feature flags (`interception`, `expect`, `cloudflare`, `fetcher`).
-6. Polish + 0.1 release (planned).
+Six development phases shipped into the v0.1.0 release. The mdBook covers each surface in depth.
 
-### Gated feature example
+1. **Foundation** — CDP transport + minimal `Browser`/`Tab`/`Element`. See [introduction](docs/book/src/introduction.md).
+2. **Stealth** — fingerprint patches + isolated worlds + stealth JS bundle. See [stealth](docs/book/src/stealth.md).
+3. **Element API completeness** — CSS/XPath/text/role selectors, actionability, input controller, screenshots. See [quickstart](docs/book/src/quickstart.md).
+4. **`Tab`/`Browser` completeness** — multi-tab, cookies, storage, frames, nav history, `wait_for_idle`. See [multi-tab](docs/book/src/multi-tab.md) + [frames](docs/book/src/frames.md).
+5. **Optional gated features** — request interception, `expect()` matchers, Cloudflare bypass, Chrome-for-Testing fetcher. See [interception](docs/book/src/interception.md), [expect](docs/book/src/expect.md), [cloudflare](docs/book/src/cloudflare.md), [fetcher](docs/book/src/fetcher.md).
+6. **Polish + release** — trait extraction, rustdoc + mdBook, publish to crates.io.
 
-```rust,ignore
-// Cargo.toml: zendriver = { version = "...", features = ["interception", "expect"] }
-use std::time::Duration;
-use zendriver::Browser;
+## Comparison
 
-#[tokio::main]
-async fn main() -> zendriver::Result<()> {
-    let browser = Browser::builder().headless(true).launch().await?;
-    let tab = browser.main_tab();
+| Feature                  | zendriver-rs            | chromiumoxide   | fantoccini       | headless_chrome | thirtyfour       |
+|--------------------------|-------------------------|-----------------|------------------|-----------------|------------------|
+| API ergonomics *opinion* | builder + auto-wait     | raw CDP types   | WebDriver verbs  | sync wrappers   | WebDriver verbs  |
+| Stealth out-of-box       | yes (default)           | no              | no               | no              | no               |
+| Multi-tab                | yes (first-class)       | yes             | yes              | yes             | yes              |
+| Interception             | yes (`Fetch.*` wrapper) | yes (raw)       | no (proxy-only)  | partial         | no (proxy-only)  |
+| License                  | MIT OR Apache-2.0       | MIT OR Apache-2.0 | Apache-2.0     | MIT             | MIT              |
+| Async runtime            | tokio                   | tokio / async-std | tokio          | sync            | tokio            |
 
-    // Block tracking requests before they hit the wire.
-    let _block = tab
-        .intercept()
-        .block("*/analytics/*")?
-        .start();
+Subjective rows marked `*opinion`. All claims accurate as of the 0.1.0 release; check upstream changelogs before relying on them.
 
-    // Arm an expectation, then trigger navigation — the matcher is live before goto.
-    let api = tab
-        .expect_response("*/api/data*")
-        .timeout(Duration::from_secs(5));
-    tab.goto("https://example.com").await?;
-    let matched = api.await?;
-    println!("api status: {}", matched.status);
+## Contributing
 
-    browser.close().await?;
-    Ok(())
-}
-```
-
-See `docs/superpowers/specs/` for per-phase design documents.
-
-## Development
-
-```bash
-cargo test --workspace --lib                                       # unit tests, no Chrome
-cargo test --workspace --doc                                       # doctests
-cargo clippy --workspace --all-targets --locked -- -D warnings    # lint
-cargo fmt --all --check                                            # format
-cargo test --workspace --features integration-tests --test '*' -- --test-threads=1  # real Chrome (requires Chrome on $PATH)
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md). Issues and PRs welcome.
 
 ## License
 
