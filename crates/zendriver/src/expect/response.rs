@@ -89,13 +89,14 @@ impl MatchedResponse {
                 json!({ "requestId": self.request_id }),
             )
             .await?;
-        let body = res.get("body").and_then(Value::as_str).ok_or_else(|| {
-            ZendriverError::Cdp {
+        let body = res
+            .get("body")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ZendriverError::Cdp {
                 code: 0,
                 message: "Network.getResponseBody returned no body field".into(),
                 data: None,
-            }
-        })?;
+            })?;
         let base64_encoded = res
             .get("base64Encoded")
             .and_then(Value::as_bool)

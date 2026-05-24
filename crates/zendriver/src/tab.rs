@@ -811,6 +811,40 @@ impl Tab {
     ) -> crate::expect::response::ResponseExpectation {
         crate::expect::response::register(self.session(), pattern.into())
     }
+
+    /// Register a one-shot expectation for the first
+    /// `Page.javascriptDialogOpened` event on this tab.
+    ///
+    /// There is no URL pattern: dialogs don't carry a request URL the way
+    /// requests/responses do — any dialog opened during the expectation
+    /// window matches. The page URL is captured on the resolved
+    /// [`MatchedDialog`](crate::expect::dialog::MatchedDialog) for context.
+    ///
+    /// The returned
+    /// [`DialogExpectation`](crate::expect::dialog::DialogExpectation) is
+    /// awaitable directly (`expectation.await`) or via the
+    /// Playwright-style `expectation.matched().await`; configure the
+    /// timeout via
+    /// [`timeout`](crate::expect::dialog::DialogExpectation::timeout) before
+    /// awaiting.
+    ///
+    /// Resolves with a
+    /// [`MatchedDialog`](crate::expect::dialog::MatchedDialog) whose
+    /// [`accept`](crate::expect::dialog::MatchedDialog::accept) /
+    /// [`dismiss`](crate::expect::dialog::MatchedDialog::dismiss) methods
+    /// dispatch `Page.handleJavaScriptDialog`.
+    ///
+    /// The subscriber task is spawned synchronously inside this call — the
+    /// subscription is live by the time you receive the
+    /// `DialogExpectation`, so a trigger action issued immediately after
+    /// cannot race past us. `Page.enable` is already on per-Tab via P1's
+    /// `Tab::goto`; this call does not re-enable.
+    ///
+    /// Gated by the `expect` cargo feature.
+    #[must_use]
+    pub fn expect_dialog(&self) -> crate::expect::dialog::DialogExpectation {
+        crate::expect::dialog::register(self.session())
+    }
 }
 
 #[cfg(feature = "interception")]

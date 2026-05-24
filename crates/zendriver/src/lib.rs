@@ -57,6 +57,10 @@ pub use expect::request::{MatchedRequest, RequestExpectation};
 #[cfg(feature = "expect")]
 pub use expect::response::{MatchedResponse, ResponseExpectation};
 
+/// `expect_dialog` API re-exports.
+#[cfg(feature = "expect")]
+pub use expect::dialog::{DialogExpectation, DialogType, MatchedDialog};
+
 /// Stealth profile + fingerprint configuration re-exported from `zendriver-stealth`.
 pub mod stealth {
     pub use zendriver_stealth::{Fingerprint, Platform, StealthProfile, UserAgentMetadata};
