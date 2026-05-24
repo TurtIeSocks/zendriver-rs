@@ -20,13 +20,23 @@ impl CookieJar {
     /// Snapshot the cookie store to a JSON file at `path`.
     ///
     /// Issues a single `Network.getAllCookies` round-trip, then writes the
-    /// pretty-printed array via [`tokio::fs::write`]. Bubbles up any
-    /// transport / CDP / IO error unchanged.
+    /// pretty-printed array via [`tokio::fs::write`]. The file is
+    /// overwritten if it already exists. Parent directories must already
+    /// exist — `save_to_file` does not create them.
     ///
-    /// The file is overwritten if it already exists. Parent directories must
-    /// already exist — `save_to_file` does not create them (matches
-    /// `tokio::fs::write` semantics; an `Err(ZendriverError::Io(_))` is
-    /// returned if the path is unwritable).
+    /// # Errors
+    ///
+    /// Returns [`crate::ZendriverError::Io`] if the path is unwritable;
+    /// [`crate::ZendriverError::Transport`] / `Cdp` on CDP failures.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// browser.cookies().save_to_file("cookies.json").await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn save_to_file(&self, path: impl AsRef<Path>) -> Result<()> {
         let cookies = self.all().await?;
         let bytes = serde_json::to_vec_pretty(&cookies)?;
@@ -36,11 +46,24 @@ impl CookieJar {
 
     /// Hydrate the browser cookie store from a JSON file at `path`.
     ///
-    /// Reads the file, deserializes a [`Vec<Cookie>`], and dispatches a
-    /// single `Network.setCookies` bulk-set (one CDP round-trip regardless
-    /// of cookie count). Existing cookies in the browser are not cleared
-    /// first — callers that want a fresh slate should call
-    /// [`CookieJar::clear`] before `load_from_file`.
+    /// Reads the file, deserializes a `Vec<Cookie>`, and dispatches a
+    /// single `Network.setCookies` bulk-set. Existing cookies in the
+    /// browser are NOT cleared first — call [`CookieJar::clear`] before
+    /// this method for a fresh slate.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::ZendriverError::Io`] if the file is unreadable;
+    /// [`crate::ZendriverError::Serde`] if the JSON is malformed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// browser.cookies().load_from_file("cookies.json").await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn load_from_file(&self, path: impl AsRef<Path>) -> Result<()> {
         let bytes = fs::read(path).await?;
         let cookies: Vec<crate::cookies::Cookie> = serde_json::from_slice(&bytes)?;

@@ -43,13 +43,19 @@ use zendriver_transport::Connection;
 
 use crate::error::{Result, ZendriverError};
 
-/// SameSite policy as defined by RFC 6265bis + the CDP `Network.CookieSameSite`
-/// enum. Serializes as `"Strict"` / `"Lax"` / `"None"` to match CDP exactly
-/// (and the standard's capitalization).
+/// SameSite policy as defined by RFC 6265bis.
+///
+/// Mirrors the CDP `Network.CookieSameSite` enum. Serializes as
+/// `"Strict"` / `"Lax"` / `"None"` to match CDP exactly (and the
+/// standard's capitalization).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SameSite {
+    /// First-party only — never sent on cross-site requests.
     Strict,
+    /// Sent on cross-site top-level navigations only (the default
+    /// modern-browser behavior for unspecified SameSite).
     Lax,
+    /// Always sent, including in third-party contexts. Requires `Secure`.
     None,
 }
 
@@ -68,18 +74,32 @@ pub enum SameSite {
 ///   by [`CookieJar::all`] / [`CookieJar::for_url`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Cookie {
+    /// Cookie name.
     pub name: String,
+    /// Cookie value.
     pub value: String,
+    /// Domain the cookie applies to. Leading dot (e.g. `.example.com`)
+    /// matches the domain and all subdomains.
     pub domain: String,
+    /// URL path the cookie applies to (typically `"/"`).
     pub path: String,
+    /// Expiration timestamp in seconds since Unix epoch. `None` for a
+    /// session cookie (deleted when the browser closes).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires: Option<f64>,
+    /// `true` if the cookie has the `HttpOnly` flag (not accessible via
+    /// JavaScript).
     #[serde(default)]
     pub http_only: bool,
+    /// `true` if the cookie is only sent over HTTPS.
     #[serde(default)]
     pub secure: bool,
+    /// SameSite policy, if specified.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub same_site: Option<SameSite>,
+    /// Origin URL for [`CookieJar::set`] convenience — CDP infers
+    /// `domain` + `path` + `secure` from it. Always `None` on cookies
+    /// returned by reads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
 }
@@ -138,13 +158,15 @@ impl From<CdpCookie> for Cookie {
     }
 }
 
-/// Cheap-to-clone handle to the browser's cookie store. Wraps a
-/// [`Connection`] in an [`Arc`]; cloning is reference-bump cheap.
+/// Cheap-to-clone handle to the browser's cookie store.
+///
+/// Wraps a [`Connection`] in an [`Arc`]; cloning is reference-bump cheap.
 ///
 /// All methods send commands at browser scope (no `sessionId`) — Chrome's
 /// cookie store is shared across all tabs in the browser, so per-tab
-/// scoping is meaningless for cookies. The owning Tab/Browser handle just
-/// passes its `Connection` in.
+/// scoping is meaningless for cookies. Construct via
+/// [`crate::Browser::cookies`] or [`crate::Tab::cookies`] — both produce
+/// jars bound to the same underlying store.
 #[derive(Clone, Debug)]
 pub struct CookieJar {
     inner: Arc<CookieJarInner>,
@@ -156,8 +178,10 @@ struct CookieJarInner {
 }
 
 impl CookieJar {
-    /// Construct a jar around a [`Connection`]. Typically called by
-    /// `Browser::cookies()` / `Tab::cookies()` (T10) rather than user code.
+    /// Construct a jar around a [`Connection`].
+    ///
+    /// Typically called by [`crate::Browser::cookies`] /
+    /// [`crate::Tab::cookies`] rather than user code.
     #[must_use]
     pub fn new(conn: Connection) -> Self {
         Self {
@@ -167,7 +191,19 @@ impl CookieJar {
 
     /// Return every cookie in the browser's store.
     ///
-    /// Maps to `Network.getAllCookies`. The response field is `cookies: Cookie[]`.
+    /// Maps to `Network.getAllCookies`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// let jar = browser.cookies();
+    /// for c in jar.all().await? {
+    ///     println!("{}={} ({})", c.name, c.value, c.domain);
+    /// }
+    /// # Ok(()) }
+    /// ```
     pub async fn all(&self) -> Result<Vec<Cookie>> {
         let resp = self
             .inner
@@ -179,12 +215,21 @@ impl CookieJar {
 
     /// Return cookies that would be sent for `url`.
     ///
-    /// Maps to `Network.getCookies` with `urls: [url]`. Same response shape
-    /// as [`Self::all`]. Accepting [`url::Url`] (not `&str`) gates the call
-    /// at the type level: CDP rejects malformed URLs silently (returning an
-    /// empty cookie list), so making the caller present a parsed `Url`
-    /// surfaces parse errors at construction time instead of as a confusing
-    /// empty result.
+    /// Maps to `Network.getCookies` with `urls: [url]`. Accepting a parsed
+    /// [`url::Url`] surfaces malformed-URL errors at construction time
+    /// instead of as a confusing empty result.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// let jar = browser.cookies();
+    /// let url = url::Url::parse("https://example.com/").unwrap();
+    /// let cookies = jar.for_url(&url).await?;
+    /// # let _ = cookies;
+    /// # Ok(()) }
+    /// ```
     pub async fn for_url(&self, url: &url::Url) -> Result<Vec<Cookie>> {
         let resp = self
             .inner
@@ -201,8 +246,31 @@ impl CookieJar {
     /// Set a single cookie.
     ///
     /// Maps to `Network.setCookie` — the cookie fields are flattened into
-    /// the top-level params object (CDP convention). Returns
-    /// [`ZendriverError::Cookie`] if CDP reports `success: false`.
+    /// the top-level params object (CDP convention).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Cookie`] if CDP reports `success: false`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use zendriver::{Cookie, SameSite};
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// browser.cookies().set(Cookie {
+    ///     name: "sid".into(),
+    ///     value: "abc".into(),
+    ///     domain: ".example.com".into(),
+    ///     path: "/".into(),
+    ///     expires: None,
+    ///     http_only: true,
+    ///     secure: true,
+    ///     same_site: Some(SameSite::Lax),
+    ///     url: None,
+    /// }).await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn set(&self, cookie: Cookie) -> Result<()> {
         let cdp: CdpCookie = cookie.into();
         let params = serde_json::to_value(&cdp).map_err(ZendriverError::Serde)?;
@@ -227,9 +295,23 @@ impl CookieJar {
 
     /// Set many cookies in a single CDP call.
     ///
-    /// Maps to `Network.setCookies` — params shape is `{ cookies: Cookie[] }`.
-    /// Faster than looping over [`Self::set`] for bulk loads (one round-trip
-    /// instead of N).
+    /// Maps to `Network.setCookies`. Faster than looping over [`Self::set`]
+    /// for bulk loads (one round-trip instead of N).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use zendriver::Cookie;
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// let cookies = vec![
+    ///     Cookie { name: "a".into(), value: "1".into(), domain: ".x.com".into(),
+    ///              path: "/".into(), expires: None, http_only: false, secure: false,
+    ///              same_site: None, url: None },
+    /// ];
+    /// browser.cookies().set_many(cookies).await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn set_many(&self, cookies: Vec<Cookie>) -> Result<()> {
         let cdp: Vec<CdpCookie> = cookies.into_iter().map(CdpCookie::from).collect();
         self.inner
@@ -239,11 +321,20 @@ impl CookieJar {
         Ok(())
     }
 
-    /// Delete cookies matching `name` and optional `domain` / `path` filters.
+    /// Delete cookies matching `name` and optional `domain` / `path`.
     ///
     /// Maps to `Network.deleteCookies`. CDP requires `name`; `domain` and
     /// `path` are optional narrowers (when omitted, all cookies with the
     /// given name across all domains/paths are deleted).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// browser.cookies().delete("sid", Some(".example.com"), Some("/")).await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn delete(&self, name: &str, domain: Option<&str>, path: Option<&str>) -> Result<()> {
         let mut params = json!({ "name": name });
         if let Some(d) = domain {
@@ -259,8 +350,19 @@ impl CookieJar {
         Ok(())
     }
 
-    /// Clear the entire browser cookie store. Maps to
-    /// `Network.clearBrowserCookies` — no params, no response payload.
+    /// Clear the entire browser cookie store.
+    ///
+    /// Maps to `Network.clearBrowserCookies` — no params, no response
+    /// payload.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// browser.cookies().clear().await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn clear(&self) -> Result<()> {
         self.inner
             .conn

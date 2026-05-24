@@ -1,9 +1,21 @@
 //! Per-Tab DOM storage handle (localStorage / sessionStorage) backed by CDP
 //! `DOMStorage.*` methods.
 //!
-//! Each [`Storage`] handle is configured at construction with an
-//! `is_local` flag selecting either localStorage (true) or sessionStorage
-//! (false) for the owning [`crate::tab::Tab`]'s current origin.
+//! Each [`Storage`] handle is configured at construction with an `is_local`
+//! flag selecting either localStorage (true) or sessionStorage (false) for
+//! the owning [`crate::Tab`]'s current origin. Obtain handles via
+//! [`crate::Tab::local_storage`] / [`crate::Tab::session_storage`].
+//!
+//! ```no_run
+//! # async fn ex() -> zendriver::Result<()> {
+//! # let browser = zendriver::Browser::builder().launch().await?;
+//! # let tab = browser.main_tab();
+//! tab.goto("https://example.com").await?;
+//! let ls = tab.local_storage();
+//! ls.set("theme", "dark").await?;
+//! assert_eq!(ls.get("theme").await?.as_deref(), Some("dark"));
+//! # Ok(()) }
+//! ```
 //!
 //! ## Why fetch the URL on every call
 //!
@@ -35,11 +47,11 @@ use zendriver_transport::SessionHandle;
 use crate::error::{Result, ZendriverError};
 use crate::tab::TabInner;
 
-/// Cheap-to-clone handle to a single DOM storage area (localStorage or
-/// sessionStorage) for the owning tab's current origin.
+/// Cheap-to-clone handle to a single DOM storage area.
 ///
-/// Construct via [`crate::tab::Tab::local_storage`] /
-/// [`crate::tab::Tab::session_storage`]. Wrapping is `Arc`-cheap; pass the
+/// localStorage or sessionStorage for the owning tab's current origin.
+/// Construct via [`crate::Tab::local_storage`] /
+/// [`crate::Tab::session_storage`]. Wrapping is `Arc`-cheap; pass the
 /// handle around freely. All methods are async — each call performs at
 /// least one CDP round-trip (origin discovery), plus the data op.
 #[derive(Clone, Debug)]
@@ -87,6 +99,17 @@ impl Storage {
 
     /// Whether this handle targets `localStorage` (true) or
     /// `sessionStorage` (false).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// assert!(tab.local_storage().is_local());
+    /// assert!(!tab.session_storage().is_local());
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn is_local(&self) -> bool {
         self.inner.is_local
@@ -94,8 +117,20 @@ impl Storage {
 
     /// Look up a single value by key. Returns `None` if the key is absent.
     ///
-    /// Fetches the full storage area via `DOMStorage.getDOMStorageItems`
-    /// (CDP has no single-key getter) and scans for the match.
+    /// Fetches the full storage area (CDP has no single-key getter) and
+    /// scans for the match.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// if let Some(v) = tab.local_storage().get("theme").await? {
+    ///     println!("theme: {v}");
+    /// }
+    /// # Ok(()) }
+    /// ```
     pub async fn get(&self, key: &str) -> Result<Option<String>> {
         let all = self.get_all().await?;
         Ok(all.get(key).cloned())
@@ -103,9 +138,19 @@ impl Storage {
 
     /// Snapshot the entire storage area as a `HashMap`.
     ///
-    /// Maps to `DOMStorage.getDOMStorageItems`. The CDP response shape is
-    /// `{ entries: [[key, value], ...] }` — a tuple-of-strings array. Order
-    /// is unspecified.
+    /// Maps to `DOMStorage.getDOMStorageItems`. Order is unspecified.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// for (k, v) in tab.local_storage().get_all().await? {
+    ///     println!("{k}={v}");
+    /// }
+    /// # Ok(()) }
+    /// ```
     pub async fn get_all(&self) -> Result<HashMap<String, String>> {
         self.ensure_enabled().await?;
         let storage_id = self.storage_id().await?;
@@ -125,6 +170,16 @@ impl Storage {
     /// Maps to `DOMStorage.setDOMStorageItem` — Chrome treats the value as
     /// opaque text (per the Storage API spec; non-string values must be
     /// stringified by the caller).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.local_storage().set("theme", "dark").await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn set(&self, key: &str, value: &str) -> Result<()> {
         self.ensure_enabled().await?;
         let storage_id = self.storage_id().await?;
@@ -142,9 +197,25 @@ impl Storage {
         Ok(())
     }
 
-    /// Set many entries. Convenience wrapper over [`Self::set`] — there is
-    /// no CDP bulk-set for DOMStorage, so this issues N round-trips. Order
-    /// of dispatch follows the `HashMap`'s iteration order (unspecified).
+    /// Set many entries.
+    ///
+    /// Convenience wrapper over [`Self::set`] — there is no CDP bulk-set for
+    /// DOMStorage, so this issues N round-trips. Order of dispatch follows
+    /// the `HashMap`'s iteration order (unspecified).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use std::collections::HashMap;
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let mut items = HashMap::new();
+    /// items.insert("theme".to_string(), "dark".to_string());
+    /// items.insert("lang".to_string(), "en".to_string());
+    /// tab.local_storage().set_many(&items).await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn set_many(&self, items: &HashMap<String, String>) -> Result<()> {
         for (k, v) in items {
             self.set(k, v).await?;
@@ -152,9 +223,20 @@ impl Storage {
         Ok(())
     }
 
-    /// Remove a single key. Maps to `DOMStorage.removeDOMStorageItem`.
-    /// Missing keys are silently ignored (matches the Storage API
-    /// `removeItem` semantics).
+    /// Remove a single key.
+    ///
+    /// Maps to `DOMStorage.removeDOMStorageItem`. Missing keys are silently
+    /// ignored (matches the Storage API `removeItem` semantics).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.local_storage().remove("theme").await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn remove(&self, key: &str) -> Result<()> {
         self.ensure_enabled().await?;
         let storage_id = self.storage_id().await?;
@@ -168,9 +250,20 @@ impl Storage {
         Ok(())
     }
 
-    /// Empty the entire storage area for this origin. Maps to
-    /// `DOMStorage.clear`. Equivalent to calling `localStorage.clear()` /
-    /// `sessionStorage.clear()` from page JS.
+    /// Empty the entire storage area for this origin.
+    ///
+    /// Maps to `DOMStorage.clear`. Equivalent to calling
+    /// `localStorage.clear()` / `sessionStorage.clear()` from page JS.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.local_storage().clear().await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn clear(&self) -> Result<()> {
         self.ensure_enabled().await?;
         let storage_id = self.storage_id().await?;
@@ -181,8 +274,21 @@ impl Storage {
         Ok(())
     }
 
-    /// Number of entries in this storage area. Implemented as
-    /// [`Self::get_all`] + `.len()` — CDP has no dedicated length op.
+    /// Number of entries in this storage area.
+    ///
+    /// Implemented as [`Self::get_all`] + `.len()` — CDP has no dedicated
+    /// length op.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let n = tab.local_storage().len().await?;
+    /// println!("{n} entries");
+    /// # Ok(()) }
+    /// ```
     pub async fn len(&self) -> Result<usize> {
         Ok(self.get_all().await?.len())
     }
