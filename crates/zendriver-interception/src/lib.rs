@@ -14,6 +14,7 @@ pub mod types;
 pub mod url_pattern;
 
 pub use error::InterceptionError;
+pub use paused::PausedRequest;
 pub use types::{
     AbortReason, RequestInfo, RequestOverrides, RequestStage, ResourceType, ResponseInfo,
 };

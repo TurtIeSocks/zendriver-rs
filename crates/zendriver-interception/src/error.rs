@@ -17,6 +17,9 @@ pub enum InterceptionError {
 
     #[error("subscription channel closed")]
     SubscriptionClosed,
+
+    #[error("invalid response from CDP: {0}")]
+    InvalidResponse(String),
 }
 
 #[cfg(test)]
