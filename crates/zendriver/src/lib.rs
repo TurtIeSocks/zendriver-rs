@@ -53,6 +53,10 @@ pub use expect::UrlMatcher;
 #[cfg(feature = "expect")]
 pub use expect::request::{MatchedRequest, RequestExpectation};
 
+/// `expect_response` API re-exports.
+#[cfg(feature = "expect")]
+pub use expect::response::{MatchedResponse, ResponseExpectation};
+
 /// Stealth profile + fingerprint configuration re-exported from `zendriver-stealth`.
 pub mod stealth {
     pub use zendriver_stealth::{Fingerprint, Platform, StealthProfile, UserAgentMetadata};

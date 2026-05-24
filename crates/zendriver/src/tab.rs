@@ -776,6 +776,41 @@ impl Tab {
     ) -> crate::expect::request::RequestExpectation {
         crate::expect::request::register(self.session(), pattern.into())
     }
+
+    /// Register a one-shot expectation for the first
+    /// `Network.responseReceived` whose URL matches `pattern`.
+    ///
+    /// `pattern` is anything convertible to a [`crate::expect::UrlMatcher`]:
+    /// `&str` / `String` build a substring matcher; [`regex::Regex`] builds
+    /// a regex matcher. The returned
+    /// [`ResponseExpectation`](crate::expect::response::ResponseExpectation)
+    /// is awaitable directly (`expectation.await`) or via the
+    /// Playwright-style `expectation.matched().await`; configure the
+    /// timeout via
+    /// [`timeout`](crate::expect::response::ResponseExpectation::timeout)
+    /// before awaiting.
+    ///
+    /// Resolves with a
+    /// [`MatchedResponse`](crate::expect::response::MatchedResponse) whose
+    /// [`body`](crate::expect::response::MatchedResponse::body) method
+    /// fetches the response payload via `Network.getResponseBody`. Bodies
+    /// are only retained for a short window after the response completes —
+    /// call `body()` promptly.
+    ///
+    /// The subscriber task is spawned synchronously inside this call —
+    /// the subscription is live by the time you receive the
+    /// `ResponseExpectation`, so a trigger action issued immediately after
+    /// cannot race past us. `Network.enable` is already on per-Tab via the
+    /// P4 in-flight tracker; this call does not re-enable.
+    ///
+    /// Gated by the `expect` cargo feature.
+    #[must_use]
+    pub fn expect_response(
+        &self,
+        pattern: impl Into<crate::expect::UrlMatcher>,
+    ) -> crate::expect::response::ResponseExpectation {
+        crate::expect::response::register(self.session(), pattern.into())
+    }
 }
 
 #[cfg(feature = "interception")]
