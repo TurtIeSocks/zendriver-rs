@@ -367,7 +367,7 @@
 <a href=#367 id=367 data-nosnippet>367</a>                )
 <a href=#368 id=368 data-nosnippet>368</a>            };
 <a href=#369 id=369 data-nosnippet>369</a>            <span class="kw">let </span>do_typo =
-<a href=#370 id=370 data-nosnippet>370</a>                profile.typo_rate &gt; <span class="number">0.0 </span>&amp;&amp; rand::Rng::<span class="kw">gen</span>::&lt;f32&gt;(<span class="kw-2">&amp;mut </span>s.rng) &lt; profile.typo_rate;
+<a href=#370 id=370 data-nosnippet>370</a>                profile.typo_rate &gt; <span class="number">0.0 </span>&amp;&amp; rand::Rng::r#gen::&lt;f32&gt;(<span class="kw-2">&amp;mut </span>s.rng) &lt; profile.typo_rate;
 <a href=#371 id=371 data-nosnippet>371</a>            <span class="kw">let </span>typo_char = <span class="kw">if </span>do_typo {
 <a href=#372 id=372 data-nosnippet>372</a>                neighbor_key(ch, <span class="kw-2">&amp;mut </span>s.rng)
 <a href=#373 id=373 data-nosnippet>373</a>            } <span class="kw">else </span>{
@@ -375,7 +375,7 @@
 <a href=#375 id=375 data-nosnippet>375</a>            </span>};
 <a href=#376 id=376 data-nosnippet>376</a>            <span class="kw">let </span>thinking = <span class="kw">if </span>ch == <span class="string">' '
 <a href=#377 id=377 data-nosnippet>377</a>                </span>&amp;&amp; profile.thinking_pause_ms_range.<span class="number">0 </span>&gt; <span class="number">0
-<a href=#378 id=378 data-nosnippet>378</a>                </span>&amp;&amp; rand::Rng::<span class="kw">gen</span>::&lt;f32&gt;(<span class="kw-2">&amp;mut </span>s.rng) &lt; <span class="number">0.05
+<a href=#378 id=378 data-nosnippet>378</a>                </span>&amp;&amp; rand::Rng::r#gen::&lt;f32&gt;(<span class="kw-2">&amp;mut </span>s.rng) &lt; <span class="number">0.05
 <a href=#379 id=379 data-nosnippet>379</a>            </span>{
 <a href=#380 id=380 data-nosnippet>380</a>                rand::Rng::gen_range(
 <a href=#381 id=381 data-nosnippet>381</a>                    <span class="kw-2">&amp;mut </span>s.rng,
@@ -426,8 +426,8 @@
 <a href=#426 id=426 data-nosnippet>426</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
 <a href=#427 id=427 data-nosnippet>427</a>    <span class="kw">use </span>serde_json::Value;
 <a href=#428 id=428 data-nosnippet>428</a>    <span class="kw">use </span>zendriver_stealth::InputProfile;
-<a href=#429 id=429 data-nosnippet>429</a>    <span class="kw">use </span>zendriver_transport::testing::MockConnection;
-<a href=#430 id=430 data-nosnippet>430</a>    <span class="kw">use </span>zendriver_transport::SessionHandle;
+<a href=#429 id=429 data-nosnippet>429</a>    <span class="kw">use </span>zendriver_transport::SessionHandle;
+<a href=#430 id=430 data-nosnippet>430</a>    <span class="kw">use </span>zendriver_transport::testing::MockConnection;
 <a href=#431 id=431 data-nosnippet>431</a>
 <a href=#432 id=432 data-nosnippet>432</a>    <span class="attr">#[tokio::test]
 <a href=#433 id=433 data-nosnippet>433</a>    </span><span class="kw">async fn </span>type_text_fast_emits_keydown_keyup_per_char() {

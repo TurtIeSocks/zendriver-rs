@@ -36,7 +36,7 @@
 <a href=#36 id=36 data-nosnippet>36</a><span class="kw">use </span>std::sync::Arc;
 <a href=#37 id=37 data-nosnippet>37</a>
 <a href=#38 id=38 data-nosnippet>38</a><span class="kw">use </span>serde::de::DeserializeOwned;
-<a href=#39 id=39 data-nosnippet>39</a><span class="kw">use </span>serde_json::{json, Value};
+<a href=#39 id=39 data-nosnippet>39</a><span class="kw">use </span>serde_json::{Value, json};
 <a href=#40 id=40 data-nosnippet>40</a><span class="kw">use </span>tokio::sync::Mutex;
 <a href=#41 id=41 data-nosnippet>41</a>
 <a href=#42 id=42 data-nosnippet>42</a><span class="kw">use </span><span class="kw">crate</span>::error::{<span class="prelude-ty">Result</span>, ZendriverError};
@@ -332,8 +332,8 @@
 <a href=#332 id=332 data-nosnippet>332</a>#[allow(clippy::panic, clippy::unwrap_used)]
 <a href=#333 id=333 data-nosnippet>333</a></span><span class="kw">mod </span>tests {
 <a href=#334 id=334 data-nosnippet>334</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
-<a href=#335 id=335 data-nosnippet>335</a>    <span class="kw">use </span>zendriver_transport::testing::MockConnection;
-<a href=#336 id=336 data-nosnippet>336</a>    <span class="kw">use </span>zendriver_transport::SessionHandle;
+<a href=#335 id=335 data-nosnippet>335</a>    <span class="kw">use </span>zendriver_transport::SessionHandle;
+<a href=#336 id=336 data-nosnippet>336</a>    <span class="kw">use </span>zendriver_transport::testing::MockConnection;
 <a href=#337 id=337 data-nosnippet>337</a>
 <a href=#338 id=338 data-nosnippet>338</a>    <span class="attr">#[tokio::test]
 <a href=#339 id=339 data-nosnippet>339</a>    </span><span class="kw">async fn </span>from_jsret_yields_evaluation_origin() {

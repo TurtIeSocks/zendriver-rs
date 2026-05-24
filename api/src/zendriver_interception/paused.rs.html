@@ -18,9 +18,9 @@
 <a href=#18 id=18 data-nosnippet>18</a>//! `zendriver`. The builder in T6/T7 constructs each instance from the actor
 <a href=#19 id=19 data-nosnippet>19</a>//! loop's session + the decoded event payload.
 <a href=#20 id=20 data-nosnippet>20</a>
-<a href=#21 id=21 data-nosnippet>21</a></span><span class="kw">use </span>base64::engine::general_purpose::STANDARD <span class="kw">as </span>BASE64;
-<a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>base64::Engine <span class="kw">as _</span>;
-<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>serde_json::{json, Map, Value};
+<a href=#21 id=21 data-nosnippet>21</a></span><span class="kw">use </span>base64::Engine <span class="kw">as _</span>;
+<a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>base64::engine::general_purpose::STANDARD <span class="kw">as </span>BASE64;
+<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>serde_json::{Map, Value, json};
 <a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span>zendriver_transport::SessionHandle;
 <a href=#25 id=25 data-nosnippet>25</a>
 <a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span><span class="kw">crate</span>::error::InterceptionError;
@@ -274,8 +274,8 @@
 <a href=#274 id=274 data-nosnippet>274</a></span><span class="kw">mod </span>tests {
 <a href=#275 id=275 data-nosnippet>275</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
 <a href=#276 id=276 data-nosnippet>276</a>    <span class="kw">use </span><span class="kw">crate</span>::types::ResourceType;
-<a href=#277 id=277 data-nosnippet>277</a>    <span class="kw">use </span>zendriver_transport::testing::MockConnection;
-<a href=#278 id=278 data-nosnippet>278</a>    <span class="kw">use </span>zendriver_transport::SessionHandle;
+<a href=#277 id=277 data-nosnippet>277</a>    <span class="kw">use </span>zendriver_transport::SessionHandle;
+<a href=#278 id=278 data-nosnippet>278</a>    <span class="kw">use </span>zendriver_transport::testing::MockConnection;
 <a href=#279 id=279 data-nosnippet>279</a>
 <a href=#280 id=280 data-nosnippet>280</a>    <span class="kw">fn </span>make_request_info() -&gt; RequestInfo {
 <a href=#281 id=281 data-nosnippet>281</a>        RequestInfo {
