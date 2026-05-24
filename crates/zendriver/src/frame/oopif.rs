@@ -68,20 +68,27 @@ pub(crate) async fn register_oopif_frame(
             if frames.contains_key(*cand) {
                 drop(frames);
 
-                // Construct an OOPIF Frame: parent_id is the host iframe's
-                // frameId (the candidate we matched), url/name unknown at
-                // attach time (a subsequent Page.frameNavigated on the
-                // child session will populate them via the lifecycle
-                // subscriber spawned by the parent Tab... actually the
-                // parent's subscriber listens on the parent's session,
-                // not the OOPIF session, so URL stays empty until a
-                // future per-OOPIF lifecycle is wired). The frame_id
-                // is the OOPIF target_id itself — same as Chrome's
-                // convention for OOPIF host frames.
-                let frame_id = (*cand).to_string();
+                // The OOPIF's own frame_id is ALWAYS its target_id — the
+                // unique CDP identifier for this child renderer's frame.
+                // The matched `cand` only tells us how we found the parent
+                // (either via Chrome's opener_frame_id hint or via the
+                // common targetId == frameId convention); it must NOT be
+                // reused as the new Frame's id, or two OOPIFs sharing a
+                // parent_frame_id would collide and overwrite each other
+                // in the frames map. The matched candidate becomes the
+                // new frame's `parent_frame_id` linkage.
+                //
+                // url/name unknown at attach time (a subsequent
+                // Page.frameNavigated on the child session will populate
+                // them via the lifecycle subscriber spawned by the parent
+                // Tab... actually the parent's subscriber listens on the
+                // parent's session, not the OOPIF session, so URL stays
+                // empty until a future per-OOPIF lifecycle is wired).
+                let frame_id = target_info.target_id.clone();
+                let parent_frame_id = (*cand).to_string();
                 let oopif = Frame::new(
                     frame_id.clone(),
-                    None, // parent linkage tracked via parent tab map, not parent_frame_id
+                    Some(parent_frame_id),
                     String::new(),
                     None,
                     session,
