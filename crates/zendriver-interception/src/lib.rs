@@ -13,8 +13,10 @@ pub mod rule;
 pub mod types;
 pub mod url_pattern;
 
+pub use builder::{InterceptBuilder, RequestPattern};
 pub use error::InterceptionError;
 pub use paused::PausedRequest;
+pub use rule::Rule;
 pub use types::{
     AbortReason, RequestInfo, RequestOverrides, RequestStage, ResourceType, ResponseInfo,
 };
