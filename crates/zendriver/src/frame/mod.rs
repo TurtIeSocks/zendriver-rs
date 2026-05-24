@@ -11,10 +11,13 @@
 //! navigation land in T13–T18.
 
 use std::sync::{Arc, Weak};
+use std::time::Duration;
 
+use futures::StreamExt;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use tokio::sync::{Mutex, RwLock};
+use tokio::time::timeout;
 use zendriver_transport::SessionHandle;
 
 use crate::error::{Result, ZendriverError};
@@ -23,6 +26,11 @@ use crate::tab::{Tab, TabInner};
 
 pub mod lifecycle;
 pub mod oopif;
+
+/// Default wait window for [`Frame::wait_for_load`]. Mirrors the constant
+/// in [`crate::tab::Tab::wait_for_load`] so single-frame and tab-level
+/// navigation share their stall budget.
+const DEFAULT_LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Cheap-to-clone handle to a single document frame.
 ///
@@ -238,6 +246,68 @@ impl Frame {
             .await
     }
 
+    /// Navigate **this frame** to the given URL. Only supported for the main
+    /// frame — sub-frame navigation must be driven by mutating the parent
+    /// document's `<iframe src>` (see error message). Does NOT wait for the
+    /// load to complete; pair with [`Frame::wait_for_load`].
+    ///
+    /// Mirrors [`crate::tab::Tab::goto`]: enables the `Page` domain on the
+    /// frame's session so subsequent `wait_for_load` sees
+    /// `Page.frameStoppedLoading`, then dispatches `Page.navigate { url }`
+    /// and forwards Chrome's `errorText` (e.g. `net::ERR_NAME_NOT_RESOLVED`)
+    /// as [`ZendriverError::Navigation`] when present.
+    pub async fn goto(&self, url: impl AsRef<str>) -> Result<()> {
+        if !self.is_main() {
+            return Err(ZendriverError::Navigation(
+                "sub-frame goto not supported; set iframe.src via parent evaluate_main".into(),
+            ));
+        }
+        // Enable Page domain so we get FrameStoppedLoading events.
+        self.inner.session.call("Page.enable", json!({})).await?;
+        let url_s = url.as_ref().to_string();
+        let res = self
+            .inner
+            .session
+            .call("Page.navigate", json!({ "url": url_s }))
+            .await?;
+        if let Some(err) = res.get("errorText").and_then(|v| v.as_str()) {
+            if !err.is_empty() {
+                return Err(ZendriverError::Navigation(err.to_string()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Wait until **this frame's** `Page.frameStoppedLoading` fires.
+    /// Subscribes on the frame's session and filters events by `frameId` so
+    /// load notifications for sibling frames in the same tab don't satisfy
+    /// the wait. Default timeout matches [`crate::tab::Tab::wait_for_load`]
+    /// (30s); on expiry returns [`ZendriverError::Timeout`].
+    pub async fn wait_for_load(&self) -> Result<()> {
+        let mut stream = self
+            .inner
+            .session
+            .subscribe::<Value>("Page.frameStoppedLoading");
+        let deadline = tokio::time::Instant::now() + DEFAULT_LOAD_TIMEOUT;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(ZendriverError::Timeout(DEFAULT_LOAD_TIMEOUT));
+            }
+            let evt = timeout(remaining, stream.next())
+                .await
+                .map_err(|_| ZendriverError::Timeout(DEFAULT_LOAD_TIMEOUT))?
+                .ok_or_else(|| ZendriverError::Navigation("page event stream closed".into()))?;
+            if evt
+                .get("frameId")
+                .and_then(|v| v.as_str())
+                .is_some_and(|fid| fid == self.inner.frame_id)
+            {
+                return Ok(());
+            }
+        }
+    }
+
     /// Begin a chainable element query against this frame's document.
     /// Mirrors [`crate::tab::Tab::find`] (`.css`, `.xpath`, `.text`,
     /// `.text_exact`, `.text_regex`, `.text_regex_with_flags`, `.role`,
@@ -319,6 +389,7 @@ impl Frame {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
     use zendriver_transport::testing::MockConnection;
@@ -504,6 +575,61 @@ mod tests {
             Some("RFN0")
         );
         assert_eq!(*el.inner.backend_node_id.lock().await, Some(77));
+        conn.shutdown();
+    }
+
+    /// Main-frame `goto` mirrors `Tab::goto`: `Page.enable` first (so a
+    /// subsequent `wait_for_load` sees `Page.frameStoppedLoading`), then
+    /// `Page.navigate { url }` on the frame's session.
+    #[tokio::test]
+    async fn main_frame_goto_dispatches_page_navigate() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let frame = frame_on(sess, "FRAME_MAIN");
+
+        let fut = tokio::spawn({
+            let f = frame.clone();
+            async move { f.goto("https://example.com").await }
+        });
+
+        let id_enable = mock.expect_cmd("Page.enable").await;
+        mock.reply(id_enable, json!({})).await;
+
+        let id_nav = mock.expect_cmd("Page.navigate").await;
+        assert_eq!(mock.last_sent()["params"]["url"], "https://example.com");
+        mock.reply(id_nav, json!({ "frameId": "FRAME_MAIN" })).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    /// Sub-frame `goto` is rejected up-front (no CDP traffic) with a
+    /// `Navigation` error pointing callers at `evaluate_main` on the
+    /// parent.
+    #[tokio::test]
+    async fn sub_frame_goto_returns_navigation_error() {
+        let (_mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        // parent_frame_id = Some(...) → is_main() == false.
+        let frame = Frame::new(
+            "FRAME_CHILD".to_string(),
+            Some("FRAME_PARENT".to_string()),
+            String::new(),
+            None,
+            sess,
+            Weak::new(),
+        );
+
+        let res = frame.goto("https://example.com").await;
+        match res {
+            Err(ZendriverError::Navigation(m)) => {
+                assert!(
+                    m.contains("sub-frame goto not supported"),
+                    "unexpected message: {m}"
+                );
+            }
+            other => panic!("expected Navigation error, got: {other:?}"),
+        }
         conn.shutdown();
     }
 }
