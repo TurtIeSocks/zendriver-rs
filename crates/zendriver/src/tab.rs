@@ -1,4 +1,22 @@
-//! Tab — handle to a single CDP target session.
+//! Per-page handle to a single CDP target session.
+//!
+//! [`Tab`] is the primary interaction surface in zendriver — most workflows
+//! are some sequence of `goto`, `find().css(...).one()`, `evaluate`,
+//! `screenshot`, and `wait_for_idle`. Each [`Tab`] owns its own
+//! [`InputController`] (cursor + held-modifier state), its own per-tab
+//! frame registry, and its own in-flight network tracker, so multiple tabs
+//! in the same [`crate::Browser`] don't interfere with one another.
+//!
+//! ```no_run
+//! # async fn ex() -> zendriver::Result<()> {
+//! let browser = zendriver::Browser::builder().launch().await?;
+//! let tab = browser.main_tab();
+//! tab.goto("https://example.com").await?;
+//! tab.wait_for_load().await?;
+//! let title: String = tab.evaluate_main("document.title").await?;
+//! assert_eq!(title, "Example Domain");
+//! # Ok(()) }
+//! ```
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -19,6 +37,16 @@ use crate::screenshot::ScreenshotBuilder;
 
 const DEFAULT_LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Handle to a single CDP target session — one open page in Chrome.
+///
+/// `Tab` is `Clone` (cheap — wraps an `Arc`) and `Send + Sync`, so the same
+/// handle can be passed across `tokio::spawn` boundaries freely. Dropping
+/// the last clone tears down the per-Tab background tasks (network tracker,
+/// frame lifecycle subscriber) but does NOT close the page in Chrome — call
+/// [`Tab::close`] for an explicit teardown.
+///
+/// Obtain a `Tab` from [`crate::Browser::main_tab`], [`crate::Browser::new_tab`],
+/// or [`crate::Browser::tabs`].
 #[derive(Clone, Debug)]
 pub struct Tab {
     pub(crate) inner: Arc<TabInner>,
@@ -212,27 +240,57 @@ impl Tab {
         )
     }
 
-    /// The CDP `targetId` for the page target this tab wraps. Stable for
-    /// the lifetime of the underlying target — used by `Browser::new_tab`
-    /// to correlate a `Target.createTarget` response with the [`Tab`] that
-    /// the [`crate::browser::TabRegistrar`] subsequently registers.
+    /// CDP `targetId` for the page target this tab wraps.
+    ///
+    /// Stable for the lifetime of the underlying target — used by
+    /// [`crate::Browser::new_tab`] to correlate a `Target.createTarget`
+    /// response with the [`Tab`] that the internal `TabRegistrar`
+    /// subsequently registers.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// let browser = zendriver::Browser::builder().launch().await?;
+    /// let tab = browser.main_tab();
+    /// let id = tab.target_id();
+    /// assert!(!id.is_empty());
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn target_id(&self) -> &str {
         &self.inner.target_id
     }
 
-    /// The per-Tab [`InputController`]. Each tab carries its own cursor +
-    /// modifier state; `Element` actions (`click`, `hover`, `type_text`,
-    /// `press`) call this to drive `mouse::*` / `keyboard::*` dispatch.
-    /// Always returns a valid handle — distinct from the P3 shape that
-    /// returned `Option` to handle the `Weak::new()` test case.
+    /// Per-Tab [`InputController`].
+    ///
+    /// Each tab carries its own cursor + modifier state; [`crate::Element`]
+    /// actions ([`crate::Element::click`], [`crate::Element::hover`],
+    /// [`crate::Element::type_text`], [`crate::Element::press`]) call this
+    /// to drive internal mouse / keyboard dispatch helpers. Always returns a
+    /// valid handle.
     #[must_use]
     pub fn input(&self) -> &Arc<InputController> {
         &self.inner.input
     }
 
-    /// Escape hatch: raw `SessionHandle` for advanced users who need to send
-    /// CDP commands the high-level API doesn't expose.
+    /// Raw [`SessionHandle`] escape hatch.
+    ///
+    /// For advanced users who need to send CDP commands the high-level API
+    /// doesn't expose. Returns the underlying transport session bound to
+    /// this tab's `sessionId`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let session = tab.session();
+    /// // Send a CDP command the high-level API doesn't wrap.
+    /// session.call("Page.bringToFront", serde_json::json!({})).await?;
+    /// # Ok(()) }
+    /// ```
     pub fn session(&self) -> &SessionHandle {
         &self.inner.session
     }
@@ -242,12 +300,25 @@ impl Tab {
     /// First call dispatches `Page.getFrameTree` on the tab's session,
     /// extracts the top-level frame's `id` / `url` / `name`, and constructs
     /// a [`Frame`] whose session is this tab's session (the main frame is
-    /// always same-process). The result is cached in
-    /// [`TabInner::main_frame`] so subsequent calls return the same `Frame`
-    /// clone without a round-trip.
+    /// always same-process). The result is cached internally so subsequent
+    /// calls return the same `Frame` clone without a round-trip.
+    ///
+    /// # Errors
     ///
     /// Returns [`ZendriverError::Navigation`] if Chrome's response is
     /// missing the top-level frame id.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// let main = tab.main_frame().await?;
+    /// assert!(main.url().await.contains("example.com"));
+    /// # Ok(()) }
+    /// ```
     pub async fn main_frame(&self) -> Result<Frame> {
         let frame = self
             .inner
@@ -280,24 +351,51 @@ impl Tab {
 
     /// Snapshot of all currently-registered frames for this tab.
     ///
-    /// The registry is maintained by the lifecycle subscriber spawned in
-    /// [`Tab::new`] — see [`crate::frame::lifecycle::run`]. Includes the
-    /// top-level frame (once Chrome has emitted at least one
-    /// `Page.frameAttached` or `Page.frameNavigated` for it) plus every
-    /// same-origin sub-frame. Out-of-process iframes (OOPIFs) land in
-    /// this map via the T16 `TargetObserver` path.
+    /// The registry is maintained by an internal lifecycle subscriber spawned
+    /// when the Tab is constructed (see the [`crate::frame::lifecycle`]
+    /// module). Includes the top-level frame (once Chrome has emitted at
+    /// least one `Page.frameAttached` or `Page.frameNavigated` for it) plus
+    /// every same-origin sub-frame. Out-of-process iframes (OOPIFs) land in
+    /// this map via the [`crate::frame::oopif`] observer path.
     ///
     /// Order is unspecified ([`HashMap`] iteration); callers that need a
     /// stable order should sort by [`Frame::id`] or [`Frame::url`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// for f in tab.frames().await? {
+    ///     println!("frame {}: {}", f.id(), f.url().await);
+    /// }
+    /// # Ok(()) }
+    /// ```
     pub async fn frames(&self) -> Result<Vec<Frame>> {
         Ok(self.inner.frames.read().await.values().cloned().collect())
     }
 
     /// First frame in [`Tab::frames`] whose URL contains `url_substr`.
+    ///
     /// Linear scan over the registry. Useful for picking a frame by its
-    /// origin (`tab.frame_by_url("docs.google.com")`) without knowing the
-    /// exact path. Returns `Ok(None)` if no frame matches; the registry
+    /// origin (e.g. `tab.frame_by_url("docs.google.com")`) without knowing
+    /// the exact path. Returns `Ok(None)` if no frame matches; the registry
     /// lock is released before returning so concurrent updates can land.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// if let Some(iframe) = tab.frame_by_url("youtube.com").await? {
+    ///     println!("found iframe: {}", iframe.url().await);
+    /// }
+    /// # Ok(()) }
+    /// ```
     pub async fn frame_by_url(&self, url_substr: &str) -> Result<Option<Frame>> {
         let map = self.inner.frames.read().await;
         for frame in map.values() {
@@ -308,27 +406,52 @@ impl Tab {
         Ok(None)
     }
 
-    /// First frame in [`Tab::frames`] whose `name` attribute equals
-    /// `name`. Linear scan. Frames without a name attribute (the common
-    /// case for the top-level frame and unnamed iframes) are skipped.
-    /// Returns `Ok(None)` if no frame matches.
+    /// First frame in [`Tab::frames`] whose `name` attribute equals `name`.
+    ///
+    /// Linear scan. Frames without a name attribute (the common case for
+    /// the top-level frame and unnamed iframes) are skipped. Returns
+    /// `Ok(None)` if no frame matches.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// if let Some(content) = tab.frame_by_name("content").await? {
+    ///     content.evaluate::<()>("document.body.scrollTop = 0").await?;
+    /// }
+    /// # Ok(()) }
+    /// ```
     pub async fn frame_by_name(&self, name: &str) -> Result<Option<Frame>> {
         let map = self.inner.frames.read().await;
         Ok(map.values().find(|f| f.name() == Some(name)).cloned())
     }
 
-    /// Browser-wide cookie store handle. Convenience accessor that delegates
-    /// to the owning [`crate::Browser`]'s root [`zendriver_transport::Connection`]
-    /// via the cached [`std::sync::Weak<crate::browser::BrowserInner>`] — Chrome's
-    /// cookie store is browser-scoped, so this jar is functionally identical
-    /// to [`crate::Browser::cookies`] for the same browser.
+    /// Browser-wide cookie store handle.
+    ///
+    /// Convenience accessor that delegates to the owning [`crate::Browser`]'s
+    /// root [`zendriver_transport::Connection`] — Chrome's cookie store is
+    /// browser-scoped, so this jar is functionally identical to
+    /// [`crate::Browser::cookies`] for the same browser.
     ///
     /// If the owning Browser has already been dropped (which shouldn't happen
     /// in practice because Drop ordering keeps it alive while any Tab clone
     /// exists, but is handled defensively here), the jar falls back to the
-    /// Tab's session-level connection. The session connection points at the
-    /// same Chrome process, so the resulting jar still dispatches against
-    /// the live browser's cookie store until the WebSocket is torn down.
+    /// Tab's session-level connection.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// let jar = tab.cookies();
+    /// let all = jar.all().await?;
+    /// println!("{} cookies set", all.len());
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn cookies(&self) -> crate::CookieJar {
         let conn = self.inner.browser.upgrade().map_or_else(
@@ -338,15 +461,31 @@ impl Tab {
         crate::CookieJar::new(conn)
     }
 
-    /// Per-tab `localStorage` accessor. The returned [`crate::Storage`] is
-    /// configured with `is_local: true` and dispatches against this tab's
-    /// session; each operation re-resolves the tab's current origin via a
-    /// [`Tab::url`] round-trip (since DOMStorage is origin-keyed and a
-    /// navigation between calls would shift the target storage area).
+    /// Per-tab `localStorage` accessor.
     ///
-    /// `DOMStorage.enable` fires lazily on the first op per handle — held
-    /// behind a [`tokio::sync::OnceCell`] inside the handle — so re-using
-    /// the same handle across many calls pays the enable cost exactly once.
+    /// The returned [`crate::Storage`] is configured with `is_local: true`
+    /// and dispatches against this tab's session; each operation re-resolves
+    /// the tab's current origin via a [`Tab::url`] round-trip (since
+    /// DOMStorage is origin-keyed and a navigation between calls would shift
+    /// the target storage area).
+    ///
+    /// `DOMStorage.enable` fires lazily on the first op per handle so
+    /// re-using the same handle across many calls pays the enable cost
+    /// exactly once.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// let ls = tab.local_storage();
+    /// ls.set("theme", "dark").await?;
+    /// let v = ls.get("theme").await?;
+    /// assert_eq!(v.as_deref(), Some("dark"));
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn local_storage(&self) -> crate::Storage {
         crate::Storage::new(
@@ -356,9 +495,22 @@ impl Tab {
         )
     }
 
-    /// Per-tab `sessionStorage` accessor. Mirror of [`Tab::local_storage`]
-    /// with `is_local: false` — backs the per-tab, per-origin
-    /// `sessionStorage` area instead of the persistent localStorage.
+    /// Per-tab `sessionStorage` accessor.
+    ///
+    /// Mirror of [`Tab::local_storage`] with `is_local: false` — backs the
+    /// per-tab, per-origin `sessionStorage` area instead of the persistent
+    /// localStorage.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// tab.session_storage().set("draft", "hello").await?;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn session_storage(&self) -> crate::Storage {
         crate::Storage::new(
@@ -376,8 +528,27 @@ impl Tab {
         Ok(res)
     }
 
-    /// Navigate the tab to the given URL. Does NOT wait for the load to
-    /// complete — call `wait_for_load` after.
+    /// Navigate the tab to `url`.
+    ///
+    /// Does NOT wait for the load to complete — call [`Tab::wait_for_load`]
+    /// (or [`Tab::wait_for_idle`]) afterward to block on the navigation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Navigation`] when Chrome reports
+    /// `errorText` on the `Page.navigate` response (e.g. DNS failure,
+    /// connection refused, invalid URL).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// tab.wait_for_load().await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn goto(&self, url: impl AsRef<str>) -> Result<()> {
         // Enable Page domain so we get FrameStoppedLoading events.
         self.call("Page.enable", json!({})).await?;
@@ -392,6 +563,26 @@ impl Tab {
     }
 
     /// Wait until the main frame's load event fires.
+    ///
+    /// Subscribes to `Page.frameStoppedLoading` and waits for the first
+    /// event. Bounded by a 30s timeout.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Timeout`] when no load event arrives
+    /// within 30s; [`ZendriverError::Navigation`] if the event stream
+    /// closes (transport teardown).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// tab.wait_for_load().await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn wait_for_load(&self) -> Result<()> {
         // Subscribe before any `goto` to avoid missing the event; in P1 we
         // accept that callers may have a small race. P3+ revisits.
@@ -406,14 +597,32 @@ impl Tab {
         Ok(())
     }
 
-    /// Evaluate a JavaScript expression in an isolated world (sandbox; no
-    /// page globals visible). Default for stealth-safe execution. The result
-    /// is deserialized into `T`. Throws `JsException` if the expression
-    /// raises.
+    /// Evaluate a JavaScript expression in an isolated world.
+    ///
+    /// Runs in a sandbox where page globals are NOT visible — the default for
+    /// stealth-safe execution. The result is deserialized into `T`.
     ///
     /// If the cached isolated-world execution context was destroyed (e.g. by
     /// a page navigation), the cache is invalidated and the evaluation is
     /// retried once.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::JsException`] when the expression raises;
+    /// [`ZendriverError::Serde`] when the result cannot be decoded into `T`;
+    /// [`ZendriverError::Navigation`] when the execution context is missing.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// let n: i32 = tab.evaluate("1 + 2").await?;
+    /// assert_eq!(n, 3);
+    /// # Ok(()) }
+    /// ```
     pub async fn evaluate<T: DeserializeOwned>(&self, js: impl AsRef<str>) -> Result<T> {
         let js = js.as_ref();
         for attempt in 0..2 {
@@ -465,10 +674,28 @@ impl Tab {
         unreachable!()
     }
 
-    /// Evaluate a JavaScript expression in the page main world (page globals
-    /// accessible). Escape hatch for cases where isolated-world semantics
-    /// don't fit. The result is deserialized into `T`. Throws `JsException`
-    /// if the expression raises.
+    /// Evaluate a JavaScript expression in the page main world.
+    ///
+    /// Page globals (e.g. `window.foo` set by page scripts) ARE visible.
+    /// Escape hatch for cases where isolated-world semantics don't fit; for
+    /// stealth-sensitive contexts prefer [`Tab::evaluate`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::JsException`] when the expression raises;
+    /// [`ZendriverError::Serde`] when the result cannot be decoded into `T`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// let title: String = tab.evaluate_main("document.title").await?;
+    /// println!("{title}");
+    /// # Ok(()) }
+    /// ```
     pub async fn evaluate_main<T: DeserializeOwned>(&self, js: impl AsRef<str>) -> Result<T> {
         let res = self
             .call(
@@ -531,6 +758,26 @@ impl Tab {
     }
 
     /// Get the tab's current URL.
+    ///
+    /// Returns a parsed [`url::Url`]. Reads from `Target.getTargetInfo`'s
+    /// `targetInfo.url`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Navigation`] when Chrome returns no URL or
+    /// the URL is unparseable.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com/foo").await?;
+    /// let u = tab.url().await?;
+    /// assert_eq!(u.path(), "/foo");
+    /// # Ok(()) }
+    /// ```
     pub async fn url(&self) -> Result<url::Url> {
         let res = self.call("Target.getTargetInfo", json!({})).await?;
         let s = res["targetInfo"]["url"]
@@ -540,6 +787,20 @@ impl Tab {
     }
 
     /// Get the tab's `<title>`.
+    ///
+    /// Reads from `Target.getTargetInfo`'s `targetInfo.title`. Returns an
+    /// empty string when the page has no title.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// assert_eq!(tab.title().await?, "Example Domain");
+    /// # Ok(()) }
+    /// ```
     pub async fn title(&self) -> Result<String> {
         let res = self.call("Target.getTargetInfo", json!({})).await?;
         Ok(res["targetInfo"]["title"]
@@ -548,23 +809,51 @@ impl Tab {
             .to_string())
     }
 
-    /// Construct a [`ScreenshotBuilder`] bound to this tab. Chain
-    /// format / clip / quality / full-page options, then call
+    /// Construct a [`ScreenshotBuilder`] bound to this tab.
+    ///
+    /// Chain format / clip / quality / full-page options, then call
     /// [`ScreenshotBuilder::bytes`] or [`ScreenshotBuilder::save`] to
     /// execute the capture.
     ///
-    /// For element-scoped screenshots, see [`Element::screenshot`].
+    /// For element-scoped screenshots, see [`crate::Element::screenshot`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// tab.screenshot_builder()
+    ///     .full_page(true)
+    ///     .jpeg()
+    ///     .quality(85)
+    ///     .save("page.jpg").await?;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn screenshot_builder(&self) -> ScreenshotBuilder<'_> {
         ScreenshotBuilder::new(self)
     }
 
-    /// Capture a full-viewport PNG screenshot of this tab. Convenience
-    /// wrapper over `self.screenshot_builder().png().bytes().await` —
-    /// for JPEG / WebP / full-page / clipped captures, drive
-    /// [`Tab::screenshot_builder`] directly.
+    /// Capture a full-viewport PNG screenshot of this tab.
     ///
-    /// For element-scoped screenshots, see [`Element::screenshot`].
+    /// Convenience wrapper over `self.screenshot_builder().png().bytes().await`.
+    /// For JPEG / WebP / full-page / clipped captures, drive
+    /// [`Tab::screenshot_builder`] directly. For element-scoped screenshots,
+    /// see [`crate::Element::screenshot`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// let png_bytes = tab.screenshot().await?;
+    /// tokio::fs::write("page.png", png_bytes).await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn screenshot(&self) -> Result<Vec<u8>> {
         self.screenshot_builder().png().bytes().await
     }
@@ -572,16 +861,23 @@ impl Tab {
     /// Close this tab in Chrome.
     ///
     /// Sends `Target.closeTarget { targetId }` at browser scope (no
-    /// `session_id`) using the cached [`TabInner::target_id`]. Chrome
-    /// destroys the page target, which in turn produces a
-    /// `Target.detachedFromTarget` event whose
-    /// [`crate::browser::TabRegistrar::on_target_detached`] handler removes
-    /// this tab from the [`crate::browser::BrowserInner::tabs`] registry.
+    /// `session_id`) using the cached `targetId`. Chrome destroys the page
+    /// target, which in turn produces a `Target.detachedFromTarget` event
+    /// whose internal handler removes this tab from the browser's tab
+    /// registry.
     ///
-    /// P1 shipped this as `Target.detachFromTarget` only, which severed the
-    /// CDP session but left the underlying page target alive in Chrome. P4
-    /// upgrades to a real close so multi-tab workflows reclaim memory and
-    /// the registry stays in sync with browser state.
+    /// Consumes `self` — the [`Tab`] handle is gone after this returns.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// let tab = browser.new_tab().await?;
+    /// tab.goto("https://example.com").await?;
+    /// tab.close().await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn close(self) -> Result<()> {
         let target_id = self.target_id().to_string();
         self.inner
@@ -595,12 +891,25 @@ impl Tab {
     /// Bring this tab to the foreground in Chrome.
     ///
     /// Sends `Target.activateTarget { targetId }` at browser scope (no
-    /// `session_id`) using the cached [`TabInner::target_id`]. Chrome
-    /// focuses the page target so it becomes the visible/active tab.
+    /// `session_id`) using the cached `targetId`. Chrome focuses the page
+    /// target so it becomes the visible/active tab.
     ///
-    /// Unlike `close`, this consumes `&self` — the tab remains usable
+    /// Unlike [`Tab::close`], this borrows `&self` — the tab remains usable
     /// after activation. Useful in multi-tab workflows where you want to
     /// surface a specific tab without tearing it down.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// let tab1 = browser.main_tab();
+    /// let tab2 = browser.new_tab().await?;
+    /// // Bring the first tab back to focus.
+    /// tab1.activate().await?;
+    /// # let _ = tab2;
+    /// # Ok(()) }
+    /// ```
     pub async fn activate(&self) -> Result<()> {
         let target_id = self.target_id().to_string();
         self.inner
@@ -617,11 +926,26 @@ impl Tab {
 
     /// Navigate one step backward in the tab's session history.
     ///
-    /// Fetches the history list via `Page.getNavigationHistory`, then dispatches
-    /// `Page.navigateToHistoryEntry { entryId }` for the entry at
-    /// `currentIndex - 1`. Errors with
-    /// [`ZendriverError::HistoryNavigation`] `"no back history"` when
-    /// `currentIndex <= 0`.
+    /// Fetches the history list via `Page.getNavigationHistory`, then
+    /// dispatches `Page.navigateToHistoryEntry { entryId }` for the entry at
+    /// `currentIndex - 1`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::HistoryNavigation`] with `"no back history"`
+    /// when `currentIndex <= 0`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// tab.goto("https://example.org").await?;
+    /// tab.back().await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn back(&self) -> Result<()> {
         let history = self.call("Page.getNavigationHistory", json!({})).await?;
         let current_idx = history["currentIndex"].as_i64().ok_or_else(|| {
@@ -643,11 +967,27 @@ impl Tab {
 
     /// Navigate one step forward in the tab's session history.
     ///
-    /// Fetches the history list via `Page.getNavigationHistory`, then dispatches
-    /// `Page.navigateToHistoryEntry { entryId }` for the entry at
-    /// `currentIndex + 1`. Errors with
-    /// [`ZendriverError::HistoryNavigation`] `"no forward history"` when
-    /// `currentIndex` is already at the last entry.
+    /// Fetches the history list via `Page.getNavigationHistory`, then
+    /// dispatches `Page.navigateToHistoryEntry { entryId }` for the entry at
+    /// `currentIndex + 1`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::HistoryNavigation`] with `"no forward history"`
+    /// when `currentIndex` is already at the last entry.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// tab.goto("https://example.org").await?;
+    /// tab.back().await?;
+    /// tab.forward().await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn forward(&self) -> Result<()> {
         let history = self.call("Page.getNavigationHistory", json!({})).await?;
         let current_idx = history["currentIndex"].as_i64().ok_or_else(|| {
@@ -672,8 +1012,20 @@ impl Tab {
         Ok(())
     }
 
-    /// Reload the tab's current page. Dispatches `Page.reload` with
-    /// `ignoreCache: false` — equivalent to a soft refresh.
+    /// Reload the tab's current page.
+    ///
+    /// Dispatches `Page.reload` with `ignoreCache: false` — equivalent to a
+    /// soft refresh.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.reload().await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn reload(&self) -> Result<()> {
         self.call("Page.reload", json!({ "ignoreCache": false }))
             .await?;
@@ -684,34 +1036,66 @@ impl Tab {
     /// for 500ms, with a 30s outer timeout. Playwright `networkidle`
     /// semantics.
     ///
-    /// Backed by the per-Tab [`crate::network_idle::InFlightTracker`]
-    /// spawned at [`Tab::new`] time, which subscribes to
+    /// Backed by a per-Tab in-flight network tracker that subscribes to
     /// `Network.requestWillBeSent` (insert) and the three terminal events
     /// (`responseReceived` / `loadingFailed` / `loadingFinished`, all
-    /// remove). On timeout returns [`ZendriverError::Timeout`] with the
-    /// configured timeout duration.
+    /// remove).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Timeout`] with the configured timeout
+    /// duration when the network does not stay idle within the deadline.
     ///
     /// See [`Tab::wait_for_idle_with`] for tunable timeout + quiet window.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// tab.wait_for_idle().await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn wait_for_idle(&self) -> Result<()> {
         self.wait_for_idle_with(Duration::from_secs(30), Duration::from_millis(500))
             .await
     }
 
-    /// Wait until the tab's network has been idle (0 in-flight requests)
-    /// for `quiet_window`, bounded by `timeout`.
+    /// Wait until the tab's network has been idle for `quiet_window`,
+    /// bounded by `timeout`.
     ///
     /// Algorithm: poll the in-flight set with a `Notify`-driven wake (or a
     /// 50ms fallback tick). Track `quiet_start = Some(now)` on the first
     /// observation of an empty set; reset to `None` on any observation
-    /// where the set is non-empty. Return `Ok(())` once `now - quiet_start
-    /// >= quiet_window`. Return [`ZendriverError::Timeout`] (carrying the
-    /// supplied `timeout`) once the outer deadline elapses.
+    /// where the set is non-empty. Return once `now - quiet_start
+    /// >= quiet_window`.
     ///
     /// The 50ms tick is a safety net for the case where the tracker is
     /// already at 0 in-flight requests and no further events fire to wake
-    /// the notifier — without it, `wait_for_idle` would block until an
-    /// unrelated event arrived. With it, the worst-case latency to detect
-    /// "stayed idle long enough" is `quiet_window + 50ms`.
+    /// the notifier. Worst-case latency to detect "stayed idle long enough"
+    /// is `quiet_window + 50ms`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Timeout`] (carrying the supplied `timeout`)
+    /// once the outer deadline elapses.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use std::time::Duration;
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// tab.wait_for_idle_with(
+    ///     Duration::from_secs(60),
+    ///     Duration::from_secs(1),
+    /// ).await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn wait_for_idle_with(
         &self,
         timeout: Duration,
@@ -746,19 +1130,46 @@ impl Tab {
 }
 
 impl Tab {
-    /// Begin a chainable element query against this tab. Pick a selector
-    /// kind (`.css`, `.xpath`, `.text`, `.text_exact`, `.text_regex`,
-    /// `.text_regex_with_flags`, `.role`, `.role_named`), optionally
-    /// apply modifiers (`.nth`, `.visible_only`, `.in_frame`,
-    /// `.timeout`), then terminate with `.one()` / `.one_or_none()`.
+    /// Begin a chainable element query against this tab.
+    ///
+    /// Pick a selector kind (`.css`, `.xpath`, `.text`, `.text_exact`,
+    /// `.text_regex`, `.text_regex_with_flags`, `.role`, `.role_named`),
+    /// optionally apply modifiers (`.nth`, `.visible_only`, `.in_frame`,
+    /// `.timeout`), then terminate with `.one()` or `.one_or_none()`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// let h1 = tab.find().css("h1").one().await?;
+    /// h1.click().await?;
+    /// # Ok(()) }
+    /// ```
     pub fn find(&self) -> crate::query::FindBuilder<'_> {
         crate::query::FindBuilder::new_for_tab(self)
     }
 
     /// Begin a chainable element query against this tab that returns
-    /// ALL matches. Mirrors `find()` selectors + modifiers (no `nth`),
-    /// terminated with `.many()` (errors on empty) or `.many_or_empty()`
-    /// (returns empty `Vec` instead).
+    /// ALL matches.
+    ///
+    /// Mirrors [`Tab::find`] selectors + modifiers (no `nth`); terminate
+    /// with `.many()` (errors on empty) or `.many_or_empty()` (returns
+    /// empty `Vec` instead).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// let links = tab.find_all().css("a").many_or_empty().await?;
+    /// println!("{} links", links.len());
+    /// # Ok(()) }
+    /// ```
     pub fn find_all(&self) -> crate::query::FindAllBuilder<'_> {
         crate::query::FindAllBuilder::new_for_tab(self)
     }

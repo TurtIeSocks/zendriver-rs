@@ -1,6 +1,51 @@
-//! zendriver — async, undetectable Chrome automation over CDP.
+//! Async, undetectable Chrome automation over the Chrome DevTools Protocol.
 //!
-//! Phase 1 public surface.
+//! `zendriver` is the high-level browser-automation entry point built on a
+//! CDP-over-WebSocket transport. The crate aims to feel like Playwright /
+//! Puppeteer for Rust while staying explicit about its CDP underpinnings —
+//! every public type maps cleanly to a CDP surface, every action has a
+//! single-call escape hatch, and stealth is on by default.
+//!
+//! # Quickstart
+//!
+//! ```no_run
+//! # async fn ex() -> zendriver::Result<()> {
+//! let browser = zendriver::Browser::builder().launch().await?;
+//! let tab = browser.main_tab();
+//! tab.goto("https://example.com").await?;
+//! let title: String = tab.evaluate_main("document.title").await?;
+//! println!("{title}");
+//! browser.close().await?;
+//! # Ok(()) }
+//! ```
+//!
+//! # Module layout
+//!
+//! - [`browser`] — process lifecycle ([`Browser`], [`BrowserBuilder`]).
+//! - [`tab`] — per-page handle ([`Tab`]); the main interaction surface.
+//! - [`frame`] — same-process + out-of-process iframes ([`Frame`]).
+//! - [`element`] — DOM handle ([`Element`]) returned by [`query`] helpers.
+//! - [`query`] — query builders, ARIA roles, actionability checks.
+//! - [`cookies`] / [`storage`] — browser-scope cookie jar + per-tab storage.
+//! - [`screenshot`] — screenshot builder (PNG / JPEG / WebP / full-page).
+//! - [`input`] — keyboard / mouse / modifier state.
+//! - [`error`] — [`ZendriverError`] + [`Result`] alias.
+//! - [`traits`] — [`Queryable`] / [`Evaluable`] for code generic over
+//!   Tab + Frame + Element.
+//! - [`expect`] (feature `expect`) — Playwright-style `expect_*` helpers.
+//!
+//! # Feature flags
+//!
+//! | Flag | Crate | Purpose |
+//! |------|-------|---------|
+//! | `expect` | in-tree | `expect_request` / `expect_response` / `expect_dialog` / `expect_download` |
+//! | `interception` | `zendriver-interception` | `Fetch.*`-backed request rewriting / abort |
+//! | `cloudflare` | `zendriver-cloudflare` | Cloudflare Turnstile bypass |
+//! | `fetcher` | `zendriver-fetcher` | Chrome-for-Testing download cache |
+//!
+//! Each gated module is re-exported here under `#[cfg(feature = "...")]` so
+//! downstream code can `use zendriver::AbortReason` etc. without depending on
+//! the sub-crate directly.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
