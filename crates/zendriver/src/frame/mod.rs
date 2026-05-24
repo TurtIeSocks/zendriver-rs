@@ -19,7 +19,7 @@ use zendriver_transport::SessionHandle;
 
 use crate::error::{Result, ZendriverError};
 use crate::isolated_world::IsolatedWorldCache;
-use crate::tab::TabInner;
+use crate::tab::{Tab, TabInner};
 
 pub mod lifecycle;
 pub mod oopif;
@@ -65,10 +65,12 @@ pub(crate) struct FrameInner {
     /// it on subsequent calls. Distinct from the tab-level cache so that
     /// per-frame contexts don't collide when the tab has multiple frames.
     pub(crate) isolated_world: Mutex<IsolatedWorldCache>,
-    /// Weak ref to the owning tab. Used by later P4 tasks (lifecycle
-    /// updates, frame-tree walks). `Weak` so that a long-held `Frame`
-    /// clone does not pin the tab alive past its public lifetime.
-    #[allow(dead_code)]
+    /// Weak ref to the owning tab. Upgraded by
+    /// [`Frame::tab_for_synthesize`] when the query layer needs to wrap
+    /// a `RemoteRef` in an `Element` (the `Element` stores an owned
+    /// `Tab` clone for the lifetime of the handle). `Weak` so that a
+    /// long-held `Frame` clone does not pin the tab alive past its
+    /// public lifetime.
     pub(crate) tab: Weak<TabInner>,
 }
 
@@ -105,6 +107,30 @@ impl Frame {
     #[must_use]
     pub fn id(&self) -> &str {
         &self.inner.frame_id
+    }
+
+    /// CDP session used to dispatch commands against this frame. Crate-
+    /// internal — exposed so `query::selectors` can route
+    /// `Runtime.evaluate` / `DOM.describeNode` etc. through the right
+    /// session for [`crate::query::FindBuilder::new_for_frame`] queries.
+    ///
+    /// For the main frame and same-origin sub-frames this is identical
+    /// to the parent tab's session; for out-of-process iframes (T16
+    /// onward) it is a distinct child session attached via
+    /// `Target.attachedToTarget`.
+    pub(crate) fn session(&self) -> &SessionHandle {
+        &self.inner.session
+    }
+
+    /// Upgrade the frame's `Weak<TabInner>` into an owned `Tab` for
+    /// [`crate::element::Element::synthesize_query`] callers. Returns
+    /// `None` if the owning Tab was dropped — in practice this should
+    /// not happen because Frames are constructed by Tabs that hold a
+    /// strong reference, but the contract is exposed honestly here so
+    /// the caller (the `QueryScope::synthesize_tab` accessor in
+    /// `query::selectors`) can decide between erroring and panicking.
+    pub(crate) fn tab_for_synthesize(&self) -> Option<Tab> {
+        self.inner.tab.upgrade().map(|inner| Tab { inner })
     }
 
     /// The frame's parent CDP `frameId`. `None` iff this is the main
@@ -210,6 +236,29 @@ impl Frame {
     pub async fn content(&self) -> Result<String> {
         self.evaluate_main("document.documentElement.outerHTML")
             .await
+    }
+
+    /// Begin a chainable element query against this frame's document.
+    /// Mirrors [`crate::tab::Tab::find`] (`.css`, `.xpath`, `.text`,
+    /// `.text_exact`, `.text_regex`, `.text_regex_with_flags`, `.role`,
+    /// `.role_named`, plus `.nth`, `.visible_only`, `.in_frame`,
+    /// `.timeout`) and terminates with `.one()` / `.one_or_none()`.
+    ///
+    /// Queries dispatch on **this frame's** CDP session — same as the
+    /// parent tab's session for same-origin frames, a distinct child
+    /// session for out-of-process iframes (OOPIFs). The query root is
+    /// the frame's own `document`; matches in sibling frames or the
+    /// parent document are not considered.
+    pub fn find(&self) -> crate::query::FindBuilder<'_> {
+        crate::query::FindBuilder::new_for_frame(self)
+    }
+
+    /// Begin a chainable element query against this frame's document
+    /// that returns ALL matches. Mirror of [`Frame::find`] selectors +
+    /// modifiers (minus `.nth`), terminated with `.many()` (errors on
+    /// empty) or `.many_or_empty()` (returns empty `Vec`).
+    pub fn find_all(&self) -> crate::query::FindAllBuilder<'_> {
+        crate::query::FindAllBuilder::new_for_frame(self)
     }
 
     /// Ensure an isolated-world execution context exists for *this frame*,
@@ -365,6 +414,96 @@ mod tests {
             .await;
 
         assert_eq!(fut.await.unwrap().unwrap(), 2);
+        conn.shutdown();
+    }
+
+    /// `Frame::find().css(...).one()` dispatches `Runtime.evaluate` on the
+    /// frame's session (same MockConnection in tests — so the assertion is
+    /// "the call was made", not "it landed on a specific session id"). The
+    /// resolved `Element` is wrapped via `synthesize_query`, which upgrades
+    /// the frame's `Weak<TabInner>` — so the test frame is constructed with
+    /// a live Tab backing rather than the `Weak::new()` shortcut used by
+    /// `frame_on` in the evaluate-only tests above.
+    ///
+    /// We assert the full CDP trace mirrors the Tab/Element resolve_many
+    /// path (Runtime.evaluate → Runtime.getProperties → DOM.describeNode)
+    /// because Frame scope routes through the same `resolve_css_many` →
+    /// `extract_array_refs` pipeline as Tab/Element scope, only swapping
+    /// the underlying `SessionHandle`.
+    #[tokio::test]
+    async fn find_dispatches_runtime_evaluate_on_frames_session() {
+        use crate::tab::Tab;
+
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess.clone());
+        // Construct the Frame with a live `Weak<TabInner>` so that
+        // `synthesize_query` → `tab_for_synthesize` succeeds. We can't
+        // use `Tab::main_frame()` here because that would consume the
+        // mock connection's first inbound `Page.getFrameTree` slot.
+        let frame = Frame::new(
+            "FRAME_FIND".to_string(),
+            None,
+            String::new(),
+            None,
+            sess,
+            std::sync::Arc::downgrade(&tab.inner),
+        );
+
+        let fut = tokio::spawn({
+            let f = frame.clone();
+            async move { f.find().css("button").one().await }
+        });
+
+        // First dispatch: Runtime.evaluate with the document.querySelectorAll
+        // expression (resolve_css_many goes through the array path).
+        let id_q = mock.expect_cmd("Runtime.evaluate").await;
+        let sent = mock.last_sent()["params"]["expression"]
+            .as_str()
+            .expect("expression should be a string")
+            .to_string();
+        assert!(
+            sent.contains("document.querySelectorAll") && sent.contains("button"),
+            "frame.find().css('button').one() must dispatch document.querySelectorAll, got: {sent}"
+        );
+        mock.reply(
+            id_q,
+            json!({ "result": { "objectId": "RArrF", "type": "object", "subtype": "array" } }),
+        )
+        .await;
+
+        // Enumerate the array — one match at index 0.
+        let id_p = mock.expect_cmd("Runtime.getProperties").await;
+        assert_eq!(mock.last_sent()["params"]["objectId"], "RArrF");
+        mock.reply(
+            id_p,
+            json!({
+                "result": [
+                    {
+                        "name": "0",
+                        "value": { "objectId": "RFN0", "type": "object", "subtype": "node" }
+                    },
+                    {
+                        "name": "length",
+                        "value": { "value": 1, "type": "number" }
+                    }
+                ]
+            }),
+        )
+        .await;
+
+        // describeNode resolves the backendNodeId for the picked element.
+        let id_d = mock.expect_cmd("DOM.describeNode").await;
+        assert_eq!(mock.last_sent()["params"]["objectId"], "RFN0");
+        mock.reply(id_d, json!({ "node": { "backendNodeId": 77 } }))
+            .await;
+
+        let el = fut.await.expect("task should not panic").expect("one() ok");
+        assert_eq!(
+            el.inner.remote_object_id.lock().await.as_deref(),
+            Some("RFN0")
+        );
+        assert_eq!(*el.inner.backend_node_id.lock().await, Some(77));
         conn.shutdown();
     }
 }

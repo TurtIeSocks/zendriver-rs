@@ -21,9 +21,11 @@
 //! which only the computed AX tree resolves.
 
 use serde_json::{json, Value};
+use zendriver_transport::SessionHandle;
 
 use crate::element::Element;
 use crate::error::{Result, ZendriverError};
+use crate::frame::Frame;
 use crate::query::role::AriaRole;
 use crate::tab::Tab;
 
@@ -37,19 +39,51 @@ pub(crate) struct RemoteRef {
     pub(crate) backend_node_id: i64,
 }
 
-/// What the query runs against: a whole tab (root = `document`) or a
-/// subtree rooted at an existing element (root = `this`).
+/// What the query runs against: a whole tab (root = `document`), a
+/// subtree rooted at an existing element (root = `this`), or a specific
+/// frame (root = the frame's `document`, dispatched on the frame's own
+/// CDP session — distinct from the parent tab's session for OOPIFs).
 #[allow(dead_code)] // Element-scoped queries land with FindBuilder ext in T12.
 pub(crate) enum QueryScope<'a> {
     Tab(&'a Tab),
     Element(&'a Element),
+    Frame(&'a Frame),
 }
 
 impl QueryScope<'_> {
-    pub(crate) fn tab(&self) -> &Tab {
+    /// CDP session that should dispatch this query's commands. Tab and
+    /// Element scopes both route to the owning tab's session; Frame
+    /// scope routes to the frame's own session (same as the parent tab
+    /// for same-origin frames, a distinct child session for OOPIFs).
+    ///
+    /// All `Runtime.evaluate` / `Runtime.callFunctionOn` /
+    /// `Runtime.getProperties` / `DOM.describeNode` /
+    /// `Accessibility.getPartialAXTree` calls in this module go through
+    /// this accessor so adding a new scope variant only requires
+    /// extending the match arm.
+    pub(crate) fn session(&self) -> &SessionHandle {
         match self {
-            QueryScope::Tab(t) => t,
-            QueryScope::Element(e) => e.tab(),
+            QueryScope::Tab(t) => t.session(),
+            QueryScope::Element(e) => e.tab().session(),
+            QueryScope::Frame(f) => f.session(),
+        }
+    }
+
+    /// Owned `Tab` clone for `Element::synthesize_query`. Tab/Element
+    /// scopes return a cheap `Arc` bump on the underlying `TabInner`;
+    /// Frame scope upgrades the frame's `Weak<TabInner>` (which is
+    /// always live in practice because every `Frame` is constructed by
+    /// a `Tab` that holds the strong reference). A dead Weak indicates
+    /// the owning Tab was dropped while the Frame clone outlived it —
+    /// a logic bug worth a clear panic rather than a confusing
+    /// `Result` propagation.
+    pub(crate) fn synthesize_tab(&self) -> Tab {
+        match self {
+            QueryScope::Tab(t) => (*t).clone(),
+            QueryScope::Element(e) => e.tab().clone(),
+            QueryScope::Frame(f) => f
+                .tab_for_synthesize()
+                .expect("Frame outlived its owning Tab while a FindBuilder query was in flight"),
         }
     }
 }
@@ -116,21 +150,22 @@ impl SelectorKind {
 
 #[allow(dead_code)] // Reached via SelectorKind::resolve_one, gated until T12.
 async fn resolve_css_one(scope: &QueryScope<'_>, selector: &str) -> Result<Option<RemoteRef>> {
+    let session = scope.session();
     let result = match scope {
-        QueryScope::Tab(tab) => {
-            tab.call(
-                "Runtime.evaluate",
-                json!({
-                    "expression": format!("document.querySelector({})", json!(selector)),
-                    "returnByValue": false,
-                }),
-            )
-            .await?
+        QueryScope::Tab(_) | QueryScope::Frame(_) => {
+            session
+                .call(
+                    "Runtime.evaluate",
+                    json!({
+                        "expression": format!("document.querySelector({})", json!(selector)),
+                        "returnByValue": false,
+                    }),
+                )
+                .await?
         }
         QueryScope::Element(el) => {
             let object_id = el.remote_object_id_cloned().await?;
-            scope
-                .tab()
+            session
                 .call(
                     "Runtime.callFunctionOn",
                     json!({
@@ -143,29 +178,30 @@ async fn resolve_css_one(scope: &QueryScope<'_>, selector: &str) -> Result<Optio
                 .await?
         }
     };
-    extract_node_ref(scope.tab(), &result["result"]).await
+    extract_node_ref(session, &result["result"]).await
 }
 
 #[allow(dead_code)] // Called via `SelectorKind::resolve_many`; gated until T12.
 async fn resolve_css_many(scope: &QueryScope<'_>, selector: &str) -> Result<Vec<RemoteRef>> {
+    let session = scope.session();
     let result = match scope {
-        QueryScope::Tab(tab) => {
-            tab.call(
-                "Runtime.evaluate",
-                json!({
-                    "expression": format!(
-                        "Array.from(document.querySelectorAll({}))",
-                        json!(selector)
-                    ),
-                    "returnByValue": false,
-                }),
-            )
-            .await?
+        QueryScope::Tab(_) | QueryScope::Frame(_) => {
+            session
+                .call(
+                    "Runtime.evaluate",
+                    json!({
+                        "expression": format!(
+                            "Array.from(document.querySelectorAll({}))",
+                            json!(selector)
+                        ),
+                        "returnByValue": false,
+                    }),
+                )
+                .await?
         }
         QueryScope::Element(el) => {
             let object_id = el.remote_object_id_cloned().await?;
-            scope
-                .tab()
+            session
                 .call(
                     "Runtime.callFunctionOn",
                     json!({
@@ -178,7 +214,7 @@ async fn resolve_css_many(scope: &QueryScope<'_>, selector: &str) -> Result<Vec<
                 .await?
         }
     };
-    extract_array_refs(scope.tab(), &result["result"]).await
+    extract_array_refs(session, &result["result"]).await
 }
 
 // ---------------------------------------------------------------------
@@ -187,24 +223,25 @@ async fn resolve_css_many(scope: &QueryScope<'_>, selector: &str) -> Result<Vec<
 
 #[allow(dead_code)] // Reached only via `SelectorKind::Xpath`, wired up in T12.
 async fn resolve_xpath_one(scope: &QueryScope<'_>, expr: &str) -> Result<Option<RemoteRef>> {
+    let session = scope.session();
     let result = match scope {
-        QueryScope::Tab(tab) => {
-            tab.call(
-                "Runtime.evaluate",
-                json!({
-                    "expression": format!(
-                        "document.evaluate({}, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue",
-                        json!(expr)
-                    ),
-                    "returnByValue": false,
-                }),
-            )
-            .await?
+        QueryScope::Tab(_) | QueryScope::Frame(_) => {
+            session
+                .call(
+                    "Runtime.evaluate",
+                    json!({
+                        "expression": format!(
+                            "document.evaluate({}, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue",
+                            json!(expr)
+                        ),
+                        "returnByValue": false,
+                    }),
+                )
+                .await?
         }
         QueryScope::Element(el) => {
             let object_id = el.remote_object_id_cloned().await?;
-            scope
-                .tab()
+            session
                 .call(
                     "Runtime.callFunctionOn",
                     json!({
@@ -218,31 +255,32 @@ async fn resolve_xpath_one(scope: &QueryScope<'_>, expr: &str) -> Result<Option<
                 .await?
         }
     };
-    extract_node_ref(scope.tab(), &result["result"]).await
+    extract_node_ref(session, &result["result"]).await
 }
 
 #[allow(dead_code)] // Called via `SelectorKind::resolve_many`; gated until T12.
 async fn resolve_xpath_many(scope: &QueryScope<'_>, expr: &str) -> Result<Vec<RemoteRef>> {
     // Build an Array of nodes from an ORDERED_NODE_SNAPSHOT_TYPE result so
     // `extract_array_refs` can enumerate it via `Runtime.getProperties`.
+    let session = scope.session();
     let result = match scope {
-        QueryScope::Tab(tab) => {
-            tab.call(
-                "Runtime.evaluate",
-                json!({
-                    "expression": format!(
-                        "(function(){{var r=document.evaluate({}, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);var a=[];for(var i=0;i<r.snapshotLength;i++)a.push(r.snapshotItem(i));return a;}})()",
-                        json!(expr)
-                    ),
-                    "returnByValue": false,
-                }),
-            )
-            .await?
+        QueryScope::Tab(_) | QueryScope::Frame(_) => {
+            session
+                .call(
+                    "Runtime.evaluate",
+                    json!({
+                        "expression": format!(
+                            "(function(){{var r=document.evaluate({}, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);var a=[];for(var i=0;i<r.snapshotLength;i++)a.push(r.snapshotItem(i));return a;}})()",
+                            json!(expr)
+                        ),
+                        "returnByValue": false,
+                    }),
+                )
+                .await?
         }
         QueryScope::Element(el) => {
             let object_id = el.remote_object_id_cloned().await?;
-            scope
-                .tab()
+            session
                 .call(
                     "Runtime.callFunctionOn",
                     json!({
@@ -256,7 +294,7 @@ async fn resolve_xpath_many(scope: &QueryScope<'_>, expr: &str) -> Result<Vec<Re
                 .await?
         }
     };
-    extract_array_refs(scope.tab(), &result["result"]).await
+    extract_array_refs(session, &result["result"]).await
 }
 
 // ---------------------------------------------------------------------
@@ -324,23 +362,24 @@ async fn resolve_text_one(
     needle: &str,
     exact: bool,
 ) -> Result<Option<RemoteRef>> {
+    let session = scope.session();
     if exact {
         // XPath path returns a single node or null.
         let result = match scope {
-            QueryScope::Tab(tab) => {
-                tab.call(
-                    "Runtime.evaluate",
-                    json!({
-                        "expression": build_text_exact_xpath_js_tab(needle, false),
-                        "returnByValue": false,
-                    }),
-                )
-                .await?
+            QueryScope::Tab(_) | QueryScope::Frame(_) => {
+                session
+                    .call(
+                        "Runtime.evaluate",
+                        json!({
+                            "expression": build_text_exact_xpath_js_tab(needle, false),
+                            "returnByValue": false,
+                        }),
+                    )
+                    .await?
             }
             QueryScope::Element(el) => {
                 let object_id = el.remote_object_id_cloned().await?;
-                scope
-                    .tab()
+                session
                     .call(
                         "Runtime.callFunctionOn",
                         json!({
@@ -353,24 +392,24 @@ async fn resolve_text_one(
                     .await?
             }
         };
-        extract_node_ref(scope.tab(), &result["result"]).await
+        extract_node_ref(session, &result["result"]).await
     } else {
         // Substring path returns an Array; pick first match.
         let result = match scope {
-            QueryScope::Tab(tab) => {
-                tab.call(
-                    "Runtime.evaluate",
-                    json!({
-                        "expression": format!("({})[0] || null", build_text_substring_js_tab(needle)),
-                        "returnByValue": false,
-                    }),
-                )
-                .await?
+            QueryScope::Tab(_) | QueryScope::Frame(_) => {
+                session
+                    .call(
+                        "Runtime.evaluate",
+                        json!({
+                            "expression": format!("({})[0] || null", build_text_substring_js_tab(needle)),
+                            "returnByValue": false,
+                        }),
+                    )
+                    .await?
             }
             QueryScope::Element(el) => {
                 let object_id = el.remote_object_id_cloned().await?;
-                scope
-                    .tab()
+                session
                     .call(
                         "Runtime.callFunctionOn",
                         json!({
@@ -388,7 +427,7 @@ async fn resolve_text_one(
                     .await?
             }
         };
-        extract_node_ref(scope.tab(), &result["result"]).await
+        extract_node_ref(session, &result["result"]).await
     }
 }
 
@@ -398,22 +437,23 @@ async fn resolve_text_many(
     needle: &str,
     exact: bool,
 ) -> Result<Vec<RemoteRef>> {
+    let session = scope.session();
     let result = if exact {
         match scope {
-            QueryScope::Tab(tab) => {
-                tab.call(
-                    "Runtime.evaluate",
-                    json!({
-                        "expression": build_text_exact_xpath_js_tab(needle, true),
-                        "returnByValue": false,
-                    }),
-                )
-                .await?
+            QueryScope::Tab(_) | QueryScope::Frame(_) => {
+                session
+                    .call(
+                        "Runtime.evaluate",
+                        json!({
+                            "expression": build_text_exact_xpath_js_tab(needle, true),
+                            "returnByValue": false,
+                        }),
+                    )
+                    .await?
             }
             QueryScope::Element(el) => {
                 let object_id = el.remote_object_id_cloned().await?;
-                scope
-                    .tab()
+                session
                     .call(
                         "Runtime.callFunctionOn",
                         json!({
@@ -428,20 +468,20 @@ async fn resolve_text_many(
         }
     } else {
         match scope {
-            QueryScope::Tab(tab) => {
-                tab.call(
-                    "Runtime.evaluate",
-                    json!({
-                        "expression": build_text_substring_js_tab(needle),
-                        "returnByValue": false,
-                    }),
-                )
-                .await?
+            QueryScope::Tab(_) | QueryScope::Frame(_) => {
+                session
+                    .call(
+                        "Runtime.evaluate",
+                        json!({
+                            "expression": build_text_substring_js_tab(needle),
+                            "returnByValue": false,
+                        }),
+                    )
+                    .await?
             }
             QueryScope::Element(el) => {
                 let object_id = el.remote_object_id_cloned().await?;
-                scope
-                    .tab()
+                session
                     .call(
                         "Runtime.callFunctionOn",
                         json!({
@@ -455,7 +495,7 @@ async fn resolve_text_many(
             }
         }
     };
-    extract_array_refs(scope.tab(), &result["result"]).await
+    extract_array_refs(session, &result["result"]).await
 }
 
 // ---------------------------------------------------------------------
@@ -494,21 +534,22 @@ async fn resolve_text_regex_one(
     pattern: &str,
     flags: &str,
 ) -> Result<Option<RemoteRef>> {
+    let session = scope.session();
     let result = match scope {
-        QueryScope::Tab(tab) => {
-            tab.call(
-                "Runtime.evaluate",
-                json!({
-                    "expression": format!("({})[0] || null", build_text_regex_js_tab(pattern, flags)),
-                    "returnByValue": false,
-                }),
-            )
-            .await?
+        QueryScope::Tab(_) | QueryScope::Frame(_) => {
+            session
+                .call(
+                    "Runtime.evaluate",
+                    json!({
+                        "expression": format!("({})[0] || null", build_text_regex_js_tab(pattern, flags)),
+                        "returnByValue": false,
+                    }),
+                )
+                .await?
         }
         QueryScope::Element(el) => {
             let object_id = el.remote_object_id_cloned().await?;
-            scope
-                .tab()
+            session
                 .call(
                     "Runtime.callFunctionOn",
                     json!({
@@ -524,7 +565,7 @@ async fn resolve_text_regex_one(
                 .await?
         }
     };
-    extract_node_ref(scope.tab(), &result["result"]).await
+    extract_node_ref(session, &result["result"]).await
 }
 
 #[allow(dead_code)] // Reached via SelectorKind::resolve_many, gated until T12.
@@ -533,21 +574,22 @@ async fn resolve_text_regex_many(
     pattern: &str,
     flags: &str,
 ) -> Result<Vec<RemoteRef>> {
+    let session = scope.session();
     let result = match scope {
-        QueryScope::Tab(tab) => {
-            tab.call(
-                "Runtime.evaluate",
-                json!({
-                    "expression": build_text_regex_js_tab(pattern, flags),
-                    "returnByValue": false,
-                }),
-            )
-            .await?
+        QueryScope::Tab(_) | QueryScope::Frame(_) => {
+            session
+                .call(
+                    "Runtime.evaluate",
+                    json!({
+                        "expression": build_text_regex_js_tab(pattern, flags),
+                        "returnByValue": false,
+                    }),
+                )
+                .await?
         }
         QueryScope::Element(el) => {
             let object_id = el.remote_object_id_cloned().await?;
-            scope
-                .tab()
+            session
                 .call(
                     "Runtime.callFunctionOn",
                     json!({
@@ -560,7 +602,7 @@ async fn resolve_text_regex_many(
                 .await?
         }
     };
-    extract_array_refs(scope.tab(), &result["result"]).await
+    extract_array_refs(session, &result["result"]).await
 }
 
 // ---------------------------------------------------------------------
@@ -581,9 +623,9 @@ async fn resolve_role_one(
     let Some(needle) = name else {
         return Ok(candidates.into_iter().next());
     };
-    let tab = scope.tab();
+    let session = scope.session();
     for candidate in candidates {
-        if accessible_name_matches(tab, &candidate, needle).await? {
+        if accessible_name_matches(session, &candidate, needle).await? {
             return Ok(Some(candidate));
         }
     }
@@ -601,10 +643,10 @@ async fn resolve_role_many(
     let Some(needle) = name else {
         return Ok(candidates);
     };
-    let tab = scope.tab();
+    let session = scope.session();
     let mut out = Vec::new();
     for candidate in candidates {
-        if accessible_name_matches(tab, &candidate, needle).await? {
+        if accessible_name_matches(session, &candidate, needle).await? {
             out.push(candidate);
         }
     }
@@ -619,8 +661,12 @@ async fn resolve_role_many(
 /// no name, or a name that isn't a string are treated as a non-match
 /// (returns `Ok(false)`).
 #[allow(dead_code)] // Called via resolve_role_*, gated until T12.
-async fn accessible_name_matches(tab: &Tab, node: &RemoteRef, needle: &str) -> Result<bool> {
-    let response = tab
+async fn accessible_name_matches(
+    session: &SessionHandle,
+    node: &RemoteRef,
+    needle: &str,
+) -> Result<bool> {
+    let response = session
         .call(
             "Accessibility.getPartialAXTree",
             json!({
@@ -651,15 +697,24 @@ async fn accessible_name_matches(tab: &Tab, node: &RemoteRef, needle: &str) -> R
 /// Turn a `Runtime.evaluate` / `Runtime.callFunctionOn` *single-node*
 /// result into a `RemoteRef`. Null subtype (`document.querySelector`
 /// returned `null`) or `undefined` => `Ok(None)`.
+///
+/// Takes a `SessionHandle` (not a `Tab`) so the follow-up
+/// `DOM.describeNode` round-trip dispatches on the same session the
+/// caller used to obtain `result` — Frame-scoped queries must keep the
+/// follow-up on the Frame's session (which for OOPIFs is a distinct
+/// child session from the parent tab's).
 #[allow(dead_code)] // Used by resolve_css_one / resolve_xpath_one; both gated until T12.
-pub(crate) async fn extract_node_ref(tab: &Tab, result: &Value) -> Result<Option<RemoteRef>> {
+pub(crate) async fn extract_node_ref(
+    session: &SessionHandle,
+    result: &Value,
+) -> Result<Option<RemoteRef>> {
     if result["subtype"] == "null" || result["type"] == "undefined" {
         return Ok(None);
     }
     let Some(remote_object_id) = result["objectId"].as_str().map(str::to_string) else {
         return Ok(None);
     };
-    let backend_node_id = describe_backend_id(tab, &remote_object_id).await?;
+    let backend_node_id = describe_backend_id(session, &remote_object_id).await?;
     Ok(Some(RemoteRef {
         remote_object_id,
         backend_node_id,
@@ -670,15 +725,21 @@ pub(crate) async fn extract_node_ref(tab: &Tab, result: &Value) -> Result<Option
 /// (an `Array` RemoteObject) into a `Vec<RemoteRef>` by enumerating
 /// numeric properties via `Runtime.getProperties` and describing each
 /// element node. Empty array yields an empty Vec, not an error.
+///
+/// See [`extract_node_ref`] for the rationale on taking a
+/// `SessionHandle` rather than a `Tab` here.
 #[allow(dead_code)] // First lib caller is FindBuilder.many in T12.
-pub(crate) async fn extract_array_refs(tab: &Tab, result: &Value) -> Result<Vec<RemoteRef>> {
+pub(crate) async fn extract_array_refs(
+    session: &SessionHandle,
+    result: &Value,
+) -> Result<Vec<RemoteRef>> {
     if result["subtype"] == "null" || result["type"] == "undefined" {
         return Ok(Vec::new());
     }
     let Some(array_id) = result["objectId"].as_str() else {
         return Ok(Vec::new());
     };
-    let props = tab
+    let props = session
         .call(
             "Runtime.getProperties",
             json!({
@@ -704,7 +765,7 @@ pub(crate) async fn extract_array_refs(tab: &Tab, result: &Value) -> Result<Vec<
             continue;
         }
         if let Some(object_id) = value["objectId"].as_str().map(str::to_string) {
-            let backend_node_id = describe_backend_id(tab, &object_id).await?;
+            let backend_node_id = describe_backend_id(session, &object_id).await?;
             out.push(RemoteRef {
                 remote_object_id: object_id,
                 backend_node_id,
@@ -719,8 +780,8 @@ pub(crate) async fn extract_array_refs(tab: &Tab, result: &Value) -> Result<Vec<
 }
 
 #[allow(dead_code)] // Both callers (extract_node_ref/extract_array_refs) are gated until T12.
-async fn describe_backend_id(tab: &Tab, object_id: &str) -> Result<i64> {
-    let described = tab
+async fn describe_backend_id(session: &SessionHandle, object_id: &str) -> Result<i64> {
+    let described = session
         .call("DOM.describeNode", json!({ "objectId": object_id }))
         .await?;
     described["node"]["backendNodeId"].as_i64().ok_or_else(|| {

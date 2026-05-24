@@ -38,6 +38,7 @@ use tokio::time::Instant;
 
 use crate::element::Element;
 use crate::error::{Result, ZendriverError};
+use crate::frame::Frame;
 use crate::query::selectors::{QueryScope, SelectorKind};
 use crate::tab::Tab;
 
@@ -53,12 +54,24 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// Selector kinds are mutually exclusive — calling `.css(...)` after
 /// `.xpath(...)` overwrites the prior selector.
 pub struct FindBuilder<'tab> {
-    pub(crate) tab: &'tab Tab,
+    /// Tab whose document is the default query root when neither
+    /// [`Self::element`] nor [`Self::frame`] is set. Cleared (`None`)
+    /// for `Frame`-rooted builders (built by
+    /// [`FindBuilder::new_for_frame`]) since the parent tab is reachable
+    /// via the frame's `Weak<TabInner>` only on Element synthesis, not
+    /// on dispatch.
+    pub(crate) tab: Option<&'tab Tab>,
     /// When set, the terminal resolves against this element's subtree
     /// (`QueryScope::Element`) rather than the whole tab (`QueryScope::Tab`).
     /// Populated by [`FindBuilder::new_for_element`]; the bare
     /// [`FindBuilder::new_for_tab`] leaves it `None`.
     pub(crate) element: Option<&'tab Element>,
+    /// When set, the terminal resolves against this frame's document
+    /// (`QueryScope::Frame`) — dispatching on the frame's own CDP
+    /// session. Populated by [`FindBuilder::new_for_frame`]; mutually
+    /// exclusive with `element` (a non-`None` value here also implies
+    /// `tab = None`).
+    pub(crate) frame: Option<&'tab Frame>,
     pub(crate) selector: Option<SelectorKind>,
     pub(crate) timeout: Duration,
     pub(crate) nth: Option<usize>,
@@ -73,8 +86,9 @@ pub struct FindBuilder<'tab> {
 impl<'tab> FindBuilder<'tab> {
     pub(crate) fn new_for_tab(tab: &'tab Tab) -> Self {
         Self {
-            tab,
+            tab: Some(tab),
             element: None,
+            frame: None,
             selector: None,
             timeout: DEFAULT_TIMEOUT,
             nth: None,
@@ -90,8 +104,27 @@ impl<'tab> FindBuilder<'tab> {
     /// the element's subtree are not considered.
     pub(crate) fn new_for_element(element: &'tab Element) -> Self {
         Self {
-            tab: element.tab(),
+            tab: Some(element.tab()),
             element: Some(element),
+            frame: None,
+            selector: None,
+            timeout: DEFAULT_TIMEOUT,
+            nth: None,
+            visible_only: false,
+            in_frame: None,
+        }
+    }
+
+    /// Build a frame-scoped query rooted at `frame`. The terminal
+    /// `one()` / `one_or_none()` resolves the selector against the
+    /// frame's `document` and dispatches on the frame's own CDP
+    /// session — distinct from the parent tab's session for OOPIFs
+    /// (T16+), identical for same-origin sub-frames.
+    pub(crate) fn new_for_frame(frame: &'tab Frame) -> Self {
+        Self {
+            tab: None,
+            element: None,
+            frame: Some(frame),
             selector: None,
             timeout: DEFAULT_TIMEOUT,
             nth: None,
@@ -231,9 +264,18 @@ impl<'tab> FindBuilder<'tab> {
             )
         })?;
         let deadline = Instant::now() + self.timeout;
-        let scope = match self.element {
-            Some(el) => QueryScope::Element(el),
-            None => QueryScope::Tab(self.tab),
+        // Element > Frame > Tab precedence — Element-scoped queries
+        // beat a co-stored Tab ref (which is the element's own tab) and
+        // Frame-scoped queries are the only path where `tab` is None.
+        let scope = match (self.element, self.frame, self.tab) {
+            (Some(el), _, _) => QueryScope::Element(el),
+            (None, Some(fr), _) => QueryScope::Frame(fr),
+            (None, None, Some(tab)) => QueryScope::Tab(tab),
+            (None, None, None) => {
+                return Err(ZendriverError::Navigation(
+                    "FindBuilder has no scope (no tab, element, or frame)".into(),
+                ))
+            }
         };
         let want_nth = self.nth.unwrap_or(0);
         loop {
@@ -281,12 +323,18 @@ impl<'tab> FindBuilder<'tab> {
 /// Terminals: `.many()` errors when the result is empty;
 /// `.many_or_empty()` returns an empty `Vec` instead.
 pub struct FindAllBuilder<'tab> {
-    pub(crate) tab: &'tab Tab,
+    /// Tab whose document is the default query root. `None` when the
+    /// builder is rooted at a `Frame` instead (see [`Self::frame`]).
+    pub(crate) tab: Option<&'tab Tab>,
     /// When set, the terminal resolves against this element's subtree
     /// (`QueryScope::Element`) rather than the whole tab (`QueryScope::Tab`).
     /// Populated by [`FindAllBuilder::new_for_element`]; the bare
     /// [`FindAllBuilder::new_for_tab`] leaves it `None`.
     pub(crate) element: Option<&'tab Element>,
+    /// When set, the terminal resolves against this frame's document
+    /// and dispatches on the frame's own CDP session. Populated by
+    /// [`FindAllBuilder::new_for_frame`].
+    pub(crate) frame: Option<&'tab Frame>,
     pub(crate) selector: Option<SelectorKind>,
     pub(crate) timeout: Duration,
     pub(crate) visible_only: bool,
@@ -300,8 +348,9 @@ pub struct FindAllBuilder<'tab> {
 impl<'tab> FindAllBuilder<'tab> {
     pub(crate) fn new_for_tab(tab: &'tab Tab) -> Self {
         Self {
-            tab,
+            tab: Some(tab),
             element: None,
+            frame: None,
             selector: None,
             timeout: DEFAULT_TIMEOUT,
             visible_only: false,
@@ -315,8 +364,24 @@ impl<'tab> FindAllBuilder<'tab> {
     /// considered.
     pub(crate) fn new_for_element(element: &'tab Element) -> Self {
         Self {
-            tab: element.tab(),
+            tab: Some(element.tab()),
             element: Some(element),
+            frame: None,
+            selector: None,
+            timeout: DEFAULT_TIMEOUT,
+            visible_only: false,
+            in_frame: None,
+        }
+    }
+
+    /// Build a frame-scoped `find_all` rooted at `frame`. The terminal
+    /// `many()` / `many_or_empty()` resolves the selector against the
+    /// frame's `document` and dispatches on the frame's own CDP session.
+    pub(crate) fn new_for_frame(frame: &'tab Frame) -> Self {
+        Self {
+            tab: None,
+            element: None,
+            frame: Some(frame),
             selector: None,
             timeout: DEFAULT_TIMEOUT,
             visible_only: false,
@@ -449,9 +514,16 @@ impl<'tab> FindAllBuilder<'tab> {
             )
         })?;
         let deadline = Instant::now() + self.timeout;
-        let scope = match self.element {
-            Some(el) => QueryScope::Element(el),
-            None => QueryScope::Tab(self.tab),
+        // See `FindBuilder::one` for the precedence rationale.
+        let scope = match (self.element, self.frame, self.tab) {
+            (Some(el), _, _) => QueryScope::Element(el),
+            (None, Some(fr), _) => QueryScope::Frame(fr),
+            (None, None, Some(tab)) => QueryScope::Tab(tab),
+            (None, None, None) => {
+                return Err(ZendriverError::Navigation(
+                    "FindAllBuilder has no scope (no tab, element, or frame)".into(),
+                ))
+            }
         };
         loop {
             let candidates = selector.resolve_many(&scope).await?;

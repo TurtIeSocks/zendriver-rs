@@ -92,12 +92,17 @@ impl Element {
         nth: usize,
     ) -> Self {
         let scope_kind = match scope {
-            QueryScope::Tab(_) => ScopeKind::TabMain,
+            // Frame queries are document-level within a frame's own
+            // session — refresh-wise they look like TabMain (re-resolve
+            // the selector against the frame's document root) rather
+            // than an element-subtree walk. The dedicated FrameMain
+            // variant lands when T17 wires Frame-aware refresh.
+            QueryScope::Tab(_) | QueryScope::Frame(_) => ScopeKind::TabMain,
             QueryScope::Element(_) => ScopeKind::ElementSubtree,
         };
         Self {
             inner: Arc::new(ElementInner {
-                tab: scope.tab().clone(),
+                tab: scope.synthesize_tab(),
                 backend_node_id: Mutex::new(Some(r.backend_node_id)),
                 remote_object_id: Mutex::new(Some(r.remote_object_id)),
                 origin: ElementOrigin::Query {
