@@ -8,9 +8,13 @@
 /// at resolve time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Channel {
+    /// Chrome's stable channel — the only fully-wired channel as of v0.1.
     Stable,
+    /// Beta channel (not yet wired).
     Beta,
+    /// Dev channel (not yet wired).
     Dev,
+    /// Canary channel (not yet wired).
     Canary,
 }
 

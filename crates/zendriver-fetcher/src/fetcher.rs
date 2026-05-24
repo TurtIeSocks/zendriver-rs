@@ -56,8 +56,17 @@ impl Default for Fetcher {
 }
 
 impl Fetcher {
-    /// Construct a new fetcher with default options
-    /// (auto-detected platform, OS cache dir, latest version).
+    /// Construct a new fetcher with default options:
+    ///
+    /// - cache dir = OS cache dir (`$XDG_CACHE_HOME/zendriver/chrome` on
+    ///   Linux, `~/Library/Caches/zendriver/chrome` on macOS, ...);
+    /// - platform = auto-detected via [`Platform::auto_detect`];
+    /// - version = [`VersionSpec::Latest`].
+    ///
+    /// ```
+    /// use zendriver_fetcher::Fetcher;
+    /// let _fetcher = Fetcher::new();
+    /// ```
     pub fn new() -> Self {
         Self {
             cache_dir: None,
@@ -69,24 +78,32 @@ impl Fetcher {
     }
 
     /// Override the cache directory root.
+    ///
+    /// Useful for CI runs that mount a shared persistent volume — point the
+    /// fetcher at it and a single download serves every job.
     pub fn cache_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.cache_dir = Some(dir.into());
         self
     }
 
-    /// Pick a specific version selector.
+    /// Pick a specific version selector. Defaults to [`VersionSpec::Latest`].
     pub fn version(mut self, spec: VersionSpec) -> Self {
         self.version = spec;
         self
     }
 
-    /// Override the target platform (skips auto-detection).
+    /// Override the target platform, skipping [`Platform::auto_detect`].
     pub fn platform(mut self, p: Platform) -> Self {
         self.platform = Some(p);
         self
     }
 
-    /// Register a progress callback fired during download + key phase transitions.
+    /// Register a progress callback fired during download + at key phase
+    /// transitions.
+    ///
+    /// The callback receives a [`FetcherProgress`] snapshot with the current
+    /// [`FetcherPhase`]; it's called from `tokio` worker threads so any heavy
+    /// work should `spawn_blocking` itself off the runtime.
     pub fn on_progress(mut self, cb: impl Fn(FetcherProgress) + Send + Sync + 'static) -> Self {
         self.progress_cb = Some(Arc::new(cb));
         self
@@ -108,6 +125,19 @@ impl Fetcher {
     /// # Errors
     ///
     /// See [`FetcherError`].
+    ///
+    /// ```no_run
+    /// # async fn ex() -> Result<(), zendriver_fetcher::FetcherError> {
+    /// use zendriver_fetcher::{Fetcher, Platform, VersionSpec};
+    ///
+    /// let path = Fetcher::new()
+    ///     .platform(Platform::MacArm64)
+    ///     .version(VersionSpec::Explicit("126.0.6478.182".into()))
+    ///     .ensure_chrome()
+    ///     .await?;
+    /// println!("{}", path.display());
+    /// # Ok(()) }
+    /// ```
     pub async fn ensure_chrome(self) -> Result<PathBuf, FetcherError> {
         let cache_dir = self.cache_dir.unwrap_or_else(default_cache_dir);
         let platform = self

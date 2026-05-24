@@ -1,12 +1,26 @@
 //! Chrome for Testing binary downloader.
 //!
 //! Resolves a [`VersionSpec`] + [`Platform`] pair against the
-//! [Chrome for Testing manifest](https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json),
-//! downloads the matching zip, extracts it into an atomic cache layout,
-//! and hands back a path to the executable.
+//! [Chrome for Testing manifest][cft-manifest], downloads the matching zip,
+//! extracts it into an atomic cache layout, and hands back a path to the
+//! executable.
 //!
 //! Public entry point is [`Fetcher`]; progress is reported through
 //! [`FetcherProgress`] callbacks tagged with a [`FetcherPhase`].
+//!
+//! ```no_run
+//! # async fn ex() -> Result<(), zendriver_fetcher::FetcherError> {
+//! use zendriver_fetcher::{Fetcher, VersionSpec};
+//!
+//! let chrome = Fetcher::new()
+//!     .version(VersionSpec::Latest)
+//!     .ensure_chrome()
+//!     .await?;
+//! println!("Chrome ready at {}", chrome.display());
+//! # Ok(()) }
+//! ```
+//!
+//! [cft-manifest]: https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json
 
 pub mod cache;
 pub mod download;

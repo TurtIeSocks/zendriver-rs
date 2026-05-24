@@ -1,26 +1,42 @@
 //! Fetcher-layer errors.
 
+/// Errors surfaced by [`crate::Fetcher`] during manifest fetch, download,
+/// extract, or verification.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum FetcherError {
+    /// HTTP request failed (network down, 4xx/5xx response, etc.).
     #[error("http: {0}")]
     Http(#[from] reqwest::Error),
 
+    /// Local filesystem I/O failed (cache write, file permission, ...).
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 
+    /// Manifest JSON could not be parsed.
     #[error("manifest: {0}")]
     Manifest(#[from] serde_json::Error),
 
+    /// The requested [`crate::VersionSpec::Explicit`] string was not present
+    /// in the manifest. Carries the requested version string.
     #[error("version not found: {0}")]
     VersionNotFound(String),
 
+    /// The current platform is not covered by Chrome for Testing, or the
+    /// requested non-stable [`crate::Channel`] is not yet wired.
     #[error("unsupported platform")]
     UnsupportedPlatform,
 
+    /// SHA256 checksum mismatch on the downloaded archive.
     #[error("integrity check failed: expected {expected}, got {actual}")]
-    IntegrityFailed { expected: String, actual: String },
+    IntegrityFailed {
+        /// SHA256 from the manifest.
+        expected: String,
+        /// SHA256 computed from the downloaded bytes.
+        actual: String,
+    },
 
+    /// The downloaded zip could not be extracted.
     #[error("extraction: {0}")]
     Extraction(String),
 }

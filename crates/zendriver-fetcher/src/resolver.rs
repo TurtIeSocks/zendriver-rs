@@ -1,6 +1,6 @@
 //! Version + platform → download URL resolution.
 //!
-//! Given a parsed [`KnownGoodVersionsResponse`] manifest and a
+//! Given a parsed Chrome-for-Testing manifest plus a
 //! [`VersionSpec`]/[`Platform`] pair, picks the matching `(version, url)`
 //! tuple — or returns a specific [`FetcherError`] when no match is possible.
 //!
