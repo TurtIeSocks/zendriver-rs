@@ -175,12 +175,20 @@ impl CookieJar {
     /// Return cookies that would be sent for `url`.
     ///
     /// Maps to `Network.getCookies` with `urls: [url]`. Same response shape
-    /// as [`Self::all`].
-    pub async fn for_url(&self, url: &str) -> Result<Vec<Cookie>> {
+    /// as [`Self::all`]. Accepting [`url::Url`] (not `&str`) gates the call
+    /// at the type level: CDP rejects malformed URLs silently (returning an
+    /// empty cookie list), so making the caller present a parsed `Url`
+    /// surfaces parse errors at construction time instead of as a confusing
+    /// empty result.
+    pub async fn for_url(&self, url: &url::Url) -> Result<Vec<Cookie>> {
         let resp = self
             .inner
             .conn
-            .call_raw("Network.getCookies", json!({ "urls": [url] }), None)
+            .call_raw(
+                "Network.getCookies",
+                json!({ "urls": [url.as_str()] }),
+                None,
+            )
             .await?;
         parse_cookies(&resp)
     }
