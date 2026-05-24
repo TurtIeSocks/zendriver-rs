@@ -31,7 +31,6 @@ use crate::error::CloudflareError;
 
 /// Result of a clearance attempt.
 #[derive(Debug, Clone)]
-#[non_exhaustive]
 pub enum ClearanceOutcome {
     /// Turnstile produced a token (value of `cf-turnstile-response`).
     TokenAcquired(String),
