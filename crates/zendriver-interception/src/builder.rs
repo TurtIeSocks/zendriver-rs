@@ -29,15 +29,15 @@
 use std::sync::Arc;
 
 use futures::stream::{Stream, StreamExt};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use zendriver_transport::SessionHandle;
 
 use crate::actor::{
-    build_request_info, build_response_info, run_actor, serialize_pattern, InterceptHandle,
-    RequestPausedEvent,
+    InterceptHandle, RequestPausedEvent, build_request_info, build_response_info, run_actor,
+    serialize_pattern,
 };
 use crate::error::InterceptionError;
 use crate::paused::PausedRequest;
@@ -308,7 +308,7 @@ impl<'tab> InterceptBuilder<'tab> {
     /// active until the session is closed, but no further pauses surface to
     /// the caller.
     #[must_use = "the returned stream is the only handle on the subscription"]
-    pub fn subscribe(mut self) -> impl Stream<Item = PausedRequest> + Send {
+    pub fn subscribe(mut self) -> impl Stream<Item = PausedRequest> + Send + use<> {
         if self.patterns.is_empty() {
             self.patterns.push(RequestPattern {
                 url_pattern: Some("*".into()),

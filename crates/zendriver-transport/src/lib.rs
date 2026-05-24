@@ -39,7 +39,7 @@ pub mod testing;
 
 // Re-exports added as types land in later Phase 1 tasks:
 pub use connection::{
-    connect, connect_with_observers, spawn_actor, spawn_actor_with_observers, Connection,
+    Connection, connect, connect_with_observers, spawn_actor, spawn_actor_with_observers,
 };
 pub use error::{CallError, TransportError};
 pub use frame::{CdpCommand, CdpInbound, CdpRpcError, RawEvent};

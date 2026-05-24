@@ -10,11 +10,11 @@
 //! must observe the same shadow-DOM mounts as the live page.
 
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use zendriver_transport::SessionHandle;
 
-use crate::error::CloudflareError;
 use crate::CloudflareBypass;
+use crate::error::CloudflareError;
 
 /// Bounding box of the Turnstile iframe, in viewport CSS pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]

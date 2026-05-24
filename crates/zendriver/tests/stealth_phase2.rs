@@ -7,8 +7,8 @@
 
 use serial_test::serial;
 use std::time::Duration;
-use zendriver::stealth::StealthProfile;
 use zendriver::Browser;
+use zendriver::stealth::StealthProfile;
 
 #[tokio::test]
 #[serial]

@@ -46,9 +46,9 @@
 
 use std::path::Path;
 
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
-use serde_json::{json, Map, Value};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use serde_json::{Map, Value, json};
 
 use crate::error::{Result, ZendriverError};
 use crate::query::BoundingBox;
@@ -416,8 +416,8 @@ impl<'tab> ScreenshotBuilder<'tab> {
 mod tests {
     use super::*;
     use serde_json::json;
-    use zendriver_transport::testing::MockConnection;
     use zendriver_transport::SessionHandle;
+    use zendriver_transport::testing::MockConnection;
 
     /// Default builder = PNG, viewport-sized (no clip), no full-page. The
     /// terminal dispatches a single `Page.captureScreenshot` with `format=png`

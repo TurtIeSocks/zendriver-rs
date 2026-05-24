@@ -33,5 +33,5 @@ instead.
 
 ## MSRV
 
-We support Rust 1.75 minimum. MSRV bumps follow the same SemVer rules
-as API changes — minor bump for MSRV bump.
+We support Rust 1.85 minimum (required for edition 2024). MSRV bumps
+follow the same SemVer rules as API changes — minor bump for MSRV bump.

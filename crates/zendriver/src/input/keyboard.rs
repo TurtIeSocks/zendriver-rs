@@ -367,7 +367,7 @@ pub(crate) async fn type_text_realistic(
                 )
             };
             let do_typo =
-                profile.typo_rate > 0.0 && rand::Rng::gen::<f32>(&mut s.rng) < profile.typo_rate;
+                profile.typo_rate > 0.0 && rand::Rng::r#gen::<f32>(&mut s.rng) < profile.typo_rate;
             let typo_char = if do_typo {
                 neighbor_key(ch, &mut s.rng)
             } else {
@@ -375,7 +375,7 @@ pub(crate) async fn type_text_realistic(
             };
             let thinking = if ch == ' '
                 && profile.thinking_pause_ms_range.0 > 0
-                && rand::Rng::gen::<f32>(&mut s.rng) < 0.05
+                && rand::Rng::r#gen::<f32>(&mut s.rng) < 0.05
             {
                 rand::Rng::gen_range(
                     &mut s.rng,
@@ -426,8 +426,8 @@ mod dispatch_tests {
     use super::*;
     use serde_json::Value;
     use zendriver_stealth::InputProfile;
-    use zendriver_transport::testing::MockConnection;
     use zendriver_transport::SessionHandle;
+    use zendriver_transport::testing::MockConnection;
 
     #[tokio::test]
     async fn type_text_fast_emits_keydown_keyup_per_char() {

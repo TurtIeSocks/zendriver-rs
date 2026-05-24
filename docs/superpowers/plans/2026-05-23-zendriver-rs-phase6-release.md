@@ -450,7 +450,7 @@ Plus a PR-only job that runs the build without deploy (validate-docs).
 Badges:
 - `https://img.shields.io/crates/v/zendriver.svg`
 - `https://docs.rs/zendriver/badge.svg`
-- `https://img.shields.io/badge/rustc-1.75+-lightgray.svg`
+- `https://img.shields.io/badge/rustc-1.85+-lightgray.svg`
 - `https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg`
 - `https://github.com/TurtIeSocks/zendriver-rs/actions/workflows/ci.yml/badge.svg`
 
@@ -543,8 +543,8 @@ instead.
 
 ## MSRV
 
-We support Rust 1.75 minimum. MSRV bumps follow the same SemVer rules
-as API changes — minor bump for MSRV bump.
+We support Rust 1.85 minimum (required for edition 2024). MSRV bumps
+follow the same SemVer rules as API changes — minor bump for MSRV bump.
 ```
 
 `CONTRIBUTING.md` — short:

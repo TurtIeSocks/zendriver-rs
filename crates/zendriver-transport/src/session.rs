@@ -63,7 +63,10 @@ impl SessionHandle {
 
     /// Subscribe to events of type `T` on this session, filtering out events
     /// for every other target.
-    pub fn subscribe<T>(&self, method: &'static str) -> impl Stream<Item = T> + Send + Unpin
+    pub fn subscribe<T>(
+        &self,
+        method: &'static str,
+    ) -> impl Stream<Item = T> + Send + Unpin + use<T>
     where
         T: DeserializeOwned + Send + 'static,
     {

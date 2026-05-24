@@ -20,7 +20,7 @@
 //! comes from `aria-labelledby`, the wrapped text, or `<label>` linkage,
 //! which only the computed AX tree resolves.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use zendriver_transport::SessionHandle;
 
 use crate::element::Element;
@@ -844,8 +844,8 @@ async fn describe_backend_id(session: &SessionHandle, object_id: &str) -> Result
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use zendriver_transport::testing::MockConnection;
     use zendriver_transport::SessionHandle;
+    use zendriver_transport::testing::MockConnection;
 
     #[tokio::test]
     async fn css_one_sends_query_selector_with_selector() {

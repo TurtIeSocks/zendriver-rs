@@ -498,8 +498,8 @@ impl Element {
 mod tests {
     use super::*;
     use crate::tab::Tab;
-    use zendriver_transport::testing::MockConnection;
     use zendriver_transport::SessionHandle;
+    use zendriver_transport::testing::MockConnection;
 
     #[tokio::test]
     async fn hover_dispatches_input_dispatchmouseevent_with_type_mousemoved() {
@@ -520,10 +520,12 @@ mod tests {
         // Step 1: scroll_into_view → Runtime.callFunctionOn.
         let id = mock.expect_cmd("Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
-        assert!(sent["params"]["functionDeclaration"]
-            .as_str()
-            .unwrap()
-            .contains("scrollIntoView"));
+        assert!(
+            sent["params"]["functionDeclaration"]
+                .as_str()
+                .unwrap()
+                .contains("scrollIntoView")
+        );
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
 

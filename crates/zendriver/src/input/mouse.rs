@@ -5,8 +5,8 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::error::Result;
-use crate::input::bezier::BezierPath;
 use crate::input::InputController;
+use crate::input::bezier::BezierPath;
 use crate::tab::Tab;
 
 /// Mouse buttons for click dispatch.

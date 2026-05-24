@@ -11,8 +11,8 @@
 
 use std::time::Duration;
 
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use serde_json::json;
 
 use crate::element::Element;
@@ -97,8 +97,8 @@ impl Element {
 mod tests {
     use super::*;
     use crate::tab::Tab;
-    use zendriver_transport::testing::MockConnection;
     use zendriver_transport::SessionHandle;
+    use zendriver_transport::testing::MockConnection;
 
     #[tokio::test]
     async fn screenshot_sends_page_capturescreenshot_with_clip_matching_bbox() {
@@ -117,10 +117,12 @@ mod tests {
         let sent = mock.last_sent();
         // Sanity-check we're calling the visibility predicate, not some
         // other JS thunk.
-        assert!(sent["params"]["functionDeclaration"]
-            .as_str()
-            .unwrap()
-            .contains("offsetParent"));
+        assert!(
+            sent["params"]["functionDeclaration"]
+                .as_str()
+                .unwrap()
+                .contains("offsetParent")
+        );
         mock.reply(
             id,
             json!({ "result": { "value": true, "type": "boolean" } }),

@@ -13,7 +13,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::connection::{spawn_actor, spawn_actor_with_observers, Connection};
+use crate::connection::{Connection, spawn_actor, spawn_actor_with_observers};
 use crate::observer::TargetObserver;
 
 /// A paired pseudo-Chrome: tests push frames the driver would read, and read

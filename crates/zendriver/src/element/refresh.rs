@@ -25,11 +25,11 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::element::{Element, ElementOrigin, ScopeKind, TraversalKind};
 use crate::error::{Result, ZendriverError};
-use crate::query::selectors::{extract_node_ref, QueryScope, RemoteRef};
+use crate::query::selectors::{QueryScope, RemoteRef, extract_node_ref};
 use crate::tab::Tab;
 
 impl Element {
@@ -218,8 +218,8 @@ mod tests {
     use std::time::Duration;
 
     use tokio::sync::Mutex;
-    use zendriver_transport::testing::MockConnection;
     use zendriver_transport::SessionHandle;
+    use zendriver_transport::testing::MockConnection;
 
     use crate::element::ElementInner;
     use crate::tab::Tab;
@@ -397,10 +397,12 @@ mod tests {
 
         // Level 2: grandparent re-resolve.
         let id_eval = mock.expect_cmd("Runtime.evaluate").await;
-        assert!(mock.last_sent()["params"]["expression"]
-            .as_str()
-            .unwrap()
-            .contains(".list"));
+        assert!(
+            mock.last_sent()["params"]["expression"]
+                .as_str()
+                .unwrap()
+                .contains(".list")
+        );
         mock.reply(
             id_eval,
             json!({ "result": { "objectId": "GP_ARR", "type": "object", "subtype": "array" } }),
@@ -448,10 +450,12 @@ mod tests {
         let id_call = mock.expect_cmd("Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["objectId"], "P");
-        assert!(sent["params"]["functionDeclaration"]
-            .as_str()
-            .unwrap()
-            .contains("this.parentElement"));
+        assert!(
+            sent["params"]["functionDeclaration"]
+                .as_str()
+                .unwrap()
+                .contains("this.parentElement")
+        );
         mock.reply(
             id_call,
             json!({ "result": { "objectId": "SELF", "type": "object", "subtype": "node" } }),

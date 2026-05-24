@@ -40,7 +40,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::OnceCell;
 use zendriver_transport::SessionHandle;
 

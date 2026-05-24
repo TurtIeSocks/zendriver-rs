@@ -1281,9 +1281,11 @@ mod tests {
         let flags = b.build_flags(Path::new("/tmp/x"));
         assert!(flags.contains(&"--password-store=basic".to_string()));
         assert!(flags.contains(&"--disable-save-password-bubble".to_string()));
-        assert!(flags
-            .iter()
-            .any(|f| f.contains("PasswordManagerOnboarding")));
+        assert!(
+            flags
+                .iter()
+                .any(|f| f.contains("PasswordManagerOnboarding"))
+        );
     }
 
     #[test]

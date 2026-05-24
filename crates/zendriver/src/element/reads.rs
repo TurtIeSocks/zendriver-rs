@@ -16,12 +16,12 @@
 
 use std::collections::HashMap;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::element::Element;
 use crate::error::{Result, ZendriverError};
-use crate::query::actionability;
 use crate::query::BoundingBox;
+use crate::query::actionability;
 
 impl Element {
     /// Return the value of attribute `name`, or `None` when absent.
@@ -288,8 +288,8 @@ impl Element {
 mod tests {
     use super::*;
     use crate::tab::Tab;
-    use zendriver_transport::testing::MockConnection;
     use zendriver_transport::SessionHandle;
+    use zendriver_transport::testing::MockConnection;
 
     #[tokio::test]
     async fn attr_returns_some_when_attribute_present() {
@@ -306,10 +306,12 @@ mod tests {
         let id = mock.expect_cmd("Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["objectId"], "R1");
-        assert!(sent["params"]["functionDeclaration"]
-            .as_str()
-            .unwrap()
-            .contains("getAttribute"));
+        assert!(
+            sent["params"]["functionDeclaration"]
+                .as_str()
+                .unwrap()
+                .contains("getAttribute")
+        );
         assert_eq!(sent["params"]["arguments"][0]["value"], "href");
         mock.reply(
             id,
@@ -336,10 +338,12 @@ mod tests {
 
         let id = mock.expect_cmd("Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
-        assert!(sent["params"]["functionDeclaration"]
-            .as_str()
-            .unwrap()
-            .contains("attributes"));
+        assert!(
+            sent["params"]["functionDeclaration"]
+                .as_str()
+                .unwrap()
+                .contains("attributes")
+        );
         mock.reply(
             id,
             json!({

@@ -69,9 +69,11 @@ mod tests {
     #[test]
     fn native_profile_includes_webrtc_disable() {
         let flags = flags_for_profile(ProfileKind::Native);
-        assert!(flags
-            .iter()
-            .any(|f| f.contains("webrtc-ip-handling-policy")));
+        assert!(
+            flags
+                .iter()
+                .any(|f| f.contains("webrtc-ip-handling-policy"))
+        );
     }
 
     #[test]

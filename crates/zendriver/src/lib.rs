@@ -86,8 +86,8 @@ pub mod traits;
 
 pub use browser::{Browser, BrowserBuilder};
 pub use cookies::{Cookie, CookieJar, SameSite};
-pub use element::actions::ClickOptions;
 pub use element::Element;
+pub use element::actions::ClickOptions;
 pub use error::{BrowserError, Result, ZendriverError};
 pub use frame::Frame;
 pub use input::{Key, KeyModifiers, MouseButton, SpecialKey};

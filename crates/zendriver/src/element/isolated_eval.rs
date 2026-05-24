@@ -19,7 +19,7 @@
 //! `element/mod.rs`.
 
 use serde::de::DeserializeOwned;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::element::Element;
 use crate::error::{Result, ZendriverError};
@@ -145,8 +145,8 @@ impl Element {
 mod tests {
     use super::*;
     use crate::tab::Tab;
-    use zendriver_transport::testing::MockConnection;
     use zendriver_transport::SessionHandle;
+    use zendriver_transport::testing::MockConnection;
 
     #[tokio::test]
     async fn evaluate_dispatches_full_isolated_world_sequence() {

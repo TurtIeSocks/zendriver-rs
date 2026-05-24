@@ -32,11 +32,11 @@
 //!
 //! [`stop`]: InterceptHandle::stop
 
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use futures::StreamExt;
 use serde::Deserialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -365,8 +365,8 @@ pub(crate) fn build_request_info(ev: &RequestPausedEvent) -> RequestInfo {
 }
 
 fn decode_post_data(req: &RequestPayload) -> Option<Vec<u8>> {
-    use base64::engine::general_purpose::STANDARD as BASE64;
     use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as BASE64;
 
     if let Some(entries) = req.post_data_entries.as_ref() {
         let mut buf = Vec::new();

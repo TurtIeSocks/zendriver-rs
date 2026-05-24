@@ -216,11 +216,7 @@ fn detect_memory_gb() -> Result<u32, StealthError> {
 fn round_to_navigator_memory(gb: u32) -> u32 {
     // navigator.deviceMemory spec values: 0.25, 0.5, 1, 2, 4, 8. Cap at 8.
     // We floor at 4 for plausibility (sub-4GB consumer desktops are extinct).
-    if gb >= 8 {
-        8
-    } else {
-        4
-    }
+    if gb >= 8 { 8 } else { 4 }
 }
 
 #[cfg(test)]

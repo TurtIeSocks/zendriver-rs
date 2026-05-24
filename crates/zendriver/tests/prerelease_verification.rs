@@ -21,8 +21,8 @@
 use std::time::Duration;
 
 use serial_test::serial;
-use zendriver::stealth::StealthProfile;
 use zendriver::Browser;
+use zendriver::stealth::StealthProfile;
 
 /// cdpdriver/zendriver#107: in headless mode, a UA override set on the main
 /// tab failed to propagate to tabs opened after launch. The Rust port wires

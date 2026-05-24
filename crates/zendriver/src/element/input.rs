@@ -158,9 +158,9 @@ async fn dispatch_key(tab: &crate::tab::Tab, key: Key, modifier_bits: i32) -> Re
 mod tests {
     use super::*;
     use crate::tab::Tab;
-    use serde_json::{json, Value};
-    use zendriver_transport::testing::MockConnection;
+    use serde_json::{Value, json};
     use zendriver_transport::SessionHandle;
+    use zendriver_transport::testing::MockConnection;
 
     #[tokio::test]
     async fn type_text_fast_emits_two_dispatchkeyevent_per_char() {
@@ -190,10 +190,12 @@ mod tests {
         // focus() then calls el.focus() — one more Runtime.callFunctionOn.
         let id = mock.expect_cmd("Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
-        assert!(sent["params"]["functionDeclaration"]
-            .as_str()
-            .unwrap()
-            .contains("this.focus()"));
+        assert!(
+            sent["params"]["functionDeclaration"]
+                .as_str()
+                .unwrap()
+                .contains("this.focus()")
+        );
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
 

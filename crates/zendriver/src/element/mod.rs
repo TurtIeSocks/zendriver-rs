@@ -36,7 +36,7 @@ pub mod traversal;
 use std::sync::Arc;
 
 use serde::de::DeserializeOwned;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
 use crate::error::{Result, ZendriverError};
@@ -332,8 +332,8 @@ impl crate::traits::Queryable for Element {
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use zendriver_transport::testing::MockConnection;
     use zendriver_transport::SessionHandle;
+    use zendriver_transport::testing::MockConnection;
 
     #[tokio::test]
     async fn from_jsret_yields_evaluation_origin() {

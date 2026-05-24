@@ -14,8 +14,8 @@
 //!
 //! `navigator.platform` reads as `Win32` once `Platform::Win32` is set.
 
-use zendriver::stealth::{Platform, StealthProfile};
 use zendriver::Browser;
+use zendriver::stealth::{Platform, StealthProfile};
 
 #[tokio::main]
 #[allow(clippy::result_large_err)] // example boundary; users wrap in their own Error

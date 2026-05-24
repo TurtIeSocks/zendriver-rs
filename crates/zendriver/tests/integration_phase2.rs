@@ -5,8 +5,8 @@
 use serial_test::serial;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-use zendriver::stealth::StealthProfile;
 use zendriver::Browser;
+use zendriver::stealth::StealthProfile;
 
 async fn fixture_with_html(html: &str) -> MockServer {
     let mock = MockServer::start().await;

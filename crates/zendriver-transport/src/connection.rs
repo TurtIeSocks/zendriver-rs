@@ -10,7 +10,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_util::sync::CancellationToken;
 
-use crate::actor::{run_actor, OutboundCmd, EVENT_BUS_CAPACITY};
+use crate::actor::{EVENT_BUS_CAPACITY, OutboundCmd, run_actor};
 use crate::error::{CallError, TransportError};
 use crate::frame::RawEvent;
 use crate::observer::TargetObserver;
@@ -90,7 +90,7 @@ impl Connection {
     }
 
     /// Subscribe to all events on this connection (no filtering).
-    pub fn subscribe_raw(&self) -> impl Stream<Item = RawEvent> + Send + Unpin {
+    pub fn subscribe_raw(&self) -> impl Stream<Item = RawEvent> + Send + Unpin + use<> {
         Box::pin(
             BroadcastStream::new(self.inner.event_tx.subscribe()).filter_map(|res| async move {
                 // Lagged frames are dropped.
@@ -100,7 +100,10 @@ impl Connection {
     }
 
     /// Subscribe to events of a specific CDP method, deserialized into `T`.
-    pub fn subscribe<T>(&self, method: &'static str) -> impl Stream<Item = T> + Send + Unpin
+    pub fn subscribe<T>(
+        &self,
+        method: &'static str,
+    ) -> impl Stream<Item = T> + Send + Unpin + use<T>
     where
         T: DeserializeOwned + Send + 'static,
     {

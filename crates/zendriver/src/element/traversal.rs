@@ -173,8 +173,8 @@ mod tests {
     use super::*;
     use crate::element::ElementOrigin;
     use crate::tab::Tab;
-    use zendriver_transport::testing::MockConnection;
     use zendriver_transport::SessionHandle;
+    use zendriver_transport::testing::MockConnection;
 
     #[tokio::test]
     async fn parent_calls_runtime_callfunctionon_with_parent_element() {

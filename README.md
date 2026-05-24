@@ -5,7 +5,7 @@ Async-first, undetectable browser automation via the Chrome DevTools Protocol.
 [![crates.io](https://img.shields.io/crates/v/zendriver.svg)](https://crates.io/crates/zendriver)
 [![docs.rs](https://docs.rs/zendriver/badge.svg)](https://docs.rs/zendriver)
 [![Book](https://img.shields.io/badge/book-mdBook-blue)](https://turtiesocks.github.io/zendriver-rs/)
-[![MSRV 1.75](https://img.shields.io/badge/rustc-1.75+-lightgray.svg)](https://blog.rust-lang.org/2023/12/28/Rust-1.75.0.html)
+[![MSRV 1.85](https://img.shields.io/badge/rustc-1.85+-lightgray.svg)](https://blog.rust-lang.org/2025/02/20/Rust-1.85.0/)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](#license)
 [![CI](https://github.com/TurtIeSocks/zendriver-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/TurtIeSocks/zendriver-rs/actions/workflows/ci.yml)
 

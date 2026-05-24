@@ -9,7 +9,7 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use futures::{FutureExt, SinkExt, StreamExt};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
@@ -128,22 +128,22 @@ pub(crate) async fn run_actor<S>(
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<CdpInbound>(&text) {
                             Ok(CdpInbound::Response { id, result, error, .. }) => {
-                                if let Some(reply) = pending.remove(&id) {
+                                match pending.remove(&id) { Some(reply) => {
                                     let res = match error {
                                         Some(e) => Err(e),
                                         None    => Ok(result.unwrap_or(Value::Null)),
                                     };
                                     let _ = reply.send(res);
-                                } else {
+                                } _ => {
                                     warn!(id, "response for unknown id (caller dropped?)");
-                                }
+                                }}
                             }
                             Ok(CdpInbound::Event { method, params, session_id }) => {
                                 // Branch on target-lifecycle events before broadcasting.
                                 if method == "Target.attachedToTarget" && !observers.is_empty() {
                                     match serde_json::from_value::<TargetAttached>(params.clone()) {
                                         Ok(ev) => {
-                                            if let Some(strong) = weak_inner.upgrade() {
+                                            match weak_inner.upgrade() { Some(strong) => {
                                                 let conn = Connection { inner: strong };
                                                 let timeout_dur = conn.observer_timeout();
                                                 let observers_clone = observers.clone();
@@ -156,12 +156,12 @@ pub(crate) async fn run_actor<S>(
                                                     )
                                                     .await;
                                                 });
-                                            } else {
+                                            } _ => {
                                                 warn!(
                                                     "Target.attachedToTarget arrived but \
                                                      Connection has dropped; skipping observers"
                                                 );
-                                            }
+                                            }}
                                         }
                                         Err(e) => error!(
                                             "bad Target.attachedToTarget payload: {e}"
@@ -182,16 +182,15 @@ pub(crate) async fn run_actor<S>(
                                         // but logging gives users a fighting
                                         // chance to find a regression instead
                                         // of dropping the panic silently.
-                                        let timeout_dur = if let Some(strong) =
-                                            weak_inner.upgrade()
-                                        {
+                                        let timeout_dur = match weak_inner.upgrade()
+                                        { Some(strong) => {
                                             Connection { inner: strong }.observer_timeout()
-                                        } else {
+                                        } _ => {
                                             // Connection has dropped — pick a
                                             // short default so the task can't
                                             // hang forever.
                                             Duration::from_secs(5)
-                                        };
+                                        }};
                                         for obs in &observers {
                                             let obs2 = obs.clone();
                                             let sid = ev.session_id.clone();

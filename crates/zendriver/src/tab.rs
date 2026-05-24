@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use serde::de::DeserializeOwned;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::time::timeout;
 use tracing::trace;
 use zendriver_transport::SessionHandle;

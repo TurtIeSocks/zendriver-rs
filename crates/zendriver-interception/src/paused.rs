@@ -18,9 +18,9 @@
 //! `zendriver`. The builder in T6/T7 constructs each instance from the actor
 //! loop's session + the decoded event payload.
 
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
-use serde_json::{json, Map, Value};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use serde_json::{Map, Value, json};
 use zendriver_transport::SessionHandle;
 
 use crate::error::InterceptionError;
@@ -274,8 +274,8 @@ impl Drop for PausedRequest {
 mod tests {
     use super::*;
     use crate::types::ResourceType;
-    use zendriver_transport::testing::MockConnection;
     use zendriver_transport::SessionHandle;
+    use zendriver_transport::testing::MockConnection;
 
     fn make_request_info() -> RequestInfo {
         RequestInfo {

@@ -488,7 +488,7 @@ impl<'scope> FindBuilder<'scope> {
             (None, None, None, None) => {
                 return Err(ZendriverError::Navigation(
                     "FindBuilder has no scope (no tab, element, or frame)".into(),
-                ))
+                ));
             }
         };
         let want_nth = self.nth.unwrap_or(0);
@@ -786,7 +786,7 @@ impl<'scope> FindAllBuilder<'scope> {
             (None, None, None, None) => {
                 return Err(ZendriverError::Navigation(
                     "FindAllBuilder has no scope (no tab, element, or frame)".into(),
-                ))
+                ));
             }
         };
         loop {
@@ -874,8 +874,8 @@ fn describe_selector(sel: &SelectorKind) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
-    use zendriver_transport::testing::MockConnection;
     use zendriver_transport::SessionHandle;
+    use zendriver_transport::testing::MockConnection;
 
     #[tokio::test]
     async fn one_returns_element_when_query_selector_matches() {
@@ -1197,7 +1197,8 @@ mod tests {
 
         let id_q = mock.expect_cmd("Runtime.evaluate").await;
         assert_eq!(
-            mock.last_sent()["sessionId"], "S_FRAME",
+            mock.last_sent()["sessionId"],
+            "S_FRAME",
             "in_frame override must route Runtime.evaluate through the Frame's session, not the Tab's"
         );
         assert_eq!(
