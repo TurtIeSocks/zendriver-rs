@@ -9,17 +9,39 @@ use crate::input::bezier::BezierPath;
 use crate::input::InputController;
 use crate::tab::Tab;
 
-/// CDP mouse button names.
+/// Mouse buttons for click dispatch.
+///
+/// Mirrors the CDP `MouseEvent.button` enum.
+///
+/// # Examples
+///
+/// ```
+/// use zendriver::MouseButton;
+/// assert_eq!(MouseButton::Left.cdp_str(), "left");
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseButton {
+    /// Primary button (left for right-handed users).
     Left,
+    /// Middle button (scroll wheel click).
     Middle,
+    /// Secondary button (right for right-handed users).
     Right,
+    /// "Back" thumb button.
     Back,
+    /// "Forward" thumb button.
     Forward,
 }
 
 impl MouseButton {
+    /// CDP wire string for this button.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use zendriver::MouseButton;
+    /// assert_eq!(MouseButton::Right.cdp_str(), "right");
+    /// ```
     #[must_use]
     pub fn cdp_str(self) -> &'static str {
         match self {

@@ -1,5 +1,13 @@
 //! Realistic + raw input simulation: mouse paths, keyboard dispatch,
-//! per-browser pointer/modifier state.
+//! per-tab pointer/modifier state.
+//!
+//! Most user code interacts with the input layer indirectly via
+//! [`crate::Element`] action methods. Public types re-exported here:
+//!
+//! - [`Key`] — single-key dispatch target.
+//! - [`SpecialKey`] — named non-character keys (Enter, F1, ...).
+//! - [`KeyModifiers`] — composable modifier bitflags.
+//! - [`MouseButton`] — mouse button enum.
 
 use std::sync::Arc;
 
@@ -17,11 +25,16 @@ pub mod pointer_state;
 pub use keyboard::{Key, KeyModifiers, SpecialKey};
 pub use mouse::MouseButton;
 
-/// Per-Browser input state holder. Wraps `InputState` + an `InputProfile`.
+/// Per-Tab input state holder.
 ///
-/// One `InputController` lives on each `Browser` and is shared via
-/// `Arc<InputController>` so each `Tab`/`Element` action can coordinate
-/// pointer position + modifier state across the same tab tree.
+/// Wraps internal cursor + modifier state and a
+/// [`zendriver_stealth::InputProfile`] that controls realism
+/// (typing cadence, mouse jitter). One `InputController` lives on each
+/// [`crate::Tab`]; element actions ([`crate::Element::click`],
+/// [`crate::Element::type_text`], etc.) consult it.
+///
+/// Most user code does not construct this directly — it's built internally
+/// when a [`crate::Tab`] is registered, and accessed via [`crate::Tab::input`].
 #[derive(Debug)]
 pub struct InputController {
     // Fields are exercised by tests and consumed by later P3 tasks
@@ -43,8 +56,20 @@ pub(crate) struct InputState {
 }
 
 impl InputController {
-    /// Build an `InputController` from an `InputProfile`. The internal RNG
-    /// is seeded from OS entropy for unpredictable typing/movement jitter.
+    /// Build an [`InputController`] from a
+    /// [`zendriver_stealth::InputProfile`].
+    ///
+    /// The internal RNG is seeded from OS entropy for unpredictable
+    /// typing/movement jitter.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use zendriver::input::InputController;
+    /// use zendriver_stealth::InputProfile;
+    /// let ic = InputController::new(InputProfile::native());
+    /// # let _ = ic;
+    /// ```
     #[must_use]
     pub fn new(profile: InputProfile) -> Arc<Self> {
         Arc::new(Self {

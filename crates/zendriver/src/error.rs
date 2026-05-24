@@ -1,79 +1,130 @@
 //! Error hierarchy for the `zendriver` crate.
+//!
+//! Every fallible API in zendriver returns [`Result<T>`], which is an alias
+//! for `std::result::Result<T, ZendriverError>`. [`ZendriverError`] is a
+//! non-exhaustive enum covering CDP transport failures, navigation /
+//! element / cookie / storage operation errors, and (when the relevant
+//! cargo feature is enabled) wrappers around the sub-crate error types.
 
 use std::path::PathBuf;
 use std::time::Duration;
 
 use zendriver_transport::CallError;
 
+/// Top-level error type returned by every fallible API in this crate.
+///
+/// `#[non_exhaustive]` — new variants may be added in minor releases.
+/// Pattern-match defensively (use a `_` arm).
+///
+/// # Examples
+///
+/// ```
+/// # use zendriver::ZendriverError;
+/// # use std::time::Duration;
+/// let e = ZendriverError::Timeout(Duration::from_secs(5));
+/// assert_eq!(e.to_string(), "timed out after 5s");
+/// ```
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ZendriverError {
+    /// Chrome process / launch failure.
     #[error("browser process failed: {0}")]
     Browser(#[from] BrowserError),
 
+    /// Lower-level transport (WebSocket) failure.
     #[error("transport: {0}")]
     Transport(#[from] zendriver_transport::TransportError),
 
+    /// Chrome returned a CDP RPC error (a method call returned `error.code` /
+    /// `error.message`).
     #[error("CDP RPC error [{code}] {message}")]
     Cdp {
+        /// CDP RPC error code (typically negative; see
+        /// [JSON-RPC spec](https://www.jsonrpc.org/specification#error_object)).
         code: i32,
+        /// Human-readable error message from Chrome.
         message: String,
+        /// Optional `data` field from the RPC error payload.
         data: Option<serde_json::Value>,
     },
 
+    /// A query selector did not match within the timeout.
     #[error("element not found: {selector}")]
-    ElementNotFound { selector: String },
+    ElementNotFound {
+        /// Description of the selector that failed to match (e.g.
+        /// `"css(button.primary)"`, `"text_exact(Submit)"`).
+        selector: String,
+    },
 
+    /// Generic operation timeout.
     #[error("timed out after {0:?}")]
     Timeout(Duration),
 
+    /// Page navigation failed (DNS, connection refused, page crashed, etc.).
     #[error("navigation failed: {0}")]
     Navigation(String),
 
+    /// A JS expression raised an exception during evaluation.
     #[error("javascript exception: {0}")]
     JsException(String),
 
+    /// An element handle is stale and the auto-refresh path failed.
     #[error("element is stale: refresh failed or origin not refreshable")]
     ElementStale,
 
+    /// An element handle obtained from raw JS evaluation cannot be refreshed
+    /// (no selector to replay).
     #[error("element not refreshable (was returned from a JS evaluation)")]
     NotRefreshable,
 
+    /// An element did not become actionable (visible + enabled + stable +
+    /// hit-tested) within the gate timeout.
     #[error("element not actionable within {0:?}: {1}")]
     NotActionable(std::time::Duration, String),
 
+    /// Frame lookup by id / url / name failed.
     #[error("frame not found: {0}")]
     FrameNotFound(String),
 
+    /// Tab lookup by target_id / session_id failed.
     #[error("tab not found: {0}")]
     TabNotFound(String),
 
+    /// A cookie operation failed (CDP refusal, malformed payload, etc.).
     #[error("cookie operation failed: {0}")]
     Cookie(String),
 
+    /// A DOM storage operation failed (origin mismatch, CDP refusal, etc.).
     #[error("storage operation failed: {0}")]
     Storage(String),
 
+    /// Session history navigation failed (no back/forward entry).
     #[error("history navigation failed: {0}")]
     HistoryNavigation(String),
 
+    /// JSON serialization / deserialization error at the CDP boundary.
     #[error("serde: {0}")]
     Serde(#[from] serde_json::Error),
 
+    /// I/O error (file read/write, etc.).
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 
+    /// Stealth fingerprint resolution failed.
     #[error("stealth: {0}")]
     Stealth(#[from] zendriver_stealth::StealthError),
 
+    /// Request-interception sub-crate error. Gated by feature `interception`.
     #[cfg(feature = "interception")]
     #[error("interception: {0}")]
     Interception(#[from] zendriver_interception::InterceptionError),
 
+    /// Cloudflare bypass sub-crate error. Gated by feature `cloudflare`.
     #[cfg(feature = "cloudflare")]
     #[error("cloudflare: {0}")]
     Cloudflare(#[from] zendriver_cloudflare::CloudflareError),
 
+    /// Chrome-for-Testing fetcher error. Gated by feature `fetcher`.
     #[cfg(feature = "fetcher")]
     #[error("fetcher: {0}")]
     Fetcher(#[from] zendriver_fetcher::FetcherError),
@@ -106,26 +157,43 @@ impl From<CallError> for ZendriverError {
     }
 }
 
+/// Convenience alias for `Result<T, ZendriverError>`.
+///
+/// All fallible APIs in this crate return this type.
 pub type Result<T, E = ZendriverError> = std::result::Result<T, E>;
 
+/// Errors specific to Chrome process discovery / spawn / WebSocket attach.
+///
+/// Surfaced inside [`ZendriverError::Browser`].
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum BrowserError {
+    /// No Chrome / Chromium binary found on PATH or in conventional install
+    /// locations. `searched` lists every path that was probed.
     #[error("chrome executable not found; searched: {searched:?}")]
-    ExecutableNotFound { searched: Vec<PathBuf> },
+    ExecutableNotFound {
+        /// Every candidate path the discovery routine probed.
+        searched: Vec<PathBuf>,
+    },
 
+    /// `Command::spawn` returned an OS-level failure.
     #[error("chrome failed to start: {0}")]
     SpawnFailed(#[source] std::io::Error),
 
+    /// Chrome exited before printing its `DevTools listening on` line —
+    /// typically a profile lock, missing GPU sandbox, or invalid flag.
     #[error("chrome exited before WS endpoint became available (status: {0:?})")]
     EarlyExit(std::process::ExitStatus),
 
+    /// Timeout waiting for the `DevTools listening on` line.
     #[error("timed out waiting for chrome WS endpoint")]
     WsTimeout,
 
+    /// Stderr contained an unparseable DevTools URL line.
     #[error("could not parse devtools endpoint from chrome stderr")]
     DevtoolsParse,
 
+    /// `tempfile` cleanup of the `user_data_dir` failed.
     #[error("failed to clean user_data_dir: {0}")]
     Cleanup(#[source] std::io::Error),
 }

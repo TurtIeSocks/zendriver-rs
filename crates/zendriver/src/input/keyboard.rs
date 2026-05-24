@@ -1,54 +1,113 @@
-//! Keyboard types + dispatch (dispatch impl lands in Task 7).
+//! Keyboard types: [`Key`] / [`SpecialKey`] / [`KeyModifiers`].
+//!
+//! Pass these to [`crate::Element::press`] / [`crate::Element::press_with`]
+//! to dispatch single keystrokes.
 
 use bitflags::bitflags;
 
-/// A single key dispatch target.
+/// A single key dispatch target — either a typed character or a named
+/// special key.
+///
+/// # Examples
+///
+/// ```
+/// use zendriver::{Key, SpecialKey};
+/// let _ = Key::Char('a');
+/// let _ = Key::Special(SpecialKey::Enter);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
+    /// A typed character.
     Char(char),
+    /// A named non-character key (Enter, Tab, F1, etc.).
     Special(SpecialKey),
 }
 
-/// Named non-character keys for `Element::press`.
+/// Named non-character keys for [`crate::Element::press`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpecialKey {
+    /// Return / Enter.
     Enter,
+    /// Tab.
     Tab,
+    /// Escape.
     Escape,
+    /// Backspace.
     Backspace,
+    /// Delete (forward delete).
     Delete,
+    /// Space bar.
     Space,
+    /// Up arrow.
     ArrowUp,
+    /// Down arrow.
     ArrowDown,
+    /// Left arrow.
     ArrowLeft,
+    /// Right arrow.
     ArrowRight,
+    /// Home.
     Home,
+    /// End.
     End,
+    /// Page Up.
     PageUp,
+    /// Page Down.
     PageDown,
+    /// F1.
     F1,
+    /// F2.
     F2,
+    /// F3.
     F3,
+    /// F4.
     F4,
+    /// F5.
     F5,
+    /// F6.
     F6,
+    /// F7.
     F7,
+    /// F8.
     F8,
+    /// F9.
     F9,
+    /// F10.
     F10,
+    /// F11.
     F11,
+    /// F12.
     F12,
+    /// Insert.
     Insert,
+    /// Caps Lock.
     CapsLock,
+    /// Num Lock.
     NumLock,
+    /// Scroll Lock.
     ScrollLock,
+    /// Print Screen.
     PrintScreen,
+    /// Pause / Break.
     Pause,
+    /// Context Menu / Application key.
     ContextMenu,
 }
 
 impl SpecialKey {
-    /// Maps to CDP `Input.dispatchKeyEvent` fields (code, key, windowsVirtualKeyCode).
+    /// Map to CDP `Input.dispatchKeyEvent` fields.
+    ///
+    /// Returns `(code, key, windowsVirtualKeyCode)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use zendriver::SpecialKey;
+    /// let (code, key, vk) = SpecialKey::Enter.to_cdp();
+    /// assert_eq!(code, "Enter");
+    /// assert_eq!(key, "Enter");
+    /// assert_eq!(vk, 13);
+    /// ```
     #[must_use]
     pub fn to_cdp(self) -> (&'static str, &'static str, i32) {
         match self {
@@ -90,18 +149,38 @@ impl SpecialKey {
 }
 
 bitflags! {
-    /// Composable keyboard modifier bits. Matches CDP modifier-bits encoding.
+    /// Composable keyboard modifier bits.
+    ///
+    /// Matches CDP modifier-bits encoding. Combine with `|`:
+    ///
+    /// ```
+    /// use zendriver::KeyModifiers;
+    /// let combo = KeyModifiers::CTRL | KeyModifiers::SHIFT;
+    /// assert!(combo.contains(KeyModifiers::CTRL));
+    /// ```
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
     pub struct KeyModifiers: u8 {
+        /// Alt key (Option on macOS).
         const ALT     = 0b0001;
+        /// Control key.
         const CTRL    = 0b0010;
+        /// Meta key (Command on macOS, Windows key on Windows).
         const META    = 0b0100;
+        /// Shift key.
         const SHIFT   = 0b1000;
     }
 }
 
 impl KeyModifiers {
     /// Encode as the integer modifier bitmask CDP expects.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use zendriver::KeyModifiers;
+    /// assert_eq!(KeyModifiers::CTRL.cdp_bits(), 2);
+    /// assert_eq!((KeyModifiers::CTRL | KeyModifiers::SHIFT).cdp_bits(), 10);
+    /// ```
     #[must_use]
     pub fn cdp_bits(self) -> i32 {
         i32::from(self.bits())
