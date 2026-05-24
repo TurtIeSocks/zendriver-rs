@@ -1,6 +1,6 @@
 [package]
 name = "zendriver-interception"
-description = "CDP-level stealth patches for zendriver (populated in Phase 5)"
+description = "Network interception (Fetch.* CDP domain) for zendriver"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,3 +10,21 @@ authors.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+zendriver-transport.workspace = true
+tokio.workspace               = true
+tokio-util.workspace          = true
+tokio-stream.workspace        = true
+async-trait.workspace         = true
+futures.workspace             = true
+serde.workspace               = true
+serde_json.workspace          = true
+thiserror.workspace           = true
+tracing.workspace             = true
+base64                        = "0.22"
+glob.workspace                = true
+
+[dev-dependencies]
+tokio-test.workspace = true
+zendriver-transport  = { workspace = true, features = ["testing"] }

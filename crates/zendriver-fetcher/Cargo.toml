@@ -1,6 +1,6 @@
 [package]
 name = "zendriver-fetcher"
-description = "CDP-level stealth patches for zendriver (populated in Phase 5)"
+description = "Chrome binary downloader for zendriver"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,3 +10,20 @@ authors.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+tokio.workspace      = true
+reqwest.workspace    = true
+zip.workspace        = true
+sha2.workspace       = true
+dirs.workspace       = true
+serde.workspace      = true
+serde_json.workspace = true
+thiserror.workspace  = true
+tracing.workspace    = true
+futures.workspace    = true
+
+[dev-dependencies]
+tokio-test.workspace = true
+wiremock.workspace   = true
+tempfile.workspace   = true

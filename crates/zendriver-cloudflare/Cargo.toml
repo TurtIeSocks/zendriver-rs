@@ -1,6 +1,6 @@
 [package]
 name = "zendriver-cloudflare"
-description = "CDP-level stealth patches for zendriver (populated in Phase 5)"
+description = "Cloudflare Turnstile bypass for zendriver"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,3 +10,16 @@ authors.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+zendriver-transport.workspace    = true
+zendriver-interception.workspace = true
+tokio.workspace                  = true
+serde.workspace                  = true
+serde_json.workspace             = true
+thiserror.workspace              = true
+tracing.workspace                = true
+
+[dev-dependencies]
+tokio-test.workspace = true
+zendriver-transport  = { workspace = true, features = ["testing"] }

@@ -53,6 +53,11 @@ regex              = "1"
 bitflags           = "2"
 rand               = { version = "0.8", default-features = false, features = ["std", "std_rng", "small_rng"] }
 base64             = "0.22"
+reqwest            = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "deflate", "stream"] }
+zip                = { version = "2",    default-features = false, features = ["deflate"] }
+sha2               = "0.10"
+dirs               = "5"
+glob               = "0.3"
 
 # Dev-deps
 tokio-test         = { version = "0.4" }

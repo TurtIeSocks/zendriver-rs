@@ -65,6 +65,18 @@ pub enum ZendriverError {
 
     #[error("stealth: {0}")]
     Stealth(#[from] zendriver_stealth::StealthError),
+
+    #[cfg(feature = "interception")]
+    #[error("interception: {0}")]
+    Interception(#[from] zendriver_interception::InterceptionError),
+
+    #[cfg(feature = "cloudflare")]
+    #[error("cloudflare: {0}")]
+    Cloudflare(#[from] zendriver_cloudflare::CloudflareError),
+
+    #[cfg(feature = "fetcher")]
+    #[error("fetcher: {0}")]
+    Fetcher(#[from] zendriver_fetcher::FetcherError),
 }
 
 impl From<CallError> for ZendriverError {

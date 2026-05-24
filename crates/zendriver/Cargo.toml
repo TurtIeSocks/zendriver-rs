@@ -15,16 +15,29 @@ workspace = true
 [features]
 default = []
 # Enables real-Chrome integration tests (requires Chrome installed on $PATH).
-integration-tests = []
+integration-tests = ["dep:wiremock", "dep:serial_test", "interception", "expect", "cloudflare"]
 # Nightly stealth tests against external sites (sannysoft, areyouheadless).
 # Separate from integration-tests because external sites flake.
 stealth-tests = ["integration-tests"]
 # Re-exports the MockConnection testing helper for downstream users.
 testing = ["zendriver-transport/testing"]
+# Network interception via the Fetch CDP domain.
+interception = ["dep:zendriver-interception"]
+# expect_* helpers (request/response/dialog/download); standalone today.
+expect = []
+# Cloudflare Turnstile bypass; pulls in interception.
+cloudflare = ["interception", "dep:zendriver-cloudflare"]
+# Chrome for Testing binary downloader.
+fetcher = ["dep:zendriver-fetcher"]
+# Network-touching fetcher tests (CfT manifest, real downloads).
+fetcher-network-tests = ["fetcher"]
 
 [dependencies]
 zendriver-transport.workspace = true
 zendriver-stealth.workspace   = true
+zendriver-interception        = { workspace = true, optional = true }
+zendriver-cloudflare          = { workspace = true, optional = true }
+zendriver-fetcher             = { workspace = true, optional = true }
 async-trait.workspace         = true
 chromiumoxide_cdp.workspace   = true
 tokio.workspace               = true
@@ -40,6 +53,11 @@ regex.workspace               = true
 bitflags.workspace            = true
 rand.workspace                = true
 base64.workspace              = true
+# Optional: only enabled by the integration-tests feature so the deps
+# can be gated via `dep:` syntax (dev-dependencies are not addressable
+# from `[features]`).
+wiremock    = { workspace = true, optional = true }
+serial_test = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -48,8 +66,6 @@ libc = "0.2"
 tokio-test.workspace          = true
 insta.workspace               = true
 tracing-subscriber.workspace  = true
-wiremock = { workspace = true, optional = false }
-serial_test = { workspace = true, optional = false }
 zendriver-transport = { workspace = true, features = ["testing"] }
 
 [[example]]
