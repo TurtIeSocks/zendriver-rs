@@ -4,8 +4,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use base64::engine::general_purpose::STANDARD as BASE64;
-use base64::Engine as _;
 use futures::StreamExt;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -17,6 +15,7 @@ use crate::error::{Result, ZendriverError};
 use crate::frame::Frame;
 use crate::input::InputController;
 use crate::isolated_world::IsolatedWorldCache;
+use crate::screenshot::ScreenshotBuilder;
 
 const DEFAULT_LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -532,21 +531,25 @@ impl Tab {
             .to_string())
     }
 
-    /// Capture a full-viewport PNG screenshot of this tab. Sends
-    /// `Page.captureScreenshot { format: "png" }` and base64-decodes the
-    /// returned `data` field into the raw PNG bytes.
+    /// Construct a [`ScreenshotBuilder`] bound to this tab. Chain
+    /// format / clip / quality / full-page options, then call
+    /// [`ScreenshotBuilder::bytes`] or [`ScreenshotBuilder::save`] to
+    /// execute the capture.
+    ///
+    /// For element-scoped screenshots, see [`Element::screenshot`].
+    #[must_use]
+    pub fn screenshot_builder(&self) -> ScreenshotBuilder<'_> {
+        ScreenshotBuilder::new(self)
+    }
+
+    /// Capture a full-viewport PNG screenshot of this tab. Convenience
+    /// wrapper over `self.screenshot_builder().png().bytes().await` —
+    /// for JPEG / WebP / full-page / clipped captures, drive
+    /// [`Tab::screenshot_builder`] directly.
     ///
     /// For element-scoped screenshots, see [`Element::screenshot`].
     pub async fn screenshot(&self) -> Result<Vec<u8>> {
-        let res = self
-            .call("Page.captureScreenshot", json!({ "format": "png" }))
-            .await?;
-        let data = res.get("data").and_then(|v| v.as_str()).ok_or_else(|| {
-            ZendriverError::Navigation("Page.captureScreenshot returned no data".into())
-        })?;
-        BASE64
-            .decode(data)
-            .map_err(|e| ZendriverError::Navigation(format!("invalid base64 in screenshot: {e}")))
+        self.screenshot_builder().png().bytes().await
     }
 
     /// Close this tab in Chrome.
