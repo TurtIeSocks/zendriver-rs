@@ -1,10 +1,10 @@
-//! `Element` keyboard input: `type_text` / `type_text_raw` / `press` /
+//! `Element` keyboard input: `type_text` / `type_text_fast` / `press` /
 //! `press_with`.
 //!
 //! Each method focuses this element first (so keystrokes route to it),
 //! then dispatches via the shared [`InputController`] — `type_text` /
-//! `type_text_raw` route through [`keyboard::type_text_realistic`] /
-//! [`keyboard::type_text_raw`], and `press` / `press_with` issue a single
+//! `type_text_fast` route through [`keyboard::type_text_realistic`] /
+//! [`keyboard::type_text_fast`], and `press` / `press_with` issue a single
 //! [`keyboard::dispatch_char`] or [`keyboard::dispatch_special`] depending
 //! on whether the [`Key`] is a character or a named special key.
 //!
@@ -36,7 +36,7 @@ impl Element {
     /// active [`crate::input::InputController`]'s
     /// [`zendriver_stealth::InputProfile`].
     ///
-    /// Use [`Element::type_text_raw`] when you want a deterministic
+    /// Use [`Element::type_text_fast`] when you want a deterministic
     /// keystroke sequence (no delays, no typos) — that path is preferable
     /// for tests + fast automation flows.
     pub async fn type_text(&self, text: impl AsRef<str>) -> Result<()> {
@@ -59,14 +59,14 @@ impl Element {
     /// Use [`Element::type_text`] when realism matters (driving a page
     /// that's keystroke-timing-sensitive, paths under the `spoofed`
     /// stealth profile, etc.).
-    pub async fn type_text_raw(&self, text: impl AsRef<str>) -> Result<()> {
+    pub async fn type_text_fast(&self, text: impl AsRef<str>) -> Result<()> {
         let text = text.as_ref().to_string();
         self.with_refresh(|| {
             let text = text.clone();
             async move {
                 self.focus().await?;
                 let input = self.inner.tab.input().clone();
-                keyboard::type_text_raw(&input, &self.inner.tab, &text).await
+                keyboard::type_text_fast(&input, &self.inner.tab, &text).await
             }
         })
         .await
@@ -126,7 +126,7 @@ mod tests {
     use zendriver_transport::SessionHandle;
 
     #[tokio::test]
-    async fn type_text_raw_emits_two_dispatchkeyevent_per_char() {
+    async fn type_text_fast_emits_two_dispatchkeyevent_per_char() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
         // `Tab::new_for_test` seeds the native input profile with a
@@ -137,7 +137,7 @@ mod tests {
 
         let fut = tokio::spawn({
             let e = el.clone();
-            async move { e.type_text_raw("hi").await }
+            async move { e.type_text_fast("hi").await }
         });
 
         // focus() runs the actionability gate first: visible → enabled.
@@ -160,7 +160,7 @@ mod tests {
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
 
-        // type_text_raw "hi" emits 4 Input.dispatchKeyEvent calls in
+        // type_text_fast "hi" emits 4 Input.dispatchKeyEvent calls in
         // order: h-down, h-up, i-down, i-up.
         let expected = [
             ("h", "keyDown"),

@@ -1,10 +1,10 @@
-//! `Element` actions: `hover` / `hover_raw` / `focus` / `scroll_into_view`.
+//! `Element` actions: `hover` / `hover_fast` / `focus` / `scroll_into_view`.
 //!
 //! Each action wraps its CDP dispatch sequence in [`Element::with_refresh`]
 //! so a stale handle (post-navigation, post-React-rerender) transparently
 //! re-resolves once and retries.
 //!
-//! `hover` / `hover_raw`:
+//! `hover` / `hover_fast`:
 //!   1. `scroll_into_view` — bring the element into the viewport so its
 //!      bbox center is a real, dispatchable coordinate.
 //!   2. `wait_actionable` with `visible + stable + receives_pointer` — gate
@@ -16,7 +16,7 @@
 //!   3. Compute bbox center (`x + width / 2`, `y + height / 2`).
 //!   4. Dispatch the mouse-move via the shared [`InputController`]:
 //!      `hover` uses [`mouse::move_realistic`] (Bezier + jitter + timing
-//!      to model human pointer paths); `hover_raw` uses [`mouse::move_raw`]
+//!      to model human pointer paths); `hover_fast` uses [`mouse::move_raw`]
 //!      (single teleport dispatch for test/automation paths that don't
 //!      need behavioral realism).
 //!
@@ -75,7 +75,7 @@ pub struct ClickOptions {
     /// performs. Mirrors Playwright's `force: true`.
     pub force: bool,
     /// Bezier-interpolated cursor path (`true`) vs single teleport
-    /// dispatch (`false`). `true` by default; the `click_raw` shortcut
+    /// dispatch (`false`). `true` by default; the `click_fast` shortcut
     /// flips this for deterministic test paths.
     pub realistic: bool,
     /// Click position relative to the element's bbox top-left
@@ -112,7 +112,7 @@ impl Element {
     /// `click_with(ClickOptions { realistic: false, force: true, ..Default::default() })`.
     /// Intended for test paths and fast automation flows where realism
     /// and per-action gating get in the way.
-    pub async fn click_raw(&self) -> Result<()> {
+    pub async fn click_fast(&self) -> Result<()> {
         self.click_with(ClickOptions {
             realistic: false,
             force: true,
@@ -164,7 +164,7 @@ impl Element {
     /// Hover the cursor over this element's bbox center, with a realistic
     /// Bezier-interpolated mouse path. See module docs for the full
     /// sequence (`scroll_into_view` → actionability gate → bbox center →
-    /// dispatch). Use [`Element::hover_raw`] when the cursor path doesn't
+    /// dispatch). Use [`Element::hover_fast`] when the cursor path doesn't
     /// matter (tests, fast automation paths that don't need behavioral
     /// realism).
     pub async fn hover(&self) -> Result<()> {
@@ -198,7 +198,7 @@ impl Element {
     /// [`Element::hover`] does — same actionability gate + bbox math, but
     /// no human-pointer modeling. Intended for paths where deterministic
     /// timing matters more than realism.
-    pub async fn hover_raw(&self) -> Result<()> {
+    pub async fn hover_fast(&self) -> Result<()> {
         self.with_refresh(|| async move {
             self.scroll_into_view().await?;
             actionability::wait_actionable(

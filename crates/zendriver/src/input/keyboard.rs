@@ -333,7 +333,7 @@ pub(crate) async fn type_text_realistic(
 
 /// Type `text` as fast as possible — no delays, no typos.
 #[allow(dead_code)]
-pub(crate) async fn type_text_raw(input: &InputController, tab: &Tab, text: &str) -> Result<()> {
+pub(crate) async fn type_text_fast(input: &InputController, tab: &Tab, text: &str) -> Result<()> {
     let mods = input.state.lock().await.modifiers_held.cdp_bits();
     for ch in text.chars() {
         dispatch_char(tab, ch, mods).await?;
@@ -351,7 +351,7 @@ mod dispatch_tests {
     use zendriver_transport::SessionHandle;
 
     #[tokio::test]
-    async fn type_text_raw_emits_keydown_keyup_per_char() {
+    async fn type_text_fast_emits_keydown_keyup_per_char() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
         let tab = Tab::new_for_test(sess);
@@ -360,7 +360,7 @@ mod dispatch_tests {
         let fut = tokio::spawn({
             let input = input.clone();
             let tab = tab.clone();
-            async move { type_text_raw(&input, &tab, "ab").await }
+            async move { type_text_fast(&input, &tab, "ab").await }
         });
 
         for ch in ['a', 'a', 'b', 'b'] {
