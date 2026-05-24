@@ -61,11 +61,7 @@ pub struct InterceptHandle {
 impl InterceptHandle {
     /// Construct a handle from the cancel token + actor-exit receiver. The
     /// constructor is `pub(crate)` so the only public path is via
-    /// `InterceptBuilder::start` in Task 7.
-    //
-    // `dead_code` until Task 7 wires `InterceptBuilder::start` — this is the
-    // sole constructor; T7 will start calling it.
-    #[allow(dead_code)]
+    /// [`InterceptBuilder::start`](crate::builder::InterceptBuilder::start).
     pub(crate) fn new(cancel: CancellationToken, done: oneshot::Receiver<()>) -> Self {
         Self {
             cancel,
@@ -84,9 +80,7 @@ impl InterceptHandle {
     pub async fn stop(mut self) -> Result<(), InterceptionError> {
         self.cancel.cancel();
         match self.done.take() {
-            Some(rx) => rx
-                .await
-                .map_err(|_| InterceptionError::SubscriptionClosed),
+            Some(rx) => rx.await.map_err(|_| InterceptionError::SubscriptionClosed),
             None => Ok(()),
         }
     }
@@ -107,44 +101,41 @@ impl Drop for InterceptHandle {
 /// Projects only the fields the actor consumes. Extra fields Chrome sends
 /// (e.g. `frameId`, `networkId`) are deliberately ignored — the rule API
 /// surfaces what callers asked for via [`RequestInfo`] / [`ResponseInfo`].
-//
-// Fields look "unread" on a non-test lib build because `run_actor` is only
-// reachable through `InterceptBuilder::start` (wired by Task 7) and via the
-// in-crate test module. `dead_code` will retire on its own once T7 lands.
-#[allow(dead_code)]
+///
+/// `pub(crate)` so [`crate::builder::InterceptBuilder::subscribe`] can reuse
+/// the same projection on the stream path.
 #[derive(Debug, Deserialize)]
-struct RequestPausedEvent {
+pub(crate) struct RequestPausedEvent {
     #[serde(rename = "requestId")]
-    request_id: String,
-    request: RequestPayload,
+    pub(crate) request_id: String,
+    pub(crate) request: RequestPayload,
     #[serde(rename = "resourceType", default)]
-    resource_type: Option<String>,
+    pub(crate) resource_type: Option<String>,
     // Only populated at the `Response` stage.
     #[serde(rename = "responseStatusCode", default)]
-    response_status_code: Option<u16>,
+    pub(crate) response_status_code: Option<u16>,
     #[serde(rename = "responseStatusText", default)]
-    response_status_text: Option<String>,
+    pub(crate) response_status_text: Option<String>,
     #[serde(rename = "responseHeaders", default)]
-    response_headers: Option<Vec<HeaderPair>>,
+    pub(crate) response_headers: Option<Vec<HeaderPair>>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
-struct RequestPayload {
-    url: String,
-    method: String,
+pub(crate) struct RequestPayload {
+    pub(crate) url: String,
+    pub(crate) method: String,
     #[serde(default)]
-    headers: HashMap<String, String>,
+    pub(crate) headers: HashMap<String, String>,
     #[serde(rename = "postData", default)]
-    post_data: Option<String>,
+    pub(crate) post_data: Option<String>,
     #[serde(rename = "hasPostData", default)]
     _has_post_data: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
-struct HeaderPair {
-    name: String,
-    value: String,
+pub(crate) struct HeaderPair {
+    pub(crate) name: String,
+    pub(crate) value: String,
 }
 
 /// Run the interception actor until `cancel` fires.
@@ -155,10 +146,6 @@ struct HeaderPair {
 ///
 /// `done` is the oneshot the actor signals on exit so the matching
 /// [`InterceptHandle::stop`] call can synchronize on actor teardown.
-//
-// `dead_code` until Task 7 wires `InterceptBuilder::start` to spawn this.
-// The in-crate test module exercises it today.
-#[allow(dead_code)]
 pub(crate) async fn run_actor(
     session: SessionHandle,
     rules: Vec<Rule>,
@@ -241,11 +228,6 @@ pub(crate) async fn run_actor(
 /// Walk the rule list against `ev.request.url` and dispatch the first match.
 /// No match → plain `Fetch.continueRequest` so Chrome proceeds as if no
 /// interception were registered.
-//
-// Dead-code allows on the actor helpers track the same Task 7 wiring window
-// as `run_actor` itself: all reachable from tests, not yet reachable from a
-// non-test build. Removes once T7 wires `InterceptBuilder::start`.
-#[allow(dead_code)]
 async fn handle_paused(
     session: &SessionHandle,
     rules: &[Rule],
@@ -278,8 +260,7 @@ async fn handle_paused(
 
 /// Serialize a [`RequestPattern`] into the JSON shape CDP expects on
 /// `Fetch.enable.patterns[]`. All three fields are optional per CDP.
-#[allow(dead_code)]
-fn serialize_pattern(p: &RequestPattern) -> Value {
+pub(crate) fn serialize_pattern(p: &RequestPattern) -> Value {
     let mut obj = Map::new();
     if let Some(url) = &p.url_pattern {
         obj.insert("urlPattern".into(), Value::String(url.clone()));
@@ -297,8 +278,7 @@ fn serialize_pattern(p: &RequestPattern) -> Value {
 }
 
 /// Build a [`RequestInfo`] from the decoded event for `Modify` closures.
-#[allow(dead_code)]
-fn build_request_info(ev: &RequestPausedEvent) -> RequestInfo {
+pub(crate) fn build_request_info(ev: &RequestPausedEvent) -> RequestInfo {
     RequestInfo {
         url: ev.request.url.clone(),
         method: ev.request.method.clone(),
@@ -315,10 +295,10 @@ fn build_request_info(ev: &RequestPausedEvent) -> RequestInfo {
 /// Build a [`ResponseInfo`] from the decoded event when Chrome paused at the
 /// `Response` stage. Returns `None` at the `Request` stage (the event
 /// payload's `responseStatusCode` is absent).
-// Surfaces via Task 7 stream path; kept here so the actor module owns the
-// decoding logic for both rule + stream consumers.
-#[allow(dead_code)]
-fn build_response_info(ev: &RequestPausedEvent) -> Option<ResponseInfo> {
+///
+/// Used on both the rule-driven actor path and the
+/// [`crate::builder::InterceptBuilder::subscribe`] stream path.
+pub(crate) fn build_response_info(ev: &RequestPausedEvent) -> Option<ResponseInfo> {
     let status = ev.response_status_code?;
     let status_text = ev.response_status_text.clone().unwrap_or_default();
     let headers = ev
@@ -342,7 +322,6 @@ fn build_response_info(ev: &RequestPausedEvent) -> Option<ResponseInfo> {
 /// failing the whole event — Chrome occasionally adds new types we don't
 /// know about yet, and dropping a real intercepted request for that would
 /// be a worse failure mode than reporting `Other`.
-#[allow(dead_code)]
 fn parse_resource_type(s: Option<&str>) -> ResourceType {
     match s.unwrap_or("Other") {
         "Document" => ResourceType::Document,
@@ -366,10 +345,7 @@ fn parse_resource_type(s: Option<&str>) -> ResourceType {
 }
 
 // --- CDP dispatch helpers --------------------------------------------------
-//
-// All `#[allow(dead_code)]` until Task 7 wires `InterceptBuilder::start`.
 
-#[allow(dead_code)]
 async fn fail_request(
     session: &SessionHandle,
     request_id: &str,
@@ -387,21 +363,16 @@ async fn fail_request(
     Ok(())
 }
 
-#[allow(dead_code)]
 async fn continue_passthrough(
     session: &SessionHandle,
     request_id: &str,
 ) -> Result<(), InterceptionError> {
     session
-        .call(
-            "Fetch.continueRequest",
-            json!({ "requestId": request_id }),
-        )
+        .call("Fetch.continueRequest", json!({ "requestId": request_id }))
         .await?;
     Ok(())
 }
 
-#[allow(dead_code)]
 async fn continue_with_url(
     session: &SessionHandle,
     request_id: &str,
@@ -419,7 +390,6 @@ async fn continue_with_url(
     Ok(())
 }
 
-#[allow(dead_code)]
 async fn continue_with_overrides(
     session: &SessionHandle,
     request_id: &str,
@@ -449,7 +419,6 @@ async fn continue_with_overrides(
     Ok(())
 }
 
-#[allow(dead_code)]
 async fn fulfill_request(
     session: &SessionHandle,
     request_id: &str,
@@ -514,12 +483,10 @@ mod tests {
         // frame::lifecycle do the same); we just observe it landed so the
         // subsequent `emit_event_for_session` runs after the subscription
         // is in place.
-        let enable_id = tokio::time::timeout(
-            Duration::from_secs(2),
-            mock.expect_cmd("Fetch.enable"),
-        )
-        .await
-        .expect("actor did not send Fetch.enable within 2s");
+        let enable_id =
+            tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Fetch.enable"))
+                .await
+                .expect("actor did not send Fetch.enable within 2s");
         let enable_params = mock.last_sent()["params"].clone();
         assert_eq!(enable_params["handleAuthRequests"], false);
         assert_eq!(enable_params["patterns"][0]["urlPattern"], "*");
@@ -545,12 +512,10 @@ mod tests {
         .await;
 
         // Step 3: expect the fail_request dispatch.
-        let fail_id = tokio::time::timeout(
-            Duration::from_secs(2),
-            mock.expect_cmd("Fetch.failRequest"),
-        )
-        .await
-        .expect("actor did not send Fetch.failRequest within 2s");
+        let fail_id =
+            tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Fetch.failRequest"))
+                .await
+                .expect("actor did not send Fetch.failRequest within 2s");
         let fail_params = mock.last_sent()["params"].clone();
         assert_eq!(fail_params["requestId"], "REQ-1");
         assert_eq!(fail_params["errorReason"], "BlockedByClient");
@@ -559,12 +524,10 @@ mod tests {
         // Step 4: cancel the actor + verify it dispatches `Fetch.disable`
         // on shutdown and signals exit through the oneshot.
         cancel.cancel();
-        let disable_id = tokio::time::timeout(
-            Duration::from_secs(2),
-            mock.expect_cmd("Fetch.disable"),
-        )
-        .await
-        .expect("actor did not send Fetch.disable on cancel");
+        let disable_id =
+            tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Fetch.disable"))
+                .await
+                .expect("actor did not send Fetch.disable on cancel");
         mock.reply(disable_id, json!({})).await;
 
         tokio::time::timeout(Duration::from_secs(2), done_rx)

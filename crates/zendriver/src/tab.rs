@@ -747,6 +747,32 @@ impl Tab {
     }
 }
 
+#[cfg(feature = "interception")]
+impl Tab {
+    /// Construct a fluent
+    /// [`InterceptBuilder`](zendriver_interception::InterceptBuilder) for
+    /// this tab's session.
+    ///
+    /// Chain rule registration (`.block(...)` / `.redirect(...)` /
+    /// `.respond(...)` / `.modify_request(...)`) and optional CDP
+    /// `RequestPattern` filters (`.pattern(...)` / `.at_request()` /
+    /// `.at_response()` / `.resource(...)`), then call
+    /// [`start`](zendriver_interception::InterceptBuilder::start) to spawn
+    /// the rule-driven actor (returns an
+    /// [`InterceptHandle`](zendriver_interception::InterceptHandle) whose
+    /// `Drop` tears it down), or
+    /// [`subscribe`](zendriver_interception::InterceptBuilder::subscribe)
+    /// to receive raw
+    /// [`PausedRequest`](zendriver_interception::PausedRequest)s on a
+    /// stream you drive manually.
+    ///
+    /// Gated by the `interception` cargo feature.
+    #[must_use]
+    pub fn intercept(&self) -> zendriver_interception::InterceptBuilder<'_> {
+        zendriver_interception::InterceptBuilder::new(self.session())
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
@@ -1637,6 +1663,71 @@ mod tests {
              window must have reset quiet_start, requiring a fresh post-R2 quiet \
              window before resolving",
         );
+
+        conn.shutdown();
+    }
+
+    // --- Tab::intercept (P5 T7, feature = "interception") -------------
+
+    /// `tab.intercept().block("*").start()` should spawn the rule actor on
+    /// the tab's session: assert `Fetch.enable` lands and a matching
+    /// `Fetch.requestPaused` triggers `Fetch.failRequest`. Verifies the
+    /// `Tab::intercept` shim plumbs into `InterceptBuilder` end-to-end.
+    #[cfg(feature = "interception")]
+    #[tokio::test]
+    async fn intercept_block_all_dispatches_fail_request_via_tab_shim() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let handle = tab.intercept().block("*").unwrap().start();
+
+        // Side-task `Fetch.enable` must land first; default match-all
+        // pattern is injected when none was registered explicitly.
+        let enable_id =
+            tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Fetch.enable"))
+                .await
+                .expect("intercept did not send Fetch.enable within 2s");
+        let enable_params = mock.last_sent()["params"].clone();
+        assert_eq!(enable_params["handleAuthRequests"], false);
+        assert_eq!(enable_params["patterns"][0]["urlPattern"], "*");
+        mock.reply(enable_id, json!({})).await;
+
+        // Any paused URL matches the `block("*")` rule.
+        mock.emit_event_for_session(
+            "Fetch.requestPaused",
+            json!({
+                "requestId": "REQ-1",
+                "request": {
+                    "url": "https://any.test/whatever",
+                    "method": "GET",
+                    "headers": {},
+                },
+                "resourceType": "Document",
+            }),
+            "S1",
+        )
+        .await;
+
+        let fail_id =
+            tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Fetch.failRequest"))
+                .await
+                .expect("actor did not send Fetch.failRequest within 2s");
+        let fail_params = mock.last_sent()["params"].clone();
+        assert_eq!(fail_params["requestId"], "REQ-1");
+        assert_eq!(fail_params["errorReason"], "BlockedByClient");
+        mock.reply(fail_id, json!({})).await;
+
+        let stop_fut = tokio::spawn(handle.stop());
+        let disable_id =
+            tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Fetch.disable"))
+                .await
+                .expect("actor did not send Fetch.disable on stop()");
+        mock.reply(disable_id, json!({})).await;
+        stop_fut
+            .await
+            .expect("stop() task panicked")
+            .expect("stop() returned Err");
 
         conn.shutdown();
     }

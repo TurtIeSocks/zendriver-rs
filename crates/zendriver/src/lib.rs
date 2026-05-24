@@ -32,6 +32,17 @@ pub use tab::Tab;
 // Re-export selected transport types for advanced users.
 pub use zendriver_transport::{CallError, Connection, SessionHandle, TransportError};
 
+/// Network interception API re-exports.
+///
+/// Gated by the `interception` cargo feature. The full surface lives in the
+/// `zendriver-interception` sub-crate; these aliases let downstream code
+/// reach the types without depending on the sub-crate directly.
+#[cfg(feature = "interception")]
+pub use zendriver_interception::{
+    AbortReason, InterceptBuilder, InterceptHandle, InterceptionError, PausedRequest, RequestInfo,
+    RequestOverrides, RequestStage, ResourceType, ResponseInfo,
+};
+
 /// Stealth profile + fingerprint configuration re-exported from `zendriver-stealth`.
 pub mod stealth {
     pub use zendriver_stealth::{Fingerprint, Platform, StealthProfile, UserAgentMetadata};

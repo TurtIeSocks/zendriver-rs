@@ -56,10 +56,6 @@ impl PausedRequest {
     /// Construct a `PausedRequest` from the actor/builder. `pub(crate)` so
     /// the public API stays "consume one of the action methods" — callers
     /// never assemble a `PausedRequest` by hand.
-    //
-    // Held alive by tests only until T6/T7 wires the actor + builder. The
-    // `allow(dead_code)` keeps clippy quiet across that window.
-    #[allow(dead_code)]
     pub(crate) fn new(
         request_id: impl Into<String>,
         request: RequestInfo,
