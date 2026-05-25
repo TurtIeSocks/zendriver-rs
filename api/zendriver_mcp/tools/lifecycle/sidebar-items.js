@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["close","open","status"],"struct":["CloseOutput","OpenInput","OpenOutput","StatusOutput","TabSummary"]};

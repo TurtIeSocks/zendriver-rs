@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["StorageKind"],"fn":["storage_clear","storage_delete","storage_get","storage_set"],"struct":["StorageClearInput","StorageClearOutput","StorageDeleteInput","StorageDeleteOutput","StorageGetInput","StorageGetOutput","StorageSetInput","StorageSetOutput"]};

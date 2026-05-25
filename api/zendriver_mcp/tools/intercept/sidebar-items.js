@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["InterceptAction"],"fn":["add_rule","clear_rules","list_rules","remove_rule"],"struct":["AddRuleInput","AddRuleOutput","ClearRulesOutput","ListRulesOutput","RemoveRuleInput","RemoveRuleOutput","RuleSummary"]};

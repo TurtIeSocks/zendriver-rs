@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["WaitFor"],"fn":["back","forward","goto","reload","wait_for_idle"],"struct":["GotoInput","HistoryInput","IdleInput","IdleOutput","NavOutput"]};

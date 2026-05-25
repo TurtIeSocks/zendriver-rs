@@ -70,7 +70,7 @@ disable stealth entirely or
 for the full anti-detection set.</p>
 <h5 id="examples-9"><a class="doc-anchor" href="#examples-9">§</a>Examples</h5>
 <div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>zendriver::stealth::StealthProfile;
-<span class="kw">let </span>builder = zendriver::Browser::builder().stealth(StealthProfile::spoofed());</code></pre></div></div></details><details class="toggle method-toggle" open><summary><section id="method.observer" class="method"><a class="src rightside" href="../../src/zendriver/browser.rs.html#414-417">Source</a><h4 class="code-header">pub fn <a href="#method.observer" class="fn">observer</a>(self, obs: <a class="struct" href="https://doc.rust-lang.org/1.95.0/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;dyn TargetObserver&gt;) -&gt; Self</h4></section></summary><div class="docblock"><p>Register an additional [<code>TargetObserver</code>].</p>
+<span class="kw">let </span>builder = zendriver::Browser::builder().stealth(StealthProfile::spoofed());</code></pre></div></div></details><details class="toggle method-toggle" open><summary><section id="method.observer" class="method"><a class="src rightside" href="../../src/zendriver/browser.rs.html#414-417">Source</a><h4 class="code-header">pub fn <a href="#method.observer" class="fn">observer</a>(self, obs: <a class="struct" href="https://doc.rust-lang.org/1.95.0/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;dyn <a class="trait" href="../../zendriver_transport/observer/trait.TargetObserver.html" title="trait zendriver_transport::observer::TargetObserver">TargetObserver</a>&gt;) -&gt; Self</h4></section></summary><div class="docblock"><p>Register an additional <a href="../../zendriver_transport/observer/trait.TargetObserver.html" title="trait zendriver_transport::observer::TargetObserver"><code>TargetObserver</code></a>.</p>
 <p>Observers fire on each new attached page target. The stealth observer
 (if any) is added before user observers; user observers run in the
 order they were registered.</p>
@@ -80,7 +80,7 @@ order they were registered.</p>
 <ol>
 <li>Resolves a <a href="../stealth/struct.Fingerprint.html" title="struct zendriver::stealth::Fingerprint"><code>zendriver_stealth::Fingerprint</code></a> from the resolved
 Chrome executable.</li>
-<li>Prepends the profile’s [<code>StealthObserver</code>] to the observer chain.</li>
+<li>Prepends the profile’s <a href="../../zendriver_stealth/observer/struct.StealthObserver.html" title="struct zendriver_stealth::observer::StealthObserver"><code>StealthObserver</code></a> to the observer chain.</li>
 <li>Appends the profile’s stealth flags to the launch argv.</li>
 <li>Sends <code>Target.setAutoAttach { waitForDebuggerOnStart: true }</code> at
 browser scope so the actor can route pauses through observers

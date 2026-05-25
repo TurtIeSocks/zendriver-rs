@@ -1,0 +1,321 @@
+<!DOCTYPE HTML>
+<html lang="en" class="ayu sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>MCP server - zendriver-rs</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "ayu";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('ayu')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">zendriver-rs</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/TurtIeSocks/zendriver-rs" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/TurtIeSocks/zendriver-rs/edit/main/docs/book/src/mcp.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="mcp-server-zendriver-mcp"><a class="header" href="#mcp-server-zendriver-mcp">MCP server (<code>zendriver-mcp</code>)</a></h1>
+<p><code>zendriver-mcp</code> is a <a href="https://modelcontextprotocol.io/">Model Context Protocol</a>
+server that exposes zendriver-rs through 49 MCP tools, so any
+MCP-compatible client (Claude Desktop, Claude Code, custom agents) can
+drive a real, stealth-by-default Chrome browser.</p>
+<h2 id="install"><a class="header" href="#install">Install</a></h2>
+<pre><code class="language-bash">cargo install zendriver-mcp
+</code></pre>
+<p>The default build enables all gated features (<code>interception</code>, <code>expect</code>,
+<code>cloudflare</code>, <code>fetcher</code>). For a lean build:</p>
+<pre><code class="language-bash">cargo install zendriver-mcp --no-default-features
+</code></pre>
+<h2 id="claude-desktop"><a class="header" href="#claude-desktop">Claude Desktop</a></h2>
+<pre><code class="language-json">{
+  "mcpServers": {
+    "zendriver": {
+      "command": "zendriver-mcp"
+    }
+  }
+}
+</code></pre>
+<h2 id="http-mode"><a class="header" href="#http-mode">HTTP mode</a></h2>
+<pre><code class="language-bash">zendriver-mcp --http 127.0.0.1:8765
+</code></pre>
+<p>Bind localhost-only by default. It is the operator's responsibility to
+expose the endpoint via a reverse proxy + mTLS / network policy for
+remote access.</p>
+<h2 id="cli-flags"><a class="header" href="#cli-flags">CLI flags</a></h2>
+<pre><code class="language-text">zendriver-mcp [OPTIONS]
+
+OPTIONS:
+    --http &lt;ADDR&gt;                  Run streamable HTTP transport on ADDR
+                                   (e.g. 127.0.0.1:8765). Default: stdio.
+    --stealth-profile &lt;KIND&gt;       Default stealth profile.
+                                   [auto|native|spoof_macos|spoof_linux|spoof_windows]
+                                   Default: auto
+    --log &lt;FILTER&gt;                 Tracing log filter (EnvFilter syntax).
+                                   Default: info
+    -h, --help
+    -V, --version
+</code></pre>
+<h2 id="tool-surface"><a class="header" href="#tool-surface">Tool surface</a></h2>
+<p>49 tools across these categories:</p>
+<div class="table-wrapper"><table><thead><tr><th>Category</th><th>Tools</th><th style="text-align: right">Count</th></tr></thead><tbody>
+<tr><td>Lifecycle</td><td><code>browser_open / _close / _status</code></td><td style="text-align: right">3</td></tr>
+<tr><td>Navigation</td><td><code>browser_goto / _back / _forward / _reload / _wait_for_idle</code></td><td style="text-align: right">5</td></tr>
+<tr><td>Tabs</td><td><code>browser_tab_list / _new / _switch / _close / _activate</code></td><td style="text-align: right">5</td></tr>
+<tr><td>Find</td><td><code>browser_find / _find_all</code></td><td style="text-align: right">2</td></tr>
+<tr><td>Actions</td><td><code>browser_click / _hover / _type / _press / _set_value / _clear / _focus / _scroll_into_view / _upload</code></td><td style="text-align: right">9</td></tr>
+<tr><td>Reads</td><td><code>browser_element_state</code></td><td style="text-align: right">1</td></tr>
+<tr><td>Snapshots</td><td><code>browser_html / _screenshot</code></td><td style="text-align: right">2</td></tr>
+<tr><td>Eval</td><td><code>browser_evaluate / _evaluate_main</code></td><td style="text-align: right">2</td></tr>
+<tr><td>Cookies</td><td><code>browser_cookies_get / _set / _delete / _clear / _persist</code></td><td style="text-align: right">5</td></tr>
+<tr><td>Storage</td><td><code>browser_storage_get / _set / _delete / _clear</code></td><td style="text-align: right">4</td></tr>
+<tr><td>Frames</td><td><code>browser_frame_list</code></td><td style="text-align: right">1</td></tr>
+<tr><td>Stealth</td><td><code>browser_set_stealth_profile</code></td><td style="text-align: right">1</td></tr>
+<tr><td>Interception (gated)</td><td><code>browser_intercept_add_rule / _remove_rule / _list_rules / _clear_rules</code></td><td style="text-align: right">4</td></tr>
+<tr><td>Expect (gated)</td><td><code>browser_expect_register / _await / _cancel</code></td><td style="text-align: right">3</td></tr>
+<tr><td>Cloudflare (gated)</td><td><code>browser_solve_turnstile</code></td><td style="text-align: right">1</td></tr>
+<tr><td>Fetcher (gated)</td><td><code>browser_install_chrome</code></td><td style="text-align: right">1</td></tr>
+</tbody></table>
+</div>
+<p>All find / action tools share a <code>Selector</code> arg — one-of <code>css | xpath | text | text_exact | text_regex | role</code>, with modifiers <code>nth / visible_only / timeout_ms / frame_id</code>. State-changing tools accept
+<code>return_snapshot: bool</code> for one-call action + observe.</p>
+<p>Full JSON Schema for every tool's input + output is captured in
+<code>crates/zendriver-mcp/tests/snapshots/</code> and changes there require an
+explicit <code>cargo insta accept</code> — the wire shape is reviewed.</p>
+<h2 id="stealth"><a class="header" href="#stealth">Stealth</a></h2>
+<p>Stealth is on by default (matching the <code>zendriver</code> library). Configure
+the default fingerprint via <code>--stealth-profile</code> at server start; switch
+live via <code>browser_set_stealth_profile</code> (takes effect on the next
+<code>browser_open</code>).</p>
+<h2 id="troubleshooting"><a class="header" href="#troubleshooting">Troubleshooting</a></h2>
+<ul>
+<li><strong>Logs go to stderr</strong> in stdio mode — stdout is reserved for MCP
+JSON-RPC. Use <code>--log debug</code> for verbose CDP-call logging.</li>
+<li><strong>Errors include <code>_meta.suggested_next</code> hints</strong> when applicable
+(e.g. <code>ElementNotFound</code> suggests reconnaissance via <code>browser_html</code> or
+a fresh <code>browser_find_all</code> snapshot).</li>
+<li><strong>HTTP smoke test</strong> binds <code>127.0.0.1:18765</code> by convention — if your
+environment has that port taken, set a different port via <code>--http</code>.</li>
+<li><strong>Real-Chrome integration tests</strong> are gated behind cargo feature
+<code>integration-tests</code> and <code>#[ignore]</code> markers: run via
+<code>cargo test -p zendriver-mcp --features integration-tests -- --ignored</code>.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="fetcher.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="migration-playwright.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="fetcher.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="migration-playwright.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["MouseButtonArg"],"fn":["clear","click","focus","hover","parse_key","press","scroll_into_view","set_value","type_text","upload"],"struct":["AckOutput","ActionOutput","ClearInput","ClickInput","FocusInput","HoverInput","PressInput","ScrollInput","SetValueInput","TypeInput","UploadInput"]};

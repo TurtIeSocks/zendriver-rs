@@ -2138,6 +2138,91 @@ the cache out-of-band or ship a Docker image with Chrome baked in.</li>
 <a href="https://docs.rs/zendriver/latest/zendriver/enum.Platform.html#method.auto_detect"><code>Platform::auto_detect</code></a> returns <code>None</code> on that host and
 <code>ensure_chrome</code> errors out.</li>
 </ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="mcp-server-zendriver-mcp"><a class="header" href="#mcp-server-zendriver-mcp">MCP server (<code>zendriver-mcp</code>)</a></h1>
+<p><code>zendriver-mcp</code> is a <a href="https://modelcontextprotocol.io/">Model Context Protocol</a>
+server that exposes zendriver-rs through 49 MCP tools, so any
+MCP-compatible client (Claude Desktop, Claude Code, custom agents) can
+drive a real, stealth-by-default Chrome browser.</p>
+<h2 id="install-1"><a class="header" href="#install-1">Install</a></h2>
+<pre><code class="language-bash">cargo install zendriver-mcp
+</code></pre>
+<p>The default build enables all gated features (<code>interception</code>, <code>expect</code>,
+<code>cloudflare</code>, <code>fetcher</code>). For a lean build:</p>
+<pre><code class="language-bash">cargo install zendriver-mcp --no-default-features
+</code></pre>
+<h2 id="claude-desktop"><a class="header" href="#claude-desktop">Claude Desktop</a></h2>
+<pre><code class="language-json">{
+  "mcpServers": {
+    "zendriver": {
+      "command": "zendriver-mcp"
+    }
+  }
+}
+</code></pre>
+<h2 id="http-mode"><a class="header" href="#http-mode">HTTP mode</a></h2>
+<pre><code class="language-bash">zendriver-mcp --http 127.0.0.1:8765
+</code></pre>
+<p>Bind localhost-only by default. It is the operator's responsibility to
+expose the endpoint via a reverse proxy + mTLS / network policy for
+remote access.</p>
+<h2 id="cli-flags"><a class="header" href="#cli-flags">CLI flags</a></h2>
+<pre><code class="language-text">zendriver-mcp [OPTIONS]
+
+OPTIONS:
+    --http &lt;ADDR&gt;                  Run streamable HTTP transport on ADDR
+                                   (e.g. 127.0.0.1:8765). Default: stdio.
+    --stealth-profile &lt;KIND&gt;       Default stealth profile.
+                                   [auto|native|spoof_macos|spoof_linux|spoof_windows]
+                                   Default: auto
+    --log &lt;FILTER&gt;                 Tracing log filter (EnvFilter syntax).
+                                   Default: info
+    -h, --help
+    -V, --version
+</code></pre>
+<h2 id="tool-surface"><a class="header" href="#tool-surface">Tool surface</a></h2>
+<p>49 tools across these categories:</p>
+<div class="table-wrapper"><table><thead><tr><th>Category</th><th>Tools</th><th style="text-align: right">Count</th></tr></thead><tbody>
+<tr><td>Lifecycle</td><td><code>browser_open / _close / _status</code></td><td style="text-align: right">3</td></tr>
+<tr><td>Navigation</td><td><code>browser_goto / _back / _forward / _reload / _wait_for_idle</code></td><td style="text-align: right">5</td></tr>
+<tr><td>Tabs</td><td><code>browser_tab_list / _new / _switch / _close / _activate</code></td><td style="text-align: right">5</td></tr>
+<tr><td>Find</td><td><code>browser_find / _find_all</code></td><td style="text-align: right">2</td></tr>
+<tr><td>Actions</td><td><code>browser_click / _hover / _type / _press / _set_value / _clear / _focus / _scroll_into_view / _upload</code></td><td style="text-align: right">9</td></tr>
+<tr><td>Reads</td><td><code>browser_element_state</code></td><td style="text-align: right">1</td></tr>
+<tr><td>Snapshots</td><td><code>browser_html / _screenshot</code></td><td style="text-align: right">2</td></tr>
+<tr><td>Eval</td><td><code>browser_evaluate / _evaluate_main</code></td><td style="text-align: right">2</td></tr>
+<tr><td>Cookies</td><td><code>browser_cookies_get / _set / _delete / _clear / _persist</code></td><td style="text-align: right">5</td></tr>
+<tr><td>Storage</td><td><code>browser_storage_get / _set / _delete / _clear</code></td><td style="text-align: right">4</td></tr>
+<tr><td>Frames</td><td><code>browser_frame_list</code></td><td style="text-align: right">1</td></tr>
+<tr><td>Stealth</td><td><code>browser_set_stealth_profile</code></td><td style="text-align: right">1</td></tr>
+<tr><td>Interception (gated)</td><td><code>browser_intercept_add_rule / _remove_rule / _list_rules / _clear_rules</code></td><td style="text-align: right">4</td></tr>
+<tr><td>Expect (gated)</td><td><code>browser_expect_register / _await / _cancel</code></td><td style="text-align: right">3</td></tr>
+<tr><td>Cloudflare (gated)</td><td><code>browser_solve_turnstile</code></td><td style="text-align: right">1</td></tr>
+<tr><td>Fetcher (gated)</td><td><code>browser_install_chrome</code></td><td style="text-align: right">1</td></tr>
+</tbody></table>
+</div>
+<p>All find / action tools share a <code>Selector</code> arg — one-of <code>css | xpath | text | text_exact | text_regex | role</code>, with modifiers <code>nth / visible_only / timeout_ms / frame_id</code>. State-changing tools accept
+<code>return_snapshot: bool</code> for one-call action + observe.</p>
+<p>Full JSON Schema for every tool's input + output is captured in
+<code>crates/zendriver-mcp/tests/snapshots/</code> and changes there require an
+explicit <code>cargo insta accept</code> — the wire shape is reviewed.</p>
+<h2 id="stealth-1"><a class="header" href="#stealth-1">Stealth</a></h2>
+<p>Stealth is on by default (matching the <code>zendriver</code> library). Configure
+the default fingerprint via <code>--stealth-profile</code> at server start; switch
+live via <code>browser_set_stealth_profile</code> (takes effect on the next
+<code>browser_open</code>).</p>
+<h2 id="troubleshooting"><a class="header" href="#troubleshooting">Troubleshooting</a></h2>
+<ul>
+<li><strong>Logs go to stderr</strong> in stdio mode — stdout is reserved for MCP
+JSON-RPC. Use <code>--log debug</code> for verbose CDP-call logging.</li>
+<li><strong>Errors include <code>_meta.suggested_next</code> hints</strong> when applicable
+(e.g. <code>ElementNotFound</code> suggests reconnaissance via <code>browser_html</code> or
+a fresh <code>browser_find_all</code> snapshot).</li>
+<li><strong>HTTP smoke test</strong> binds <code>127.0.0.1:18765</code> by convention — if your
+environment has that port taken, set a different port via <code>--http</code>.</li>
+<li><strong>Real-Chrome integration tests</strong> are gated behind cargo feature
+<code>integration-tests</code> and <code>#[ignore]</code> markers: run via
+<code>cargo test -p zendriver-mcp --features integration-tests -- --ignored</code>.</li>
+</ul>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="migration-from-playwright"><a class="header" href="#migration-from-playwright">Migration from Playwright</a></h1>
 <p>zendriver-rs's surface borrows heavily from Playwright (locator-based
 queries, pre-register expectations, fluent builders) so most flows port

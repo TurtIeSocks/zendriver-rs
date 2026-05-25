@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["activate","close","list","new_tab","switch"],"struct":["TabActivateInput","TabActivateOutput","TabCloseInput","TabCloseOutput","TabListOutput","TabNewInput","TabSummary","TabSwitchInput"]};

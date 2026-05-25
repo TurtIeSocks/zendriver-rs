@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["PersistDirection","SameSiteDto"],"fn":["cookies_clear","cookies_delete","cookies_get","cookies_persist","cookies_set"],"struct":["CookieDto","CookiesClearOutput","CookiesDeleteInput","CookiesDeleteOutput","CookiesGetInput","CookiesGetOutput","CookiesPersistInput","CookiesPersistOutput","CookiesSetInput","CookiesSetOutput"]};
