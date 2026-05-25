@@ -153,5 +153,9 @@ name = "cloudflare_bypass"
 required-features = ["cloudflare"]
 
 [[example]]
+name = "imperva_bypass"
+required-features = ["imperva"]
+
+[[example]]
 name = "fetcher_demo"
 required-features = ["fetcher"]
