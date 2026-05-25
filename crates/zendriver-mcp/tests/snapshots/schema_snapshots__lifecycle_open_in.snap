@@ -1,0 +1,39 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::lifecycle::OpenInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: OpenInput
+description: "Input for `browser_open`."
+type: object
+properties:
+  headless:
+    description: "Run Chrome with `--headless=new` (default: `true`)."
+    type: boolean
+    default: true
+  stealth_profile:
+    description: "Override the session's default stealth profile for this launch.\nWhen `None`, the session-wide default (set via CLI / construct time)\nis used."
+    anyOf:
+      - $ref: "#/$defs/StealthProfileChoice"
+      - type: "null"
+    default: ~
+additionalProperties: false
+$defs:
+  StealthProfileChoice:
+    description: "Stealth profile choice carried over the MCP wire.\n\nConcrete `StealthProfile` resolution happens inside the lifecycle\nhandler (it depends on platform detection that only matters at launch\ntime); the wire-level enum stays stable and platform-agnostic."
+    oneOf:
+      - description: "Defer to `zendriver_stealth::StealthProfile::native()` (auto-detect\nplatform via `sysinfo`)."
+        type: string
+        const: auto
+      - description: "Force native (same as `Auto`, but explicit)."
+        type: string
+        const: native
+      - description: Spoof a macOS fingerprint regardless of host platform.
+        type: string
+        const: spoof_macos
+      - description: Spoof a Linux fingerprint regardless of host platform.
+        type: string
+        const: spoof_linux
+      - description: Spoof a Windows fingerprint regardless of host platform.
+        type: string
+        const: spoof_windows

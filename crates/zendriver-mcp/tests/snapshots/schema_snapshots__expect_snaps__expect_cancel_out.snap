@@ -1,0 +1,14 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::expect::CancelOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: CancelOutput
+description: "Output of `browser_expect_cancel`."
+type: object
+properties:
+  cancelled:
+    description: "Always `true` on success. Cancellation of an unknown id returns\n[`McpServerError::ExpectationNotFound`] rather than `false` here."
+    type: boolean
+required:
+  - cancelled

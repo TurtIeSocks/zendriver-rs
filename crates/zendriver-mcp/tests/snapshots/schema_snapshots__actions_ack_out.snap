@@ -1,0 +1,14 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::actions::AckOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: AckOutput
+description: "`{ ok: true }` reply for non-visual tools that don't accept a snapshot\n(focus, scroll_into_view, upload). Distinct from [`ActionOutput`] so\nthe schema doesn't carry a permanently-absent `snapshot` field."
+type: object
+properties:
+  ok:
+    description: "Always `true` for successful returns."
+    type: boolean
+required:
+  - ok

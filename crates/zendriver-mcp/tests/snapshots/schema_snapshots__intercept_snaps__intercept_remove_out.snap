@@ -1,0 +1,14 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::intercept::RemoveRuleOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: RemoveRuleOutput
+description: "Output of `browser_intercept_remove_rule`."
+type: object
+properties:
+  removed:
+    description: "Always `true` on success. Removal of an unknown id returns\n[`McpServerError::RuleNotFound`] rather than a `false` here, so an\nagent can branch on success without re-checking the body."
+    type: boolean
+required:
+  - removed

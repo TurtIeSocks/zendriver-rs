@@ -20,6 +20,13 @@ rustdoc-args = ["--cfg", "docsrs"]
 [lints]
 workspace = true
 
+[features]
+# `test-support`: enables a small surface of constructors (`InterceptHandle::for_tests`) that
+# downstream crates' unit tests can use to populate the type without going
+# through the full actor pipeline. Not intended for production use — gated
+# off by default and `#[doc(hidden)]`.
+test-support = []
+
 [dependencies]
 zendriver-transport.workspace = true
 tokio.workspace               = true

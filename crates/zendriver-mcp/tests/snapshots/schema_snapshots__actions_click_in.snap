@@ -1,0 +1,85 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::actions::ClickInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: ClickInput
+description: "Input for `browser_click`."
+type: object
+properties:
+  button:
+    description: "Which mouse button to dispatch. Default: `left`."
+    anyOf:
+      - $ref: "#/$defs/MouseButtonArg"
+      - type: "null"
+  click_count:
+    description: "`clickCount` for the CDP dispatch (set `2` for a double-click in\na single call). Default: `1`."
+    type:
+      - integer
+      - "null"
+    format: uint32
+    minimum: 0
+  css:
+    type:
+      - string
+      - "null"
+  frame_id:
+    type:
+      - string
+      - "null"
+  nth:
+    type:
+      - integer
+      - "null"
+    format: uint
+    minimum: 0
+  return_snapshot:
+    description: "When `true`, include the trimmed page HTML in the response."
+    type: boolean
+    default: false
+  role:
+    type:
+      - string
+      - "null"
+  role_name:
+    type:
+      - string
+      - "null"
+  text:
+    type:
+      - string
+      - "null"
+  text_exact:
+    type:
+      - string
+      - "null"
+  text_regex:
+    type:
+      - string
+      - "null"
+  timeout_ms:
+    type: integer
+    format: uint64
+    default: 5000
+    minimum: 0
+  visible_only:
+    type: boolean
+    default: true
+  xpath:
+    type:
+      - string
+      - "null"
+additionalProperties: false
+$defs:
+  MouseButtonArg:
+    description: "MCP-layer mouse button enum, mapped to [`zendriver::MouseButton`].\n\nOnly the three commonly-dispatched buttons; thumb buttons (Back /\nForward) are deliberately omitted to keep the schema small."
+    oneOf:
+      - description: Primary button (default).
+        type: string
+        const: left
+      - description: Middle button (scroll wheel click).
+        type: string
+        const: middle
+      - description: Secondary button.
+        type: string
+        const: right

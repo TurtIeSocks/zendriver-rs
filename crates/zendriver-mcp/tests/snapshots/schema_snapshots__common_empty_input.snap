@@ -1,0 +1,9 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::common::EmptyInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: EmptyInput
+description: "Placeholder input struct for tools with no arguments.\n\nRequired so rmcp can synthesize a JSON schema for the tool's args (an\nabsent arg block would yield `null` schema)."
+type: object
+additionalProperties: false

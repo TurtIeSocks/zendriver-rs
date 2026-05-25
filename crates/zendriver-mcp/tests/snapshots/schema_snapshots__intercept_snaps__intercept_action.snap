@@ -1,0 +1,77 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::intercept::InterceptAction)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: InterceptAction
+description: "Wire-level interception action. One variant per supported rule kind.\n\nTagged with `kind` so a JSON payload looks like\n`{ \"kind\": \"block\" }` or `{ \"kind\": \"redirect\", \"to\": \"...\" }`, which\nis easier for an agent to construct than a flat field set with mutually\nexclusive shapes."
+oneOf:
+  - description: "Fail every matching request with `BlockedByClient`."
+    type: object
+    properties:
+      kind:
+        type: string
+        const: block
+    additionalProperties: false
+    required:
+      - kind
+  - description: "Redirect every match to `to` (verbatim URL replacement)."
+    type: object
+    properties:
+      kind:
+        type: string
+        const: redirect
+      to:
+        description: "Target URL. Sent to the actor as a string — no expansion of the\nmatched URL is performed; if you need per-request substitution\nuse `modify_request` or the manual stream API."
+        type: string
+    additionalProperties: false
+    required:
+      - kind
+      - to
+  - description: Synthesize a response with the given status / body / headers.
+    type: object
+    properties:
+      body:
+        description: Response body as UTF-8 text.
+        type: string
+      content_type:
+        description: "Convenience for the most common header: when set, a\n`Content-Type: <content_type>` header is added (and overrides\nany same-named entry in `headers`)."
+        type:
+          - string
+          - "null"
+        default: ~
+      headers:
+        description: "Additional response headers. Lexicographically sorted (`BTreeMap`)\nfor stable wire output."
+        type: object
+        additionalProperties:
+          type: string
+        default: {}
+      kind:
+        type: string
+        const: respond
+      status:
+        description: "HTTP status code (e.g. `200`, `404`)."
+        type: integer
+        format: uint16
+        maximum: 65535
+        minimum: 0
+    additionalProperties: false
+    required:
+      - kind
+      - status
+      - body
+  - description: "Continue the request with extra / replaced headers. Other fields\n(URL, method, post-data) are left at Chrome's originals."
+    type: object
+    properties:
+      headers:
+        description: "Headers to merge over the request's originals. CDP's\n`continueRequest.headers` is a full replacement, so the closure\nrebuilds the header list from the intercepted request and\noverlays these entries (case-insensitive on names)."
+        type: object
+        additionalProperties:
+          type: string
+        default: {}
+      kind:
+        type: string
+        const: modify_request
+    additionalProperties: false
+    required:
+      - kind

@@ -1,0 +1,14 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::cookies::CookiesDeleteOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: CookiesDeleteOutput
+description: "Output of `browser_cookies_delete`."
+type: object
+properties:
+  deleted:
+    description: "`true` if CDP accepted the delete (it doesn't report match count;\nmissing cookies are silently ignored)."
+    type: boolean
+required:
+  - deleted

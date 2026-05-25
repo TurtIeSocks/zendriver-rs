@@ -1,0 +1,104 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::snapshot::ScreenshotInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: ScreenshotInput
+description: "Input for `browser_screenshot`."
+type: object
+properties:
+  format:
+    description: Output format. Default PNG.
+    $ref: "#/$defs/ImgFormat"
+    default: png
+  full_page:
+    description: "`true` → capture the full scrollable document (issues\n`Page.getLayoutMetrics` first to size the clip). Default `false`\n(viewport-sized)."
+    type: boolean
+    default: false
+  omit_background:
+    description: "`true` → transparent background. PNG / WebP only (JPEG has no\nalpha channel; Chrome silently ignores the flag)."
+    type: boolean
+    default: false
+  quality:
+    description: JPEG compression quality (1..=100). Ignored on PNG / WebP.
+    type:
+      - integer
+      - "null"
+    format: uint8
+    maximum: 255
+    minimum: 0
+  save_path:
+    description: "When set, also write the raw bytes to this path on the host running\nthe MCP server. The inline image block is still returned regardless."
+    type:
+      - string
+      - "null"
+  selector:
+    description: "When set, clip the screenshot to the element's bounding box (after\nresolving the selector). Mutually compatible with all formats;\noverrides `full_page`."
+    anyOf:
+      - $ref: "#/$defs/Selector"
+      - type: "null"
+additionalProperties: false
+$defs:
+  ImgFormat:
+    description: "Image format choice for `browser_screenshot`."
+    oneOf:
+      - description: "Lossless PNG (default). Chrome ignores `quality` here."
+        type: string
+        const: png
+      - description: "JPEG; pair with `quality` (1..=100) to control compression."
+        type: string
+        const: jpeg
+      - description: WebP; smaller than JPEG at similar visual fidelity.
+        type: string
+        const: webp
+  Selector:
+    description: "Selector arg struct on every find / action tool.\n\nCaller supplies exactly one of `css`, `xpath`, `text`, `text_exact`,\n`text_regex`, or `role`. `role_name` is an optional modifier on `role`.\nOther fields are tuning knobs with defaults that match the lib's\n`FindBuilder` defaults."
+    type: object
+    properties:
+      css:
+        type:
+          - string
+          - "null"
+      frame_id:
+        type:
+          - string
+          - "null"
+      nth:
+        type:
+          - integer
+          - "null"
+        format: uint
+        minimum: 0
+      role:
+        type:
+          - string
+          - "null"
+      role_name:
+        type:
+          - string
+          - "null"
+      text:
+        type:
+          - string
+          - "null"
+      text_exact:
+        type:
+          - string
+          - "null"
+      text_regex:
+        type:
+          - string
+          - "null"
+      timeout_ms:
+        type: integer
+        format: uint64
+        default: 5000
+        minimum: 0
+      visible_only:
+        type: boolean
+        default: true
+      xpath:
+        type:
+          - string
+          - "null"
+    additionalProperties: false

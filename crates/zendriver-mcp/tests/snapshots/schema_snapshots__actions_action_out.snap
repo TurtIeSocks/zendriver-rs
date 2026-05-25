@@ -1,0 +1,19 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::actions::ActionOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: ActionOutput
+description: "Common output of every action tool that accepts `return_snapshot`.\n\n`ok` is always `true` on a `Result::Ok`; errors come back as\n[`rmcp::ErrorData`], not an `ok: false`. `snapshot` is populated only\nwhen the caller opted in."
+type: object
+properties:
+  ok:
+    description: "Always `true` for successful action returns; failures surface as\n`Err(ErrorData)` instead of an `ok: false` body."
+    type: boolean
+  snapshot:
+    description: "Trimmed rendered HTML of the page after the action completes\n(drops `<script>` / `<style>` blocks + collapses whitespace).\nPopulated only when `return_snapshot: true` is on the input."
+    type:
+      - string
+      - "null"
+required:
+  - ok

@@ -1,0 +1,17 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::actions::MouseButtonArg)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: MouseButtonArg
+description: "MCP-layer mouse button enum, mapped to [`zendriver::MouseButton`].\n\nOnly the three commonly-dispatched buttons; thumb buttons (Back /\nForward) are deliberately omitted to keep the schema small."
+oneOf:
+  - description: Primary button (default).
+    type: string
+    const: left
+  - description: Middle button (scroll wheel click).
+    type: string
+    const: middle
+  - description: Secondary button.
+    type: string
+    const: right

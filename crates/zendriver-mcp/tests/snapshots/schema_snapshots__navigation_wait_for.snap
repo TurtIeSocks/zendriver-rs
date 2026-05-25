@@ -1,0 +1,17 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::navigation::WaitFor)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: WaitFor
+description: "Wait strategy options for `browser_goto`."
+oneOf:
+  - description: "Wait for the `load` event to fire."
+    type: string
+    const: load
+  - description: Wait until the network has been idle for ~500ms (5s outer timeout).
+    type: string
+    const: idle
+  - description: Return immediately after the navigation request is dispatched.
+    type: string
+    const: none

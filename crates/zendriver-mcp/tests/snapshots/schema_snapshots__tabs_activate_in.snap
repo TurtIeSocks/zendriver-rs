@@ -1,0 +1,15 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::tabs::TabActivateInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: TabActivateInput
+description: "Input for `browser_tab_activate`."
+type: object
+properties:
+  tab_id:
+    description: CDP target id of the tab to bring to the foreground.
+    type: string
+additionalProperties: false
+required:
+  - tab_id

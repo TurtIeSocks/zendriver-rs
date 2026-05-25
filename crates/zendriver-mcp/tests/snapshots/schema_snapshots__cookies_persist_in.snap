@@ -1,0 +1,29 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::cookies::CookiesPersistInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: CookiesPersistInput
+description: "Input for `browser_cookies_persist`."
+type: object
+properties:
+  direction:
+    description: "Whether to `save` (browser → disk) or `load` (disk → browser)."
+    $ref: "#/$defs/PersistDirection"
+  path:
+    description: "Path on the MCP server host. Save writes pretty-printed JSON; load\nexpects the same shape (a JSON array of cookies)."
+    type: string
+additionalProperties: false
+required:
+  - direction
+  - path
+$defs:
+  PersistDirection:
+    description: "Direction selector for `browser_cookies_persist`."
+    oneOf:
+      - description: "Snapshot every cookie in the browser store to `path` as pretty JSON."
+        type: string
+        const: save
+      - description: "Replace the in-memory cookies with those parsed from `path`."
+        type: string
+        const: load

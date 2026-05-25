@@ -1,0 +1,14 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::expect::RegisterOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: RegisterOutput
+description: "Output of `browser_expect_register`."
+type: object
+properties:
+  expectation_id:
+    description: "Opaque id for the session's expectation registry. Pass to\n`browser_expect_await` or `browser_expect_cancel`."
+    type: string
+required:
+  - expectation_id

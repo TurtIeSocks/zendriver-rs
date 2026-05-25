@@ -55,6 +55,7 @@ jobs:
           # zendriver-fetcher        -> (no internal deps)
           # zendriver-cloudflare     -> transport, interception
           # zendriver                -> transport, stealth, interception?, cloudflare?, fetcher?
+          # zendriver-mcp            -> zendriver (binary crate; publish last)
           CRATES=(
             zendriver-transport
             zendriver-stealth
@@ -62,6 +63,7 @@ jobs:
             zendriver-fetcher
             zendriver-cloudflare
             zendriver
+            zendriver-mcp
           )
 
           summary() { echo "$1" >> "$GITHUB_STEP_SUMMARY"; }

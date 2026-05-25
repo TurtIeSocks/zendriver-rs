@@ -1,0 +1,26 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::find::BoundingBox)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: BoundingBox
+description: "Geometry wire shape mirroring [`zendriver::BoundingBox`].\n\nWrapped (rather than re-exporting the lib type) so it can derive\n`Serialize` + `JsonSchema` without forcing those derives on the lib's\ntype."
+type: object
+properties:
+  height:
+    type: number
+    format: double
+  width:
+    type: number
+    format: double
+  x:
+    type: number
+    format: double
+  y:
+    type: number
+    format: double
+required:
+  - x
+  - y
+  - width
+  - height

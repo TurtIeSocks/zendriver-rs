@@ -1,0 +1,20 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::tabs::TabNewInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: TabNewInput
+description: "Input for `browser_tab_new`."
+type: object
+properties:
+  activate:
+    description: "When `true` (the default), the new tab becomes the session's\ncurrent tab — subsequent navigation / find / action tools target\nit. When `false` the focus stays on the previous current tab and\nthe caller can switch later via `browser_tab_switch`."
+    type: boolean
+    default: true
+  url:
+    description: "Initial URL for the new tab. When `None` the tab opens at\n`about:blank` (via `Browser::new_tab`)."
+    type:
+      - string
+      - "null"
+    default: ~
+additionalProperties: false

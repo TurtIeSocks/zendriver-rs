@@ -1,0 +1,14 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::navigation::IdleOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: IdleOutput
+description: "Output of `browser_wait_for_idle`."
+type: object
+properties:
+  idle:
+    description: "`true` when the network reached the idle state before the timeout."
+    type: boolean
+required:
+  - idle

@@ -1,0 +1,56 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::actions::ScrollInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: ScrollInput
+description: "Input for `browser_scroll_into_view`."
+type: object
+properties:
+  css:
+    type:
+      - string
+      - "null"
+  frame_id:
+    type:
+      - string
+      - "null"
+  nth:
+    type:
+      - integer
+      - "null"
+    format: uint
+    minimum: 0
+  role:
+    type:
+      - string
+      - "null"
+  role_name:
+    type:
+      - string
+      - "null"
+  text:
+    type:
+      - string
+      - "null"
+  text_exact:
+    type:
+      - string
+      - "null"
+  text_regex:
+    type:
+      - string
+      - "null"
+  timeout_ms:
+    type: integer
+    format: uint64
+    default: 5000
+    minimum: 0
+  visible_only:
+    type: boolean
+    default: true
+  xpath:
+    type:
+      - string
+      - "null"
+additionalProperties: false

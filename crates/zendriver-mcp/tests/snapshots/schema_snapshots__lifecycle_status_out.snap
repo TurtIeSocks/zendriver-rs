@@ -1,0 +1,62 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::lifecycle::StatusOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: StatusOutput
+description: "Output of `browser_status`."
+type: object
+properties:
+  current_tab:
+    description: "`id` / `url` / `title` of the currently-focused tab, or `null`."
+    anyOf:
+      - $ref: "#/$defs/TabSummary"
+      - type: "null"
+  open:
+    description: "`true` iff a Browser is currently launched in this session."
+    type: boolean
+  profile:
+    description: Configured stealth profile choice for this session.
+    $ref: "#/$defs/StealthProfileChoice"
+  tab_count:
+    description: Number of live tabs (0 when no browser is open).
+    type: integer
+    format: uint
+    minimum: 0
+required:
+  - open
+  - tab_count
+  - profile
+$defs:
+  StealthProfileChoice:
+    description: "Stealth profile choice carried over the MCP wire.\n\nConcrete `StealthProfile` resolution happens inside the lifecycle\nhandler (it depends on platform detection that only matters at launch\ntime); the wire-level enum stays stable and platform-agnostic."
+    oneOf:
+      - description: "Defer to `zendriver_stealth::StealthProfile::native()` (auto-detect\nplatform via `sysinfo`)."
+        type: string
+        const: auto
+      - description: "Force native (same as `Auto`, but explicit)."
+        type: string
+        const: native
+      - description: Spoof a macOS fingerprint regardless of host platform.
+        type: string
+        const: spoof_macos
+      - description: Spoof a Linux fingerprint regardless of host platform.
+        type: string
+        const: spoof_linux
+      - description: Spoof a Windows fingerprint regardless of host platform.
+        type: string
+        const: spoof_windows
+  TabSummary:
+    description: "Lightweight summary of the current tab — returned inside [`StatusOutput`]."
+    type: object
+    properties:
+      id:
+        type: string
+      title:
+        type: string
+      url:
+        type: string
+    required:
+      - id
+      - url
+      - title

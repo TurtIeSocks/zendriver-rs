@@ -1,0 +1,16 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::navigation::IdleInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: IdleInput
+description: "Arg block for `browser_wait_for_idle`."
+type: object
+properties:
+  timeout_ms:
+    description: "Outer timeout in milliseconds (default: 5000)."
+    type: integer
+    format: uint64
+    default: 5000
+    minimum: 0
+additionalProperties: false

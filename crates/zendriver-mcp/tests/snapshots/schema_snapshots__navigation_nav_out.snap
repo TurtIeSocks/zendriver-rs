@@ -1,0 +1,23 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::navigation::NavOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: NavOutput
+description: "Common output of navigation tools that change the page URL.\n\n`snapshot` is populated only when the caller passes\n`return_snapshot: true` on tools that accept that flag."
+type: object
+properties:
+  snapshot:
+    description: "Trimmed rendered HTML of the page (drops script/style + collapses\nwhitespace). Only populated when the caller asks for it."
+    type:
+      - string
+      - "null"
+  title:
+    description: Current tab title after the operation completes.
+    type: string
+  url:
+    description: Current tab URL after the operation completes.
+    type: string
+required:
+  - url
+  - title

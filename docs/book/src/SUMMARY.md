@@ -11,6 +11,7 @@
 - [Expect()](./expect.md)
 - [Cloudflare](./cloudflare.md)
 - [Fetcher](./fetcher.md)
+- [MCP server](./mcp.md)
 - [Migration from Playwright](./migration-playwright.md)
 - [Migration from zendriver (Python)](./migration-zendriver-python.md)
 - [Migration from nodriver (Python)](./migration-nodriver-python.md)

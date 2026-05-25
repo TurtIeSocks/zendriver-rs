@@ -1,0 +1,26 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::tabs::TabSummary)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: TabSummary
+description: "Per-tab projection returned by `browser_tab_list` + the create/switch\ntools.\n\n`is_current` is computed against `SessionState::current_tab_id` at the\ntime of the call. Returning it inline (rather than expecting the client\nto cross-reference against a separate \"current tab\" field) keeps the\nlist response self-contained."
+type: object
+properties:
+  id:
+    description: "Stable CDP target id. Use this with `browser_tab_switch` /\n`_close` / `_activate`."
+    type: string
+  is_current:
+    description: "`true` iff this tab is the session's current focused tab."
+    type: boolean
+  title:
+    description: "Live tab title (best-effort; empty string on transient lookup\nfailure)."
+    type: string
+  url:
+    description: "Live tab URL (best-effort; empty string on transient lookup\nfailure, e.g. a tab that's in the middle of closing)."
+    type: string
+required:
+  - id
+  - url
+  - title
+  - is_current

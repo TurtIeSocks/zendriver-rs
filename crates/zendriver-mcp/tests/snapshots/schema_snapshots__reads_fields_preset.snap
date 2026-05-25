@@ -1,0 +1,23 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::reads::ReadFieldsPreset)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: ReadFieldsPreset
+description: "Field preset for `browser_element_state`.\n\nEach preset chooses which subset of the (potentially expensive) probes\nthe handler runs. Defaults to [`ReadFieldsPreset::All`] — costs an\nextra eval + attrs + inner_html call but matches the most common\nagent inspection flow."
+oneOf:
+  - description: "Every field (existence, visible/enabled, geometry, text/attrs/html).\n`in_viewport` remains `None` in v0 — no zendriver primitive yet."
+    type: string
+    const: all
+  - description: "Only `exists`. Cheapest preset — skips every probe past resolve."
+    type: string
+    const: exists_only
+  - description: "`exists`, `visible`, `enabled`."
+    type: string
+    const: visible_enabled
+  - description: "`exists`, `bounding_box`. `in_viewport` stays `None` in v0."
+    type: string
+    const: geometry
+  - description: "`exists`, `text`, `attrs`, `inner_html`."
+    type: string
+    const: text_attrs

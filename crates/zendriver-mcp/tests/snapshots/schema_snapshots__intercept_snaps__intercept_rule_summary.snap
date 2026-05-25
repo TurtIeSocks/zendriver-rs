@@ -1,0 +1,22 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::intercept::RuleSummary)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: RuleSummary
+description: Description of a single live interception rule.
+type: object
+properties:
+  action_kind:
+    description: "`\"block\"`, `\"redirect\"`, `\"respond\"`, or `\"modify_request\"`."
+    type: string
+  pattern:
+    description: URL pattern the rule was registered with.
+    type: string
+  rule_id:
+    description: "Same id `browser_intercept_add_rule` returned."
+    type: string
+required:
+  - rule_id
+  - pattern
+  - action_kind

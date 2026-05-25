@@ -1,0 +1,17 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::snapshot::ImgFormat)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: ImgFormat
+description: "Image format choice for `browser_screenshot`."
+oneOf:
+  - description: "Lossless PNG (default). Chrome ignores `quality` here."
+    type: string
+    const: png
+  - description: "JPEG; pair with `quality` (1..=100) to control compression."
+    type: string
+    const: jpeg
+  - description: WebP; smaller than JPEG at similar visual fidelity.
+    type: string
+    const: webp

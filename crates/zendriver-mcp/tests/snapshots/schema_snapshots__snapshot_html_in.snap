@@ -1,0 +1,76 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::snapshot::HtmlInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: HtmlInput
+description: "Input for `browser_html`."
+type: object
+properties:
+  frame_id:
+    description: "Return the *frame's* document HTML rather than the tab's main frame.\nMutually exclusive with `selector`."
+    type:
+      - string
+      - "null"
+  selector:
+    description: "When set, returns `el.innerHTML` for the matched element.\nMutually exclusive with the tool-level `frame_id` — use the\nselector's own `frame_id` to scope the lookup to a sub-frame."
+    anyOf:
+      - $ref: "#/$defs/Selector"
+      - type: "null"
+  trim:
+    description: "Trim the result: strip `<script>` / `<style>` blocks + collapse\nwhitespace. Default `true`. Pass `false` for byte-exact output."
+    type: boolean
+    default: true
+additionalProperties: false
+$defs:
+  Selector:
+    description: "Selector arg struct on every find / action tool.\n\nCaller supplies exactly one of `css`, `xpath`, `text`, `text_exact`,\n`text_regex`, or `role`. `role_name` is an optional modifier on `role`.\nOther fields are tuning knobs with defaults that match the lib's\n`FindBuilder` defaults."
+    type: object
+    properties:
+      css:
+        type:
+          - string
+          - "null"
+      frame_id:
+        type:
+          - string
+          - "null"
+      nth:
+        type:
+          - integer
+          - "null"
+        format: uint
+        minimum: 0
+      role:
+        type:
+          - string
+          - "null"
+      role_name:
+        type:
+          - string
+          - "null"
+      text:
+        type:
+          - string
+          - "null"
+      text_exact:
+        type:
+          - string
+          - "null"
+      text_regex:
+        type:
+          - string
+          - "null"
+      timeout_ms:
+        type: integer
+        format: uint64
+        default: 5000
+        minimum: 0
+      visible_only:
+        type: boolean
+        default: true
+      xpath:
+        type:
+          - string
+          - "null"
+    additionalProperties: false

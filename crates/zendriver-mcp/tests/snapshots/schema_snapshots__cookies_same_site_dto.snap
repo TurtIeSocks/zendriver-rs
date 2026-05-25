@@ -1,0 +1,17 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::cookies::SameSiteDto)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: SameSiteDto
+description: "SameSite policy mirror of [`zendriver::SameSite`].\n\nSerializes with the same `\"Strict\" / \"Lax\" / \"None\"` capitalization as\nthe lib's enum (which matches the RFC and CDP), so on-the-wire payloads\nstay identical to what `zendriver::Cookie`'s own serde emits."
+oneOf:
+  - description: First-party only — never sent on cross-site requests.
+    type: string
+    const: Strict
+  - description: Sent on cross-site top-level navigations only.
+    type: string
+    const: Lax
+  - description: "Always sent, including in third-party contexts."
+    type: string
+    const: None

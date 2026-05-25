@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  zendriver-mcp evaluation set.
+
+  Ten independent, read-only, multi-tool-call questions against stable public
+  sites. Each <answer> is a single string the evaluator can compare exactly.
+  Sites used (rationale: stable content, no auth, no rate-limit pressure):
+    - https://example.com           (RFC 2606 reserved domain, IANA-managed)
+    - https://www.iana.org/...      (IANA help page, stable URL)
+    - https://httpbin.org/...       (request-mirror service, stable behavior)
+-->
+<evaluation>
+  <qa_pair>
+    <question>Open example.com and report the page title via browser_status or browser_evaluate.</question>
+    <answer>Example Domain</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>On https://example.com, what is the text of the first &lt;h1&gt; (use browser_find with css="h1" then browser_element_state with include="text_attrs")?</question>
+    <answer>Example Domain</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>On https://example.com, how many &lt;a&gt; elements exist (browser_find_all with css="a")?</question>
+    <answer>1</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>On https://example.com, what is the value of document.documentElement.lang (use browser_evaluate)?</question>
+    <answer></answer>
+  </qa_pair>
+  <qa_pair>
+    <question>On https://example.com, what is the lowercased tagName of the first &lt;h1&gt; element (use browser_evaluate with expression "document.querySelector('h1').tagName.toLowerCase()")?</question>
+    <answer>h1</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Take a PNG screenshot of https://example.com via browser_screenshot. Is the returned base64 image data non-empty (boolean)?</question>
+    <answer>true</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>On https://example.com after browser_storage_set with kind="local", key="zd_test", value="42", what does browser_storage_get with kind="local", key="zd_test" return for the value?</question>
+    <answer>42</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Navigate to https://example.com then https://www.iana.org/help/example-domains, then call browser_back. What host is current (use the host portion of browser_status.current_tab.url)?</question>
+    <answer>example.com</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>On https://httpbin.org/cookies/set/foo/bar, after navigation completes, what cookie name does browser_cookies_get with url="https://httpbin.org/" return (first entry's name)?</question>
+    <answer>foo</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Call browser_evaluate with expression "1 + 2" against https://example.com. What numeric value is returned?</question>
+    <answer>3</answer>
+  </qa_pair>
+</evaluation>

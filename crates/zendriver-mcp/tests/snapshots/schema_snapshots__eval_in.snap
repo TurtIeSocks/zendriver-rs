@@ -1,0 +1,24 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::eval::EvalInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: EvalInput
+description: "Input for `browser_evaluate` / `browser_evaluate_main`."
+type: object
+properties:
+  await_promise:
+    description: "If the expression resolves to a promise, await it before returning\nthe value. Default `true`. Currently observational — the lib always\nawaits promises in `Runtime.evaluate`."
+    type: boolean
+    default: true
+  expression:
+    description: "JavaScript expression (NOT a statement block). Examples: `\"1 + 2\"`,\n`\"document.title\"`. For multi-line logic, wrap in an IIFE:\n`\"(() => { /* ... */ return result; })()\"`."
+    type: string
+  frame_id:
+    description: "When set, evaluate inside the specified frame instead of the tab's\nmain frame."
+    type:
+      - string
+      - "null"
+additionalProperties: false
+required:
+  - expression

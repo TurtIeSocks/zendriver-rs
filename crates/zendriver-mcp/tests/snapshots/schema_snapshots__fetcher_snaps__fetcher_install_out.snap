@@ -1,0 +1,24 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::fetcher::InstallOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: InstallOutput
+description: "Output of `browser_install_chrome`."
+type: object
+properties:
+  channel_requested:
+    description: "Echo of the caller's `channel` input. `None` when `channel` was\nnot set (the fetcher used `version` or latest)."
+    type:
+      - string
+      - "null"
+  path:
+    description: "Filesystem path to the runnable Chrome binary on the MCP server\nhost (not the client's machine)."
+    type: string
+  version_requested:
+    description: "Echo of the caller's `version` input. `None` when `version` was\nnot set (the fetcher resolved a channel or latest)."
+    type:
+      - string
+      - "null"
+required:
+  - path

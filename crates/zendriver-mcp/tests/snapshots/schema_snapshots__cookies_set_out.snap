@@ -1,0 +1,16 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::cookies::CookiesSetOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: CookiesSetOutput
+description: "Output of `browser_cookies_set`."
+type: object
+properties:
+  added:
+    description: Number of cookies dispatched to CDP (echoes input.cookies.len()).
+    type: integer
+    format: uint
+    minimum: 0
+required:
+  - added

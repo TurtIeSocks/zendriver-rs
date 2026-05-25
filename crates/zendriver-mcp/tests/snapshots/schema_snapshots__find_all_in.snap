@@ -1,0 +1,62 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::find::FindAllInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: FindAllInput
+description: "Input for `browser_find_all`."
+type: object
+properties:
+  css:
+    type:
+      - string
+      - "null"
+  frame_id:
+    type:
+      - string
+      - "null"
+  limit:
+    description: Maximum number of matches to return. Default 50.
+    type: integer
+    format: uint
+    default: 50
+    minimum: 0
+  nth:
+    type:
+      - integer
+      - "null"
+    format: uint
+    minimum: 0
+  role:
+    type:
+      - string
+      - "null"
+  role_name:
+    type:
+      - string
+      - "null"
+  text:
+    type:
+      - string
+      - "null"
+  text_exact:
+    type:
+      - string
+      - "null"
+  text_regex:
+    type:
+      - string
+      - "null"
+  timeout_ms:
+    type: integer
+    format: uint64
+    default: 5000
+    minimum: 0
+  visible_only:
+    type: boolean
+    default: true
+  xpath:
+    type:
+      - string
+      - "null"
+additionalProperties: false

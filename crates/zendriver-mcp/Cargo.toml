@@ -1,0 +1,63 @@
+[package]
+name = "zendriver-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "MCP server exposing zendriver-rs's stealth browser automation to MCP clients."
+keywords = ["mcp", "browser", "automation", "cdp", "stealth"]
+categories = ["command-line-utilities", "web-programming::http-server"]
+readme = "README.md"
+homepage = "https://github.com/TurtIeSocks/zendriver-rs"
+documentation = "https://turtiesocks.github.io/zendriver-rs/mcp.html"
+
+[[bin]]
+name = "zendriver-mcp"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = ["interception", "expect", "cloudflare", "fetcher"]
+interception = ["zendriver/interception", "dep:uuid"]
+expect       = ["zendriver/expect", "dep:uuid"]
+cloudflare   = ["zendriver/cloudflare"]
+fetcher      = ["zendriver/fetcher"]
+integration-tests = []
+
+[dependencies]
+zendriver           = { workspace = true }
+rmcp                = { workspace = true, features = ["server", "macros", "schemars", "transport-io", "transport-streamable-http-server"] }
+schemars            = { workspace = true }
+tokio               = { workspace = true }
+tokio-util          = { workspace = true }
+tracing             = { workspace = true }
+tracing-subscriber  = { workspace = true }
+serde               = { workspace = true }
+serde_json          = { workspace = true }
+thiserror           = { workspace = true }
+clap                = { workspace = true }
+url                 = { workspace = true }
+regex               = { workspace = true }
+async-trait         = { workspace = true }
+base64              = { workspace = true }
+axum                = { workspace = true }
+uuid                = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio-test = { workspace = true }
+tempfile   = { workspace = true }
+insta      = { workspace = true }
+# rmcp client features for end-to-end smoke tests — child-process for stdio,
+# streamable-http-client-reqwest for HTTP.
+rmcp       = { workspace = true, features = ["client", "transport-child-process", "transport-streamable-http-client", "transport-streamable-http-client-reqwest"] }
+# `test-support` enables `InterceptHandle::for_tests`, which the lifecycle
+# close-cleanup unit test uses to populate `SessionState::rules` without
+# spinning up a real interception actor.
+zendriver-interception = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true

@@ -74,6 +74,25 @@ impl InterceptHandle {
         }
     }
 
+    /// Test-support constructor: build a no-op handle backed by an unused
+    /// cancel token + a `oneshot::channel`'s receiver whose sender is
+    /// immediately dropped. Intended for downstream unit tests that need
+    /// to populate a registry of `InterceptHandle`s without going through
+    /// the actor pipeline. Dropping the handle still calls `.cancel()`
+    /// on the token (no observable side effect — nothing is listening).
+    ///
+    /// Gated behind the `test-support` feature so production builds don't
+    /// expose it.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn for_tests() -> Self {
+        let (_done_tx, done_rx) = oneshot::channel();
+        Self {
+            cancel: CancellationToken::new(),
+            done: Some(done_rx),
+        }
+    }
+
     /// Stop the actor and wait for it to acknowledge exit.
     ///
     /// Cancels the actor's token, then awaits the oneshot the actor sends

@@ -1,0 +1,17 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::expect::AwaitOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: AwaitOutput
+description: "Output of `browser_expect_await`."
+type: object
+properties:
+  event:
+    description: "JSON-encoded matched event. Shape depends on the expectation's\n`kind` — see the per-kind `*_to_json` helpers in this module."
+  expectation_id:
+    description: Echoed id of the awaited expectation (matches input).
+    type: string
+required:
+  - expectation_id
+  - event

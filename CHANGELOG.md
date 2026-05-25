@@ -5,6 +5,27 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SEMVER.md].
 
 ## [Unreleased]
 
+### Added
+
+- `zendriver-mcp` — Model Context Protocol server crate exposing
+  zendriver-rs through 49 MCP tools over stdio + streamable HTTP. See
+  the [MCP chapter](https://turtiesocks.github.io/zendriver-rs/mcp.html).
+- `zendriver-interception` — `test-support` cargo feature exposing a
+  hidden `InterceptHandle::for_tests()` constructor for downstream
+  crates' unit tests. Not intended for production use; default off.
+
+### Known issues
+
+- `zendriver-mcp::browser_tab_close` does NOT reap `browser_expect_*`
+  expectations or `browser_intercept_*` rules that were registered
+  against the closing tab. The per-handle registries
+  (`SessionState::expectations` / `SessionState::rules`) are flat
+  HashMaps with no `tab_id` field, so a per-tab close can't filter
+  them. Workarounds: explicitly call `browser_expect_cancel` /
+  `browser_intercept_remove_rule` before closing the tab, or let
+  `browser_close` tear them down at session end (which DOES drain
+  both registries as of this release). Fix tracked for a follow-up.
+
 ## [0.1.0] - 2026-05-23
 
 First public release. Built across 6 phases of internal development.
