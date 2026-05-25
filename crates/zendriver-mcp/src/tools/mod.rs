@@ -9,5 +9,8 @@
 //! `server.rs`.
 
 pub mod common;
+pub mod frames;
 pub mod lifecycle;
 pub mod navigation;
+pub mod stealth;
+pub mod tabs;

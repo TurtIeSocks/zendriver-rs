@@ -20,7 +20,7 @@ use tokio::sync::Mutex;
 
 use crate::state::SessionState;
 use crate::tools::common::EmptyInput;
-use crate::tools::{lifecycle, navigation};
+use crate::tools::{frames, lifecycle, navigation, stealth, tabs};
 
 /// rmcp handler carrying the per-session [`SessionState`].
 ///
@@ -138,6 +138,98 @@ impl ZendriverServer {
         Parameters(input): Parameters<navigation::IdleInput>,
     ) -> Result<Json<navigation::IdleOutput>, ErrorData> {
         navigation::wait_for_idle(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    // ---------- tabs -----------------------------------------------------
+
+    /// Enumerate all live tabs.
+    #[tool(
+        name = "browser_tab_list",
+        description = "Enumerate all live tabs. Each entry includes the CDP target id, URL, title, and an `is_current` flag relative to the session's focused tab."
+    )]
+    pub async fn browser_tab_list(
+        &self,
+        Parameters(input): Parameters<EmptyInput>,
+    ) -> Result<Json<tabs::TabListOutput>, ErrorData> {
+        tabs::list(self.state.clone(), input).await.map(Json)
+    }
+
+    /// Open a new tab.
+    #[tool(
+        name = "browser_tab_new",
+        description = "Open a new tab. `url` selects the initial URL (defaults to about:blank). When `activate` is true (the default) the new tab becomes the session's current tab."
+    )]
+    pub async fn browser_tab_new(
+        &self,
+        Parameters(input): Parameters<tabs::TabNewInput>,
+    ) -> Result<Json<tabs::TabSummary>, ErrorData> {
+        tabs::new_tab(self.state.clone(), input).await.map(Json)
+    }
+
+    /// Switch the session's current tab.
+    #[tool(
+        name = "browser_tab_switch",
+        description = "Switch the session's current tab to the given `tab_id`. Use `browser_tab_list` to enumerate available ids."
+    )]
+    pub async fn browser_tab_switch(
+        &self,
+        Parameters(input): Parameters<tabs::TabSwitchInput>,
+    ) -> Result<Json<tabs::TabSummary>, ErrorData> {
+        tabs::switch(self.state.clone(), input).await.map(Json)
+    }
+
+    /// Close a tab.
+    #[tool(
+        name = "browser_tab_close",
+        description = "Close a tab. When `tab_id` is omitted, the session's current tab is closed; if that was the focused tab, focus falls back to one of the remaining tabs (or `None` if none remain)."
+    )]
+    pub async fn browser_tab_close(
+        &self,
+        Parameters(input): Parameters<tabs::TabCloseInput>,
+    ) -> Result<Json<tabs::TabCloseOutput>, ErrorData> {
+        tabs::close(self.state.clone(), input).await.map(Json)
+    }
+
+    /// Bring a tab to the foreground.
+    #[tool(
+        name = "browser_tab_activate",
+        description = "Bring `tab_id` to the foreground in Chrome (sends Target.activateTarget). Also updates the session's current tab so subsequent calls target the foregrounded tab."
+    )]
+    pub async fn browser_tab_activate(
+        &self,
+        Parameters(input): Parameters<tabs::TabActivateInput>,
+    ) -> Result<Json<tabs::TabActivateOutput>, ErrorData> {
+        tabs::activate(self.state.clone(), input).await.map(Json)
+    }
+
+    // ---------- frames ---------------------------------------------------
+
+    /// Enumerate all frames on the current tab.
+    #[tool(
+        name = "browser_frame_list",
+        description = "Enumerate all frames on the current tab. Each entry includes the frame id, URL, parent id (None for the main frame), optional `name`, and `is_main` flag."
+    )]
+    pub async fn browser_frame_list(
+        &self,
+        Parameters(input): Parameters<EmptyInput>,
+    ) -> Result<Json<frames::FrameListOutput>, ErrorData> {
+        frames::list(self.state.clone(), input).await.map(Json)
+    }
+
+    // ---------- stealth --------------------------------------------------
+
+    /// Configure the session's default stealth profile.
+    #[tool(
+        name = "browser_set_stealth_profile",
+        description = "Configure the session's default stealth profile. NOTE: takes effect on the NEXT `browser_open` call; does NOT re-fingerprint an already-open browser. Call `browser_close` + `browser_open` to apply live."
+    )]
+    pub async fn browser_set_stealth_profile(
+        &self,
+        Parameters(input): Parameters<stealth::SetStealthProfileInput>,
+    ) -> Result<Json<stealth::SetStealthProfileOutput>, ErrorData> {
+        stealth::set_stealth_profile(self.state.clone(), input)
             .await
             .map(Json)
     }
