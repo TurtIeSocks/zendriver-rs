@@ -38,6 +38,22 @@ The plan's `server.tool(name, desc, handler)` pattern is wrong. Real rmcp uses `
 
 **Tab is `Clone`** (Arc-backed at `crates/zendriver/src/tab.rs:50-51`), so `current_tab` helper can return owned `Tab` cheaply — no borrow lifetime issues.
 
+**`AriaRole` lives at `zendriver::AriaRole`** (re-exported from `query::role`) with **21 explicit variants** + `Other(&'static str)` escape hatch: `Button, Link, Textbox, Combobox, Checkbox, Radio, Tab, Menu, Menuitem, Dialog, Heading, Banner, Navigation, Main, Article, List, Listitem, Row, Cell, Columnheader, Rowheader`. **No `FromStr` impl** — write a `parse_role(&str) -> Result<AriaRole, ErrorData>` mapping lowercase names; reject unknowns with a list-bearing error.
+
+**`zendriver::BoundingBox` lacks `Serialize` / `JsonSchema` derives** — MCP layer needs its own wire-shape struct + `From<zendriver::BoundingBox>` impl. Same for any other zendriver type that flows over the wire (screenshot clip rects, etc.).
+
+**`Tab::find() / find_all()` borrow `&self`** — returned `FindBuilder<'a>` / `FindAllBuilder<'a>` is lifetime-tied. Construct builder + apply selectors + await terminal within one `tab` borrow. `in_frame(&Frame)` likewise wants a stable borrow — look up Frame into owned handle first, then pass `&f`.
+
+**`FindBuilder::visible_only(bool)` is currently a NO-OP in zendriver lib** (see `crates/zendriver/src/query/mod.rs:502` comment "TODO(T16) — depends on actionability::check_visible"). MCP layer still passes the bool through so the feature lights up automatically when the lib lands the implementation. `Element::is_visible() / is_enabled()` work today via a separate `actionability::check_*` code path — so `browser_element_state.include = visible_enabled` returns real data.
+
+**`ZendriverError::FrameNotFound` is a TUPLE variant `FrameNotFound(String)`**, NOT struct `FrameNotFound { id: String }`. Construct with `ZendriverError::FrameNotFound(id.to_string())`.
+
+**`Element::evaluate(js)` wraps the expression** as `function(el) { return (<js>); }` internally. Pass an expression like `"el.tagName.toLowerCase()"`, NOT an arrow `"el => el.tagName.toLowerCase()"` — the latter yields a JS Function object instead of the value.
+
+**`Element::tag_name` workaround:** `el.evaluate::<String>("el.tagName.toLowerCase()").await.ok()`. Use `.ok()` to make tag discovery best-effort (so describe doesn't fail wholesale if eval rejects).
+
+**`Tab::new_for_test` is `pub(crate)` + `#[cfg(test)]`** — not reachable from `zendriver-mcp` tests. Either expose a test factory in the lib or rely on the `integration-tests`-gated end-to-end shape (slower but real).
+
 **Canonical pattern (use as template for all tool modules):**
 
 ```rust
