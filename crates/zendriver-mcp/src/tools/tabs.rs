@@ -240,6 +240,27 @@ pub struct TabCloseOutput {
 ///
 /// `Tab::close(self)` consumes the receiver, so we have to fetch the
 /// owned `Tab` out of `Browser::tabs()` before calling `.close()`.
+///
+/// # v0 limitation: tab-scoped expectations and interception rules leak
+///
+/// `SessionState::expectations` and `SessionState::rules` are flat
+/// `HashMap`s keyed by opaque ids — neither tracks which tab a handle
+/// was originally bound to. A `browser_tab_close` here therefore does
+/// **not** reap expectations registered via `browser_expect_register`
+/// or rules registered via `browser_intercept_add_rule` against the
+/// closing tab; they continue running (the expectation's spawned task
+/// holds its `.matched()` future open until its inner
+/// `pre_await_timeout_ms` fires, the interception actor's
+/// `Fetch.disable` only dispatches when its handle drops) until
+/// either: (a) the agent explicitly calls `browser_expect_cancel` /
+/// `browser_intercept_remove_rule`, or (b) the whole browser is torn
+/// down via `browser_close` (which DOES drain both registries —
+/// see `crate::tools::lifecycle::close`).
+///
+/// Fixing this requires extending each handle struct with a `tab_id`
+/// field plus a per-tab filter pass on close — out of scope for v0
+/// (would also need to handle the "tab id mid-rotation" case where the
+/// CDP target id changes under us). Tracked for a follow-up release.
 pub async fn close(
     state: Arc<Mutex<SessionState>>,
     input: TabCloseInput,
