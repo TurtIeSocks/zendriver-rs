@@ -55,8 +55,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
-      - name: Install Chromium
-        run: sudo apt-get update && sudo apt-get install -y chromium-browser
+      - name: Ensure Chrome available (preinstalled or apt fallback)
+        run: |
+          set -euo pipefail
+          if command -v google-chrome >/dev/null 2>&1; then
+            echo "Using preinstalled $(google-chrome --version) at $(command -v google-chrome)"
+          elif command -v google-chrome-stable >/dev/null 2>&1; then
+            echo "Using preinstalled $(google-chrome-stable --version) at $(command -v google-chrome-stable)"
+          elif command -v chromium-browser >/dev/null 2>&1; then
+            echo "Using preinstalled $(chromium-browser --version) at $(command -v chromium-browser)"
+          else
+            echo "No Chrome/Chromium found on PATH — falling back to apt install"
+            sudo apt-get update
+            sudo apt-get install -y chromium-browser
+            chromium-browser --version
+          fi
       - run: cargo nextest run --workspace --features integration-tests --locked --profile ci-integration -E 'kind(test)'
 
   nightly-stealth-tests:
@@ -68,8 +81,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
-      - name: Install Chromium
-        run: sudo apt-get update && sudo apt-get install -y chromium-browser
+      - name: Ensure Chrome available (preinstalled or apt fallback)
+        run: |
+          set -euo pipefail
+          if command -v google-chrome >/dev/null 2>&1; then
+            echo "Using preinstalled $(google-chrome --version) at $(command -v google-chrome)"
+          elif command -v google-chrome-stable >/dev/null 2>&1; then
+            echo "Using preinstalled $(google-chrome-stable --version) at $(command -v google-chrome-stable)"
+          elif command -v chromium-browser >/dev/null 2>&1; then
+            echo "Using preinstalled $(chromium-browser --version) at $(command -v chromium-browser)"
+          else
+            echo "No Chrome/Chromium found on PATH — falling back to apt install"
+            sudo apt-get update
+            sudo apt-get install -y chromium-browser
+            chromium-browser --version
+          fi
       - run: cargo nextest run --workspace --features stealth-tests --test stealth_phase2 --locked --profile ci-integration
 
   nightly-cloudflare-tests:
@@ -81,7 +107,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
-      - name: Install Chromium
-        run: sudo apt-get update && sudo apt-get install -y chromium-browser
+      - name: Ensure Chrome available (preinstalled or apt fallback)
+        run: |
+          set -euo pipefail
+          if command -v google-chrome >/dev/null 2>&1; then
+            echo "Using preinstalled $(google-chrome --version) at $(command -v google-chrome)"
+          elif command -v google-chrome-stable >/dev/null 2>&1; then
+            echo "Using preinstalled $(google-chrome-stable --version) at $(command -v google-chrome-stable)"
+          elif command -v chromium-browser >/dev/null 2>&1; then
+            echo "Using preinstalled $(chromium-browser --version) at $(command -v chromium-browser)"
+          else
+            echo "No Chrome/Chromium found on PATH — falling back to apt install"
+            sudo apt-get update
+            sudo apt-get install -y chromium-browser
+            chromium-browser --version
+          fi
       - run: cargo nextest run --workspace --features cloudflare-tests --test cloudflare_phase5 --locked --profile ci-integration
 
