@@ -1,9 +1,10 @@
 //! rmcp server stack + tool router.
 //!
 //! Every `#[tool]` method on [`ZendriverServer`] is a one-liner that
-//! delegates to a free async fn in [`crate::tools`]. Tools are split across
-//! two `#[tool_router]` impl blocks: the always-on `base_tool_router` and
-//! the `cfg(feature = "interception")`-gated `intercept_tool_router`. The
+//! delegates to a free async fn in [`crate::tools`]. Tools are split
+//! across multiple `#[tool_router]` impl blocks: the always-on
+//! `base_tool_router`, and one cfg-gated block per feature
+//! (`interception`, `expect`, `cloudflare`, `fetcher`). The
 //! `combined_tool_router()` helper sums them (`ToolRouter` implements
 //! `Add`), and a hand-written `#[tool_handler]` impl wires that sum into
 //! [`rmcp::ServerHandler`]. This split is forced by [`tool_router`] not
@@ -27,9 +28,13 @@ use rmcp::{ErrorData, Json, ServiceExt, tool, tool_handler, tool_router};
 use tokio::sync::Mutex;
 
 use crate::state::SessionState;
+#[cfg(feature = "cloudflare")]
+use crate::tools::cloudflare;
 use crate::tools::common::EmptyInput;
 #[cfg(feature = "expect")]
 use crate::tools::expect;
+#[cfg(feature = "fetcher")]
+use crate::tools::fetcher;
 #[cfg(feature = "interception")]
 use crate::tools::intercept;
 use crate::tools::{
@@ -715,19 +720,73 @@ impl ZendriverServer {
     }
 }
 
+// ---------- cloudflare (gated) -------------------------------------------
+//
+// Same split pattern as the interception / expect blocks above — the
+// `tool_router` macro can't see through per-method `#[cfg]`, so the
+// `browser_solve_turnstile` tool lives in its own impl block.
+
+#[cfg(feature = "cloudflare")]
+#[tool_router(router = cloudflare_tool_router, vis = "pub")]
+impl ZendriverServer {
+    /// Drive the Cloudflare Turnstile clearance flow on the current tab.
+    #[tool(
+        name = "browser_solve_turnstile",
+        description = "Drive the Cloudflare Turnstile clearance flow on the current tab. Locates the Turnstile iframe, clicks the checkbox at the canonical 15%/50% bbox offset, then polls every `poll_interval_ms` (default 500ms) until one of three terminal states is reached, bounded by `timeout_ms` (default 30_000 = 30s): `solved` (token captured in `cf-turnstile-response` — returned in `token`), `challenge_gone` (iframe vanished without a token, e.g. clearance cookie shortcut), or `timeout` (deadline elapsed — not an error, the agent can retry or fall back). Errors only on the structural failures: no challenge present at all, CDP call failed, or in-page JS exception."
+    )]
+    pub async fn browser_solve_turnstile(
+        &self,
+        Parameters(input): Parameters<cloudflare::SolveInput>,
+    ) -> Result<Json<cloudflare::SolveOutput>, ErrorData> {
+        cloudflare::solve_turnstile(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+}
+
+// ---------- fetcher (gated) ----------------------------------------------
+//
+// Same split pattern as the other gated blocks. `browser_install_chrome`
+// is the v0 surface; `browser_list_installed_chromes` was dropped per the
+// plan's API Reality note (no lib support, and reaching into the cache
+// layout by hand was deemed too invasive for v0).
+
+#[cfg(feature = "fetcher")]
+#[tool_router(router = fetcher_tool_router, vis = "pub")]
+impl ZendriverServer {
+    /// Resolve + download (on cache miss) a Chrome-for-Testing binary.
+    #[tool(
+        name = "browser_install_chrome",
+        description = "Resolve, download (on cache miss), and return the path to a runnable Chrome-for-Testing binary on the MCP server host. `version` selects an exact CFT release (e.g. `\"126.0.6478.182\"`) and wins over `channel` when both are set. `channel` (case-insensitive: `stable` / `beta` / `dev` / `canary`) maps to a release channel; only `stable` is wired end-to-end as of v0 — the others surface `UnsupportedPlatform`. Omitting both falls back to the lib's `Latest`. `cache_dir` overrides the OS cache root (`$XDG_CACHE_HOME/zendriver/chrome` on Linux, `~/Library/Caches/zendriver/chrome` on macOS). Returns `{ path, version_requested?, channel_requested? }` — `path` is on the MCP server host, not the client's machine."
+    )]
+    pub async fn browser_install_chrome(
+        &self,
+        Parameters(input): Parameters<fetcher::InstallInput>,
+    ) -> Result<Json<fetcher::InstallOutput>, ErrorData> {
+        fetcher::install_chrome(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+}
+
 // ---------- combined router + ServerHandler -----------------------------
 
 impl ZendriverServer {
-    /// Combine the always-on base router with the feature-gated interception
-    /// and expect routers. The `tool_handler` impl below points at this so a
-    /// single `ServerHandler::call_tool` / `list_tools` reaches every tool
-    /// the build was compiled with.
+    /// Combine the always-on base router with every feature-gated router
+    /// the build was compiled with (`interception`, `expect`,
+    /// `cloudflare`, `fetcher`). The `tool_handler` impl below points at
+    /// this so a single `ServerHandler::call_tool` / `list_tools` reaches
+    /// every tool the build was compiled with.
     pub fn combined_tool_router() -> ToolRouter<Self> {
         let router = Self::base_tool_router();
         #[cfg(feature = "interception")]
         let router = router + Self::intercept_tool_router();
         #[cfg(feature = "expect")]
         let router = router + Self::expect_tool_router();
+        #[cfg(feature = "cloudflare")]
+        let router = router + Self::cloudflare_tool_router();
+        #[cfg(feature = "fetcher")]
+        let router = router + Self::fetcher_tool_router();
         router
     }
 }

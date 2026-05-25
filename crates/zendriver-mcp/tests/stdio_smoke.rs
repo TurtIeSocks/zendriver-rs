@@ -79,6 +79,21 @@ async fn browser_status_round_trip_over_stdio() {
             "{expected} should be advertised; tools: {names:?}"
         );
     }
+    // Cloudflare tool (gated behind `cfg(feature = "cloudflare")`) lives
+    // in its own `tool_router` impl block. Default build has the feature
+    // on; this catches a router-composition regression.
+    #[cfg(feature = "cloudflare")]
+    assert!(
+        names.contains(&"browser_solve_turnstile"),
+        "browser_solve_turnstile should be advertised; tools: {names:?}"
+    );
+    // Fetcher tool (gated behind `cfg(feature = "fetcher")`) lives in its
+    // own `tool_router` impl block. Default build has the feature on.
+    #[cfg(feature = "fetcher")]
+    assert!(
+        names.contains(&"browser_install_chrome"),
+        "browser_install_chrome should be advertised; tools: {names:?}"
+    );
 
     let result = client
         .call_tool(

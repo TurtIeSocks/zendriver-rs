@@ -46,6 +46,7 @@ uuid                = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }
+tempfile   = { workspace = true }
 # rmcp client features for end-to-end smoke tests — child-process for stdio,
 # streamable-http-client-reqwest for HTTP.
 rmcp       = { workspace = true, features = ["client", "transport-child-process", "transport-streamable-http-client", "transport-streamable-http-client-reqwest"] }

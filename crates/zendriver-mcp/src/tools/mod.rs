@@ -9,11 +9,15 @@
 //! `server.rs`.
 
 pub mod actions;
+#[cfg(feature = "cloudflare")]
+pub mod cloudflare;
 pub mod common;
 pub mod cookies;
 pub mod eval;
 #[cfg(feature = "expect")]
 pub mod expect;
+#[cfg(feature = "fetcher")]
+pub mod fetcher;
 pub mod find;
 pub mod frames;
 #[cfg(feature = "interception")]
