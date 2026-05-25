@@ -33,6 +33,7 @@ rmcp        = { version = "1.7", default-features = false }
 rmcp-macros = { version = "1.7" }
 schemars    = "1.0"
 clap        = { version = "4", features = ["derive"] }
+axum        = { version = "0.7" }
 
 # External — runtime
 tokio              = { version = "1.40",  features = ["full"] }

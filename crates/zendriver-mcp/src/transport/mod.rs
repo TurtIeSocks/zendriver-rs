@@ -1,5 +1,10 @@
 //! Transport bootstraps for rmcp.
 //!
-//! In this slice, stdio wiring lives inline in [`crate::server`] (one
+//! Stdio wiring lives inline in [`crate::server`] (one
 //! `serve(stdio()).await` line — no helper earns its keep yet). The HTTP
-//! transport implementation lands in a follow-up dispatch.
+//! transport mounts an `rmcp` [`StreamableHttpService`] onto axum; see
+//! [`http::serve`].
+//!
+//! [`StreamableHttpService`]: rmcp::transport::streamable_http_server::StreamableHttpService
+
+pub mod http;

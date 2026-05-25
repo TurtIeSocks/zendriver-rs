@@ -594,6 +594,16 @@ pub async fn run_stdio(state: Arc<Mutex<SessionState>>) -> Result<(), Box<dyn st
     Ok(())
 }
 
+/// Run the MCP server over streamable HTTP, bound to `addr`. Each new
+/// MCP session gets its own [`SessionState`] (and therefore its own
+/// `Browser` slot) — clients do not share browser state.
+pub async fn run_http(
+    addr: std::net::SocketAddr,
+    default_profile: crate::state::StealthProfileChoice,
+) -> Result<(), Box<dyn std::error::Error>> {
+    crate::transport::http::serve(addr, default_profile).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

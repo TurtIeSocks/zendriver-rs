@@ -68,12 +68,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }));
 
     match cli.http {
-        Some(_addr) => {
-            // HTTP transport implementation lands in a follow-up dispatch.
-            #[allow(clippy::unimplemented)]
-            {
-                unimplemented!("HTTP transport — next dispatch")
-            }
+        Some(addr_str) => {
+            let addr: std::net::SocketAddr = addr_str
+                .parse()
+                .map_err(|e| format!("invalid --http address `{addr_str}`: {e}"))?;
+            server::run_http(addr, cli.stealth_profile.into()).await?;
         }
         None => server::run_stdio(state).await?,
     }
