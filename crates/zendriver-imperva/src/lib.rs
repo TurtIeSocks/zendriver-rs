@@ -11,3 +11,7 @@
 //! Public API stub — modules land in subsequent tasks.
 //!
 //! [`BrowserBuilder::stealth`]: https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.stealth
+
+pub mod error;
+
+pub use error::ImpervaError;
