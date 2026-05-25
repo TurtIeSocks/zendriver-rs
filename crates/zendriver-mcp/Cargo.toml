@@ -9,6 +9,9 @@ authors.workspace = true
 description = "MCP server exposing zendriver-rs's stealth browser automation to MCP clients."
 keywords = ["mcp", "browser", "automation", "cdp", "stealth"]
 categories = ["command-line-utilities", "web-programming::http-server"]
+readme = "README.md"
+homepage = "https://github.com/TurtIeSocks/zendriver-rs"
+documentation = "https://turtiesocks.github.io/zendriver-rs/mcp.html"
 
 [[bin]]
 name = "zendriver-mcp"

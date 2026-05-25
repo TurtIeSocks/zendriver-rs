@@ -5,6 +5,12 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SEMVER.md].
 
 ## [Unreleased]
 
+### Added
+
+- `zendriver-mcp` — Model Context Protocol server crate exposing
+  zendriver-rs through 49 MCP tools over stdio + streamable HTTP. See
+  the [MCP chapter](https://turtiesocks.github.io/zendriver-rs/mcp.html).
+
 ## [0.1.0] - 2026-05-23
 
 First public release. Built across 6 phases of internal development.
