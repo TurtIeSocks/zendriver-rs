@@ -4,6 +4,10 @@
 //! of the [zendriver-rs user guide](https://turtiesocks.github.io/zendriver-rs/)
 //! for end-to-end usage, timeout tuning, and detection-failure diagnostics.
 //!
+//! **Stealth recommended.** Cloudflare Turnstile is somewhat forgiving of
+//! non-stealth Chrome, but `BrowserBuilder::stealth` significantly raises
+//! the clearance success rate.
+//!
 //! Drives the Turnstile checkbox click flow:
 //!
 //! 1. Detect the Turnstile iframe via a shadow-DOM-aware walk of the page's
