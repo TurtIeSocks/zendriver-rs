@@ -16,6 +16,31 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SEMVER.md].
 
 ### Changed
 
+- `zendriver-cloudflare::CloudflareBypass::wait_for_clearance` now drives a
+  unified poll loop instead of an upfront iframe-detect + click + poll.
+  Each tick fetches token, iframe bbox (shadow-DOM aware), and a
+  challenge-marker flag in a single CDP round-trip. The click flow still
+  fires when the interactive iframe mounts, but the **invisible
+  Turnstile** path — where Cloudflare's loader populates
+  `cf-turnstile-response` directly with no iframe — now resolves to
+  `TokenAcquired` instead of `Err(NoChallenge)`. `NoChallenge` is now
+  reserved for the case where the entire timeout window elapsed without
+  any challenge marker on the page. Public API unchanged; behavior
+  strictly more permissive.
+- Nightly Cloudflare integration test (`cloudflare_phase5.rs`) switched
+  from `nopecha.com/demo/cloudflare` to a wiremock-served local HTML page
+  with Cloudflare's invisible test sitekey
+  `1x00000000000000000000AA`. The nopecha demo now serves a non-iframe
+  JS-Challenge interstitial that no headless Chrome — stealth or
+  otherwise — can clear via the click flow, so the previous test no
+  longer exercised meaningful code paths. The local page still loads
+  `challenges.cloudflare.com/turnstile/v0/api.js`, so the end-to-end
+  token-detection / poll-loop is still validated against real
+  Cloudflare script traffic.
+- Nightly stealth integration test (`stealth_phase2.rs`) updated its
+  sannysoft pass-cell detection to accept sannysoft's 2026 olive-green
+  shade (`rgb(200, 216, 109)`) in addition to the legacy pure-green
+  variants.
 - Per-crate version automation via [release-plz](https://release-plz.dev).
   Each crate now versions independently based on conventional commits;
   the old manual `publish.yml` is replaced by `release-plz-pr.yml`

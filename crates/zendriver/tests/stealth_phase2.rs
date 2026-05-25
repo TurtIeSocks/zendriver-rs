@@ -28,15 +28,31 @@ async fn spoofed_passes_sannysoft_intoli_block() {
     let results: Vec<(String, bool)> = tab
         .evaluate_main(
             r#"
+        // sannysoft historically colored passing rows pure-green and failing
+        // rows red. Around early 2026 it switched its pass shade to an
+        // olive `rgb(200, 216, 109)`. Accept the new shade plus the legacy
+        // greens so the test survives if the site reverts. Failure cells
+        // remain red-dominant (R >> G && R >> B), so we infer pass = "any
+        // non-failure, non-default background that the page picked".
+        function isPassBg(bg) {
+            const m = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+            if (!m) return false;
+            const r = +m[1], g = +m[2], b = +m[3];
+            // Legacy greens.
+            if (r === 0 && g >= 128 && b <= 128) return true;
+            if (r <= 128 && g === 255 && b === 0) return true;
+            // 2026 olive: r ≈ 200, g ≈ 216, b ≈ 109. Treat any cell where
+            // green dominates red AND red dominates blue as a pass — that
+            // covers the olive and any further yellow-green tweak without
+            // false-positiving on the red failures.
+            return g > r && r > b && g >= 150;
+        }
         Array.from(document.querySelectorAll('table tr')).map(tr => {
             const cells = tr.querySelectorAll('td');
             if (cells.length < 2) return null;
             const name = cells[0].textContent.trim();
             const bg = window.getComputedStyle(cells[1]).backgroundColor;
-            // sannysoft uses green (passing) / red (failing) backgrounds.
-            const passed = bg.includes('0, 255, 0') || bg.includes('128, 255, 0')
-                        || bg.includes('0, 128, 0') || bg.includes('rgb(0, 255, 0)');
-            return [name, passed];
+            return [name, isPassBg(bg)];
         }).filter(x => x !== null)
     "#,
         )

@@ -51,6 +51,18 @@ pub fn flags_for_profile(kind: ProfileKind) -> Vec<String> {
             // Disabling the feature removes the native injection and
             // lets our shim's prototype getter stick.
             v.push("--disable-blink-features=AutomationControlled".into());
+            // Route WebGL through ANGLE + SwiftShader so headless Chrome
+            // reports a realistic vendor/renderer pair to fingerprinters
+            // even when GPU acceleration is disabled. Without this trio
+            // headless mode returns `Canvas has no webgl context` for
+            // both `UNMASKED_VENDOR_WEBGL` and `UNMASKED_RENDERER_WEBGL`,
+            // which detectors like sannysoft flag as bot-tier.
+            // `--enable-unsafe-swiftshader` is required on Chrome >= 116
+            // because SwiftShader was deprecated for production use; the
+            // flag re-enables it for fingerprinting purposes.
+            v.push("--use-gl=angle".into());
+            v.push("--use-angle=swiftshader".into());
+            v.push("--enable-unsafe-swiftshader".into());
             v
         }
     }
