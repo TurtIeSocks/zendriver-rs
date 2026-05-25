@@ -126,16 +126,18 @@ pub async fn add_rule(
     let mut s = state.lock().await;
     let tab = current_tab(&s).await?;
 
-    // Each match-arm builds + starts its own InterceptBuilder. We can't
-    // hoist the `tab.intercept().pattern(pat)` prefix because the four
-    // configuration methods consume `self` by move *and* the `respond` /
-    // `modify_request` arms need their captured payloads, so threading a
-    // builder through arms gets noisier than just inlining.
+    // Each match-arm builds + starts its own InterceptBuilder. The action
+    // method (`block` / `redirect` / `respond` / `modify_request`) takes the
+    // URL pattern as its first arg and registers it as the rule's matcher;
+    // `InterceptBuilder::start` auto-injects a match-all `"*"` CDP
+    // `Fetch.RequestPattern` when none is added via `.pattern()`, so we
+    // don't need to add one ourselves. (Conflating the two would just
+    // register the same string twice as conceptually different things —
+    // the CDP server-side filter and the rule's per-request matcher.)
     let (handle, action_kind): (zendriver::InterceptHandle, &'static str) = match input.action {
         InterceptAction::Block => {
             let h = tab
                 .intercept()
-                .pattern(input.pattern.clone())
                 .block(input.pattern.clone())
                 .map_err(zendriver_err)?
                 .start();
@@ -144,7 +146,6 @@ pub async fn add_rule(
         InterceptAction::Redirect { to } => {
             let h = tab
                 .intercept()
-                .pattern(input.pattern.clone())
                 .redirect(input.pattern.clone(), to)
                 .map_err(zendriver_err)?
                 .start();
@@ -164,7 +165,6 @@ pub async fn add_rule(
             let header_vec: Vec<(String, String)> = headers.into_iter().collect();
             let h = tab
                 .intercept()
-                .pattern(input.pattern.clone())
                 .respond(input.pattern.clone(), status, header_vec, body.into_bytes())
                 .map_err(zendriver_err)?
                 .start();
@@ -177,7 +177,6 @@ pub async fn add_rule(
             let overlay = Arc::new(headers);
             let h = tab
                 .intercept()
-                .pattern(input.pattern.clone())
                 .modify_request(input.pattern.clone(), move |req| {
                     merge_headers(&req.headers, &overlay)
                 })
