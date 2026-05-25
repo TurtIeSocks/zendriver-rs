@@ -24,10 +24,16 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
   of `Err(NoChallenge)`. `NoChallenge` is now reserved for the case
   where the entire timeout window elapsed without any challenge marker on
   the page. Public surface unchanged.
+- Dropped stale `zendriver-interception` Cargo dep (declared but never
+  imported in `src/`).
+- `CloudflareBypass::wait_for_clearance` emits one `tracing::warn!`
+  after ~2.5s of stalled clearance, suggesting
+  `BrowserBuilder::stealth`.
+- `lib.rs` module docs gain a *Stealth recommended* call-out at the
+  top for posture parity with `zendriver-imperva`.
 
 ## [0.1.1] - 2026-05-25
 
 ### Changed
 
 - Split workspace.package.version into per-crate versions ([#5](https://github.com/TurtIeSocks/zendriver-rs/pull/5))
-
