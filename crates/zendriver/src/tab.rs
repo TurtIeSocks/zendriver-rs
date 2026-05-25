@@ -1393,10 +1393,40 @@ impl Tab {
     /// [`is_challenge_present`](zendriver_cloudflare::CloudflareBypass::is_challenge_present)
     /// for a one-shot probe without driving a click.
     ///
+    /// **Stealth recommended.** Cloudflare Turnstile is somewhat forgiving
+    /// of non-stealth Chrome, but `BrowserBuilder::stealth` significantly
+    /// raises the clearance success rate.
+    ///
     /// Gated by the `cloudflare` cargo feature.
     #[must_use]
     pub fn cloudflare(&self) -> zendriver_cloudflare::CloudflareBypass<'_> {
         zendriver_cloudflare::CloudflareBypass::new(self.session())
+    }
+}
+
+#[cfg(feature = "imperva")]
+impl Tab {
+    /// Construct an
+    /// [`ImpervaBypass`](zendriver_imperva::ImpervaBypass) bound to this
+    /// tab's session.
+    ///
+    /// Chain
+    /// [`timeout`](zendriver_imperva::ImpervaBypass::timeout) /
+    /// [`poll_interval`](zendriver_imperva::ImpervaBypass::poll_interval) /
+    /// [`with_interception`](zendriver_imperva::ImpervaBypass::with_interception) /
+    /// [`on_captcha`](zendriver_imperva::ImpervaBypass::on_captcha)
+    /// builder methods, then call
+    /// [`wait_for_clearance`](zendriver_imperva::ImpervaBypass::wait_for_clearance)
+    /// to detect the active Imperva surface (modern reese84, legacy
+    /// Incapsula, or CAPTCHA escalation) and poll until clearance.
+    ///
+    /// **Stealth required.** Without `BrowserBuilder::stealth`, the
+    /// bypass will fail on nearly all real Imperva-protected sites.
+    ///
+    /// Gated by the `imperva` cargo feature.
+    #[must_use]
+    pub fn imperva(&self) -> zendriver_imperva::ImpervaBypass<'_> {
+        zendriver_imperva::ImpervaBypass::new(self.session())
     }
 }
 

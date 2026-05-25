@@ -60,6 +60,7 @@
 //! | `expect` | in-tree | `expect_request` / `expect_response` / `expect_dialog` / `expect_download` |
 //! | `interception` | `zendriver-interception` | `Fetch.*`-backed request rewriting / abort |
 //! | `cloudflare` | `zendriver-cloudflare` | Cloudflare Turnstile bypass |
+//! | `imperva` | `zendriver-imperva` | Imperva WAF / Incapsula bypass |
 //! | `fetcher` | `zendriver-fetcher` | Chrome-for-Testing download cache |
 //!
 //! Each gated module is re-exported here under `#[cfg(feature = "...")]` so
@@ -119,6 +120,23 @@ pub use zendriver_interception::{
 /// [`Tab::cloudflare`].
 #[cfg(feature = "cloudflare")]
 pub use zendriver_cloudflare::{ClearanceOutcome, CloudflareBypass, CloudflareError};
+
+/// Imperva WAF / Incapsula bypass surface re-exports.
+///
+/// Gated by the `imperva` cargo feature. The driver lives in the
+/// `zendriver-imperva` sub-crate; these aliases let downstream code reach
+/// it via the parent crate without an extra dependency. Entry point is
+/// [`Tab::imperva`].
+#[cfg(feature = "imperva")]
+pub use zendriver_imperva::{
+    CaptchaChallenge, CaptchaKind, CaptchaSolution, CookieSnapshot, DetectionSnapshot,
+    ImpervaBypass, ImpervaError, ImpervaSurface, detect_surface,
+};
+
+/// Imperva-bypass clearance outcome (aliased to avoid colliding with the
+/// cloudflare crate's `ClearanceOutcome`).
+#[cfg(feature = "imperva")]
+pub use zendriver_imperva::ClearanceOutcome as ImpervaClearanceOutcome;
 
 /// Re-export the shared `UrlMatcher` used by the `expect_*` helpers.
 #[cfg(feature = "expect")]
@@ -250,6 +268,26 @@ mod auto_trait_assertions {
         assert_send_sync::<CloudflareBypass>();
         assert_send_sync::<CloudflareError>();
         assert_send_sync::<ClearanceOutcome>();
+    }
+
+    #[cfg(feature = "imperva")]
+    use crate::{
+        CaptchaChallenge, CaptchaKind, CaptchaSolution, CookieSnapshot, DetectionSnapshot,
+        ImpervaBypass, ImpervaClearanceOutcome, ImpervaError, ImpervaSurface,
+    };
+
+    #[cfg(feature = "imperva")]
+    #[test]
+    fn imperva_surface_is_send_sync() {
+        assert_send_sync::<ImpervaBypass<'_>>();
+        assert_send_sync::<ImpervaError>();
+        assert_send_sync::<ImpervaSurface>();
+        assert_send_sync::<CaptchaKind>();
+        assert_send_sync::<CaptchaChallenge>();
+        assert_send_sync::<CaptchaSolution>();
+        assert_send_sync::<CookieSnapshot>();
+        assert_send_sync::<DetectionSnapshot>();
+        assert_send_sync::<ImpervaClearanceOutcome>();
     }
 
     #[cfg(feature = "fetcher")]
