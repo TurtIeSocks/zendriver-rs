@@ -12,6 +12,10 @@
 //!
 //! [`BrowserBuilder::stealth`]: https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.stealth
 
+pub mod detection;
 pub mod error;
 
+pub use detection::{
+    CaptchaKind, CookieSnapshot, DetectionSnapshot, ImpervaSurface, detect_surface,
+};
 pub use error::ImpervaError;

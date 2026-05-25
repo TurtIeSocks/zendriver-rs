@@ -4,27 +4,7 @@ use std::time::Duration;
 use zendriver_interception::InterceptionError;
 use zendriver_transport::CallError;
 
-/// **Stub** — relocated to `detection.rs` in Task 2.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ImpervaSurface {
-    /// Modern reese84-based bot management.
-    Reese84,
-    /// Legacy Incapsula (`___utmvc` / `incap_ses_*`).
-    Legacy,
-    /// Visual or invisible CAPTCHA challenge.
-    Captcha(CaptchaKind),
-    /// No Imperva surface detected.
-    None,
-}
-
-/// **Stub** — relocated to `detection.rs` in Task 2.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CaptchaKind {
-    HCaptcha,
-    Recaptcha,
-    ImpervaNative,
-    Unknown,
-}
+use crate::detection::{CaptchaKind, ImpervaSurface};
 
 /// Error returned by [`ImpervaBypass`] operations.
 ///
