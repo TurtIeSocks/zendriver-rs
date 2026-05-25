@@ -22,6 +22,11 @@ pub enum McpServerError {
     #[error("Browser not open. Call `browser_open` first.")]
     BrowserNotOpen,
 
+    /// `browser_open` was called while a Browser is already attached to this
+    /// session.
+    #[error("Browser already open. Call `browser_close` first.")]
+    BrowserAlreadyOpen,
+
     /// `current_tab_id` is `None` or doesn't resolve to any live tab.
     #[error("No current tab. Open a tab via `browser_tab_new` or `browser_open`.")]
     NoCurrentTab,
@@ -47,6 +52,7 @@ pub fn map_error(err: impl Into<McpServerError>) -> ErrorData {
     let err: McpServerError = err.into();
     let (msg, suggested_next) = match &err {
         McpServerError::BrowserNotOpen => (err.to_string(), Some("browser_open")),
+        McpServerError::BrowserAlreadyOpen => (err.to_string(), Some("browser_close")),
         McpServerError::NoCurrentTab => (err.to_string(), Some("browser_tab_new")),
         McpServerError::ExpectationNotFound(_) => {
             (err.to_string(), Some("browser_expect_register"))
@@ -113,6 +119,14 @@ mod tests {
         assert!(e.message.contains("browser_open"));
         let data = e.data.as_ref().expect("data populated");
         assert_eq!(data["suggested_next"], "browser_open");
+    }
+
+    #[test]
+    fn browser_already_open_suggests_browser_close() {
+        let e = map_error(McpServerError::BrowserAlreadyOpen);
+        assert!(e.message.contains("browser_close"));
+        let data = e.data.as_ref().expect("data populated");
+        assert_eq!(data["suggested_next"], "browser_close");
     }
 
     #[test]
