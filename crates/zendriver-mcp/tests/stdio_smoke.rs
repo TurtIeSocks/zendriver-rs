@@ -46,6 +46,24 @@ async fn browser_status_round_trip_over_stdio() {
             "{expected} should be advertised; tools: {names:?}"
         );
     }
+    // Interception tools (gated behind `cfg(feature = "interception")`)
+    // are wired through a second `tool_router` impl block and combined
+    // into the handler via `combined_tool_router()`. The default build has
+    // the feature on, so all four should be in the advertised list — if
+    // the combination drops one, this assertion catches it before users
+    // do.
+    #[cfg(feature = "interception")]
+    for expected in [
+        "browser_intercept_add_rule",
+        "browser_intercept_remove_rule",
+        "browser_intercept_list_rules",
+        "browser_intercept_clear_rules",
+    ] {
+        assert!(
+            names.contains(&expected),
+            "{expected} should be advertised; tools: {names:?}"
+        );
+    }
 
     let result = client
         .call_tool(

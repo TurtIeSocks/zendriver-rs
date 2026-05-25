@@ -19,7 +19,7 @@ path = "src/lib.rs"
 
 [features]
 default = ["interception", "expect", "cloudflare", "fetcher"]
-interception = ["zendriver/interception"]
+interception = ["zendriver/interception", "dep:uuid"]
 expect       = ["zendriver/expect"]
 cloudflare   = ["zendriver/cloudflare"]
 fetcher      = ["zendriver/fetcher"]
@@ -42,6 +42,7 @@ regex               = { workspace = true }
 async-trait         = { workspace = true }
 base64              = { workspace = true }
 axum                = { workspace = true }
+uuid                = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }

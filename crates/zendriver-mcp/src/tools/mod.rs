@@ -14,6 +14,8 @@ pub mod cookies;
 pub mod eval;
 pub mod find;
 pub mod frames;
+#[cfg(feature = "interception")]
+pub mod intercept;
 pub mod lifecycle;
 pub mod navigation;
 pub mod reads;

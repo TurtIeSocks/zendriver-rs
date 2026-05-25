@@ -63,12 +63,18 @@ pub struct ExpectationHandle {
     pub kind: String,
 }
 
-/// Placeholder for an `InterceptHandle`; populated by the interception
-/// tools in a later dispatch.
+/// One MCP interception rule = one `zendriver_interception::InterceptHandle`.
+///
+/// Holding the handle is what keeps the rule live: dropping it (via
+/// [`HashMap::remove`] or [`HashMap::clear`]) cancels the actor and tears
+/// down `Fetch.enable` on that rule's session. `pattern` + `action_kind`
+/// are kept alongside so `browser_intercept_list_rules` can report back
+/// what each id corresponds to without poking at the handle's internals.
 #[cfg(feature = "interception")]
 pub struct InterceptRuleHandle {
     pub pattern: String,
-    pub action_kind: String,
+    pub action_kind: &'static str,
+    pub _handle: zendriver::InterceptHandle,
 }
 
 impl SessionState {

@@ -1,26 +1,35 @@
 //! rmcp server stack + tool router.
 //!
 //! Every `#[tool]` method on [`ZendriverServer`] is a one-liner that
-//! delegates to a free async fn in [`crate::tools`]. The
-//! [`#[tool_router(server_handler)]`][tr] form emits the `ServerHandler`
-//! impl in one step — no separate `#[tool_handler]` block needed.
+//! delegates to a free async fn in [`crate::tools`]. Tools are split across
+//! two `#[tool_router]` impl blocks: the always-on `base_tool_router` and
+//! the `cfg(feature = "interception")`-gated `intercept_tool_router`. The
+//! `combined_tool_router()` helper sums them (`ToolRouter` implements
+//! `Add`), and a hand-written `#[tool_handler]` impl wires that sum into
+//! [`rmcp::ServerHandler`]. This split is forced by [`tool_router`] not
+//! propagating per-method `#[cfg]` attributes — feature-gated tools must
+//! live in their own impl block that the macro can either generate or
+//! skip wholesale.
 //!
 //! Keeping the per-tool implementations in `tools/*.rs` (rather than
 //! inline here) makes the surface easy to grow: a new tool group adds a
 //! new module, a new wrapper here, and lands without touching the others.
 //!
-//! [tr]: rmcp::tool_router
+//! [`tool_router`]: rmcp::tool_router
 
 use std::sync::Arc;
 
+use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::transport::stdio;
-use rmcp::{ErrorData, Json, ServiceExt, tool, tool_router};
+use rmcp::{ErrorData, Json, ServiceExt, tool, tool_handler, tool_router};
 use tokio::sync::Mutex;
 
 use crate::state::SessionState;
 use crate::tools::common::EmptyInput;
+#[cfg(feature = "interception")]
+use crate::tools::intercept;
 use crate::tools::{
     actions, cookies, eval, find, frames, lifecycle, navigation, reads, snapshot, stealth, storage,
     tabs,
@@ -34,7 +43,14 @@ pub struct ZendriverServer {
     pub state: Arc<Mutex<SessionState>>,
 }
 
-#[tool_router(server_handler)]
+// Two `#[tool_router]` impl blocks: this one (always present) and the
+// `#[cfg(feature = "interception")]` one near the bottom of the file. The
+// `tool_router` macro can't see through `#[cfg]` attributes on individual
+// `#[tool]` methods, so we split feature-gated tools into a separate impl
+// block that the macro can either generate or skip wholesale. The two
+// per-block routers are then combined in `combined_tool_router()`, which
+// the manual `ServerHandler` impl below uses.
+#[tool_router(router = base_tool_router, vis = "pub")]
 impl ZendriverServer {
     /// Construct a server bound to the given session state.
     pub fn new(state: Arc<Mutex<SessionState>>) -> Self {
@@ -580,6 +596,90 @@ impl ZendriverServer {
             .map(Json)
     }
 }
+
+// ---------- interception (gated) ----------------------------------------
+//
+// Separate impl block so the `tool_router` macro can be cfg-gated as a
+// unit. See the comment on `base_tool_router` above for why per-method
+// `#[cfg]` doesn't work.
+
+#[cfg(feature = "interception")]
+#[tool_router(router = intercept_tool_router, vis = "pub")]
+impl ZendriverServer {
+    /// Install one network-interception rule on the current tab.
+    #[tool(
+        name = "browser_intercept_add_rule",
+        description = "Install one interception rule on the current tab. `pattern` uses CDP wildcard syntax (`*` / `?`). `action.kind` selects `block` (fail with `BlockedByClient`), `redirect` (URL replacement via `action.to`), `respond` (synthesize a response — `status`, `body`, optional `content_type`, optional `headers`), or `modify_request` (overlay extra `headers` onto the request). Returns `{ rule_id }`. v0: one rule per call — chain multiple `add_rule` calls for multiple rules. Each rule spawns its own actor; tearing it down (`browser_intercept_remove_rule` / `_clear_rules`) stops only that rule."
+    )]
+    pub async fn browser_intercept_add_rule(
+        &self,
+        Parameters(input): Parameters<intercept::AddRuleInput>,
+    ) -> Result<Json<intercept::AddRuleOutput>, ErrorData> {
+        intercept::add_rule(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Remove a previously-installed interception rule.
+    #[tool(
+        name = "browser_intercept_remove_rule",
+        description = "Remove the interception rule identified by `rule_id`. Drops the underlying handle, which cancels the per-rule actor and tears down its `Fetch.enable`. Returns an error if the id is unknown — for an idempotent clear-all use `browser_intercept_clear_rules`."
+    )]
+    pub async fn browser_intercept_remove_rule(
+        &self,
+        Parameters(input): Parameters<intercept::RemoveRuleInput>,
+    ) -> Result<Json<intercept::RemoveRuleOutput>, ErrorData> {
+        intercept::remove_rule(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Enumerate every live interception rule.
+    #[tool(
+        name = "browser_intercept_list_rules",
+        description = "Enumerate every live interception rule. Returns `{ rules: [{ rule_id, pattern, action_kind }] }` sorted by `rule_id` for stable output. Empty list (never an error) when no rules are installed."
+    )]
+    pub async fn browser_intercept_list_rules(
+        &self,
+        Parameters(input): Parameters<EmptyInput>,
+    ) -> Result<Json<intercept::ListRulesOutput>, ErrorData> {
+        intercept::list_rules(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Drop every live interception rule on this session.
+    #[tool(
+        name = "browser_intercept_clear_rules",
+        description = "Drop every live interception rule on this session (each handle's `Drop` cancels its actor). Returns `{ cleared: <count> }`. Idempotent — calling on an empty registry returns `{ cleared: 0 }` rather than erroring."
+    )]
+    pub async fn browser_intercept_clear_rules(
+        &self,
+        Parameters(input): Parameters<EmptyInput>,
+    ) -> Result<Json<intercept::ClearRulesOutput>, ErrorData> {
+        intercept::clear_rules(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+}
+
+// ---------- combined router + ServerHandler -----------------------------
+
+impl ZendriverServer {
+    /// Combine the always-on base router with the feature-gated interception
+    /// router. The `tool_handler` impl below points at this so a single
+    /// `ServerHandler::call_tool` / `list_tools` reaches every tool the
+    /// build was compiled with.
+    pub fn combined_tool_router() -> ToolRouter<Self> {
+        let router = Self::base_tool_router();
+        #[cfg(feature = "interception")]
+        let router = router + Self::intercept_tool_router();
+        router
+    }
+}
+
+#[tool_handler(router = Self::combined_tool_router())]
+impl rmcp::ServerHandler for ZendriverServer {}
 
 /// Build a fresh server handler bound to the given state.
 pub fn build_handler(state: Arc<Mutex<SessionState>>) -> ZendriverServer {
