@@ -66,6 +66,113 @@ pub(crate) type CaptchaSolver = dyn Fn(
     + Send
     + Sync;
 
+/// Extract a CAPTCHA site key from the current page via a small inline JS
+/// probe. Returns `None` if no recognizable embed is present.
+async fn extract_captcha_site_key(
+    session: &SessionHandle,
+    kind: CaptchaKind,
+) -> Result<(Option<String>, String), ImpervaError> {
+    use serde_json::json;
+
+    const PROBE_JS: &str = r#"
+    (function () {
+        function findKey(selector, attr) {
+            var el = document.querySelector(selector);
+            return el ? el.getAttribute(attr) : null;
+        }
+        var hcap =
+            findKey(".h-captcha", "data-sitekey") ||
+            findKey("[data-hcaptcha-sitekey]", "data-hcaptcha-sitekey");
+        var rcap =
+            findKey(".g-recaptcha", "data-sitekey") ||
+            findKey("[data-recaptcha-sitekey]", "data-recaptcha-sitekey");
+        return { hcap: hcap, rcap: rcap, url: location.href };
+    })()
+    "#;
+
+    let res = session
+        .call(
+            "Runtime.evaluate",
+            json!({
+                "expression": PROBE_JS,
+                "returnByValue": true,
+            }),
+        )
+        .await?;
+    let value = res
+        .get("result")
+        .and_then(|r| r.get("value"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+
+    #[derive(serde::Deserialize)]
+    struct Probe {
+        hcap: Option<String>,
+        rcap: Option<String>,
+        url: String,
+    }
+    let probe: Probe = serde_json::from_value(value)
+        .map_err(|e| ImpervaError::JsError(format!("invalid captcha probe payload: {e}")))?;
+
+    let site_key = match kind {
+        CaptchaKind::HCaptcha => probe.hcap,
+        CaptchaKind::Recaptcha => probe.rcap,
+        CaptchaKind::ImpervaNative | CaptchaKind::Unknown => None,
+    };
+    Ok((site_key, probe.url))
+}
+
+/// Inject a CAPTCHA solver token into the named form field via
+/// `Runtime.evaluate`.
+async fn inject_captcha_solution(
+    session: &SessionHandle,
+    solution: &CaptchaSolution,
+) -> Result<(), ImpervaError> {
+    use serde_json::json;
+
+    let script = format!(
+        r#"
+        (function () {{
+            var field = document.querySelector('[name="{name}"]')
+                || document.getElementById("{name}");
+            if (!field) {{
+                var t = document.createElement("textarea");
+                t.name = "{name}";
+                t.id = "{name}";
+                t.style.display = "none";
+                document.body.appendChild(t);
+                field = t;
+            }}
+            field.value = {token};
+            field.dispatchEvent(new Event("change", {{ bubbles: true }}));
+            return true;
+        }})()
+        "#,
+        name = solution.form_field.replace('"', "\\\""),
+        token = serde_json::Value::String(solution.token.clone()),
+    );
+
+    let res = session
+        .call(
+            "Runtime.evaluate",
+            json!({
+                "expression": script,
+                "returnByValue": true,
+            }),
+        )
+        .await?;
+    if let Some(details) = res.get("exceptionDetails") {
+        let msg = details
+            .get("exception")
+            .and_then(|e| e.get("description"))
+            .and_then(|d| d.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        return Err(ImpervaError::JsError(msg));
+    }
+    Ok(())
+}
+
 /// Drives an Imperva clearance flow against a single tab's session.
 ///
 /// Constructed via `Tab::imperva()`.
@@ -175,11 +282,21 @@ impl<'tab> ImpervaBypass<'tab> {
             return Ok(ClearanceOutcome::AlreadyClear);
         }
         if let crate::detection::ImpervaSurface::Captcha(kind) = snapshot.surface {
-            if self.on_captcha.is_none() {
+            let Some(solver) = self.on_captcha.clone() else {
                 return Err(ImpervaError::CaptchaRequired { kind });
-            }
-            // Callback dispatch happens in Task 5; for now, fail explicitly.
-            return Err(ImpervaError::CaptchaRequired { kind });
+            };
+            let (site_key, url) = extract_captcha_site_key(self.session, kind).await?;
+            let challenge = CaptchaChallenge {
+                kind,
+                site_key,
+                url,
+            };
+            let solution = solver(challenge)
+                .await
+                .map_err(ImpervaError::CaptchaSolver)?;
+            inject_captcha_solution(self.session, &solution).await?;
+            // Fall through to poll loop: the page should now submit the
+            // CAPTCHA and clear the Imperva surface.
         }
 
         let deadline = Instant::now() + self.timeout;
@@ -568,6 +685,158 @@ mod tests {
             matches!(outcome, ClearanceOutcome::ChallengeGone),
             "empty reese84 must not produce TokenAcquired"
         );
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn wait_for_clearance_invokes_captcha_callback_and_resumes() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move {
+                ImpervaBypass::new(&s)
+                    .poll_interval(Duration::from_millis(1))
+                    .on_captcha(|c| async move {
+                        assert!(matches!(c.kind, CaptchaKind::HCaptcha));
+                        assert_eq!(c.site_key.as_deref(), Some("KEY_ABC"));
+                        Ok(CaptchaSolution {
+                            token: "SOLVED_TOK".into(),
+                            form_field: "h-captcha-response".into(),
+                        })
+                    })
+                    .wait_for_clearance()
+                    .await
+            }
+        });
+
+        // 1. Detect snapshot → CAPTCHA.
+        let id1 = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id1,
+            snapshot_reply(json!({
+                "surface": { "kind": "Captcha", "captcha": "HCaptcha" },
+                "reese84": null,
+                "body_clean": false,
+                "sessions": [],
+                "has_imperva_signal": true,
+            })),
+        )
+        .await;
+
+        // 2. Site-key probe.
+        let id2 = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id2,
+            json!({
+                "result": {
+                    "type": "object",
+                    "value": {
+                        "hcap": "KEY_ABC",
+                        "rcap": null,
+                        "url": "https://example.com/protected",
+                    }
+                }
+            }),
+        )
+        .await;
+
+        // 3. Solution injection.
+        let id3 = mock.expect_cmd("Runtime.evaluate").await;
+        let sent = mock.last_sent();
+        assert!(
+            sent["params"]["expression"]
+                .as_str()
+                .unwrap()
+                .contains("SOLVED_TOK"),
+            "injection script should contain the solver token"
+        );
+        assert!(
+            sent["params"]["expression"]
+                .as_str()
+                .unwrap()
+                .contains("h-captcha-response"),
+            "injection script should target the form_field"
+        );
+        mock.reply(
+            id3,
+            json!({ "result": { "type": "boolean", "value": true } }),
+        )
+        .await;
+
+        // 4. Resumed poll: cleared.
+        let id4 = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id4,
+            snapshot_reply(json!({
+                "surface": { "kind": "None" },
+                "reese84": "TOK_FINAL",
+                "body_clean": true,
+                "sessions": [{ "name": "reese84", "value": "TOK_FINAL" }],
+                "has_imperva_signal": true,
+            })),
+        )
+        .await;
+
+        let outcome = fut.await.unwrap().unwrap();
+        assert!(matches!(
+            outcome,
+            ClearanceOutcome::TokenAcquired { reese84, .. } if reese84 == "TOK_FINAL"
+        ));
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn wait_for_clearance_propagates_captcha_solver_error() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move {
+                ImpervaBypass::new(&s)
+                    .on_captcha(|_c| async move {
+                        Err(Box::<dyn std::error::Error + Send + Sync>::from(
+                            "solver down",
+                        ))
+                    })
+                    .wait_for_clearance()
+                    .await
+            }
+        });
+
+        let id1 = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id1,
+            snapshot_reply(json!({
+                "surface": { "kind": "Captcha", "captcha": "Recaptcha" },
+                "reese84": null,
+                "body_clean": false,
+                "sessions": [],
+                "has_imperva_signal": true,
+            })),
+        )
+        .await;
+
+        let id2 = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id2,
+            json!({
+                "result": {
+                    "type": "object",
+                    "value": {
+                        "hcap": null,
+                        "rcap": "RKEY",
+                        "url": "https://x.com/",
+                    }
+                }
+            }),
+        )
+        .await;
+
+        let err = fut.await.unwrap().unwrap_err();
+        assert!(matches!(err, ImpervaError::CaptchaSolver(_)));
         conn.shutdown();
     }
 }
