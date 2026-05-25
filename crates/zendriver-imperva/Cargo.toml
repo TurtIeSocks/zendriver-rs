@@ -24,6 +24,7 @@ workspace = true
 zendriver-transport.workspace    = true
 zendriver-interception.workspace = true
 tokio.workspace                  = true
+futures.workspace                = true
 serde.workspace                  = true
 serde_json.workspace             = true
 thiserror.workspace              = true

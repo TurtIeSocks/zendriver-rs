@@ -13,6 +13,7 @@
 pub mod bypass;
 pub mod detection;
 pub mod error;
+mod interception;
 
 pub use bypass::{CaptchaChallenge, CaptchaSolution, ClearanceOutcome, ImpervaBypass};
 pub use detection::{
