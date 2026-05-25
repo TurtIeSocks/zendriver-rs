@@ -1,18 +1,12 @@
-name: Release (dry-run)
-
-# Phase-3 staging: workflow_dispatch only with --dry-run. Phase 4 flips
-# to `on: push` and removes --dry-run.
+name: Release
 
 permissions:
   contents: write
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      really_publish:
-        description: "If false (default), pass --dry-run to cargo publish. Leave false in Phase 3."
-        type: boolean
-        default: false
 
 concurrency:
   group: release-plz-release
@@ -20,7 +14,7 @@ concurrency:
 
 jobs:
   release-plz-release:
-    name: Publish to crates.io (dry-run)
+    name: Publish to crates.io
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,10 +29,6 @@ jobs:
       - uses: release-plz/action@v0.5.129
         with:
           command: release
-          # Phase 3: always force --dry-run regardless of input. This
-          # makes `cargo publish` validate but skip the upload.
-          # cargo_publish_args is passed straight to `cargo publish`.
-          cargo_publish_args: ${{ inputs.really_publish && '' || '--dry-run' }}
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
