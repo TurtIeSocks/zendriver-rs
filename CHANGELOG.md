@@ -14,6 +14,18 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SEMVER.md].
   hidden `InterceptHandle::for_tests()` constructor for downstream
   crates' unit tests. Not intended for production use; default off.
 
+### Changed
+
+- Per-crate version automation via [release-plz](https://release-plz.dev).
+  Each crate now versions independently based on conventional commits;
+  the old manual `publish.yml` is replaced by `release-plz-pr.yml`
+  (opens "chore: release" PR with version bumps + per-crate changelogs)
+  and `release-plz-release.yml` (publishes on PR merge). Per-crate
+  `CHANGELOG.md` files (next to each crate's `Cargo.toml`) are the
+  authoritative changelog source going forward; this top-level file
+  remains for human-curated release narrative. Design and migration
+  plan in `docs/superpowers/{specs,plans}/2026-05-25-publish-version-automation*.md`.
+
 ### Known issues
 
 - `zendriver-mcp::browser_tab_close` does NOT reap `browser_expect_*`
