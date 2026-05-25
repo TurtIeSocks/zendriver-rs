@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-05-25
+
+### Fixed
+
+- Repair stealth + cloudflare nightly tests against drift
+
+
 ### Changed
 
 - `CloudflareBypass::wait_for_clearance` now drives a unified poll loop
