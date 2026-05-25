@@ -1,0 +1,34 @@
+[package]
+name = "zendriver-imperva"
+description = "Imperva WAF / Incapsula bypass for zendriver"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme = "../../README.md"
+homepage = "https://github.com/TurtIeSocks/zendriver-rs"
+documentation = "https://docs.rs/zendriver-imperva"
+keywords = ["imperva", "incapsula", "waf", "bypass", "zendriver"]
+categories = ["web-programming"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
+[dependencies]
+zendriver-transport.workspace    = true
+zendriver-interception.workspace = true
+tokio.workspace                  = true
+serde.workspace                  = true
+serde_json.workspace             = true
+thiserror.workspace              = true
+tracing.workspace                = true
+
+[dev-dependencies]
+tokio-test.workspace = true
+zendriver-transport  = { workspace = true, features = ["testing"] }

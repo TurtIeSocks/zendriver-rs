@@ -23,7 +23,7 @@ workspace = true
 [features]
 default = []
 # Enables real-Chrome integration tests (requires Chrome installed on $PATH).
-integration-tests = ["dep:wiremock", "dep:serial_test", "interception", "expect", "cloudflare"]
+integration-tests = ["dep:wiremock", "dep:serial_test", "interception", "expect", "cloudflare", "imperva"]
 # Nightly stealth tests against external sites (sannysoft, areyouheadless).
 # Separate from integration-tests because external sites flake.
 stealth-tests = ["integration-tests"]
@@ -38,6 +38,10 @@ interception = ["dep:zendriver-interception"]
 expect = []
 # Cloudflare Turnstile bypass; pulls in interception.
 cloudflare = ["interception", "dep:zendriver-cloudflare"]
+# Imperva WAF / Incapsula bypass; pulls in interception.
+imperva = ["interception", "dep:zendriver-imperva"]
+# Network-touching Imperva nightly tests (real protected sites).
+imperva-tests = ["imperva", "integration-tests"]
 # Chrome for Testing binary downloader.
 fetcher = ["dep:zendriver-fetcher"]
 # Network-touching fetcher tests (CfT manifest, real downloads).
@@ -48,6 +52,7 @@ zendriver-transport.workspace = true
 zendriver-stealth.workspace   = true
 zendriver-interception        = { workspace = true, optional = true }
 zendriver-cloudflare          = { workspace = true, optional = true }
+zendriver-imperva             = { workspace = true, optional = true }
 zendriver-fetcher             = { workspace = true, optional = true }
 async-trait.workspace         = true
 chromiumoxide_cdp.workspace   = true
