@@ -8,15 +8,17 @@
 //! solver into the CAPTCHA escalation path. See module docs of
 //! [`crate::detection`] for surface inference rules.
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::time::Instant;
 use zendriver_transport::SessionHandle;
 
-use crate::detection::{CaptchaKind, DetectionSnapshot, ImpervaSurface};
+use crate::captcha::{
+    CaptchaChallenge, CaptchaSolution, CaptchaSolver, arc_solver, extract_captcha_site_key,
+    inject_captcha_solution,
+};
+use crate::detection::{DetectionSnapshot, ImpervaSurface};
 use crate::error::ImpervaError;
 
 /// Budget passed to [`probe_with_deadline`]: the absolute deadline the
@@ -50,27 +52,6 @@ pub(crate) const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// Default overall timeout for [`ImpervaBypass::wait_for_clearance`].
 pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// CAPTCHA escalation handed to a user-supplied solver.
-#[derive(Debug, Clone)]
-pub struct CaptchaChallenge {
-    pub kind: CaptchaKind,
-    /// Site key extracted from the embed (hCaptcha / reCAPTCHA). `None`
-    /// if the kind is `ImpervaNative` or `Unknown`.
-    pub site_key: Option<String>,
-    /// URL of the page presenting the CAPTCHA.
-    pub url: String,
-}
-
-/// Token returned by a user-supplied CAPTCHA solver.
-#[derive(Debug, Clone)]
-pub struct CaptchaSolution {
-    /// Verification token issued by the solver service.
-    pub token: String,
-    /// DOM field where the token must be injected for the page to accept it
-    /// (e.g. `"h-captcha-response"`, `"g-recaptcha-response"`).
-    pub form_field: String,
-}
-
 /// Outcome of a successful `wait_for_clearance`.
 #[derive(Debug, Clone)]
 pub enum ClearanceOutcome {
@@ -83,127 +64,6 @@ pub enum ClearanceOutcome {
     ChallengeGone,
     /// No Imperva surface present at call time. Fast path; no waiting.
     AlreadyClear,
-}
-
-type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-
-pub(crate) type CaptchaSolver = dyn Fn(
-        CaptchaChallenge,
-    ) -> BoxFuture<'static, Result<CaptchaSolution, Box<dyn std::error::Error + Send + Sync>>>
-    + Send
-    + Sync;
-
-/// Extract a CAPTCHA site key from the current page via a small inline JS
-/// probe. Returns `None` if no recognizable embed is present.
-async fn extract_captcha_site_key(
-    session: &SessionHandle,
-    kind: CaptchaKind,
-) -> Result<(Option<String>, String), ImpervaError> {
-    use serde_json::json;
-
-    const PROBE_JS: &str = r#"
-    (function () {
-        function findKey(selector, attr) {
-            var el = document.querySelector(selector);
-            return el ? el.getAttribute(attr) : null;
-        }
-        var hcap =
-            findKey(".h-captcha", "data-sitekey") ||
-            findKey("[data-hcaptcha-sitekey]", "data-hcaptcha-sitekey");
-        var rcap =
-            findKey(".g-recaptcha", "data-sitekey") ||
-            findKey("[data-recaptcha-sitekey]", "data-recaptcha-sitekey");
-        return { hcap: hcap, rcap: rcap, url: location.href };
-    })()
-    "#;
-
-    let res = session
-        .call(
-            "Runtime.evaluate",
-            json!({
-                "expression": PROBE_JS,
-                "returnByValue": true,
-            }),
-        )
-        .await?;
-    let value = res
-        .get("result")
-        .and_then(|r| r.get("value"))
-        .cloned()
-        .unwrap_or(serde_json::Value::Null);
-
-    #[derive(serde::Deserialize)]
-    struct Probe {
-        hcap: Option<String>,
-        rcap: Option<String>,
-        url: String,
-    }
-    let probe: Probe = serde_json::from_value(value)
-        .map_err(|e| ImpervaError::JsError(format!("invalid captcha probe payload: {e}")))?;
-
-    let site_key = match kind {
-        CaptchaKind::HCaptcha => probe.hcap,
-        CaptchaKind::Recaptcha => probe.rcap,
-        CaptchaKind::ImpervaNative | CaptchaKind::Unknown => None,
-    };
-    Ok((site_key, probe.url))
-}
-
-/// Inject a CAPTCHA solver token into the named form field via
-/// `Runtime.evaluate`.
-async fn inject_captcha_solution(
-    session: &SessionHandle,
-    solution: &CaptchaSolution,
-) -> Result<(), ImpervaError> {
-    use serde_json::json;
-
-    // Escape `\` first, then `"` — order matters; reversing it would
-    // double-escape the backslashes inserted by the quote pass.
-    let name = solution
-        .form_field
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"");
-    let script = format!(
-        r#"
-        (function () {{
-            var field = document.querySelector('[name="{name}"]')
-                || document.getElementById("{name}");
-            if (!field) {{
-                var t = document.createElement("textarea");
-                t.name = "{name}";
-                t.id = "{name}";
-                t.style.display = "none";
-                document.body.appendChild(t);
-                field = t;
-            }}
-            field.value = {token};
-            field.dispatchEvent(new Event("change", {{ bubbles: true }}));
-            return true;
-        }})()
-        "#,
-        name = name,
-        token = serde_json::Value::String(solution.token.clone()),
-    );
-
-    let res = session
-        .call(
-            "Runtime.evaluate",
-            json!({
-                "expression": script,
-                "returnByValue": true,
-            }),
-        )
-        .await?;
-    if let Some(details) = res.get("exceptionDetails") {
-        let msg = details
-            .get("exception")
-            .and_then(|e| e.get("description"))
-            .and_then(|d| d.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-        return Err(ImpervaError::JsError(msg));
-    }
-    Ok(())
 }
 
 /// Drives an Imperva clearance flow against a single tab's session.
@@ -280,11 +140,12 @@ impl<'tab> ImpervaBypass<'tab> {
     pub fn on_captcha<F, Fut>(mut self, f: F) -> Self
     where
         F: Fn(CaptchaChallenge) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<CaptchaSolution, Box<dyn std::error::Error + Send + Sync>>>
-            + Send
+        Fut: std::future::Future<
+                Output = Result<CaptchaSolution, Box<dyn std::error::Error + Send + Sync>>,
+            > + Send
             + 'static,
     {
-        self.on_captcha = Some(Arc::new(move |challenge| Box::pin(f(challenge))));
+        self.on_captcha = Some(arc_solver(f));
         self
     }
 
@@ -556,7 +417,7 @@ mod tests {
         conn.shutdown();
     }
 
-    use crate::detection::ImpervaSurface;
+    use crate::detection::{CaptchaKind, ImpervaSurface};
     use serde_json::json;
 
     fn snapshot_reply(payload: serde_json::Value) -> serde_json::Value {

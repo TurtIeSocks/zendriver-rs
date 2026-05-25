@@ -35,11 +35,13 @@
 //! [`BrowserBuilder::stealth`]: https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.stealth
 
 pub mod bypass;
+pub mod captcha;
 pub mod detection;
 pub mod error;
 mod interception;
 
-pub use bypass::{CaptchaChallenge, CaptchaSolution, ClearanceOutcome, ImpervaBypass};
+pub use bypass::{ClearanceOutcome, ImpervaBypass};
+pub use captcha::{CaptchaChallenge, CaptchaSolution};
 pub use detection::{
     CaptchaKind, CookieSnapshot, DetectionSnapshot, ImpervaSurface, detect_surface,
 };
