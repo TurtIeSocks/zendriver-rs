@@ -322,6 +322,10 @@ impl<'tab> ImpervaBypass<'tab> {
         let mut last_surface: Option<crate::detection::ImpervaSurface> = None;
         let mut next_snapshot = Some(snapshot);
 
+        let mut prev_surface: Option<crate::detection::ImpervaSurface> = None;
+        let mut stall_ticks: u32 = 0;
+        let mut warned_stall = false;
+
         loop {
             // First iteration uses the snapshot already taken above; subsequent
             // iterations re-probe. The probe is itself raced against the
@@ -350,6 +354,24 @@ impl<'tab> ImpervaBypass<'tab> {
                 }
                 (None, true, true) => return Ok(ClearanceOutcome::ChallengeGone),
                 _ => last_surface = Some(snap.surface),
+            }
+
+            // Stalled-poll warning: if surface hasn't changed for ~2.5s
+            // (10 ticks at the default 250ms interval), nudge the caller
+            // toward stealth.
+            stall_ticks = if Some(snap.surface) == prev_surface {
+                stall_ticks + 1
+            } else {
+                0
+            };
+            prev_surface = Some(snap.surface);
+            if stall_ticks == 10 && !warned_stall {
+                tracing::warn!(
+                    surface = ?snap.surface,
+                    poll_interval_ms = self.poll_interval.as_millis() as u64,
+                    "imperva clearance stalled — is BrowserBuilder::stealth enabled?"
+                );
+                warned_stall = true;
             }
 
             if Instant::now() >= deadline {
