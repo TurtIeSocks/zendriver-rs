@@ -28,6 +28,16 @@ The plan's `server.tool(name, desc, handler)` pattern is wrong. Real rmcp uses `
 
 **`#[tool_router(server_handler)]` shortcut:** does NOT require a `tool_router` field on the struct (that pattern is for the explicit `#[tool_handler(router = self.tool_router)]` form). With the shortcut, the macro references a static `Self::tool_router()` from the auto-emitted `ServerHandler` impl — your struct only needs the application state fields.
 
+**`Tab::wait_for_idle_with` arg order is `(timeout, quiet_window)`, NOT `(quiet_window, timeout)`** — earlier draft was reversed. Verified at `crates/zendriver/src/tab.rs:1157`.
+
+**`Tab` has NO `content()` / `page_source()` method** — only `Frame::content()` (at `crates/zendriver/src/frame/mod.rs:346`). To get a tab's HTML: `tab.main_frame().await?.content().await?` OR `tab.evaluate_main::<String>("document.documentElement.outerHTML").await?`.
+
+**`Platform` enum variants are `Win32 / MacIntel / LinuxX86_64`** (at `crates/zendriver-stealth/src/profile.rs:24-30`), NOT `Mac / Linux / Windows`. Stealth profile mapping should use these names.
+
+**rmcp `CallToolResult.structured_content` is `Option<Value>`** (separate field from `content: Vec<Content>`). Clients reading structured output should prefer `result.structured_content` and fall back to parsing `content`.
+
+**Tab is `Clone`** (Arc-backed at `crates/zendriver/src/tab.rs:50-51`), so `current_tab` helper can return owned `Tab` cheaply — no borrow lifetime issues.
+
 **Canonical pattern (use as template for all tool modules):**
 
 ```rust
