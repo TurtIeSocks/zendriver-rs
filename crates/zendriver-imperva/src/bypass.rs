@@ -213,8 +213,6 @@ impl<'tab> ImpervaBypass<'tab> {
     /// # Ok(()) }
     /// ```
     pub async fn wait_for_clearance(self) -> Result<ClearanceOutcome, ImpervaError> {
-        use tokio::time::{Interval, MissedTickBehavior};
-
         let deadline = Instant::now() + self.timeout;
         let timeout = self.timeout;
 
@@ -254,26 +252,53 @@ impl<'tab> ImpervaBypass<'tab> {
             // immediately rather than wasting an iteration on stale state.
         }
 
-        // Optional Fetch-domain fast-path. The guard's `Drop` aborts the
-        // spawned task; abort is asynchronous, so the task may run one more
-        // pause-release before stopping (harmless — page just keeps loading).
-        let (mut interception_rx, _interception_guard) = if self.interception_enabled {
+        // Prime the loop with the pre-loop snapshot UNLESS we just ran the
+        // CAPTCHA branch — in that case the page has been mutated since the
+        // snapshot was taken, so force a re-probe.
+        let next_snapshot = match snapshot.surface {
+            crate::detection::ImpervaSurface::Captcha(_) => None,
+            _ => Some(snapshot),
+        };
+
+        // Optional Fetch-domain fast-path. The guard's `Drop` cooperatively
+        // cancels the spawned task (token check at every loop boundary)
+        // with `abort()` as a backstop.
+        let (interception_rx, interception_guard) = if self.interception_enabled {
             let (rx, guard) = crate::interception::spawn_signal(self.session);
             (Some(rx), Some(guard))
         } else {
             (None, None)
         };
 
+        self.poll_loop(
+            deadline,
+            timeout,
+            next_snapshot,
+            interception_rx,
+            interception_guard,
+        )
+        .await
+    }
+
+    /// Core poll loop, factored out so unit tests can drive it with a
+    /// controlled interception receiver without standing up the real
+    /// InterceptBuilder + Fetch.enable plumbing. Production callers go
+    /// through [`wait_for_clearance`](Self::wait_for_clearance), which
+    /// constructs the receiver via [`spawn_signal`].
+    ///
+    /// [`spawn_signal`]: crate::interception::spawn_signal
+    pub(crate) async fn poll_loop(
+        self,
+        deadline: Instant,
+        timeout: Duration,
+        mut next_snapshot: Option<DetectionSnapshot>,
+        mut interception_rx: Option<tokio::sync::oneshot::Receiver<()>>,
+        _interception_guard: Option<crate::interception::InterceptionGuard>,
+    ) -> Result<ClearanceOutcome, ImpervaError> {
+        use tokio::time::{Interval, MissedTickBehavior};
+
         let mut ticker: Interval = tokio::time::interval(self.poll_interval);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-        // Prime the loop with the pre-loop snapshot UNLESS we just ran the
-        // CAPTCHA branch — in that case the page has been mutated since the
-        // snapshot was taken, so force a re-probe.
-        let mut next_snapshot = match snapshot.surface {
-            crate::detection::ImpervaSurface::Captcha(_) => None,
-            _ => Some(snapshot),
-        };
 
         // Initial `None` is unreachable in practice (first iter always either
         // returns or writes `last_surface` before any read), but the
@@ -338,7 +363,7 @@ impl<'tab> ImpervaBypass<'tab> {
 
             if Instant::now() >= deadline {
                 return Err(ImpervaError::Timeout {
-                    timeout: self.timeout,
+                    timeout,
                     last_surface,
                 });
             }
@@ -347,7 +372,7 @@ impl<'tab> ImpervaBypass<'tab> {
                 _ = ticker.tick() => {}
                 () = tokio::time::sleep_until(deadline) => {
                     return Err(ImpervaError::Timeout {
-                        timeout: self.timeout,
+                        timeout,
                         last_surface,
                     });
                 }
@@ -847,20 +872,74 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wait_for_clearance_with_interception_uses_fast_path() {
-        // Exercises the new builder shape end-to-end: with
-        // `interception_enabled = false`, the poll loop must still run and
-        // produce `TokenAcquired` through the same select! that now also
-        // races the (disabled) interception arm. The disabled arm uses
-        // `std::future::pending()` as a never-resolving fallback so the
-        // other arms still drive progress — this test catches a regression
-        // where the new select! shape would starve the polling arm.
-        //
-        // Real fast-path behavior (interception oneshot signalling
-        // clearance ahead of the poll tick) requires `Fetch.enable` +
-        // `Fetch.requestPaused` plumbing that `MockConnection` doesn't
-        // simulate end-to-end; nightly integration coverage lands in
-        // Task 12.
+    async fn poll_loop_interception_signal_preempts_polling_tick() {
+        // Real fast-path behavior: drive `poll_loop` directly with a
+        // controlled oneshot. With a long poll_interval (1s), the only way
+        // the loop runs a second probe within the test's wall-clock budget
+        // is if the interception arm wakes it. Sending on the oneshot
+        // before the first tick should preempt the sleep and trigger an
+        // immediate re-probe.
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move {
+                let bypass = ImpervaBypass::new(&s).poll_interval(Duration::from_secs(1));
+                let deadline = Instant::now() + Duration::from_secs(5);
+                bypass
+                    .poll_loop(deadline, Duration::from_secs(5), None, Some(rx), None)
+                    .await
+            }
+        });
+
+        // First probe (immediate, no tick wait yet) — surface present, no
+        // clearance signals.
+        let id1 = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id1,
+            snapshot_reply(json!({
+                "surface": { "kind": "Reese84" },
+                "reese84": null,
+                "body_clean": false,
+                "sessions": [],
+                "has_imperva_signal": true,
+            })),
+        )
+        .await;
+
+        // Fire the interception oneshot — should preempt the 1s tick wait.
+        tx.send(()).unwrap();
+
+        // Second probe arrives almost immediately because the interception
+        // arm won the select!. Reply with clearance.
+        let id2 = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id2,
+            snapshot_reply(json!({
+                "surface": { "kind": "None" },
+                "reese84": "FAST_PATH_TOK",
+                "body_clean": true,
+                "sessions": [{ "name": "reese84", "value": "FAST_PATH_TOK" }],
+                "has_imperva_signal": true,
+            })),
+        )
+        .await;
+
+        let outcome = fut.await.unwrap().unwrap();
+        assert!(matches!(
+            outcome,
+            ClearanceOutcome::TokenAcquired { reese84, .. } if reese84 == "FAST_PATH_TOK"
+        ));
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn wait_for_clearance_with_interception_disabled_polls_normally() {
+        // Regression guard for the select! shape: with
+        // `interception_enabled = false`, the never-resolves fallback arm
+        // must not starve the polling arm. Plain poll-to-clearance run.
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
 
