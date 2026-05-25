@@ -9,6 +9,7 @@
 
 use futures::StreamExt;
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 use zendriver_interception::InterceptBuilder;
 use zendriver_transport::SessionHandle;
 
@@ -24,12 +25,17 @@ use zendriver_transport::SessionHandle;
 /// `clippy::result_large_err` warning that `ImpervaError`'s 136-byte
 /// `CallError` variant would otherwise trip for a tiny `Ok` payload.
 ///
-/// Caller must keep the returned [`InterceptionGuard`] alive until they
-/// are done with the receiver — dropping it aborts the background task
-/// (the stream is owned by the task, so the CDP subscription tears
-/// down on the next poll).
+/// Caller must keep the returned [`InterceptionGuard`] alive until they are
+/// done with the receiver. Dropping the guard cancels the spawned task
+/// cooperatively via a `CancellationToken` checked at every loop boundary,
+/// then aborts it as a backstop. Cooperative cancel is preferred over a
+/// bare `abort()` because abort is asynchronous: the task may run one more
+/// `paused.continue_().await` after the abort signal lands — harmless, but
+/// the token lets the loop exit cleanly between events instead.
 pub(crate) fn spawn_signal(session: &SessionHandle) -> (oneshot::Receiver<()>, InterceptionGuard) {
     let (tx, rx) = oneshot::channel();
+    let cancel = CancellationToken::new();
+    let task_cancel = cancel.clone();
 
     // `subscribe()` is sync and returns `impl Stream<Item = PausedRequest>`.
     // `pattern()` returns `Self` (not a `Result`), so no `?` needed on chain.
@@ -43,19 +49,26 @@ pub(crate) fn spawn_signal(session: &SessionHandle) -> (oneshot::Receiver<()>, I
     let handle = tokio::spawn(async move {
         let mut stream = Box::pin(stream);
         let mut tx = Some(tx);
-        while let Some(paused) = stream.next().await {
-            let is_2xx = paused
-                .response
-                .as_ref()
-                .map(|r| (200..300).contains(&r.status))
-                .unwrap_or(false);
-            // Always release the pause so the page keeps loading.
-            let _ = paused.continue_().await;
-            if is_2xx {
-                if let Some(t) = tx.take() {
-                    let _ = t.send(());
+        loop {
+            tokio::select! {
+                biased;
+                () = task_cancel.cancelled() => break,
+                next = stream.next() => {
+                    let Some(paused) = next else { break };
+                    let is_2xx = paused
+                        .response
+                        .as_ref()
+                        .map(|r| (200..300).contains(&r.status))
+                        .unwrap_or(false);
+                    // Always release the pause so the page keeps loading.
+                    let _ = paused.continue_().await;
+                    if is_2xx {
+                        if let Some(t) = tx.take() {
+                            let _ = t.send(());
+                        }
+                        break;
+                    }
                 }
-                break;
             }
         }
     });
@@ -63,18 +76,24 @@ pub(crate) fn spawn_signal(session: &SessionHandle) -> (oneshot::Receiver<()>, I
     (
         rx,
         InterceptionGuard {
+            cancel,
             handle: Some(handle),
         },
     )
 }
 
-/// Guard for the background interception task. Aborts on drop.
+/// Guard for the background interception task. On drop, signals
+/// cooperative cancellation first (clean exit between events) and then
+/// aborts as a backstop in case the task is parked on a non-cancellable
+/// future.
 pub(crate) struct InterceptionGuard {
+    cancel: CancellationToken,
     handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Drop for InterceptionGuard {
     fn drop(&mut self) {
+        self.cancel.cancel();
         if let Some(h) = self.handle.take() {
             h.abort();
         }

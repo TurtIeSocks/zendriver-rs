@@ -13,10 +13,37 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::time::Instant;
 use zendriver_transport::SessionHandle;
 
-use crate::detection::CaptchaKind;
+use crate::detection::{CaptchaKind, DetectionSnapshot, ImpervaSurface};
 use crate::error::ImpervaError;
+
+/// Budget passed to [`probe_with_deadline`]: the absolute deadline the
+/// select races against, the original timeout duration for error reporting,
+/// and the most-recently-observed surface for `Timeout` diagnostics.
+#[derive(Debug, Clone, Copy)]
+struct ProbeBudget {
+    deadline: Instant,
+    timeout: Duration,
+    last_surface: Option<ImpervaSurface>,
+}
+
+/// Probe `detect_snapshot` against `session`, racing against the overall
+/// `deadline`. Returns `ImpervaError::Timeout` if the deadline wins so that
+/// no probe — including the pre-loop one — can outlive the caller's budget.
+async fn probe_with_deadline(
+    session: &SessionHandle,
+    budget: ProbeBudget,
+) -> Result<DetectionSnapshot, ImpervaError> {
+    tokio::select! {
+        res = crate::detection::detect_snapshot(session) => res,
+        () = tokio::time::sleep_until(budget.deadline) => Err(ImpervaError::Timeout {
+            timeout: budget.timeout,
+            last_surface: budget.last_surface,
+        }),
+    }
+}
 
 /// Default poll interval for [`ImpervaBypass::wait_for_clearance`].
 pub(crate) const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -130,6 +157,12 @@ async fn inject_captcha_solution(
 ) -> Result<(), ImpervaError> {
     use serde_json::json;
 
+    // Escape `\` first, then `"` — order matters; reversing it would
+    // double-escape the backslashes inserted by the quote pass.
+    let name = solution
+        .form_field
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
     let script = format!(
         r#"
         (function () {{
@@ -148,7 +181,7 @@ async fn inject_captcha_solution(
             return true;
         }})()
         "#,
-        name = solution.form_field.replace('"', "\\\""),
+        name = name,
         token = serde_json::Value::String(solution.token.clone()),
     );
 
@@ -319,35 +352,50 @@ impl<'tab> ImpervaBypass<'tab> {
     /// # Ok(()) }
     /// ```
     pub async fn wait_for_clearance(self) -> Result<ClearanceOutcome, ImpervaError> {
-        use tokio::time::{Instant, Interval, MissedTickBehavior};
+        use tokio::time::{Interval, MissedTickBehavior};
 
-        let snapshot = crate::detection::detect_snapshot(self.session).await?;
+        let deadline = Instant::now() + self.timeout;
+        let timeout = self.timeout;
 
-        // Fast paths.
+        // Every probe — including the first — is raced against the deadline.
+        // A hung CDP call cannot exceed the caller's stated timeout budget.
+        let snapshot = probe_with_deadline(
+            self.session,
+            ProbeBudget {
+                deadline,
+                timeout,
+                last_surface: None,
+            },
+        )
+        .await?;
+
+        // Fast path: nothing to clear.
         if matches!(snapshot.surface, crate::detection::ImpervaSurface::None) && snapshot.body_clean
         {
             return Ok(ClearanceOutcome::AlreadyClear);
         }
+
+        // CAPTCHA escalation: dispatch to solver or fast-fail.
         if let crate::detection::ImpervaSurface::Captcha(kind) = snapshot.surface {
             let Some(solver) = self.on_captcha.clone() else {
                 return Err(ImpervaError::CaptchaRequired { kind });
             };
             let (site_key, url) = extract_captcha_site_key(self.session, kind).await?;
-            let challenge = CaptchaChallenge {
+            let solution = solver(CaptchaChallenge {
                 kind,
                 site_key,
                 url,
-            };
-            let solution = solver(challenge)
-                .await
-                .map_err(ImpervaError::CaptchaSolver)?;
+            })
+            .await
+            .map_err(ImpervaError::CaptchaSolver)?;
             inject_captcha_solution(self.session, &solution).await?;
-            // Fall through to poll loop: the page should now submit the
-            // CAPTCHA and clear the Imperva surface.
+            // Drop the pre-injection snapshot so the loop re-probes
+            // immediately rather than wasting an iteration on stale state.
         }
 
-        // Optional Fetch-domain fast-path. The guard tears down the
-        // background subscription on drop, so it must outlive the loop.
+        // Optional Fetch-domain fast-path. The guard's `Drop` aborts the
+        // spawned task; abort is asynchronous, so the task may run one more
+        // pause-release before stopping (harmless — page just keeps loading).
         let (mut interception_rx, _interception_guard) = if self.interception_enabled {
             let (rx, guard) = crate::interception::spawn_signal(self.session);
             (Some(rx), Some(guard))
@@ -355,39 +403,42 @@ impl<'tab> ImpervaBypass<'tab> {
             (None, None)
         };
 
-        let deadline = Instant::now() + self.timeout;
         let mut ticker: Interval = tokio::time::interval(self.poll_interval);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-        // `last_surface` carries the most-recently-observed non-clearance
-        // surface for `Timeout` diagnostics. The initial assignment is dead
-        // because the first loop iteration always either returns or writes
-        // `last_surface` itself, but keeping the type-annotated `None` here
-        // (rather than `let last_surface;` with first-write later) keeps the
-        // mutation site obvious to readers.
+        // Prime the loop with the pre-loop snapshot UNLESS we just ran the
+        // CAPTCHA branch — in that case the page has been mutated since the
+        // snapshot was taken, so force a re-probe.
+        let mut next_snapshot = match snapshot.surface {
+            crate::detection::ImpervaSurface::Captcha(_) => None,
+            _ => Some(snapshot),
+        };
+
+        // Initial `None` is unreachable in practice (first iter always either
+        // returns or writes `last_surface` before any read), but the
+        // deadline-check branch keeps a read path alive for the borrow
+        // checker.
         #[allow(unused_assignments)]
         let mut last_surface: Option<crate::detection::ImpervaSurface> = None;
-        let mut next_snapshot = Some(snapshot);
 
         let mut prev_surface: Option<crate::detection::ImpervaSurface> = None;
         let mut stall_ticks: u32 = 0;
         let mut warned_stall = false;
 
         loop {
-            // First iteration uses the snapshot already taken above; subsequent
-            // iterations re-probe. The probe is itself raced against the
-            // overall deadline so a stuck CDP call cannot deadlock the loop.
             let snap = match next_snapshot.take() {
                 Some(s) => s,
-                None => tokio::select! {
-                    res = crate::detection::detect_snapshot(self.session) => res?,
-                    () = tokio::time::sleep_until(deadline) => {
-                        return Err(ImpervaError::Timeout {
-                            timeout: self.timeout,
+                None => {
+                    probe_with_deadline(
+                        self.session,
+                        ProbeBudget {
+                            deadline,
+                            timeout,
                             last_surface,
-                        });
-                    }
-                },
+                        },
+                    )
+                    .await?
+                }
             };
 
             let token = snap.reese84.as_ref().filter(|v| !v.is_empty());
@@ -399,13 +450,16 @@ impl<'tab> ImpervaBypass<'tab> {
                         sessions: snap.sessions,
                     });
                 }
+                // ChallengeGone requires `surface_clear` in addition to the
+                // body+no-token spec criteria: lingering Legacy cookies
+                // (`incap_ses_*`, `___utmvc`) indicate the page is still
+                // tracking the challenge even after body markers drop, and
+                // returning ChallengeGone there would race the page's own
+                // post-clearance navigation.
                 (None, true, true) => return Ok(ClearanceOutcome::ChallengeGone),
                 _ => last_surface = Some(snap.surface),
             }
 
-            // Stalled-poll warning: if surface hasn't changed for ~2.5s
-            // (10 ticks at the default 250ms interval), nudge the caller
-            // toward stealth.
             stall_ticks = if Some(snap.surface) == prev_surface {
                 stall_ticks + 1
             } else {
@@ -439,15 +493,14 @@ impl<'tab> ImpervaBypass<'tab> {
                 Ok(()) = async {
                     match interception_rx.as_mut() {
                         Some(rx) => rx.await,
-                        // Never-resolves fallback so this arm is inert when
-                        // interception is disabled. `select!` keeps polling
-                        // the other arms.
+                        // Never-resolves fallback keeps this arm inert when
+                        // interception is disabled; `select!` polls the
+                        // remaining arms unaffected.
                         None => std::future::pending().await,
                     }
                 } => {
-                    // Interception fired → drop the receiver so we don't
-                    // re-await a closed channel on subsequent iterations.
-                    // The next loop pass re-probes immediately.
+                    // Drop the receiver so we don't re-await a closed channel
+                    // on the next iteration; loop body re-probes immediately.
                     interception_rx = None;
                 }
             }

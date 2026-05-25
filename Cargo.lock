@@ -3315,6 +3315,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-test",
+ "tokio-util",
  "tracing",
  "zendriver-interception",
  "zendriver-transport",
