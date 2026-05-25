@@ -3242,7 +3242,7 @@ dependencies = [
 
 [[package]]
 name = "zendriver"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "base64",
@@ -3274,7 +3274,7 @@ dependencies = [
 
 [[package]]
 name = "zendriver-cloudflare"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -3328,7 +3328,7 @@ dependencies = [
 
 [[package]]
 name = "zendriver-mcp"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "axum",
@@ -3355,7 +3355,7 @@ dependencies = [
 
 [[package]]
 name = "zendriver-stealth"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "chromiumoxide_cdp",
