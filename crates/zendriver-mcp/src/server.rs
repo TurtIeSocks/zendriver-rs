@@ -14,13 +14,16 @@
 use std::sync::Arc;
 
 use rmcp::handler::server::wrapper::Parameters;
+use rmcp::model::CallToolResult;
 use rmcp::transport::stdio;
 use rmcp::{ErrorData, Json, ServiceExt, tool, tool_router};
 use tokio::sync::Mutex;
 
 use crate::state::SessionState;
 use crate::tools::common::EmptyInput;
-use crate::tools::{actions, find, frames, lifecycle, navigation, reads, stealth, tabs};
+use crate::tools::{
+    actions, eval, find, frames, lifecycle, navigation, reads, snapshot, stealth, tabs,
+};
 
 /// rmcp handler carrying the per-session [`SessionState`].
 ///
@@ -390,6 +393,60 @@ impl ZendriverServer {
         Parameters(input): Parameters<actions::UploadInput>,
     ) -> Result<Json<actions::AckOutput>, ErrorData> {
         actions::upload(self.state.clone(), input).await.map(Json)
+    }
+
+    // ---------- snapshot -------------------------------------------------
+
+    /// Return the current page's HTML (trimmed by default).
+    #[tool(
+        name = "browser_html",
+        description = "Return the current page's HTML as a text content block. With `selector` set, returns that element's `innerHTML`. With `frame_id` set, returns that frame's `document.documentElement.outerHTML`. `selector` and `frame_id` are mutually exclusive — use the selector's own `frame_id` field to scope element lookup to a sub-frame. `trim: true` (default) strips `<script>` / `<style>` blocks and collapses whitespace."
+    )]
+    pub async fn browser_html(
+        &self,
+        Parameters(input): Parameters<snapshot::HtmlInput>,
+    ) -> Result<String, ErrorData> {
+        snapshot::html(self.state.clone(), input).await
+    }
+
+    /// Capture a screenshot of the current tab.
+    #[tool(
+        name = "browser_screenshot",
+        description = "Capture a screenshot of the current tab and return it as an inline `image` content block (base64-encoded). `format` selects PNG / JPEG / WebP (default PNG). `full_page: true` captures the entire scrollable document; `selector` clips to that element's bounding box (overrides `full_page`). `omit_background: true` is honored on PNG / WebP only. `quality` (1..=100) applies to JPEG. `save_path` writes the bytes to disk on the MCP server host in addition to returning the inline image. The structured result also exposes `{ format, byte_len, saved_path? }` for callers that want metadata without decoding the image block."
+    )]
+    pub async fn browser_screenshot(
+        &self,
+        Parameters(input): Parameters<snapshot::ScreenshotInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        snapshot::screenshot(self.state.clone(), input).await
+    }
+
+    // ---------- eval -----------------------------------------------------
+
+    /// Evaluate a JavaScript expression in the page's isolated world.
+    #[tool(
+        name = "browser_evaluate",
+        description = "Evaluate `expression` in the page's ISOLATED world (page globals NOT visible — preserves stealth fingerprint shims). The expression must be an expression (not a statement block); for multi-line logic wrap in an IIFE: `(() => { /* ... */ return result; })()`. Returns the value as JSON; `undefined` → `null`. With `frame_id`, evaluates inside that frame instead of the tab's main frame. `await_promise` (default `true`) is currently observational — the lib always awaits promises."
+    )]
+    pub async fn browser_evaluate(
+        &self,
+        Parameters(input): Parameters<eval::EvalInput>,
+    ) -> Result<Json<eval::EvalOutput>, ErrorData> {
+        eval::evaluate(self.state.clone(), input).await.map(Json)
+    }
+
+    /// Evaluate a JavaScript expression in the page's main world.
+    #[tool(
+        name = "browser_evaluate_main",
+        description = "Evaluate `expression` in the page's MAIN world. Page globals ARE visible — and the page can observe the call, which BREAKS STEALTH ISOLATION if the page is fingerprinting evaluator origins. Prefer `browser_evaluate` for anything that doesn't strictly require page globals. Same args + return shape as `browser_evaluate`."
+    )]
+    pub async fn browser_evaluate_main(
+        &self,
+        Parameters(input): Parameters<eval::EvalInput>,
+    ) -> Result<Json<eval::EvalOutput>, ErrorData> {
+        eval::evaluate_main(self.state.clone(), input)
+            .await
+            .map(Json)
     }
 }
 

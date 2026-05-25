@@ -39,6 +39,7 @@ clap                = { workspace = true }
 url                 = { workspace = true }
 regex               = { workspace = true }
 async-trait         = { workspace = true }
+base64              = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }

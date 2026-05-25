@@ -10,10 +10,12 @@
 
 pub mod actions;
 pub mod common;
+pub mod eval;
 pub mod find;
 pub mod frames;
 pub mod lifecycle;
 pub mod navigation;
 pub mod reads;
+pub mod snapshot;
 pub mod stealth;
 pub mod tabs;
