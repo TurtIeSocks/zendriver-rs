@@ -87,11 +87,13 @@ async fn end_to_end_find_on_example_com() {
 
     // 4. browser_find_all with css = "a" → at least 1 link.
     let find_all_resp = client
-        .call_tool(CallToolRequestParams::new("browser_find_all").with_arguments({
-            let mut m = serde_json::Map::new();
-            m.insert("css".into(), serde_json::json!("a"));
-            m
-        }))
+        .call_tool(
+            CallToolRequestParams::new("browser_find_all").with_arguments({
+                let mut m = serde_json::Map::new();
+                m.insert("css".into(), serde_json::json!("a"));
+                m
+            }),
+        )
         .await
         .expect("browser_find_all a ok");
     let find_all_body = structured(&find_all_resp);
