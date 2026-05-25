@@ -224,6 +224,25 @@ impl<'tab> ImpervaBypass<'tab> {
 
     /// Register a user-supplied async CAPTCHA solver. Without this, a
     /// CAPTCHA surface returns [`ImpervaError::CaptchaRequired`] immediately.
+    ///
+    /// ```no_run
+    /// # async fn ex(tab: &zendriver_transport::SessionHandle)
+    /// #   -> Result<(), zendriver_imperva::ImpervaError> {
+    /// use zendriver_imperva::{CaptchaSolution, ImpervaBypass};
+    ///
+    /// let outcome = ImpervaBypass::new(tab)
+    ///     .on_captcha(|challenge| async move {
+    ///         // Call your 2captcha / anticaptcha integration here.
+    ///         Ok(CaptchaSolution {
+    ///             token: "SOLVER_TOKEN".into(),
+    ///             form_field: "h-captcha-response".into(),
+    ///         })
+    ///     })
+    ///     .wait_for_clearance()
+    ///     .await?;
+    /// println!("{outcome:?}");
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn on_captcha<F, Fut>(mut self, f: F) -> Self
     where
@@ -240,6 +259,19 @@ impl<'tab> ImpervaBypass<'tab> {
     /// its own [`InterceptBuilder::subscribe`] hook against this session,
     /// listening for `Reese.js` / `_Incapsula_Resource` 2xx responses to
     /// signal clearance faster than polling alone.
+    ///
+    /// ```no_run
+    /// # async fn ex(tab: &zendriver_transport::SessionHandle)
+    /// #   -> Result<(), zendriver_imperva::ImpervaError> {
+    /// use zendriver_imperva::ImpervaBypass;
+    ///
+    /// let outcome = ImpervaBypass::new(tab)
+    ///     .with_interception()
+    ///     .wait_for_clearance()
+    ///     .await?;
+    /// println!("{outcome:?}");
+    /// # Ok(()) }
+    /// ```
     ///
     /// [`InterceptBuilder::subscribe`]: zendriver_interception::InterceptBuilder::subscribe
     #[must_use]
@@ -271,6 +303,21 @@ impl<'tab> ImpervaBypass<'tab> {
     ///   [`with_interception`](Self::with_interception)) failed.
     /// - [`ImpervaError::Call`] / [`ImpervaError::JsError`] — CDP or
     ///   in-page evaluator failure.
+    ///
+    /// ```no_run
+    /// # async fn ex(tab: &zendriver_transport::SessionHandle)
+    /// #   -> Result<(), zendriver_imperva::ImpervaError> {
+    /// use std::time::Duration;
+    /// use zendriver_imperva::ImpervaBypass;
+    ///
+    /// let outcome = ImpervaBypass::new(tab)
+    ///     .poll_interval(Duration::from_millis(500))
+    ///     .timeout(Duration::from_secs(45))
+    ///     .wait_for_clearance()
+    ///     .await?;
+    /// println!("{outcome:?}");
+    /// # Ok(()) }
+    /// ```
     pub async fn wait_for_clearance(self) -> Result<ClearanceOutcome, ImpervaError> {
         use tokio::time::{Instant, Interval, MissedTickBehavior};
 

@@ -146,6 +146,18 @@ pub(crate) async fn detect_snapshot(
 
 /// Surface-only probe. Convenience for callers wanting a non-blocking
 /// "which surface is showing" check without the full snapshot.
+///
+/// ```no_run
+/// # async fn ex(tab: &zendriver_transport::SessionHandle)
+/// #   -> Result<(), zendriver_imperva::ImpervaError> {
+/// use zendriver_imperva::{ImpervaSurface, detect_surface};
+///
+/// match detect_surface(tab).await? {
+///     ImpervaSurface::None => println!("clean page"),
+///     other => println!("imperva surface: {other:?}"),
+/// }
+/// # Ok(()) }
+/// ```
 pub async fn detect_surface(session: &SessionHandle) -> Result<ImpervaSurface, ImpervaError> {
     Ok(detect_snapshot(session).await?.surface)
 }
