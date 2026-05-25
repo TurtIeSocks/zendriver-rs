@@ -5,6 +5,7 @@ Async-first, undetectable browser automation via the Chrome DevTools Protocol.
 [![crates.io](https://img.shields.io/crates/v/zendriver.svg)](https://crates.io/crates/zendriver)
 [![docs.rs](https://docs.rs/zendriver/badge.svg)](https://docs.rs/zendriver)
 [![Book](https://img.shields.io/badge/book-mdBook-blue)](https://turtiesocks.github.io/zendriver-rs/)
+[![MCP](https://img.shields.io/badge/MCP-server-blue)](https://turtiesocks.github.io/zendriver-rs/mcp.html)
 [![MSRV 1.85](https://img.shields.io/badge/rustc-1.85+-lightgray.svg)](https://blog.rust-lang.org/2025/02/20/Rust-1.85.0/)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](#license)
 [![CI](https://github.com/TurtIeSocks/zendriver-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/TurtIeSocks/zendriver-rs/actions/workflows/ci.yml)
@@ -52,6 +53,12 @@ More working examples in [`crates/zendriver/examples/`](crates/zendriver/example
 | `cloudflare`   | no       | Solve Cloudflare Turnstile challenges                         | `zendriver-cloudflare`                |
 | `fetcher`      | no       | Auto-download a pinned Chrome for Testing build               | `zendriver-fetcher` + `reqwest`/`zip` |
 
+Separate binary crate (not a feature on `zendriver`):
+
+| Crate           | Use case                                                                                   | Install                                     |
+| --------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------- |
+| `zendriver-mcp` | [Model Context Protocol](https://modelcontextprotocol.io/) server — 49 tools, stdio + HTTP | `cargo install zendriver-mcp` ([docs](https://turtiesocks.github.io/zendriver-rs/mcp.html)) |
+
 ## Install
 
 Pick the use case that matches what you're building.
@@ -79,6 +86,16 @@ cargo add zendriver --features "interception expect cloudflare fetcher"
 ```
 
 Adds request interception, `expect()` matchers, Cloudflare Turnstile bypass, and the Chrome for Testing fetcher.
+
+## MCP server
+
+For driving zendriver-rs from LLM agents, `zendriver-mcp` exposes 49 [Model Context Protocol](https://modelcontextprotocol.io/) tools over stdio + streamable HTTP. Drop-in for Claude Desktop, Claude Code, or any MCP-compatible client.
+
+```bash
+cargo install zendriver-mcp
+```
+
+See the [MCP chapter](https://turtiesocks.github.io/zendriver-rs/mcp.html) for the Claude Desktop config snippet, CLI flags, and full tool reference.
 
 ## Phases
 
