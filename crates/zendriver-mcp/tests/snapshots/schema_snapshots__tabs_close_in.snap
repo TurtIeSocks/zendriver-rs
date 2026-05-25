@@ -1,0 +1,16 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::tabs::TabCloseInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: TabCloseInput
+description: "Input for `browser_tab_close`."
+type: object
+properties:
+  tab_id:
+    description: "CDP target id of the tab to close. When `None`, the current tab\nis closed."
+    type:
+      - string
+      - "null"
+    default: ~
+additionalProperties: false

@@ -1,0 +1,13 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::eval::EvalOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: EvalOutput
+description: "Output of `browser_evaluate` / `browser_evaluate_main`."
+type: object
+properties:
+  value:
+    description: "Whatever the expression returned, serialized as JSON. `undefined` →\nJSON `null`."
+required:
+  - value

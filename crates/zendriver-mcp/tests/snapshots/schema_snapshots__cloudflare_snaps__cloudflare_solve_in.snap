@@ -1,0 +1,23 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::cloudflare::SolveInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: SolveInput
+description: "Input for `browser_solve_turnstile`."
+type: object
+properties:
+  poll_interval_ms:
+    description: "Override the bypass driver's internal poll cadence, in milliseconds.\nDefaults to the lib's own default (500ms). Lowering speeds up\ndetection at the cost of more CDP `Runtime.evaluate` round-trips;\nraising is a safe knob for slow / sandboxed environments."
+    type:
+      - integer
+      - "null"
+    format: uint64
+    minimum: 0
+  timeout_ms:
+    description: "Maximum total wait for a terminal outcome, in milliseconds. Default\n30_000 (30s) — the lib's documented sane default for a real Turnstile\nflow. Lower values can be used in tests or when the agent wants to\nfail fast and fall back to another strategy."
+    type: integer
+    format: uint64
+    default: 30000
+    minimum: 0
+additionalProperties: false

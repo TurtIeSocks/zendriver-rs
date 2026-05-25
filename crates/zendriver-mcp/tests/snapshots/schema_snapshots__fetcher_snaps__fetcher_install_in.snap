@@ -1,0 +1,25 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::fetcher::InstallInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: InstallInput
+description: "Input for `browser_install_chrome`."
+type: object
+properties:
+  cache_dir:
+    description: "Override the cache directory root. Defaults to the OS cache dir\n(`$XDG_CACHE_HOME/zendriver/chrome` on Linux,\n`~/Library/Caches/zendriver/chrome` on macOS). Useful for CI runs\nthat mount a shared persistent volume."
+    type:
+      - string
+      - "null"
+  channel:
+    description: "Release channel selector. Accepted (case-insensitive): `stable`,\n`beta`, `dev`, `canary`. Used only when `version` is unset. As of\nv0 only `stable` is wired end-to-end in the lib — the others\nsurface `UnsupportedPlatform` at resolve time. Unknown strings\nsurface [`McpServerError`] without reaching the fetcher."
+    type:
+      - string
+      - "null"
+  version:
+    description: "Exact Chrome-for-Testing version to install (e.g. `\"126.0.6478.182\"`).\nWhen set, the lookup uses [`VersionSpec::Explicit`] and `channel`\nis ignored. Unknown versions surface\n[`FetcherError::VersionNotFound`].\n\n[`VersionSpec::Explicit`]: zendriver_fetcher::VersionSpec::Explicit\n[`FetcherError::VersionNotFound`]: zendriver_fetcher::FetcherError::VersionNotFound"
+    type:
+      - string
+      - "null"
+additionalProperties: false

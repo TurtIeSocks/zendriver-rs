@@ -1,0 +1,16 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::intercept::ClearRulesOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: ClearRulesOutput
+description: "Output of `browser_intercept_clear_rules`."
+type: object
+properties:
+  cleared:
+    description: "Number of rules that were dropped. `0` is a successful no-op\nrather than an error — calling clear on an empty registry is the\nagent's idempotent \"make sure nothing is intercepting\" lever."
+    type: integer
+    format: uint
+    minimum: 0
+required:
+  - cleared

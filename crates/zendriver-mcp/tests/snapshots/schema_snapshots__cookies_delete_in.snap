@@ -1,0 +1,27 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::cookies::CookiesDeleteInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: CookiesDeleteInput
+description: "Input for `browser_cookies_delete`."
+type: object
+properties:
+  domain:
+    description: "Optional domain narrower. When omitted, cookies with the given name\nacross all domains are deleted."
+    type:
+      - string
+      - "null"
+    default: ~
+  name:
+    description: "Cookie name to delete. Always required (CDP `Network.deleteCookies`\nrequires it)."
+    type: string
+  path:
+    description: "Optional path narrower. When omitted, cookies with the given name\nacross all paths are deleted."
+    type:
+      - string
+      - "null"
+    default: ~
+additionalProperties: false
+required:
+  - name

@@ -1,0 +1,22 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::cookies::CookiesGetInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: CookiesGetInput
+description: "Input for `browser_cookies_get`."
+type: object
+properties:
+  name:
+    description: "When set, post-filters the result to cookies whose `name` matches\nexactly. Combinable with `url`."
+    type:
+      - string
+      - "null"
+    default: ~
+  url:
+    description: "When set, returns only cookies that would be sent for this URL\n(CDP `Network.getCookies`). When unset, returns every cookie in\nthe browser's store (`Storage.getCookies`)."
+    type:
+      - string
+      - "null"
+    default: ~
+additionalProperties: false

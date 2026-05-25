@@ -1,0 +1,41 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::lifecycle::OpenOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: OpenOutput
+description: "Output of `browser_open`."
+type: object
+properties:
+  chrome_version:
+    description: "Detected Chrome version string. Empty in v0 (the zendriver lib does\nnot expose a version accessor); reserved for a follow-up dispatch."
+    type: string
+  headless:
+    description: Effective headless flag for the launched browser.
+    type: boolean
+  profile:
+    description: Effective stealth profile for the launched browser.
+    $ref: "#/$defs/StealthProfileChoice"
+required:
+  - chrome_version
+  - headless
+  - profile
+$defs:
+  StealthProfileChoice:
+    description: "Stealth profile choice carried over the MCP wire.\n\nConcrete `StealthProfile` resolution happens inside the lifecycle\nhandler (it depends on platform detection that only matters at launch\ntime); the wire-level enum stays stable and platform-agnostic."
+    oneOf:
+      - description: "Defer to `zendriver_stealth::StealthProfile::native()` (auto-detect\nplatform via `sysinfo`)."
+        type: string
+        const: auto
+      - description: "Force native (same as `Auto`, but explicit)."
+        type: string
+        const: native
+      - description: Spoof a macOS fingerprint regardless of host platform.
+        type: string
+        const: spoof_macos
+      - description: Spoof a Linux fingerprint regardless of host platform.
+        type: string
+        const: spoof_linux
+      - description: Spoof a Windows fingerprint regardless of host platform.
+        type: string
+        const: spoof_windows

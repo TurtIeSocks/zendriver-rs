@@ -1,0 +1,14 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::intercept::AddRuleOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: AddRuleOutput
+description: "Output of `browser_intercept_add_rule`."
+type: object
+properties:
+  rule_id:
+    description: "Opaque id for [`SessionState::rules`]. Pass to\n`browser_intercept_remove_rule` to take the rule down."
+    type: string
+required:
+  - rule_id

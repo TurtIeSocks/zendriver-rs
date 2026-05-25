@@ -1,0 +1,16 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::storage::StorageGetOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: StorageGetOutput
+description: "Output of `browser_storage_get`."
+type: object
+properties:
+  values:
+    description: "Storage entries, keyed lexicographically. Empty when the key is\nmissing or the area is empty."
+    type: object
+    additionalProperties:
+      type: string
+required:
+  - values

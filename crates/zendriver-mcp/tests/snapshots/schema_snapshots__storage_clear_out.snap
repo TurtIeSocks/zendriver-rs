@@ -1,0 +1,14 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::storage::StorageClearOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: StorageClearOutput
+description: "Output of `browser_storage_clear`."
+type: object
+properties:
+  ok:
+    description: "Always `true` when the call succeeded."
+    type: boolean
+required:
+  - ok

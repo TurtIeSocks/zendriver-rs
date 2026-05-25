@@ -1,0 +1,19 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::lifecycle::TabSummary)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: TabSummary
+description: "Lightweight summary of the current tab — returned inside [`StatusOutput`]."
+type: object
+properties:
+  id:
+    type: string
+  title:
+    type: string
+  url:
+    type: string
+required:
+  - id
+  - url
+  - title

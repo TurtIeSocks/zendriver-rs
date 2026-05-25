@@ -1,0 +1,30 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::cookies::CookiesPersistOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: CookiesPersistOutput
+description: "Output of `browser_cookies_persist`."
+type: object
+properties:
+  count:
+    description: Number of cookies written (save) or restored (load).
+    type: integer
+    format: uint
+    minimum: 0
+  direction:
+    description: Echoes the input direction.
+    $ref: "#/$defs/PersistDirection"
+required:
+  - count
+  - direction
+$defs:
+  PersistDirection:
+    description: "Direction selector for `browser_cookies_persist`."
+    oneOf:
+      - description: "Snapshot every cookie in the browser store to `path` as pretty JSON."
+        type: string
+        const: save
+      - description: "Replace the in-memory cookies with those parsed from `path`."
+        type: string
+        const: load

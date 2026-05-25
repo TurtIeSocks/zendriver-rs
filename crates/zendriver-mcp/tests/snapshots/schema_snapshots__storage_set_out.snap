@@ -1,0 +1,14 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::storage::StorageSetOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: StorageSetOutput
+description: "Output of `browser_storage_set`."
+type: object
+properties:
+  ok:
+    description: "Always `true` when the call succeeded."
+    type: boolean
+required:
+  - ok

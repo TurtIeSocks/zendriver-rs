@@ -1,0 +1,17 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::cloudflare::Outcome)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: Outcome
+description: "Terminal outcome of a turnstile bypass attempt.\n\n`Solved` and `ChallengeGone` mirror the lib's `ClearanceOutcome`\nvariants. `Timeout` is the MCP layer's collapse of\n`CloudflareError::ClearanceTimeout` into the success channel — agents\ncan branch on `outcome` without try/catch around a timeout."
+oneOf:
+  - description: "Turnstile produced a token (value of `cf-turnstile-response`). The\ntoken is available in [`SolveOutput::token`]."
+    type: string
+    const: solved
+  - description: "The challenge container disappeared without yielding a token (e.g.\na clearance cookie shortcut). `token` will be `None`."
+    type: string
+    const: challenge_gone
+  - description: "`timeout_ms` elapsed without reaching either success state. `token`\nwill be `None`. Not a hard error — agents can retry or give up."
+    type: string
+    const: timeout

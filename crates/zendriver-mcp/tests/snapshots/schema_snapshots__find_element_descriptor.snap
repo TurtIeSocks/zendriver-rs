@@ -1,0 +1,60 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::find::ElementDescriptor)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: ElementDescriptor
+description: "Element projection returned by `browser_find` (single) and\n`browser_find_all` (list).\n\n`tag` is best-effort: the lib has no `Element::tag_name()` so we ask\nthe page via `el.tagName.toLowerCase()`. If the eval call fails (e.g.\nthe element became stale between the find and the describe), we leave\n`tag` as `None` rather than failing the entire describe — the rest of\nthe projection (attrs, text, geometry) is still useful."
+type: object
+properties:
+  attrs:
+    description: "All attributes on the element, in stable key order."
+    type: object
+    additionalProperties:
+      type: string
+  bounding_box:
+    description: "Viewport-relative bounding box, or `None` when the element has no\nbox (display: none, detached, etc.)."
+    anyOf:
+      - $ref: "#/$defs/BoundingBox"
+      - type: "null"
+  enabled:
+    description: "`true` when the element is not disabled (form-aware)."
+    type: boolean
+  tag:
+    description: "Lowercase tag name, or `None` when the eval probe failed."
+    type:
+      - string
+      - "null"
+  text_snippet:
+    description: "First 200 chars of `innerText` (post `chars().take(200)` so we\nnever split a multibyte codepoint)."
+    type: string
+  visible:
+    description: "`true` when the lib's visibility predicate accepts the element."
+    type: boolean
+required:
+  - text_snippet
+  - attrs
+  - visible
+  - enabled
+$defs:
+  BoundingBox:
+    description: "Geometry wire shape mirroring [`zendriver::BoundingBox`].\n\nWrapped (rather than re-exporting the lib type) so it can derive\n`Serialize` + `JsonSchema` without forcing those derives on the lib's\ntype."
+    type: object
+    properties:
+      height:
+        type: number
+        format: double
+      width:
+        type: number
+        format: double
+      x:
+        type: number
+        format: double
+      y:
+        type: number
+        format: double
+    required:
+      - x
+      - y
+      - width
+      - height

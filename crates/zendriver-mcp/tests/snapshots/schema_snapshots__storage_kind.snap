@@ -1,0 +1,14 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::storage::StorageKind)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: StorageKind
+description: Which DOM storage area to target.
+oneOf:
+  - description: "`window.localStorage` (persists across tab restarts)."
+    type: string
+    const: local
+  - description: "`window.sessionStorage` (cleared on tab close)."
+    type: string
+    const: session

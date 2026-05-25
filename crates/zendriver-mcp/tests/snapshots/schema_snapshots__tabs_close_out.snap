@@ -1,0 +1,19 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::tabs::TabCloseOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: TabCloseOutput
+description: "Output of `browser_tab_close`."
+type: object
+properties:
+  closed_id:
+    description: CDP target id of the tab that was closed.
+    type: string
+  current_tab_id:
+    description: "Session's current tab after the close. `None` when the last tab\nwas closed (or when the closed tab was the current tab and no\nother tabs remained)."
+    type:
+      - string
+      - "null"
+required:
+  - closed_id

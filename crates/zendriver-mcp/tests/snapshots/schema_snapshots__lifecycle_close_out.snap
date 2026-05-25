@@ -1,0 +1,14 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::lifecycle::CloseOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: CloseOutput
+description: "Output of `browser_close`."
+type: object
+properties:
+  ok:
+    description: "Always `true`. Present so the tool's structured output is\nnon-empty (rmcp clients sometimes treat `{}` as \"no payload\")."
+    type: boolean
+required:
+  - ok

@@ -1,0 +1,44 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::frames::FrameListOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: FrameListOutput
+description: "Output of `browser_frame_list`."
+type: object
+properties:
+  frames:
+    description: "All frames on the current tab. Order follows\n`zendriver::Tab::frames` (unspecified but typically tree-traversal\norder)."
+    type: array
+    items:
+      $ref: "#/$defs/FrameSummary"
+required:
+  - frames
+$defs:
+  FrameSummary:
+    description: "Per-frame projection returned by `browser_frame_list`.\n\nField choice matches `zendriver::Frame`'s public accessors. Notable\ngaps from the original plan:\n- `is_oopif` does NOT exist on `Frame` — `is_main` + `parent_id`\n  together are sufficient for the main \"what's the frame tree\n  layout?\" question agents care about.\n- `url` is a plain `String` (not `Result<String>`), so we don't need\n  the empty-string fallback that `TabSummary` uses."
+    type: object
+    properties:
+      id:
+        description: "Frame id (`Frame::id()`)."
+        type: string
+      is_main:
+        description: "`true` for the main (top-level) frame."
+        type: boolean
+      name:
+        description: "Frame `name` attribute, or `None` if unset."
+        type:
+          - string
+          - "null"
+      parent_id:
+        description: "Parent frame id, or `None` for the main frame."
+        type:
+          - string
+          - "null"
+      url:
+        description: "Live frame URL (`Frame::url().await` — infallible)."
+        type: string
+    required:
+      - id
+      - url
+      - is_main

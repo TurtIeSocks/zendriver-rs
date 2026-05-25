@@ -1,0 +1,73 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::reads::ElementState)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: ElementState
+description: "Output of `browser_element_state`. Every field is `Option<_>` so only\nthe ones a preset requested round-trip on the wire."
+type: object
+properties:
+  attrs:
+    description: "All HTML attributes. Populated by `All` and `TextAttrs`."
+    type:
+      - object
+      - "null"
+    additionalProperties:
+      type: string
+  bounding_box:
+    description: "Viewport-relative bounding box. Populated by `All` and `Geometry`."
+    anyOf:
+      - $ref: "#/$defs/BoundingBox"
+      - type: "null"
+  enabled:
+    description: "`true` when the element is not disabled. Populated by `All` and\n`VisibleEnabled`."
+    type:
+      - boolean
+      - "null"
+  exists:
+    description: "`true` when the selector resolved to an element. Always set (every\npreset includes this)."
+    type: boolean
+  in_viewport:
+    description: "`true` when the element's bounding box intersects the viewport.\nAlways `None` in v0 — no zendriver primitive yet. Field reserved\nso a follow-up dispatch can add it without breaking the schema."
+    type:
+      - boolean
+      - "null"
+  inner_html:
+    description: "Serialized `innerHTML`. Populated by `All` and `TextAttrs`."
+    type:
+      - string
+      - "null"
+  text:
+    description: "`innerText`. Populated by `All` and `TextAttrs`. NOT truncated —\ncallers wanting a snippet should clip on their side."
+    type:
+      - string
+      - "null"
+  visible:
+    description: "`true` when the lib's visibility predicate accepts the element.\nPopulated by `All` and `VisibleEnabled`."
+    type:
+      - boolean
+      - "null"
+required:
+  - exists
+$defs:
+  BoundingBox:
+    description: "Geometry wire shape mirroring [`zendriver::BoundingBox`].\n\nWrapped (rather than re-exporting the lib type) so it can derive\n`Serialize` + `JsonSchema` without forcing those derives on the lib's\ntype."
+    type: object
+    properties:
+      height:
+        type: number
+        format: double
+      width:
+        type: number
+        format: double
+      x:
+        type: number
+        format: double
+      y:
+        type: number
+        format: double
+    required:
+      - x
+      - y
+      - width
+      - height

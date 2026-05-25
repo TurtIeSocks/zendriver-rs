@@ -1,0 +1,21 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::expect::AwaitInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: AwaitInput
+description: "Input for `browser_expect_await`."
+type: object
+properties:
+  expectation_id:
+    description: "Id returned by an earlier `browser_expect_register` call."
+    type: string
+  timeout_ms:
+    description: "Outer timeout for waiting on the spawned task to send the matched\nevent. Defaults to 30s."
+    type: integer
+    format: uint64
+    default: 30000
+    minimum: 0
+additionalProperties: false
+required:
+  - expectation_id

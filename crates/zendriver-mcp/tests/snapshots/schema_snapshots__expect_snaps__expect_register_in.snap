@@ -1,0 +1,59 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::expect::RegisterInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: RegisterInput
+description: "Input for `browser_expect_register`."
+type: object
+properties:
+  kind:
+    description: Which event family to watch.
+    $ref: "#/$defs/ExpectKind"
+  matcher:
+    description: URL matcher (request/response only — ignored for dialog/download).
+    anyOf:
+      - $ref: "#/$defs/ExpectMatcher"
+      - type: "null"
+  pre_await_timeout_ms:
+    description: "Inner timeout applied to the lib's `.timeout(d)` call. Generous by\ndefault (60s) so the user has time to call the action tool that\ntriggers the event between `register` and `await`."
+    type: integer
+    format: uint64
+    default: 60000
+    minimum: 0
+additionalProperties: false
+required:
+  - kind
+$defs:
+  ExpectKind:
+    description: "Which `Page.*` / `Network.*` family the expectation listens on."
+    oneOf:
+      - description: "`Network.requestWillBeSent` — outgoing request, no body fetch."
+        type: string
+        const: request
+      - description: "`Network.responseReceived` — incoming response headers (no body in v0)."
+        type: string
+        const: response
+      - description: "`Page.javascriptDialogOpened` — alert/confirm/prompt/beforeunload."
+        type: string
+        const: dialog
+      - description: "`Page.downloadWillBegin` — start of a file download."
+        type: string
+        const: download
+  ExpectMatcher:
+    description: "URL match predicate for request/response expectations. Dialog and\nDownload kinds ignore matcher fields entirely (the lib has no URL filter\nfor them in v0).\n\nExactly zero or one of `url_substr` / `url_regex` may be set. Setting\nneither matches every URL (substring matcher with the empty string)."
+    type: object
+    properties:
+      url_regex:
+        description: "Regex matcher — match if `regex::Regex::is_match(url)` returns true.\nCompiled inside `_register`; an invalid regex surfaces as an\ninvalid-request error."
+        type:
+          - string
+          - "null"
+        default: ~
+      url_substr:
+        description: Substring matcher — match if request URL contains this needle.
+        type:
+          - string
+          - "null"
+        default: ~
+    additionalProperties: false

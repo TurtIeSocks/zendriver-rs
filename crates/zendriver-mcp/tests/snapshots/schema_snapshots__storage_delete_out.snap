@@ -1,0 +1,14 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::storage::StorageDeleteOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: StorageDeleteOutput
+description: "Output of `browser_storage_delete`."
+type: object
+properties:
+  deleted:
+    description: "Always `true` when the call succeeded (no match-count signal from CDP)."
+    type: boolean
+required:
+  - deleted

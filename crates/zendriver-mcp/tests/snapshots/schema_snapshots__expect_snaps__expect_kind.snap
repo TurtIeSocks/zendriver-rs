@@ -1,0 +1,20 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::expect::ExpectKind)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: ExpectKind
+description: "Which `Page.*` / `Network.*` family the expectation listens on."
+oneOf:
+  - description: "`Network.requestWillBeSent` — outgoing request, no body fetch."
+    type: string
+    const: request
+  - description: "`Network.responseReceived` — incoming response headers (no body in v0)."
+    type: string
+    const: response
+  - description: "`Page.javascriptDialogOpened` — alert/confirm/prompt/beforeunload."
+    type: string
+    const: dialog
+  - description: "`Page.downloadWillBegin` — start of a file download."
+    type: string
+    const: download

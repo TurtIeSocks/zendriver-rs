@@ -3334,6 +3334,7 @@ dependencies = [
  "axum",
  "base64",
  "clap",
+ "insta",
  "regex",
  "rmcp",
  "schemars",

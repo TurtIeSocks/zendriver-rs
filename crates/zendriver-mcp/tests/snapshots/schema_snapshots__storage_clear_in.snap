@@ -1,0 +1,25 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::storage::StorageClearInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: StorageClearInput
+description: "Input for `browser_storage_clear`."
+type: object
+properties:
+  kind:
+    description: Which storage area to empty.
+    $ref: "#/$defs/StorageKind"
+additionalProperties: false
+required:
+  - kind
+$defs:
+  StorageKind:
+    description: Which DOM storage area to target.
+    oneOf:
+      - description: "`window.localStorage` (persists across tab restarts)."
+        type: string
+        const: local
+      - description: "`window.sessionStorage` (cleared on tab close)."
+        type: string
+        const: session

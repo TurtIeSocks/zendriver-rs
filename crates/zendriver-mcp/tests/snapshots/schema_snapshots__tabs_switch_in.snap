@@ -1,0 +1,15 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::tabs::TabSwitchInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: TabSwitchInput
+description: "Input for `browser_tab_switch`."
+type: object
+properties:
+  tab_id:
+    description: "CDP target id of the tab to switch to. Obtain from\n`browser_tab_list`."
+    type: string
+additionalProperties: false
+required:
+  - tab_id

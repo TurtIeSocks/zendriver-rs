@@ -1,0 +1,36 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::navigation::GotoInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: GotoInput
+description: "`browser_goto` arg block."
+type: object
+properties:
+  return_snapshot:
+    description: "When `true`, include the trimmed page HTML in the response."
+    type: boolean
+    default: false
+  url:
+    description: Absolute URL to navigate to.
+    type: string
+  wait_for:
+    description: "Post-navigation wait strategy. Default: `load`."
+    $ref: "#/$defs/WaitFor"
+    default: load
+additionalProperties: false
+required:
+  - url
+$defs:
+  WaitFor:
+    description: "Wait strategy options for `browser_goto`."
+    oneOf:
+      - description: "Wait for the `load` event to fire."
+        type: string
+        const: load
+      - description: Wait until the network has been idle for ~500ms (5s outer timeout).
+        type: string
+        const: idle
+      - description: Return immediately after the navigation request is dispatched.
+        type: string
+        const: none

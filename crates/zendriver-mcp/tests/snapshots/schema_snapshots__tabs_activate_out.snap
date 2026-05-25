@@ -1,0 +1,14 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::tabs::TabActivateOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: TabActivateOutput
+description: "Output of `browser_tab_activate`."
+type: object
+properties:
+  id:
+    description: CDP target id of the tab that was activated.
+    type: string
+required:
+  - id
