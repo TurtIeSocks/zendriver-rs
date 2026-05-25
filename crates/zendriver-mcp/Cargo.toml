@@ -27,7 +27,7 @@ integration-tests = []
 
 [dependencies]
 zendriver           = { workspace = true }
-rmcp                = { workspace = true, features = ["server", "macros", "schemars", "transport-streamable-http-server"] }
+rmcp                = { workspace = true, features = ["server", "macros", "schemars", "transport-io", "transport-streamable-http-server"] }
 schemars            = { workspace = true }
 tokio               = { workspace = true }
 tracing             = { workspace = true }
@@ -41,6 +41,8 @@ async-trait         = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }
+# rmcp client features for end-to-end smoke tests that spawn the bin.
+rmcp       = { workspace = true, features = ["client", "transport-child-process"] }
 
 [lints]
 workspace = true
