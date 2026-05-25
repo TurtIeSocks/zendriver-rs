@@ -1,0 +1,46 @@
+[package]
+name = "zendriver-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "MCP server exposing zendriver-rs's stealth browser automation to MCP clients."
+keywords = ["mcp", "browser", "automation", "cdp", "stealth"]
+categories = ["command-line-utilities", "web-programming::http-server"]
+
+[[bin]]
+name = "zendriver-mcp"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = ["interception", "expect", "cloudflare", "fetcher"]
+interception = ["zendriver/interception"]
+expect       = ["zendriver/expect"]
+cloudflare   = ["zendriver/cloudflare"]
+fetcher      = ["zendriver/fetcher"]
+integration-tests = []
+
+[dependencies]
+zendriver           = { workspace = true }
+rmcp                = { workspace = true, features = ["server", "macros", "schemars", "transport-streamable-http-server"] }
+schemars            = { workspace = true }
+tokio               = { workspace = true }
+tracing             = { workspace = true }
+tracing-subscriber  = { workspace = true }
+serde               = { workspace = true }
+serde_json          = { workspace = true }
+thiserror           = { workspace = true }
+clap                = { workspace = true }
+url                 = { workspace = true }
+async-trait         = { workspace = true }
+
+[dev-dependencies]
+tokio-test = { workspace = true }
+
+[lints]
+workspace = true
