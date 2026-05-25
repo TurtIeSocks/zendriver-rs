@@ -1,0 +1,39 @@
+name: Release PR (dry-run)
+
+# Phase-3 staging: workflow_dispatch only. Phase 4 flips to `on: push`.
+
+permissions:
+  contents: write
+  pull-requests: write
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release-plz-pr
+  cancel-in-progress: false
+
+jobs:
+  release-plz-pr:
+    name: Update release PR (dry-run)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLZ_TOKEN }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: release-plz/action@v0.5.129
+        with:
+          command: release-pr
+          # `dry-run` means: compute the bumps + changelog and log them,
+          # but do not open or amend a PR. Safe to run repeatedly while
+          # iterating on the config.
+          # Once we're happy, Phase 4 removes this flag.
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
