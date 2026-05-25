@@ -16,6 +16,7 @@ use std::time::Duration;
 use zendriver_transport::SessionHandle;
 
 use crate::detection::CaptchaKind;
+use crate::error::ImpervaError;
 
 /// Default poll interval for [`ImpervaBypass::wait_for_clearance`].
 pub(crate) const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -69,7 +70,6 @@ pub(crate) type CaptchaSolver = dyn Fn(
 ///
 /// Constructed via `Tab::imperva()`.
 pub struct ImpervaBypass<'tab> {
-    #[expect(dead_code, reason = "wired in Task 4 wait_for_clearance")]
     pub(crate) session: &'tab SessionHandle,
     pub(crate) poll_interval: Duration,
     pub(crate) timeout: Duration,
@@ -140,6 +140,121 @@ impl<'tab> ImpervaBypass<'tab> {
         self.interceptor = Some(interceptor);
         self
     }
+
+    /// Run the surface-aware poll loop until clearance is achieved or
+    /// the configured timeout elapses.
+    ///
+    /// # Returns
+    /// - `Ok(ClearanceOutcome::AlreadyClear)` — no Imperva surface present
+    ///   at call time. Fast path; no waiting.
+    /// - `Ok(ClearanceOutcome::TokenAcquired { reese84, sessions })` —
+    ///   reese84 cookie was observed AND the page body no longer contains
+    ///   Imperva challenge markers (hybrid AND signal).
+    /// - `Ok(ClearanceOutcome::ChallengeGone)` — body markers cleared but
+    ///   no reese84 token was ever observed (e.g., legacy Incapsula).
+    ///
+    /// # Errors
+    /// - [`ImpervaError::Timeout`] — overall timeout elapsed before
+    ///   clearance. `last_surface` carries the most-recent observed surface.
+    /// - [`ImpervaError::CaptchaRequired`] — CAPTCHA surface detected
+    ///   but no `on_captcha` solver was registered.
+    /// - [`ImpervaError::CaptchaSolver`] — registered solver returned an
+    ///   error.
+    /// - [`ImpervaError::Interception`] — Fetch-domain hook (when set via
+    ///   [`with_interception`](Self::with_interception)) failed.
+    /// - [`ImpervaError::Call`] / [`ImpervaError::JsError`] — CDP or
+    ///   in-page evaluator failure.
+    pub async fn wait_for_clearance(self) -> Result<ClearanceOutcome, ImpervaError> {
+        use tokio::time::{Instant, Interval, MissedTickBehavior};
+
+        let snapshot = crate::detection::detect_snapshot(self.session).await?;
+
+        // Fast paths.
+        if matches!(snapshot.surface, crate::detection::ImpervaSurface::None) && snapshot.body_clean
+        {
+            return Ok(ClearanceOutcome::AlreadyClear);
+        }
+        if let crate::detection::ImpervaSurface::Captcha(kind) = snapshot.surface {
+            if self.on_captcha.is_none() {
+                return Err(ImpervaError::CaptchaRequired { kind });
+            }
+            // Callback dispatch happens in Task 5; for now, fail explicitly.
+            return Err(ImpervaError::CaptchaRequired { kind });
+        }
+
+        let deadline = Instant::now() + self.timeout;
+        let mut ticker: Interval = tokio::time::interval(self.poll_interval);
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        // `last_surface` carries the most-recently-observed non-clearance
+        // surface for `Timeout` diagnostics. The initial assignment is dead
+        // because the first loop iteration always either returns or writes
+        // `last_surface` itself, but keeping the type-annotated `None` here
+        // (rather than `let last_surface;` with first-write later) keeps the
+        // mutation site obvious to readers.
+        #[allow(unused_assignments)]
+        let mut last_surface: Option<crate::detection::ImpervaSurface> = None;
+        let mut next_snapshot = Some(snapshot);
+
+        loop {
+            // First iteration uses the snapshot already taken above; subsequent
+            // iterations re-probe. The probe is itself raced against the
+            // overall deadline so a stuck CDP call cannot deadlock the loop.
+            let snap = match next_snapshot.take() {
+                Some(s) => s,
+                None => tokio::select! {
+                    res = crate::detection::detect_snapshot(self.session) => res?,
+                    () = tokio::time::sleep_until(deadline) => {
+                        return Err(ImpervaError::Timeout {
+                            timeout: self.timeout,
+                            last_surface,
+                        });
+                    }
+                },
+            };
+
+            let token = snap.reese84.as_ref().filter(|v| !v.is_empty());
+            let surface_clear = matches!(snap.surface, crate::detection::ImpervaSurface::None);
+            match (token, snap.body_clean, surface_clear) {
+                (Some(token), true, _) => {
+                    return Ok(ClearanceOutcome::TokenAcquired {
+                        reese84: token.clone(),
+                        sessions: snap.sessions,
+                    });
+                }
+                (None, true, true) => return Ok(ClearanceOutcome::ChallengeGone),
+                _ => last_surface = Some(snap.surface),
+            }
+
+            if Instant::now() >= deadline {
+                return Err(ImpervaError::Timeout {
+                    timeout: self.timeout,
+                    last_surface,
+                });
+            }
+
+            tokio::select! {
+                _ = ticker.tick() => {}
+                () = tokio::time::sleep_until(deadline) => {
+                    return Err(ImpervaError::Timeout {
+                        timeout: self.timeout,
+                        last_surface,
+                    });
+                }
+            }
+        }
+    }
+
+    /// One-shot probe: returns `true` iff [`detect_surface`] returns
+    /// anything other than `ImpervaSurface::None`.
+    ///
+    /// [`detect_surface`]: crate::detection::detect_surface
+    pub async fn is_challenge_present(&self) -> Result<bool, ImpervaError> {
+        Ok(!matches!(
+            crate::detection::detect_surface(self.session).await?,
+            crate::detection::ImpervaSurface::None,
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -176,6 +291,283 @@ mod tests {
         assert_eq!(b.timeout, Duration::from_secs(60));
         assert_eq!(b.poll_interval, Duration::from_millis(100));
         assert!(b.on_captcha.is_some());
+        conn.shutdown();
+    }
+
+    use crate::detection::ImpervaSurface;
+    use serde_json::json;
+
+    fn snapshot_reply(payload: serde_json::Value) -> serde_json::Value {
+        json!({
+            "result": {
+                "type": "object",
+                "value": payload,
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn wait_for_clearance_returns_already_clear_on_clean_page() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move { ImpervaBypass::new(&s).wait_for_clearance().await }
+        });
+
+        let id = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id,
+            snapshot_reply(json!({
+                "surface": { "kind": "None" },
+                "reese84": null,
+                "body_clean": true,
+                "sessions": [],
+                "has_imperva_signal": false,
+            })),
+        )
+        .await;
+
+        let outcome = fut.await.unwrap().unwrap();
+        assert!(matches!(outcome, ClearanceOutcome::AlreadyClear));
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn wait_for_clearance_returns_token_when_both_signals_hit() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move {
+                ImpervaBypass::new(&s)
+                    .poll_interval(Duration::from_millis(1))
+                    .wait_for_clearance()
+                    .await
+            }
+        });
+
+        // First probe: surface present, no clearance yet.
+        let id1 = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id1,
+            snapshot_reply(json!({
+                "surface": { "kind": "Reese84" },
+                "reese84": null,
+                "body_clean": false,
+                "sessions": [],
+                "has_imperva_signal": true,
+            })),
+        )
+        .await;
+
+        // Second probe: token + body clean → TokenAcquired.
+        let id2 = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id2,
+            snapshot_reply(json!({
+                "surface": { "kind": "None" },
+                "reese84": "TOK_ABC",
+                "body_clean": true,
+                "sessions": [{ "name": "reese84", "value": "TOK_ABC" }],
+                "has_imperva_signal": true,
+            })),
+        )
+        .await;
+
+        let outcome = fut.await.unwrap().unwrap();
+        match outcome {
+            ClearanceOutcome::TokenAcquired { reese84, sessions } => {
+                assert_eq!(reese84, "TOK_ABC");
+                assert_eq!(sessions.len(), 1);
+                assert_eq!(sessions[0].name, "reese84");
+            }
+            other => panic!("expected TokenAcquired, got {other:?}"),
+        }
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn wait_for_clearance_holds_when_cookie_only_no_body_clean() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move {
+                ImpervaBypass::new(&s)
+                    .poll_interval(Duration::from_millis(1))
+                    .timeout(Duration::from_millis(50))
+                    .wait_for_clearance()
+                    .await
+            }
+        });
+
+        // Always reply cookie-only.
+        for _ in 0..50 {
+            let Ok(id) = tokio::time::timeout(
+                Duration::from_millis(100),
+                mock.expect_cmd("Runtime.evaluate"),
+            )
+            .await
+            else {
+                break;
+            };
+            mock.reply(
+                id,
+                snapshot_reply(json!({
+                    "surface": { "kind": "Reese84" },
+                    "reese84": "TOK",
+                    "body_clean": false,
+                    "sessions": [],
+                    "has_imperva_signal": true,
+                })),
+            )
+            .await;
+        }
+
+        let err = fut.await.unwrap().unwrap_err();
+        match err {
+            ImpervaError::Timeout { last_surface, .. } => {
+                assert_eq!(last_surface, Some(ImpervaSurface::Reese84));
+            }
+            other => panic!("expected Timeout, got {other:?}"),
+        }
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn wait_for_clearance_returns_challenge_gone_when_body_clean_no_token() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move {
+                ImpervaBypass::new(&s)
+                    .poll_interval(Duration::from_millis(1))
+                    .wait_for_clearance()
+                    .await
+            }
+        });
+
+        // Surface present at start.
+        let id1 = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id1,
+            snapshot_reply(json!({
+                "surface": { "kind": "Legacy" },
+                "reese84": null,
+                "body_clean": false,
+                "sessions": [{ "name": "incap_ses_123", "value": "X" }],
+                "has_imperva_signal": true,
+            })),
+        )
+        .await;
+
+        // Then body becomes clean, but no reese84 ever sets.
+        let id2 = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id2,
+            snapshot_reply(json!({
+                "surface": { "kind": "None" },
+                "reese84": null,
+                "body_clean": true,
+                "sessions": [],
+                "has_imperva_signal": false,
+            })),
+        )
+        .await;
+
+        let outcome = fut.await.unwrap().unwrap();
+        assert!(matches!(outcome, ClearanceOutcome::ChallengeGone));
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn wait_for_clearance_returns_captcha_required_when_no_solver() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move { ImpervaBypass::new(&s).wait_for_clearance().await }
+        });
+
+        let id = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id,
+            snapshot_reply(json!({
+                "surface": { "kind": "Captcha", "captcha": "HCaptcha" },
+                "reese84": null,
+                "body_clean": false,
+                "sessions": [],
+                "has_imperva_signal": true,
+            })),
+        )
+        .await;
+
+        let err = fut.await.unwrap().unwrap_err();
+        assert!(matches!(
+            err,
+            ImpervaError::CaptchaRequired {
+                kind: CaptchaKind::HCaptcha
+            }
+        ));
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn wait_for_clearance_treats_empty_reese84_as_unset() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move {
+                ImpervaBypass::new(&s)
+                    .poll_interval(Duration::from_millis(1))
+                    .wait_for_clearance()
+                    .await
+            }
+        });
+
+        // Surface present, cookie is empty string → not yet set.
+        let id1 = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id1,
+            snapshot_reply(json!({
+                "surface": { "kind": "Reese84" },
+                "reese84": "",
+                "body_clean": true,
+                "sessions": [],
+                "has_imperva_signal": true,
+            })),
+        )
+        .await;
+
+        // Expect that the loop did NOT return TokenAcquired with empty token.
+        // Next probe returns ChallengeGone (no reese84, body clean).
+        let id2 = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id2,
+            snapshot_reply(json!({
+                "surface": { "kind": "None" },
+                "reese84": null,
+                "body_clean": true,
+                "sessions": [],
+                "has_imperva_signal": false,
+            })),
+        )
+        .await;
+
+        let outcome = fut.await.unwrap().unwrap();
+        assert!(
+            matches!(outcome, ClearanceOutcome::ChallengeGone),
+            "empty reese84 must not produce TokenAcquired"
+        );
         conn.shutdown();
     }
 }
