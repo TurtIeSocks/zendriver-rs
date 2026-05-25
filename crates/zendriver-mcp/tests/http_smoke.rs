@@ -70,7 +70,7 @@ async fn wait_for_server_ready(addr: &str, attempts: usize) -> std::io::Result<(
             }
         }
     }
-    Err(last_err.unwrap_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "no attempts")))
+    Err(last_err.unwrap_or_else(|| std::io::Error::other("no attempts")))
 }
 
 #[tokio::test]
