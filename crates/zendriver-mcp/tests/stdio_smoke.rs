@@ -64,6 +64,21 @@ async fn browser_status_round_trip_over_stdio() {
             "{expected} should be advertised; tools: {names:?}"
         );
     }
+    // Expect tools (gated behind `cfg(feature = "expect")`) live in their
+    // own `tool_router` impl block and are combined via
+    // `combined_tool_router()`. The default build has the feature on; if
+    // the combination drops one, this catches it.
+    #[cfg(feature = "expect")]
+    for expected in [
+        "browser_expect_register",
+        "browser_expect_await",
+        "browser_expect_cancel",
+    ] {
+        assert!(
+            names.contains(&expected),
+            "{expected} should be advertised; tools: {names:?}"
+        );
+    }
 
     let result = client
         .call_tool(

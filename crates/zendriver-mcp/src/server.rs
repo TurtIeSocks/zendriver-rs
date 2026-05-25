@@ -28,6 +28,8 @@ use tokio::sync::Mutex;
 
 use crate::state::SessionState;
 use crate::tools::common::EmptyInput;
+#[cfg(feature = "expect")]
+use crate::tools::expect;
 #[cfg(feature = "interception")]
 use crate::tools::intercept;
 use crate::tools::{
@@ -663,17 +665,69 @@ impl ZendriverServer {
     }
 }
 
+// ---------- expect (gated) -----------------------------------------------
+//
+// Same split pattern as the interception block above — the `tool_router`
+// macro can't see through per-method `#[cfg]`, so feature-gated tools live
+// in their own impl block. The matched-event JSON returned by
+// `browser_expect_await` is `serde_json::Value`; the schema for that on the
+// wire is `JSON`, which rmcp's `Json` wrapper handles transparently.
+
+#[cfg(feature = "expect")]
+#[tool_router(router = expect_tool_router, vis = "pub")]
+impl ZendriverServer {
+    /// Register a one-shot expectation against the current tab.
+    #[tool(
+        name = "browser_expect_register",
+        description = "Register a one-shot expectation against the current tab. `kind` selects `request` / `response` / `dialog` / `download`. `matcher.url_substr` / `matcher.url_regex` filter request and response by URL (regex wins if both set; default matches every URL). `dialog` and `download` ignore matcher fields entirely. `pre_await_timeout_ms` (default 60_000 = 60s) is the inner timeout applied to the lib's `.timeout(d)` so the user has time to trigger the action between `_register` and `_await`. Returns `{ expectation_id }` — pass to `browser_expect_await` or `browser_expect_cancel`."
+    )]
+    pub async fn browser_expect_register(
+        &self,
+        Parameters(input): Parameters<expect::RegisterInput>,
+    ) -> Result<Json<expect::RegisterOutput>, ErrorData> {
+        expect::register(self.state.clone(), input).await.map(Json)
+    }
+
+    /// Wait for a previously-registered expectation to resolve.
+    #[tool(
+        name = "browser_expect_await",
+        description = "Wait for a previously-registered expectation to resolve. `timeout_ms` (default 30_000 = 30s) is the outer wait on the spawned task's matched-event channel. Returns `{ expectation_id, event }` where `event` is a JSON object whose shape depends on the expectation's `kind`: request/response carry `url` / `headers` / `method` or `status`; dialog carries `dialog_type` / `message` / `default_prompt`; download carries `suggested_filename` / `guid` / `download_dir`. Response bodies and download bytes are NOT fetched in v0 — agents that need them can poll via `browser_evaluate` or a future kind-specific tool."
+    )]
+    pub async fn browser_expect_await(
+        &self,
+        Parameters(input): Parameters<expect::AwaitInput>,
+    ) -> Result<Json<expect::AwaitOutput>, ErrorData> {
+        expect::await_expectation(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Cancel a pending expectation, aborting its spawned task.
+    #[tool(
+        name = "browser_expect_cancel",
+        description = "Cancel a pending expectation. Drops the registry entry and aborts the spawned task so the lib-side `.matched()` future is torn down promptly instead of left to fire its own pre-await timeout. Returns `{ cancelled: true }`. Unknown ids surface `ExpectationNotFound`."
+    )]
+    pub async fn browser_expect_cancel(
+        &self,
+        Parameters(input): Parameters<expect::CancelInput>,
+    ) -> Result<Json<expect::CancelOutput>, ErrorData> {
+        expect::cancel(self.state.clone(), input).await.map(Json)
+    }
+}
+
 // ---------- combined router + ServerHandler -----------------------------
 
 impl ZendriverServer {
     /// Combine the always-on base router with the feature-gated interception
-    /// router. The `tool_handler` impl below points at this so a single
-    /// `ServerHandler::call_tool` / `list_tools` reaches every tool the
-    /// build was compiled with.
+    /// and expect routers. The `tool_handler` impl below points at this so a
+    /// single `ServerHandler::call_tool` / `list_tools` reaches every tool
+    /// the build was compiled with.
     pub fn combined_tool_router() -> ToolRouter<Self> {
         let router = Self::base_tool_router();
         #[cfg(feature = "interception")]
         let router = router + Self::intercept_tool_router();
+        #[cfg(feature = "expect")]
+        let router = router + Self::expect_tool_router();
         router
     }
 }

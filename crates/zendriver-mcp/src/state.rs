@@ -56,11 +56,23 @@ pub struct SessionState {
     pub rules: HashMap<RuleId, InterceptRuleHandle>,
 }
 
-/// Placeholder for a pending `expect_*` future; populated by the
-/// expectation tools in a later dispatch.
+/// Live handle to a pending `expect_*` expectation.
+///
+/// The expectation is awaited inside a tokio task spawned by
+/// `browser_expect_register`; the task forwards the result through
+/// [`Self::rx`] (a `oneshot::Receiver`) carrying either the JSON-encoded
+/// matched-event or a textual error from the spawned task. The
+/// [`Self::task`] handle is retained so `browser_expect_cancel` can `.abort()`
+/// the in-flight `.matched()` future instead of leaving it orphaned until its
+/// inner timeout fires.
+///
+/// `kind` is a static label ("request" / "response" / "dialog" / "download")
+/// for diagnostics — not currently surfaced, but cheap to keep alongside.
 #[cfg(feature = "expect")]
 pub struct ExpectationHandle {
-    pub kind: String,
+    pub kind: &'static str,
+    pub task: tokio::task::JoinHandle<()>,
+    pub rx: tokio::sync::oneshot::Receiver<Result<serde_json::Value, String>>,
 }
 
 /// One MCP interception rule = one `zendriver_interception::InterceptHandle`.

@@ -20,7 +20,7 @@ path = "src/lib.rs"
 [features]
 default = ["interception", "expect", "cloudflare", "fetcher"]
 interception = ["zendriver/interception", "dep:uuid"]
-expect       = ["zendriver/expect"]
+expect       = ["zendriver/expect", "dep:uuid"]
 cloudflare   = ["zendriver/cloudflare"]
 fetcher      = ["zendriver/fetcher"]
 integration-tests = []
