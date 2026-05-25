@@ -56,8 +56,10 @@ insta      = { workspace = true }
 rmcp       = { workspace = true, features = ["client", "transport-child-process", "transport-streamable-http-client", "transport-streamable-http-client-reqwest"] }
 # `test-support` enables `InterceptHandle::for_tests`, which the lifecycle
 # close-cleanup unit test uses to populate `SessionState::rules` without
-# spinning up a real interception actor.
-zendriver-interception = { workspace = true, features = ["test-support"] }
+# spinning up a real interception actor. Path-only (no version) so `cargo
+# publish` strips this dev-dep from the published manifest — avoids
+# requiring the `test-support` feature on crates.io's `zendriver-interception`.
+zendriver-interception = { path = "../zendriver-interception", features = ["test-support"] }
 
 [lints]
 workspace = true
