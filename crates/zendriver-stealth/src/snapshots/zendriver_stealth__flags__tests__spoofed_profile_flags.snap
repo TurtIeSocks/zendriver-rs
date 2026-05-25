@@ -22,3 +22,6 @@ expression: flags
 - "--webrtc-ip-handling-policy=disable_non_proxied_udp"
 - "--force-webrtc-ip-handling-policy"
 - "--disable-blink-features=AutomationControlled"
+- "--use-gl=angle"
+- "--use-angle=swiftshader"
+- "--enable-unsafe-swiftshader"
