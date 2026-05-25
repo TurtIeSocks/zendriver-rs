@@ -48,7 +48,9 @@ pub fn map_error(err: impl Into<McpServerError>) -> ErrorData {
     let (msg, suggested_next) = match &err {
         McpServerError::BrowserNotOpen => (err.to_string(), Some("browser_open")),
         McpServerError::NoCurrentTab => (err.to_string(), Some("browser_tab_new")),
-        McpServerError::ExpectationNotFound(_) => (err.to_string(), Some("browser_expect_register")),
+        McpServerError::ExpectationNotFound(_) => {
+            (err.to_string(), Some("browser_expect_register"))
+        }
         McpServerError::RuleNotFound(_) => (err.to_string(), Some("browser_intercept_add_rule")),
         McpServerError::Zendriver(ze) => map_zendriver(ze),
     };
@@ -133,6 +135,9 @@ mod tests {
             Ok(())
         }
         let e = map_error(inner().unwrap_err());
-        assert_eq!(e.data.as_ref().unwrap()["suggested_next"], "browser_tab_list");
+        assert_eq!(
+            e.data.as_ref().unwrap()["suggested_next"],
+            "browser_tab_list"
+        );
     }
 }
