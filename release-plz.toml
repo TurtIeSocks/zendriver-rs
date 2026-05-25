@@ -1,0 +1,36 @@
+# release-plz workspace configuration.
+# Docs: https://release-plz.ieni.dev/docs/config
+
+[workspace]
+# Run cargo-semver-checks before bumping. Catches API breaks that
+# conventional commits forgot to mark with `!`.
+semver_check = true
+
+# Generate per-crate CHANGELOG.md. The top-level CHANGELOG.md stays
+# human-curated (release-plz does not touch the workspace root).
+changelog_update = true
+
+# Open a GitHub Release for each published crate version, with the
+# changelog snippet as the release body.
+git_release_enable = true
+
+# Use conventional commits for bump magnitude inference. The template
+# below also drives the generated CHANGELOG entries.
+changelog_config = "release-plz-changelog.toml"
+
+# Don't release a crate just because its files changed — require a
+# conventional commit that maps to a bump (fix/feat/BREAKING). This is
+# the safer default; flip to `true` per-crate if we lose releases.
+# release_always = false  # ← default
+
+# Don't skip the cargo-publish verify step.
+publish_no_verify = false
+
+# Disable changelog generation for purely-internal crates? — none here,
+# all 7 are public.
+
+# zendriver-mcp is a binary crate. release-plz still publishes it so
+# `cargo install zendriver-mcp` works.
+[[package]]
+name = "zendriver-mcp"
+publish = true
