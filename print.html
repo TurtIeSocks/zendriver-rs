@@ -1793,26 +1793,33 @@ flow.</p>
 //!
 //! Sequence:
 //!   1. Launch a headless browser and navigate to a Cloudflare-protected
-//!      demo URL. Set this to whatever endpoint you actually want to clear;
-//!      `nopecha.com/demo/cloudflare` is the conventional public demo.
+//!      URL. Set this to whatever endpoint you actually want to clear.
 //!   2. Call [`Tab::cloudflare`] to construct a [`CloudflareBypass`] bound
 //!      to the tab's session.
 //!   3. Call [`CloudflareBypass::wait_for_clearance`] with a 30s budget.
-//!      The driver detects the Turnstile iframe + bounding box, dispatches
-//!      a raw `mousedown`/`mouseup` at the canonical (15% x, 50% y) offset
-//!      inside the iframe — the checkbox spot — and polls the page until
-//!      the `cf-turnstile-response` input picks up a non-empty token
-//!      (success) or the challenge container disappears (cookie shortcut).
+//!      The driver runs a single CDP poll loop that, per tick, looks for
+//!      the `cf-turnstile-response` token, the Turnstile challenge
+//!      iframe's bounding box (shadow-DOM aware), and any challenge marker
+//!      on the page. When the interactive iframe is present and we have
+//!      not yet clicked it, the driver dispatches a single raw left-click
+//!      at the canonical (15% x, 50% y) offset (Turnstile checkbox).
+//!      Resolves the first tick a token is observed or the iframe is gone
+//!      after a click.
 //!   4. Print the [`ClearanceOutcome`] enum variant + the page title.
 //!
 //! Outcomes:
 //!   - `TokenAcquired(_)` — Turnstile yielded a `cf-turnstile-response`
-//!     token; the page is cleared.
-//!   - `ChallengeGone` — the challenge container disappeared without
-//!     yielding a token (cookie shortcut).
-//!   - `Err(NoChallenge)` — there was nothing to clear at navigation time.
-//!     The demo site may have already passed you through; not a failure.
-//!   - `Err(ClearanceTimeout)` — 30s elapsed without resolution.
+//!     token, either after clicking the checkbox or directly (invisible
+//!     Turnstile, where the iframe never mounts).
+//!   - `ChallengeGone` — the interactive iframe was clicked and the
+//!     challenge container then disappeared without a token (e.g.
+//!     clearance-cookie shortcut).
+//!   - `Err(NoChallenge)` — the full timeout window elapsed without any
+//!     challenge markers ever being observed (no container, no hidden
+//!     input, no iframe). The page likely has no Cloudflare gate; not a
+//!     failure.
+//!   - `Err(ClearanceTimeout)` — 30s elapsed with markers present but
+//!     neither success state observed.
 //!
 //! Requires the `cloudflare` cargo feature:
 //! `cargo run --example cloudflare_bypass --features cloudflare`.
