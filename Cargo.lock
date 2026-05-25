@@ -3350,6 +3350,7 @@ dependencies = [
  "url",
  "uuid",
  "zendriver",
+ "zendriver-interception",
 ]
 
 [[package]]

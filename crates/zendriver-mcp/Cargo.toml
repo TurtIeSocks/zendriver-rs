@@ -54,6 +54,10 @@ insta      = { workspace = true }
 # rmcp client features for end-to-end smoke tests — child-process for stdio,
 # streamable-http-client-reqwest for HTTP.
 rmcp       = { workspace = true, features = ["client", "transport-child-process", "transport-streamable-http-client", "transport-streamable-http-client-reqwest"] }
+# `test-support` enables `InterceptHandle::for_tests`, which the lifecycle
+# close-cleanup unit test uses to populate `SessionState::rules` without
+# spinning up a real interception actor.
+zendriver-interception = { workspace = true, features = ["test-support"] }
 
 [lints]
 workspace = true

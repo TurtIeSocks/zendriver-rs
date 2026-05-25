@@ -111,11 +111,48 @@ pub struct CloseOutput {
 }
 
 /// Close the open browser. Idempotent — no error if no browser is open.
+///
+/// Resource cleanup ordering (when applicable cargo features are on):
+/// 1. **Expectations**: drain `s.expectations`, calling `.abort()` on each
+///    spawned tokio task. Without this, the task's inner `.matched()`
+///    future keeps a `Network.*` / `Page.*` subscription alive against a
+///    session that's about to disappear, and the task only unwinds when
+///    its `pre_await_timeout_ms` finally fires (up to 60s of orphaned work
+///    per expectation).
+/// 2. **Interception rules**: `s.rules.clear()` drops every stored
+///    `InterceptRuleHandle`, whose embedded `InterceptHandle::Drop`
+///    cancels the actor (fire-and-forget `Fetch.disable`). Doing this
+///    *before* `Browser::close` means the actor's teardown happens while
+///    the transport is still live, so the disable round-trip actually
+///    lands instead of being eaten by a closed connection.
+/// 3. **Browser**: only then do we `b.close().await`, which tears down
+///    the transport and the CDP connection.
 pub async fn close(
     state: Arc<Mutex<SessionState>>,
     _: EmptyInput,
 ) -> Result<CloseOutput, ErrorData> {
     let mut s = state.lock().await;
+
+    #[cfg(feature = "expect")]
+    {
+        // Drain + abort: dropping the handle alone leaks the spawned task
+        // until its pre_await_timeout fires. `.abort()` is the only way to
+        // promptly tear down the `.matched()` future the task is parked
+        // on.
+        for (_, h) in s.expectations.drain() {
+            h.task.abort();
+        }
+    }
+
+    #[cfg(feature = "interception")]
+    {
+        // `InterceptHandle::Drop` cancels the per-rule actor (fire-and-
+        // forget `Fetch.disable`). Doing this before `Browser::close`
+        // gives each `Fetch.disable` a live transport to land on; doing
+        // it after would race a closed connection.
+        s.rules.clear();
+    }
+
     if let Some(b) = s.browser.take() {
         b.close()
             .await
@@ -192,6 +229,7 @@ pub async fn status(
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -210,5 +248,101 @@ mod tests {
         assert_eq!(out.tab_count, 0);
         assert!(out.current_tab.is_none());
         assert_eq!(out.profile, StealthProfileChoice::Auto);
+    }
+
+    /// `close` drains every entry in `s.expectations`, calling `.abort()`
+    /// on each spawned task. Without this the orphan tasks remain parked
+    /// on their `.matched()` futures until `pre_await_timeout_ms` fires.
+    #[cfg(feature = "expect")]
+    #[tokio::test]
+    async fn close_drains_and_aborts_expectations() {
+        use crate::state::ExpectationHandle;
+
+        let state = Arc::new(Mutex::new(SessionState::new()));
+
+        // Spawn a long-lived sentinel task. We hold the oneshot Sender so
+        // the task can't complete on its own — `.abort()` is the only way
+        // out. After `close` we check the task's join handle reports
+        // cancellation.
+        let (_tx_keep_alive, rx) =
+            tokio::sync::oneshot::channel::<Result<serde_json::Value, String>>();
+        let task = tokio::spawn(async move {
+            // Park indefinitely. `close()` must abort us.
+            std::future::pending::<()>().await;
+        });
+        let join_handle_for_check = task.abort_handle();
+        {
+            let mut s = state.lock().await;
+            s.expectations.insert(
+                "test-id".into(),
+                ExpectationHandle {
+                    kind: "request",
+                    task,
+                    rx,
+                },
+            );
+            assert_eq!(s.expectations.len(), 1, "precondition: expectation present");
+        }
+
+        let out = close(state.clone(), EmptyInput {}).await.expect("close ok");
+        assert!(out.ok);
+
+        let s = state.lock().await;
+        assert!(
+            s.expectations.is_empty(),
+            "expectations map must be empty after close (was: {})",
+            s.expectations.len(),
+        );
+        // Yield once to let the abort signal propagate so the task is
+        // observably finished.
+        drop(s);
+        tokio::task::yield_now().await;
+        assert!(
+            join_handle_for_check.is_finished(),
+            "expectation task should be aborted (and thus finished) after close",
+        );
+    }
+
+    /// `close` clears every entry in `s.rules`. Each
+    /// `InterceptRuleHandle::_handle` drop fires the interception actor's
+    /// cancel token (which would dispatch `Fetch.disable` against the live
+    /// transport in a real session — here we just verify the map is
+    /// emptied).
+    #[cfg(feature = "interception")]
+    #[tokio::test]
+    async fn close_clears_interception_rules() {
+        use crate::state::InterceptRuleHandle;
+
+        let state = Arc::new(Mutex::new(SessionState::new()));
+        {
+            let mut s = state.lock().await;
+            s.rules.insert(
+                "rule-a".into(),
+                InterceptRuleHandle {
+                    pattern: "*/ads/*".into(),
+                    action_kind: "block",
+                    _handle: zendriver_interception::InterceptHandle::for_tests(),
+                },
+            );
+            s.rules.insert(
+                "rule-b".into(),
+                InterceptRuleHandle {
+                    pattern: "*/api/*".into(),
+                    action_kind: "respond",
+                    _handle: zendriver_interception::InterceptHandle::for_tests(),
+                },
+            );
+            assert_eq!(s.rules.len(), 2, "precondition: rules present");
+        }
+
+        let out = close(state.clone(), EmptyInput {}).await.expect("close ok");
+        assert!(out.ok);
+
+        let s = state.lock().await;
+        assert!(
+            s.rules.is_empty(),
+            "rules map must be empty after close (was: {})",
+            s.rules.len(),
+        );
     }
 }
