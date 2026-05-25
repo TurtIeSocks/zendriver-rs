@@ -20,7 +20,7 @@ use tokio::sync::Mutex;
 
 use crate::state::SessionState;
 use crate::tools::common::EmptyInput;
-use crate::tools::{find, frames, lifecycle, navigation, reads, stealth, tabs};
+use crate::tools::{actions, find, frames, lifecycle, navigation, reads, stealth, tabs};
 
 /// rmcp handler carrying the per-session [`SessionState`].
 ///
@@ -274,6 +274,122 @@ impl ZendriverServer {
         reads::element_state(self.state.clone(), input)
             .await
             .map(Json)
+    }
+
+    // ---------- actions --------------------------------------------------
+
+    /// Click an element with realistic Bezier-path cursor approach.
+    #[tool(
+        name = "browser_click",
+        description = "Click an element (realistic Bezier-path cursor + full actionability gate). Set `button` to `middle` / `right` for non-primary buttons or `click_count: 2` for a double-click. `return_snapshot: true` includes the post-click trimmed page HTML."
+    )]
+    pub async fn browser_click(
+        &self,
+        Parameters(input): Parameters<actions::ClickInput>,
+    ) -> Result<Json<actions::ActionOutput>, ErrorData> {
+        actions::click(self.state.clone(), input).await.map(Json)
+    }
+
+    /// Hover the cursor over an element's bbox center.
+    #[tool(
+        name = "browser_hover",
+        description = "Hover the cursor over an element's bbox center via a realistic Bezier-interpolated mouse path. Common pre-step for revealing dropdown menus / tooltips."
+    )]
+    pub async fn browser_hover(
+        &self,
+        Parameters(input): Parameters<actions::HoverInput>,
+    ) -> Result<Json<actions::ActionOutput>, ErrorData> {
+        actions::hover(self.state.clone(), input).await.map(Json)
+    }
+
+    /// Type text into an element with realistic per-character timing.
+    #[tool(
+        name = "browser_type",
+        description = "Type `text` into an element with realistic per-character timing (occasional typos + thinking pauses per the active stealth profile). When `clear_first: true`, the element's value is reset before typing — useful for replacing pre-filled inputs."
+    )]
+    pub async fn browser_type(
+        &self,
+        Parameters(input): Parameters<actions::TypeInput>,
+    ) -> Result<Json<actions::ActionOutput>, ErrorData> {
+        actions::type_text(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Focus an element + dispatch a single keystroke.
+    #[tool(
+        name = "browser_press",
+        description = "Focus an element + dispatch a single keystroke. `key` accepts a special-key name (Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, Space, Home, End, PageUp, PageDown, F1..F12, etc., case-insensitive) OR a single character (typed as `Key::Char`)."
+    )]
+    pub async fn browser_press(
+        &self,
+        Parameters(input): Parameters<actions::PressInput>,
+    ) -> Result<Json<actions::ActionOutput>, ErrorData> {
+        actions::press(self.state.clone(), input).await.map(Json)
+    }
+
+    /// Set an element's `value` directly + fire `input`/`change` events.
+    #[tool(
+        name = "browser_set_value",
+        description = "Set an element's `value` directly + fire bubbled `input` and `change` events. Faster than `browser_type` when keystroke realism doesn't matter, but still routes through the event handlers React-style controlled inputs listen on."
+    )]
+    pub async fn browser_set_value(
+        &self,
+        Parameters(input): Parameters<actions::SetValueInput>,
+    ) -> Result<Json<actions::ActionOutput>, ErrorData> {
+        actions::set_value(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Clear an element's `value` and fire a bubbled `input` event.
+    #[tool(
+        name = "browser_clear",
+        description = "Clear an element's `value` by assigning `''` and firing a bubbled `input` event. Omits `change` event + focus + Backspace sequence — for contenteditable / non-`<input>` clearing semantics, use `browser_type` with a leading select-all + Delete."
+    )]
+    pub async fn browser_clear(
+        &self,
+        Parameters(input): Parameters<actions::ClearInput>,
+    ) -> Result<Json<actions::ActionOutput>, ErrorData> {
+        actions::clear(self.state.clone(), input).await.map(Json)
+    }
+
+    /// Move keyboard focus to an element.
+    #[tool(
+        name = "browser_focus",
+        description = "Move keyboard focus to an element by calling `el.focus()`. No snapshot field — focus has no visual side effect for the agent to inspect."
+    )]
+    pub async fn browser_focus(
+        &self,
+        Parameters(input): Parameters<actions::FocusInput>,
+    ) -> Result<Json<actions::AckOutput>, ErrorData> {
+        actions::focus(self.state.clone(), input).await.map(Json)
+    }
+
+    /// Scroll an element into the center of its scroll container.
+    #[tool(
+        name = "browser_scroll_into_view",
+        description = "Scroll an element into the center of its scroll container (`block: 'center', behavior: 'instant'`). Synchronous — the post-scroll bbox is final by the time the call returns."
+    )]
+    pub async fn browser_scroll_into_view(
+        &self,
+        Parameters(input): Parameters<actions::ScrollInput>,
+    ) -> Result<Json<actions::AckOutput>, ErrorData> {
+        actions::scroll_into_view(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Attach files to an `<input type=\"file\">` element.
+    #[tool(
+        name = "browser_upload",
+        description = "Attach files to an `<input type=\"file\">` element via CDP `DOM.setFileInputFiles`. Bypasses the OS file picker; paths must exist on the host running the MCP server (not the client's machine)."
+    )]
+    pub async fn browser_upload(
+        &self,
+        Parameters(input): Parameters<actions::UploadInput>,
+    ) -> Result<Json<actions::AckOutput>, ErrorData> {
+        actions::upload(self.state.clone(), input).await.map(Json)
     }
 }
 

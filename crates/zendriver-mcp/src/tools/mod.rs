@@ -8,6 +8,7 @@
 //! handlers makes it easy to grow new tool categories without bloating
 //! `server.rs`.
 
+pub mod actions;
 pub mod common;
 pub mod find;
 pub mod frames;
