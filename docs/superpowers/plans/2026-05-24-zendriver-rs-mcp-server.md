@@ -20,7 +20,13 @@ Recon against live source (rmcp v1.7.0 at `/Users/rin/GitHub/rust-sdk`, zendrive
 
 The plan's `server.tool(name, desc, handler)` pattern is wrong. Real rmcp uses `#[tool_router]` on an impl block, `#[tool]` on methods, and emits `#[tool_handler] impl ServerHandler` for you.
 
-**Cargo features:** `["server", "macros", "schemars", "transport-streamable-http-server"]`. `schemars` **1.0+** (not 0.8 as plan said).
+**Cargo features:** `["server", "macros", "schemars", "transport-io", "transport-streamable-http-server"]`. `schemars` **1.0+** (not 0.8 as plan said). `transport-io` is required for `rmcp::transport::stdio()` — earlier draft incorrectly said server pulled it in automatically.
+
+**Zendriver feature note:** the `zendriver` crate has **no `stealth` cargo feature** — stealth is always-on in the lib. `zendriver-mcp`'s `Cargo.toml` should NOT declare `stealth = ["zendriver/stealth"]`. Default-features for the MCP binary: `["interception", "expect", "cloudflare", "fetcher"]`.
+
+**rmcp client API:** use `CallToolRequestParams` (plural) — the singular `CallToolRequestParam` is a deprecated alias that warns under `-D warnings`. Construction: `CallToolRequestParams::new(name).with_arguments(json_map)` where `json_map` is `serde_json::Map<String, Value>`. Result's `content` is `Vec<Content>`, not `Option<Vec<Content>>`.
+
+**`#[tool_router(server_handler)]` shortcut:** does NOT require a `tool_router` field on the struct (that pattern is for the explicit `#[tool_handler(router = self.tool_router)]` form). With the shortcut, the macro references a static `Self::tool_router()` from the auto-emitted `ServerHandler` impl — your struct only needs the application state fields.
 
 **Canonical pattern (use as template for all tool modules):**
 
