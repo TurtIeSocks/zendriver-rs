@@ -22,7 +22,8 @@ use tokio::sync::Mutex;
 use crate::state::SessionState;
 use crate::tools::common::EmptyInput;
 use crate::tools::{
-    actions, eval, find, frames, lifecycle, navigation, reads, snapshot, stealth, tabs,
+    actions, cookies, eval, find, frames, lifecycle, navigation, reads, snapshot, stealth, storage,
+    tabs,
 };
 
 /// rmcp handler carrying the per-session [`SessionState`].
@@ -445,6 +446,136 @@ impl ZendriverServer {
         Parameters(input): Parameters<eval::EvalInput>,
     ) -> Result<Json<eval::EvalOutput>, ErrorData> {
         eval::evaluate_main(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    // ---------- cookies --------------------------------------------------
+
+    /// Fetch the browser's cookies.
+    #[tool(
+        name = "browser_cookies_get",
+        description = "Fetch the browser's cookies. With `url` set, returns only cookies that would be sent for that URL (CDP `Network.getCookies`); otherwise returns every cookie in the store (`Storage.getCookies`). `name` (optional) post-filters by exact-match cookie name. Returns `{ cookies: [...] }`."
+    )]
+    pub async fn browser_cookies_get(
+        &self,
+        Parameters(input): Parameters<cookies::CookiesGetInput>,
+    ) -> Result<Json<cookies::CookiesGetOutput>, ErrorData> {
+        cookies::cookies_get(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Set many cookies in one CDP round-trip.
+    #[tool(
+        name = "browser_cookies_set",
+        description = "Set many cookies in one CDP round-trip (`Storage.setCookies`). Each cookie carries the usual `name / value / domain / path / expires / http_only / secure / same_site / url` fields; `url`, when present, lets CDP infer `domain` + `path` + `secure`. Existing cookies matching `(name, domain, path)` are overwritten."
+    )]
+    pub async fn browser_cookies_set(
+        &self,
+        Parameters(input): Parameters<cookies::CookiesSetInput>,
+    ) -> Result<Json<cookies::CookiesSetOutput>, ErrorData> {
+        cookies::cookies_set(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Delete cookies by name (optionally narrowed by domain / path).
+    #[tool(
+        name = "browser_cookies_delete",
+        description = "Delete cookies matching `name` plus optional `domain` / `path` narrowers (`Network.deleteCookies`). When `domain` and `path` are omitted, every cookie with the given name is removed across all domains and paths. Missing cookies are silently ignored (CDP returns no match count)."
+    )]
+    pub async fn browser_cookies_delete(
+        &self,
+        Parameters(input): Parameters<cookies::CookiesDeleteInput>,
+    ) -> Result<Json<cookies::CookiesDeleteOutput>, ErrorData> {
+        cookies::cookies_delete(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Clear the entire browser cookie store.
+    #[tool(
+        name = "browser_cookies_clear",
+        description = "Clear the entire browser cookie store via `Storage.clearCookies`. No filters — for targeted deletion use `browser_cookies_delete`."
+    )]
+    pub async fn browser_cookies_clear(
+        &self,
+        Parameters(input): Parameters<EmptyInput>,
+    ) -> Result<Json<cookies::CookiesClearOutput>, ErrorData> {
+        cookies::cookies_clear(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Persist or restore the browser's cookies via on-disk JSON.
+    #[tool(
+        name = "browser_cookies_persist",
+        description = "Persist cookies to disk (`direction: save`) or restore from disk (`direction: load`). Format is pretty-printed `serde_json` of the cookie array — same shape `browser_cookies_get` returns. `path` is on the MCP server host, not the client's machine. Returns `{ count, direction }`."
+    )]
+    pub async fn browser_cookies_persist(
+        &self,
+        Parameters(input): Parameters<cookies::CookiesPersistInput>,
+    ) -> Result<Json<cookies::CookiesPersistOutput>, ErrorData> {
+        cookies::cookies_persist(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    // ---------- storage --------------------------------------------------
+
+    /// Read entries from local- or session-storage.
+    #[tool(
+        name = "browser_storage_get",
+        description = "Read entries from `local` or `session` storage on the current tab's origin. With `key` set, returns `{ key: value }` for that one key (empty `values` map if the key is absent). Without `key`, returns every entry. `values` is sorted lexicographically for stable agent diffs."
+    )]
+    pub async fn browser_storage_get(
+        &self,
+        Parameters(input): Parameters<storage::StorageGetInput>,
+    ) -> Result<Json<storage::StorageGetOutput>, ErrorData> {
+        storage::storage_get(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Insert or replace one storage entry.
+    #[tool(
+        name = "browser_storage_set",
+        description = "Set `key` to `value` in `local` or `session` storage on the current tab's origin (`DOMStorage.setDOMStorageItem`). Value is treated as opaque text by Chrome — stringify non-string values on the caller side."
+    )]
+    pub async fn browser_storage_set(
+        &self,
+        Parameters(input): Parameters<storage::StorageSetInput>,
+    ) -> Result<Json<storage::StorageSetOutput>, ErrorData> {
+        storage::storage_set(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Remove one storage entry by key.
+    #[tool(
+        name = "browser_storage_delete",
+        description = "Remove `key` from `local` or `session` storage on the current tab's origin (`DOMStorage.removeDOMStorageItem`). Missing keys are silently ignored (matches the Storage API `removeItem` contract)."
+    )]
+    pub async fn browser_storage_delete(
+        &self,
+        Parameters(input): Parameters<storage::StorageDeleteInput>,
+    ) -> Result<Json<storage::StorageDeleteOutput>, ErrorData> {
+        storage::storage_delete(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Empty the chosen storage area for the current tab's origin.
+    #[tool(
+        name = "browser_storage_clear",
+        description = "Empty `local` or `session` storage for the current tab's origin (`DOMStorage.clear`). Equivalent to calling `localStorage.clear()` / `sessionStorage.clear()` from page JS."
+    )]
+    pub async fn browser_storage_clear(
+        &self,
+        Parameters(input): Parameters<storage::StorageClearInput>,
+    ) -> Result<Json<storage::StorageClearOutput>, ErrorData> {
+        storage::storage_clear(self.state.clone(), input)
             .await
             .map(Json)
     }

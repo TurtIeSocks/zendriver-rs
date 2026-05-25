@@ -10,6 +10,7 @@
 
 pub mod actions;
 pub mod common;
+pub mod cookies;
 pub mod eval;
 pub mod find;
 pub mod frames;
@@ -18,4 +19,5 @@ pub mod navigation;
 pub mod reads;
 pub mod snapshot;
 pub mod stealth;
+pub mod storage;
 pub mod tabs;
