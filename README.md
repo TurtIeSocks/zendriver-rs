@@ -1,6 +1,6 @@
 # zendriver-rs
 
-Async-first, undetectable browser automation via the Chrome DevTools Protocol.
+Async-first, undetectable browser automation via the Chrome DevTools Protocol — drive real Chrome from Rust, or hand the keys to an LLM agent over the [Model Context Protocol](https://modelcontextprotocol.io/).
 
 [![crates.io](https://img.shields.io/crates/v/zendriver.svg)](https://crates.io/crates/zendriver)
 [![docs.rs](https://docs.rs/zendriver/badge.svg)](https://docs.rs/zendriver)
@@ -12,7 +12,7 @@ Async-first, undetectable browser automation via the Chrome DevTools Protocol.
 
 A Rust port of [zendriver](https://github.com/cdpdriver/zendriver). Drives Chrome via raw CDP — no WebDriver, no JS shim — with anti-detection patches baked in by default.
 
-📖 **[User guide & full documentation →](https://turtiesocks.github.io/zendriver-rs/)** · 🦀 **[API reference (docs.rs) →](https://docs.rs/zendriver)**
+📖 **[User guide & full documentation →](https://turtiesocks.github.io/zendriver-rs/)** · 🦀 **[API reference (docs.rs) →](https://docs.rs/zendriver)** · 🤖 **[MCP server for AI agents →](https://turtiesocks.github.io/zendriver-rs/mcp.html)**
 
 ## Quick example
 
@@ -55,9 +55,9 @@ More working examples in [`crates/zendriver/examples/`](crates/zendriver/example
 
 Separate binary crate (not a feature on `zendriver`):
 
-| Crate           | Use case                                                                                   | Install                                     |
-| --------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------- |
-| `zendriver-mcp` | [Model Context Protocol](https://modelcontextprotocol.io/) server — 49 tools, stdio + HTTP | `cargo install zendriver-mcp` ([docs](https://turtiesocks.github.io/zendriver-rs/mcp.html)) |
+| Crate           | Use case                                                                                                                         | Install                                                                                     |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `zendriver-mcp` | Drive a stealth Chrome from any LLM agent — [Model Context Protocol](https://modelcontextprotocol.io/) server, 49 tools, stdio + streamable HTTP | `cargo install zendriver-mcp` ([docs](https://turtiesocks.github.io/zendriver-rs/mcp.html)) |
 
 ## Install
 
@@ -87,15 +87,40 @@ cargo add zendriver --features "interception expect cloudflare fetcher"
 
 Adds request interception, `expect()` matchers, Cloudflare Turnstile bypass, and the Chrome for Testing fetcher.
 
-## MCP server
+## Drive a stealth browser from your AI agent
 
-For driving zendriver-rs from LLM agents, `zendriver-mcp` exposes 49 [Model Context Protocol](https://modelcontextprotocol.io/) tools over stdio + streamable HTTP. Drop-in for Claude Desktop, Claude Code, or any MCP-compatible client.
+`zendriver-mcp` is a **first-class [Model Context Protocol](https://modelcontextprotocol.io/) server** that hands the entire zendriver-rs surface to any LLM client — Claude Desktop, Claude Code, Cursor, or your own agent loop. **49 tools**, two transports (stdio + streamable HTTP), and the same stealth-by-default fingerprinting baked into the lib. Unlike generic browser MCP servers, this one bypasses Cloudflare Turnstile, ships an isolated-world JS eval that survives anti-bot detection, and lets agents persist auth state across sessions.
 
 ```bash
 cargo install zendriver-mcp
 ```
 
-See the [MCP chapter](https://turtiesocks.github.io/zendriver-rs/mcp.html) for the Claude Desktop config snippet, CLI flags, and full tool reference.
+**Claude Desktop / Claude Code config:**
+
+```json
+{
+  "mcpServers": {
+    "zendriver": {
+      "command": "zendriver-mcp"
+    }
+  }
+}
+```
+
+**What agents get out of the box:**
+
+- **Stealth navigation** — `browser_open`, `browser_goto`, `browser_back/forward/reload`, `browser_wait_for_idle`, plus a runtime-swappable `browser_set_stealth_profile` (auto / native / spoof_macos / spoof_linux / spoof_windows)
+- **Selector-based find + actions** — one `Selector` arg works across `browser_find`, `browser_click`, `browser_type`, `browser_press`, `browser_set_value`, `browser_upload`, etc., with CSS / XPath / visible-text / ARIA-role lookups and per-frame scoping
+- **Three ways to "see" the page** — `browser_html` (trimmed DOM), `browser_screenshot` (PNG / JPEG / WebP as inline image content), `browser_element_state` (visibility / geometry / attrs)
+- **Stateful primitives** agents need for real work — `browser_cookies_persist` for save/load auth, full `browser_storage_*`, multi-tab management, frame traversal
+- **Anti-bot superpowers** (gated cargo features, on by default for the published binary):
+  - `browser_solve_turnstile` — Cloudflare Turnstile bypass without a CAPTCHA-solving service
+  - `browser_intercept_*` — block/redirect/respond/modify requests via CDP `Fetch.*`
+  - `browser_expect_register / _await` — Playwright-style "wait for response/dialog/download" matchers, split across MCP calls so the agent can act in between
+  - `browser_install_chrome` — pull a pinned Chrome-for-Testing build on demand
+- **Actionable errors** — every error carries an `_meta.suggested_next` hint pointing the agent at the right recovery tool (e.g. `ElementNotFound` → "try `browser_html` to inspect")
+
+See the [MCP chapter](https://turtiesocks.github.io/zendriver-rs/mcp.html) for the full tool reference, CLI flags, HTTP-mode operator notes, and troubleshooting guide.
 
 ## Phases
 
@@ -116,6 +141,8 @@ Six development phases shipped into the v0.1.0 release. The [mdBook](https://tur
 | Stealth out-of-box       | yes (default)           | no                | no              | no              | no              |
 | Multi-tab                | yes (first-class)       | yes               | yes             | yes             | yes             |
 | Interception             | yes (`Fetch.*` wrapper) | yes (raw)         | no (proxy-only) | partial         | no (proxy-only) |
+| Cloudflare bypass        | yes (`zendriver-cloudflare`) | no           | no              | no              | no              |
+| MCP server for AI agents | yes (`zendriver-mcp`, 49 tools) | no        | no              | no              | no              |
 | License                  | MIT OR Apache-2.0       | MIT OR Apache-2.0 | Apache-2.0      | MIT             | MIT             |
 | Async runtime            | tokio                   | tokio / async-std | tokio           | sync            | tokio           |
 
