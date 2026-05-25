@@ -36,6 +36,16 @@ async fn browser_status_round_trip_over_stdio() {
         names.contains(&"browser_status"),
         "browser_status should be advertised; tools: {names:?}"
     );
+    // The find / element_state surface lands in this dispatch — make sure
+    // the wiring landed in `server.rs` and not just in the per-module
+    // source. A missing delegator would silently drop the tool from the
+    // advertised list.
+    for expected in ["browser_find", "browser_find_all", "browser_element_state"] {
+        assert!(
+            names.contains(&expected),
+            "{expected} should be advertised; tools: {names:?}"
+        );
+    }
 
     let result = client
         .call_tool(

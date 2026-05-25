@@ -81,9 +81,11 @@ impl Selector {
         Ok(())
     }
 
-    // TODO(find-tools): impl Selector::apply(&self, FindBuilder) -> FindBuilder
-    // once tools/find.rs lands. The bridge lives there because it depends on
-    // zendriver's FindBuilder + AriaRole + Regex types.
+    // The `Selector` → `FindBuilder` bridge lives in [`crate::tools::find`]
+    // (specifically [`crate::tools::find::resolve`] and `resolve_all`). The
+    // bridge depends on zendriver types (`FindBuilder`, `AriaRole`, `Regex`)
+    // that `selectors.rs` deliberately doesn't pull in — keeping this wire
+    // struct decoupled from CDP-shaped concerns.
 }
 
 #[cfg(test)]

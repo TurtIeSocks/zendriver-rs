@@ -20,7 +20,7 @@ use tokio::sync::Mutex;
 
 use crate::state::SessionState;
 use crate::tools::common::EmptyInput;
-use crate::tools::{frames, lifecycle, navigation, stealth, tabs};
+use crate::tools::{find, frames, lifecycle, navigation, reads, stealth, tabs};
 
 /// rmcp handler carrying the per-session [`SessionState`].
 ///
@@ -230,6 +230,48 @@ impl ZendriverServer {
         Parameters(input): Parameters<stealth::SetStealthProfileInput>,
     ) -> Result<Json<stealth::SetStealthProfileOutput>, ErrorData> {
         stealth::set_stealth_profile(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    // ---------- find -----------------------------------------------------
+
+    /// Resolve a Selector to one element and return its descriptor.
+    #[tool(
+        name = "browser_find",
+        description = "Resolve a Selector to a single element on the current tab. Returns `{ found: false, element: null }` when no element matches within the selector's timeout (instead of an error) — agents can branch on existence without try/catch."
+    )]
+    pub async fn browser_find(
+        &self,
+        Parameters(input): Parameters<find::FindInput>,
+    ) -> Result<Json<find::FindOutput>, ErrorData> {
+        find::find(self.state.clone(), input).await.map(Json)
+    }
+
+    /// Resolve a Selector to ALL matches (up to `limit`).
+    #[tool(
+        name = "browser_find_all",
+        description = "Resolve a Selector to ALL matching elements on the current tab (up to `limit`, default 50). `{ elements: [] }` is returned when nothing matches — never an error."
+    )]
+    pub async fn browser_find_all(
+        &self,
+        Parameters(input): Parameters<find::FindAllInput>,
+    ) -> Result<Json<find::FindAllOutput>, ErrorData> {
+        find::find_all(self.state.clone(), input).await.map(Json)
+    }
+
+    // ---------- reads ----------------------------------------------------
+
+    /// Resolve a Selector and report selected state fields.
+    #[tool(
+        name = "browser_element_state",
+        description = "Inspect a single element's state. `include` picks which fields to populate (default `all`). `in_viewport` is reserved for v1 and always returns null. Missing-element returns `{ exists: false }` rather than an error."
+    )]
+    pub async fn browser_element_state(
+        &self,
+        Parameters(input): Parameters<reads::ElementStateInput>,
+    ) -> Result<Json<reads::ElementState>, ErrorData> {
+        reads::element_state(self.state.clone(), input)
             .await
             .map(Json)
     }

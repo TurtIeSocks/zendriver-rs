@@ -3204,6 +3204,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "clap",
+ "regex",
  "rmcp",
  "schemars",
  "serde",
