@@ -8,13 +8,13 @@
 //! fingerprint check. Run with [`BrowserBuilder::stealth`] enabled or this
 //! bypass will fail on nearly all real Imperva-protected sites.
 //!
-//! Public API stub — modules land in subsequent tasks.
-//!
 //! [`BrowserBuilder::stealth`]: https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.stealth
 
+pub mod bypass;
 pub mod detection;
 pub mod error;
 
+pub use bypass::{CaptchaChallenge, CaptchaSolution, ClearanceOutcome, ImpervaBypass};
 pub use detection::{
     CaptchaKind, CookieSnapshot, DetectionSnapshot, ImpervaSurface, detect_surface,
 };
