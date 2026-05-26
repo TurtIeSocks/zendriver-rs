@@ -496,6 +496,60 @@ pub(crate) struct BrowserInner {
     pub(crate) proxy_auth_handle: std::sync::OnceLock<zendriver_interception::InterceptHandle>,
 }
 
+impl BrowserInner {
+    /// Wraps `Target.disposeBrowserContext`, the CDP command that destroys
+    /// an incognito-style [browser context][1] previously created via
+    /// `Target.createBrowserContext`. Sent at browser scope (no
+    /// `sessionId`).
+    ///
+    /// Used by [`crate::BrowserContext`]'s `Drop` impl to free its backing
+    /// context when the handle goes out of scope.
+    ///
+    /// [1]: https://chromedevtools.github.io/devtools-protocol/tot/Target/#method-disposeBrowserContext
+    pub(crate) async fn dispose_browser_context(&self, id: &str) -> Result<(), ZendriverError> {
+        self.conn
+            .call_raw(
+                "Target.disposeBrowserContext",
+                json!({ "browserContextId": id }),
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+}
+
+/// Test-only helper that constructs a minimal [`BrowserInner`] backed by a
+/// caller-supplied [`Connection`] (typically the consumer side of a
+/// [`zendriver_transport::testing::MockConnection`] pair). Mirrors the
+/// shape `launch` produces post-step-12: a main tab keyed under `"S1"` /
+/// target id `"T1"` in the registry.
+///
+/// Used by inline unit tests that need to exercise [`BrowserInner`]
+/// methods without launching Chrome. Subsequent tasks in this series
+/// (per-context proxy support) reuse the same helper.
+#[cfg(test)]
+pub(crate) fn test_only_inner_from_conn(conn: Connection) -> Arc<BrowserInner> {
+    let input_profile = zendriver_stealth::InputProfile::native();
+    Arc::new_cyclic(|weak: &std::sync::Weak<BrowserInner>| {
+        let main_session = SessionHandle::new(conn.clone(), "S1");
+        let main_input = InputController::new(input_profile.clone());
+        let main_tab = Tab::new(main_session, weak.clone(), main_input, "T1".to_string());
+        let mut map = HashMap::new();
+        map.insert("S1".to_string(), main_tab.clone());
+        BrowserInner {
+            conn,
+            main_tab,
+            child: tokio::sync::Mutex::new(None),
+            _user_data: None,
+            stealth_input_profile: input_profile,
+            tabs: tokio::sync::RwLock::new(map),
+            tabs_changed: tokio::sync::Notify::new(),
+            #[cfg(feature = "interception")]
+            proxy_auth_handle: std::sync::OnceLock::new(),
+        }
+    })
+}
+
 /// [`TargetObserver`] that maintains [`BrowserInner::tabs`] in step with
 /// CDP target lifecycle events.
 ///
@@ -1895,6 +1949,38 @@ mod tests {
         let parent_tab = inner.tabs.read().await.get("S1").cloned().unwrap();
         assert!(parent_tab.inner.frames.read().await.is_empty());
 
+        conn.shutdown();
+    }
+
+    // ----- BrowserInner::dispose_browser_context (per-context proxy) -----
+
+    /// Asserts [`BrowserInner::dispose_browser_context`] issues exactly one
+    /// `Target.disposeBrowserContext` CDP command at browser scope (no
+    /// `sessionId`) carrying the supplied `browserContextId`, and that the
+    /// awaited future resolves `Ok` once the mock replies.
+    ///
+    /// Wired into the per-context proxy support series: [`crate::BrowserContext`]'s
+    /// `Drop` impl calls this method to release the context when the handle
+    /// goes out of scope.
+    #[tokio::test]
+    async fn dispose_browser_context_sends_target_dispose() {
+        use zendriver_transport::testing::MockConnection;
+
+        let (mut mock, conn) = MockConnection::pair();
+        let inner = test_only_inner_from_conn(conn.clone());
+
+        let inner_for_task = inner.clone();
+        let fut = tokio::spawn(async move {
+            inner_for_task.dispose_browser_context("ctx-abc").await
+        });
+
+        let id = mock.expect_cmd("Target.disposeBrowserContext").await;
+        assert_eq!(mock.last_sent()["params"]["browserContextId"], "ctx-abc");
+        // Browser-scope command — no session_id.
+        assert!(mock.last_sent().get("sessionId").is_none());
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
         conn.shutdown();
     }
 }
