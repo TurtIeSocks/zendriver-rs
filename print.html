@@ -1968,6 +1968,113 @@ challenge; subsequent navigations on the same <code>user_data_dir</code> are
 usually cookie-shortcut clears and resolve in &lt;1 s via
 <code>ChallengeGone</code>.</li>
 </ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="imperva-waf--incapsula"><a class="header" href="#imperva-waf--incapsula">Imperva WAF / Incapsula</a></h1>
+<p>The <code>imperva</code> cargo feature (sub-crate: <code>zendriver-imperva</code>) provides a
+passive bypass driver for sites protected by Imperva WAF / Incapsula. It
+detects which Imperva surface is active (modern reese84 bot management,
+legacy Incapsula <code>___utmvc</code> flow, or a CAPTCHA escalation), then polls
+the page until both clearance signals — <code>reese84</code> cookie set AND body
+markers cleared — are observed.</p>
+<blockquote>
+<p><strong>Stealth required.</strong> Imperva's reese84 sensor is itself a browser
+fingerprint check. Run with <code>BrowserBuilder::stealth</code> enabled or the
+bypass will fail on nearly all real Imperva-protected sites.</p>
+</blockquote>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick start</a></h2>
+<pre><pre class="playground"><code class="language-rust no_run">use std::time::Duration;
+use zendriver::stealth::StealthProfile;
+use zendriver::{Browser, ImpervaClearanceOutcome};
+
+#[tokio::main]
+async fn main() -&gt; zendriver::Result&lt;()&gt; {
+    let browser = Browser::builder()
+        .stealth(StealthProfile::spoofed())
+        .launch()
+        .await?;
+    let tab = browser.main_tab();
+    tab.goto("https://protected.example.com").await?;
+    tab.wait_for_load().await?;
+
+    let outcome = tab
+        .imperva()
+        .timeout(Duration::from_secs(60))
+        .wait_for_clearance()
+        .await?;
+
+    match outcome {
+        ImpervaClearanceOutcome::TokenAcquired { reese84, .. } =&gt; {
+            println!("got token: {reese84}")
+        }
+        ImpervaClearanceOutcome::ChallengeGone =&gt; println!("legacy cleared"),
+        ImpervaClearanceOutcome::AlreadyClear =&gt; println!("no challenge"),
+    }
+
+    browser.close().await?;
+    Ok(())
+}</code></pre></pre>
+<h2 id="surface-variants"><a class="header" href="#surface-variants">Surface variants</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Variant</th><th>What it is</th><th>How it's detected</th></tr></thead><tbody>
+<tr><td><code>Reese84</code></td><td>Modern Imperva ABP bot management. Invisible JS challenge → reese84 sensor token.</td><td><code>reese84</code> cookie name OR <code>Reese.js</code> body marker.</td></tr>
+<tr><td><code>Legacy</code></td><td>Older Incapsula <code>___utmvc</code> / <code>incap_ses_*</code> flow.</td><td><code>___utmvc</code> / <code>incap_ses_*</code> / <code>visid_incap_*</code> cookies, or <code>/_Incapsula_Resource</code> body marker.</td></tr>
+<tr><td><code>Captcha(kind)</code></td><td>Escalation to hCaptcha, reCAPTCHA, or Imperva's native CAPTCHA.</td><td>iframe src patterns + <code>g-recaptcha</code> / <code>h-captcha</code> DOM markers.</td></tr>
+<tr><td><code>None</code></td><td>No Imperva surface present.</td><td>Default — fast <code>AlreadyClear</code> path.</td></tr>
+</tbody></table>
+</div>
+<p>Detection precedence: <strong>Captcha &gt; Reese84 &gt; Legacy &gt; None</strong>.</p>
+<h2 id="clearance-signal-s3-hybrid-and"><a class="header" href="#clearance-signal-s3-hybrid-and">Clearance signal (S3 hybrid AND)</a></h2>
+<p><code>TokenAcquired</code> requires <em>both</em>:</p>
+<ol>
+<li>A non-empty <code>reese84</code> cookie scoped to the current site.</li>
+<li>The page body no longer contains Imperva challenge markers.</li>
+</ol>
+<p>This avoids false positives (cookie set during pre-clearance redirect)
+and false negatives (cookie evicted by site CSP). Legacy flows that
+never set <code>reese84</code> resolve to <code>ChallengeGone</code> once body markers clear.</p>
+<h2 id="captcha-handling"><a class="header" href="#captcha-handling">CAPTCHA handling</a></h2>
+<p>Without an <code>on_captcha</code> callback, a CAPTCHA surface returns
+<code>ImpervaError::CaptchaRequired { kind }</code> immediately (no waiting). Plug
+in your own solver:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">use zendriver_imperva::{CaptchaSolution, ImpervaBypass};
+</span><span class="boring">async fn ex(tab: &amp;zendriver_transport::SessionHandle) -&gt; Result&lt;(), zendriver_imperva::ImpervaError&gt; {
+</span>let _ = ImpervaBypass::new(tab)
+    .on_captcha(|challenge| async move {
+        // Call 2captcha / anticaptcha / your own service here.
+        Ok(CaptchaSolution {
+            token: "...".into(),
+            form_field: "h-captcha-response".into(),
+        })
+    })
+    .wait_for_clearance()
+    .await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p><code>CaptchaChallenge</code> carries <code>kind</code>, <code>site_key</code> (when extractable), and
+<code>url</code>. <code>CaptchaSolution</code> is the token + form field name your solver
+returns.</p>
+<h2 id="fetch-domain-fast-path"><a class="header" href="#fetch-domain-fast-path">Fetch-domain fast path</a></h2>
+<p><code>with_interception()</code> spawns a <code>Fetch</code> subscription that signals on
+first 2xx response to <code>Reese.js</code> or <code>_Incapsula_Resource*</code>. Polling
+continues in parallel; first signal wins. Useful on sites where the
+token cookie is set faster than the default 250ms poll cadence.</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">use zendriver_imperva::ImpervaBypass;
+</span><span class="boring">async fn ex(tab: &amp;zendriver_transport::SessionHandle) -&gt; Result&lt;(), zendriver_imperva::ImpervaError&gt; {
+</span>let _ = ImpervaBypass::new(tab)
+    .with_interception()
+    .wait_for_clearance()
+    .await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<h2 id="active-sensor-synthesis--out-of-scope"><a class="header" href="#active-sensor-synthesis--out-of-scope">Active sensor synthesis — out of scope</a></h2>
+<p>Reverse-engineering Imperva's obfuscated reese84 sensor JS and computing
+tokens in pure Rust is <em>not</em> in scope for this crate. The maintenance
+burden (Imperva ships new obfuscated builds frequently) and the lack of
+CAPTCHA fallback in a pure-HTTP design make it a poor fit alongside a
+browser-automation library. If you need pure-HTTP Imperva bypass for
+high-throughput scraping, build that as a separate crate.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="fetcher"><a class="header" href="#fetcher">Fetcher</a></h1>
 <p>The <code>fetcher</code> Cargo feature downloads a Chrome binary from Google's
 <a href="https://googlechromelabs.github.io/chrome-for-testing/">Chrome for Testing</a> (CFT) distribution and hands back a path you

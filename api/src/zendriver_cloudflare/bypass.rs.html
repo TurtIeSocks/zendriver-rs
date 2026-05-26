@@ -126,358 +126,370 @@
 <a href=#126 id=126 data-nosnippet>126</a>        <span class="kw">let </span><span class="kw-2">mut </span>clicked = <span class="bool-val">false</span>;
 <a href=#127 id=127 data-nosnippet>127</a>        <span class="kw">let </span><span class="kw-2">mut </span>ever_seen_markers = <span class="bool-val">false</span>;
 <a href=#128 id=128 data-nosnippet>128</a>
-<a href=#129 id=129 data-nosnippet>129</a>        <span class="kw">loop </span>{
-<a href=#130 id=130 data-nosnippet>130</a>            <span class="kw">let </span>state = poll_state(<span class="self">self</span>.session).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#131 id=131 data-nosnippet>131</a>            <span class="kw">if </span>state.has_markers {
-<a href=#132 id=132 data-nosnippet>132</a>                ever_seen_markers = <span class="bool-val">true</span>;
-<a href=#133 id=133 data-nosnippet>133</a>            }
-<a href=#134 id=134 data-nosnippet>134</a>
-<a href=#135 id=135 data-nosnippet>135</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(token) = state.token {
-<a href=#136 id=136 data-nosnippet>136</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(ClearanceOutcome::TokenAcquired(token));
-<a href=#137 id=137 data-nosnippet>137</a>            }
-<a href=#138 id=138 data-nosnippet>138</a>
-<a href=#139 id=139 data-nosnippet>139</a>            <span class="kw">match </span>state.bbox {
-<a href=#140 id=140 data-nosnippet>140</a>                <span class="prelude-val">Some</span>(bbox) <span class="kw">if </span>!clicked =&gt; {
-<a href=#141 id=141 data-nosnippet>141</a>                    <span class="kw">let </span>click_x = bbox.x + bbox.width * <span class="number">0.15</span>;
-<a href=#142 id=142 data-nosnippet>142</a>                    <span class="kw">let </span>click_y = bbox.y + bbox.height * <span class="number">0.50</span>;
-<a href=#143 id=143 data-nosnippet>143</a>                    click_at(<span class="self">self</span>.session, click_x, click_y).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#144 id=144 data-nosnippet>144</a>                    clicked = <span class="bool-val">true</span>;
-<a href=#145 id=145 data-nosnippet>145</a>                }
-<a href=#146 id=146 data-nosnippet>146</a>                <span class="prelude-val">None </span><span class="kw">if </span>clicked =&gt; {
-<a href=#147 id=147 data-nosnippet>147</a>                    <span class="comment">// Iframe was present, we clicked, and now the challenge
-<a href=#148 id=148 data-nosnippet>148</a>                    // container has been torn down without a token — the
-<a href=#149 id=149 data-nosnippet>149</a>                    // clearance-cookie shortcut.
-<a href=#150 id=150 data-nosnippet>150</a>                    </span><span class="kw">return </span><span class="prelude-val">Ok</span>(ClearanceOutcome::ChallengeGone);
-<a href=#151 id=151 data-nosnippet>151</a>                }
-<a href=#152 id=152 data-nosnippet>152</a>                <span class="kw">_ </span>=&gt; {}
-<a href=#153 id=153 data-nosnippet>153</a>            }
-<a href=#154 id=154 data-nosnippet>154</a>
-<a href=#155 id=155 data-nosnippet>155</a>            <span class="kw">if </span>Instant::now() &gt;= deadline {
-<a href=#156 id=156 data-nosnippet>156</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="kw">if </span>ever_seen_markers {
-<a href=#157 id=157 data-nosnippet>157</a>                    CloudflareError::ClearanceTimeout
-<a href=#158 id=158 data-nosnippet>158</a>                } <span class="kw">else </span>{
-<a href=#159 id=159 data-nosnippet>159</a>                    CloudflareError::NoChallenge
-<a href=#160 id=160 data-nosnippet>160</a>                });
-<a href=#161 id=161 data-nosnippet>161</a>            }
-<a href=#162 id=162 data-nosnippet>162</a>
-<a href=#163 id=163 data-nosnippet>163</a>            <span class="macro">tokio::select!</span> {
-<a href=#164 id=164 data-nosnippet>164</a>                () = tokio::time::sleep(<span class="self">self</span>.poll_interval) =&gt; {}
-<a href=#165 id=165 data-nosnippet>165</a>                () = tokio::time::sleep_until(deadline) =&gt; {}
-<a href=#166 id=166 data-nosnippet>166</a>            }
-<a href=#167 id=167 data-nosnippet>167</a>        }
-<a href=#168 id=168 data-nosnippet>168</a>    }
-<a href=#169 id=169 data-nosnippet>169</a>}
-<a href=#170 id=170 data-nosnippet>170</a>
-<a href=#171 id=171 data-nosnippet>171</a><span class="doccomment">/// Decoded payload from the unified poll evaluator. Combines token check,
-<a href=#172 id=172 data-nosnippet>172</a>/// iframe bbox, and a coarse "any challenge marker present" flag so each
-<a href=#173 id=173 data-nosnippet>173</a>/// tick is a single CDP round-trip.
-<a href=#174 id=174 data-nosnippet>174</a></span><span class="attr">#[derive(Debug, Deserialize)]
-<a href=#175 id=175 data-nosnippet>175</a></span><span class="kw">struct </span>PollState {
-<a href=#176 id=176 data-nosnippet>176</a>    <span class="doccomment">/// Non-empty `cf-turnstile-response` / `cf_challenge_response` value, if
-<a href=#177 id=177 data-nosnippet>177</a>    /// any.
-<a href=#178 id=178 data-nosnippet>178</a>    </span><span class="attr">#[serde(default)]
-<a href=#179 id=179 data-nosnippet>179</a>    </span>token: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#180 id=180 data-nosnippet>180</a>    <span class="doccomment">/// Bounding box of the Turnstile challenge iframe, if mounted. Walks
-<a href=#181 id=181 data-nosnippet>181</a>    /// shadow roots so closed shadow trees still surface the iframe.
-<a href=#182 id=182 data-nosnippet>182</a>    </span><span class="attr">#[serde(default)]
-<a href=#183 id=183 data-nosnippet>183</a>    </span>bbox: <span class="prelude-ty">Option</span>&lt;BoundingBox&gt;,
-<a href=#184 id=184 data-nosnippet>184</a>    <span class="doccomment">/// `true` when the page has any of: a `.cf-turnstile` / `.turnstile`
-<a href=#185 id=185 data-nosnippet>185</a>    /// container, a `cf-turnstile-response` hidden input, or a live
-<a href=#186 id=186 data-nosnippet>186</a>    /// challenge iframe. Used to distinguish "wrong page" (no markers ever
-<a href=#187 id=187 data-nosnippet>187</a>    /// seen) from "real challenge that timed out".
-<a href=#188 id=188 data-nosnippet>188</a>    </span><span class="attr">#[serde(default, rename = <span class="string">"hasMarkers"</span>)]
-<a href=#189 id=189 data-nosnippet>189</a>    </span>has_markers: bool,
-<a href=#190 id=190 data-nosnippet>190</a>}
-<a href=#191 id=191 data-nosnippet>191</a>
-<a href=#192 id=192 data-nosnippet>192</a><span class="doccomment">/// Unified in-page evaluator. Returns:
-<a href=#193 id=193 data-nosnippet>193</a>/// - `token` — non-empty `cf-turnstile-response` (or legacy
-<a href=#194 id=194 data-nosnippet>194</a>///   `cf_challenge_response`) input value, else null.
-<a href=#195 id=195 data-nosnippet>195</a>/// - `bbox` — the Turnstile challenge iframe's bounding box (shadow-DOM
-<a href=#196 id=196 data-nosnippet>196</a>///   aware walk), else null.
-<a href=#197 id=197 data-nosnippet>197</a>/// - `hasMarkers` — true when *any* Cloudflare challenge marker is present
-<a href=#198 id=198 data-nosnippet>198</a>///   (container, hidden input, or live iframe).
-<a href=#199 id=199 data-nosnippet>199</a>///
-<a href=#200 id=200 data-nosnippet>200</a>/// The shadow-DOM walk is necessary because Cloudflare sometimes hosts the
-<a href=#201 id=201 data-nosnippet>201</a>/// challenge iframe inside an open shadow root attached to a host element on
-<a href=#202 id=202 data-nosnippet>202</a>/// the page. The token input itself is in light DOM by design (page JS reads
-<a href=#203 id=203 data-nosnippet>203</a>/// it to submit forms), so `document.querySelector` is sufficient there.
-<a href=#204 id=204 data-nosnippet>204</a></span><span class="kw">const </span>POLL_JS: <span class="kw-2">&amp;</span>str = <span class="string">r#"
-<a href=#205 id=205 data-nosnippet>205</a>(function () {
-<a href=#206 id=206 data-nosnippet>206</a>    function findBbox(root) {
-<a href=#207 id=207 data-nosnippet>207</a>        var iframes = root.querySelectorAll ? root.querySelectorAll("iframe") : [];
-<a href=#208 id=208 data-nosnippet>208</a>        for (var i = 0; i &lt; iframes.length; i++) {
-<a href=#209 id=209 data-nosnippet>209</a>            var f = iframes[i];
-<a href=#210 id=210 data-nosnippet>210</a>            if (f.src &amp;&amp; f.src.includes("challenges.cloudflare.com")) {
-<a href=#211 id=211 data-nosnippet>211</a>                var r = f.getBoundingClientRect();
-<a href=#212 id=212 data-nosnippet>212</a>                return { x: r.left, y: r.top, width: r.width, height: r.height };
-<a href=#213 id=213 data-nosnippet>213</a>            }
-<a href=#214 id=214 data-nosnippet>214</a>        }
-<a href=#215 id=215 data-nosnippet>215</a>        var all = root.querySelectorAll ? root.querySelectorAll("*") : [];
-<a href=#216 id=216 data-nosnippet>216</a>        for (var j = 0; j &lt; all.length; j++) {
-<a href=#217 id=217 data-nosnippet>217</a>            if (all[j].shadowRoot) {
-<a href=#218 id=218 data-nosnippet>218</a>                var sub = findBbox(all[j].shadowRoot);
-<a href=#219 id=219 data-nosnippet>219</a>                if (sub) return sub;
-<a href=#220 id=220 data-nosnippet>220</a>            }
-<a href=#221 id=221 data-nosnippet>221</a>        }
-<a href=#222 id=222 data-nosnippet>222</a>        return null;
-<a href=#223 id=223 data-nosnippet>223</a>    }
-<a href=#224 id=224 data-nosnippet>224</a>    var bbox = findBbox(document);
-<a href=#225 id=225 data-nosnippet>225</a>    var input =
-<a href=#226 id=226 data-nosnippet>226</a>        document.querySelector('[name="cf-turnstile-response"]') ||
-<a href=#227 id=227 data-nosnippet>227</a>        document.querySelector('[name="cf_challenge_response"]');
-<a href=#228 id=228 data-nosnippet>228</a>    var token = (input &amp;&amp; input.value) ? input.value : null;
-<a href=#229 id=229 data-nosnippet>229</a>    var hasContainer = !!document.querySelector('.cf-turnstile, .turnstile, [data-sitekey]');
-<a href=#230 id=230 data-nosnippet>230</a>    var hasMarkers = hasContainer || !!input || !!bbox;
-<a href=#231 id=231 data-nosnippet>231</a>    return { token: token, bbox: bbox, hasMarkers: hasMarkers };
-<a href=#232 id=232 data-nosnippet>232</a>})()
-<a href=#233 id=233 data-nosnippet>233</a>"#</span>;
-<a href=#234 id=234 data-nosnippet>234</a>
-<a href=#235 id=235 data-nosnippet>235</a><span class="doccomment">/// Run [`POLL_JS`] against `session`'s main world and decode the result.
-<a href=#236 id=236 data-nosnippet>236</a></span><span class="kw">async fn </span>poll_state(session: <span class="kw-2">&amp;</span>SessionHandle) -&gt; <span class="prelude-ty">Result</span>&lt;PollState, CloudflareError&gt; {
-<a href=#237 id=237 data-nosnippet>237</a>    <span class="kw">let </span>res = session
-<a href=#238 id=238 data-nosnippet>238</a>        .call(
-<a href=#239 id=239 data-nosnippet>239</a>            <span class="string">"Runtime.evaluate"</span>,
-<a href=#240 id=240 data-nosnippet>240</a>            <span class="macro">json!</span>({
-<a href=#241 id=241 data-nosnippet>241</a>                <span class="string">"expression"</span>: POLL_JS,
-<a href=#242 id=242 data-nosnippet>242</a>                <span class="string">"returnByValue"</span>: <span class="bool-val">true</span>,
-<a href=#243 id=243 data-nosnippet>243</a>                <span class="string">"awaitPromise"</span>: <span class="bool-val">true</span>,
-<a href=#244 id=244 data-nosnippet>244</a>            }),
-<a href=#245 id=245 data-nosnippet>245</a>        )
-<a href=#246 id=246 data-nosnippet>246</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#247 id=247 data-nosnippet>247</a>
-<a href=#248 id=248 data-nosnippet>248</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(details) = res.get(<span class="string">"exceptionDetails"</span>) {
-<a href=#249 id=249 data-nosnippet>249</a>        <span class="kw">let </span>msg = details
-<a href=#250 id=250 data-nosnippet>250</a>            .get(<span class="string">"exception"</span>)
-<a href=#251 id=251 data-nosnippet>251</a>            .and_then(|e| e.get(<span class="string">"description"</span>))
-<a href=#252 id=252 data-nosnippet>252</a>            .and_then(|d| d.as_str())
-<a href=#253 id=253 data-nosnippet>253</a>            .unwrap_or(<span class="string">"unknown"</span>)
-<a href=#254 id=254 data-nosnippet>254</a>            .to_string();
-<a href=#255 id=255 data-nosnippet>255</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(CloudflareError::JsError(msg));
-<a href=#256 id=256 data-nosnippet>256</a>    }
-<a href=#257 id=257 data-nosnippet>257</a>
-<a href=#258 id=258 data-nosnippet>258</a>    <span class="kw">let </span>value = res
-<a href=#259 id=259 data-nosnippet>259</a>        .get(<span class="string">"result"</span>)
-<a href=#260 id=260 data-nosnippet>260</a>        .and_then(|r| r.get(<span class="string">"value"</span>))
-<a href=#261 id=261 data-nosnippet>261</a>        .cloned()
-<a href=#262 id=262 data-nosnippet>262</a>        .unwrap_or(Value::Null);
-<a href=#263 id=263 data-nosnippet>263</a>
-<a href=#264 id=264 data-nosnippet>264</a>    serde_json::from_value(value)
-<a href=#265 id=265 data-nosnippet>265</a>        .map_err(|e| CloudflareError::JsError(<span class="macro">format!</span>(<span class="string">"invalid poll payload: {e}"</span>)))
-<a href=#266 id=266 data-nosnippet>266</a>}
-<a href=#267 id=267 data-nosnippet>267</a>
-<a href=#268 id=268 data-nosnippet>268</a><span class="attr">#[cfg(test)]
-<a href=#269 id=269 data-nosnippet>269</a>#[allow(clippy::panic, clippy::unwrap_used)]
-<a href=#270 id=270 data-nosnippet>270</a></span><span class="kw">mod </span>tests {
-<a href=#271 id=271 data-nosnippet>271</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
-<a href=#272 id=272 data-nosnippet>272</a>    <span class="kw">use </span>zendriver_transport::testing::MockConnection;
-<a href=#273 id=273 data-nosnippet>273</a>
-<a href=#274 id=274 data-nosnippet>274</a>    <span class="doccomment">/// Interactive happy path: poll #1 yields a bbox → click_at fires the
-<a href=#275 id=275 data-nosnippet>275</a>    /// three mouse events at (15% × width, 50% × height) inside the bbox →
-<a href=#276 id=276 data-nosnippet>276</a>    /// poll #2 observes the token → TokenAcquired.
-<a href=#277 id=277 data-nosnippet>277</a>    </span><span class="attr">#[tokio::test]
-<a href=#278 id=278 data-nosnippet>278</a>    </span><span class="kw">async fn </span>wait_for_clearance_clicks_at_bbox_offset_then_returns_token() {
-<a href=#279 id=279 data-nosnippet>279</a>        <span class="kw">let </span>(<span class="kw-2">mut </span>mock, conn) = MockConnection::pair();
-<a href=#280 id=280 data-nosnippet>280</a>        <span class="kw">let </span>sess = SessionHandle::new(conn.clone(), <span class="string">"S1"</span>);
-<a href=#281 id=281 data-nosnippet>281</a>
-<a href=#282 id=282 data-nosnippet>282</a>        <span class="comment">// bbox at (100, 200) with 60×40 → click at
-<a href=#283 id=283 data-nosnippet>283</a>        //   x = 100 + 60 * 0.15 = 109
-<a href=#284 id=284 data-nosnippet>284</a>        //   y = 200 + 40 * 0.50 = 220
-<a href=#285 id=285 data-nosnippet>285</a>        </span><span class="kw">const </span>BBOX_X: f64 = <span class="number">100.0</span>;
-<a href=#286 id=286 data-nosnippet>286</a>        <span class="kw">const </span>BBOX_Y: f64 = <span class="number">200.0</span>;
-<a href=#287 id=287 data-nosnippet>287</a>        <span class="kw">const </span>BBOX_W: f64 = <span class="number">60.0</span>;
-<a href=#288 id=288 data-nosnippet>288</a>        <span class="kw">const </span>BBOX_H: f64 = <span class="number">40.0</span>;
-<a href=#289 id=289 data-nosnippet>289</a>        <span class="kw">const </span>EXPECTED_CLICK_X: f64 = BBOX_X + BBOX_W * <span class="number">0.15</span>;
-<a href=#290 id=290 data-nosnippet>290</a>        <span class="kw">const </span>EXPECTED_CLICK_Y: f64 = BBOX_Y + BBOX_H * <span class="number">0.50</span>;
-<a href=#291 id=291 data-nosnippet>291</a>
-<a href=#292 id=292 data-nosnippet>292</a>        <span class="kw">let </span>fut = tokio::spawn({
-<a href=#293 id=293 data-nosnippet>293</a>            <span class="kw">let </span>s = sess.clone();
-<a href=#294 id=294 data-nosnippet>294</a>            <span class="kw">async move </span>{
-<a href=#295 id=295 data-nosnippet>295</a>                <span class="kw">let </span>b = CloudflareBypass::new(<span class="kw-2">&amp;</span>s).poll_interval(Duration::from_millis(<span class="number">1</span>));
-<a href=#296 id=296 data-nosnippet>296</a>                b.wait_for_clearance(Duration::from_secs(<span class="number">5</span>)).<span class="kw">await
-<a href=#297 id=297 data-nosnippet>297</a>            </span>}
-<a href=#298 id=298 data-nosnippet>298</a>        });
-<a href=#299 id=299 data-nosnippet>299</a>
-<a href=#300 id=300 data-nosnippet>300</a>        <span class="comment">// Poll #1: unified evaluator returns bbox, no token, markers present.
-<a href=#301 id=301 data-nosnippet>301</a>        </span><span class="kw">let </span>id_poll1 = mock.expect_cmd(<span class="string">"Runtime.evaluate"</span>).<span class="kw">await</span>;
-<a href=#302 id=302 data-nosnippet>302</a>        <span class="macro">assert!</span>(
-<a href=#303 id=303 data-nosnippet>303</a>            mock.last_sent()[<span class="string">"params"</span>][<span class="string">"expression"</span>]
-<a href=#304 id=304 data-nosnippet>304</a>                .as_str()
-<a href=#305 id=305 data-nosnippet>305</a>                .unwrap()
-<a href=#306 id=306 data-nosnippet>306</a>                .contains(<span class="string">"challenges.cloudflare.com"</span>),
-<a href=#307 id=307 data-nosnippet>307</a>            <span class="string">"poll eval should walk for challenges.cloudflare.com iframe"
-<a href=#308 id=308 data-nosnippet>308</a>        </span>);
-<a href=#309 id=309 data-nosnippet>309</a>        <span class="macro">assert!</span>(
-<a href=#310 id=310 data-nosnippet>310</a>            mock.last_sent()[<span class="string">"params"</span>][<span class="string">"expression"</span>]
-<a href=#311 id=311 data-nosnippet>311</a>                .as_str()
-<a href=#312 id=312 data-nosnippet>312</a>                .unwrap()
-<a href=#313 id=313 data-nosnippet>313</a>                .contains(<span class="string">"cf-turnstile-response"</span>),
-<a href=#314 id=314 data-nosnippet>314</a>            <span class="string">"poll eval should look at the cf-turnstile-response input"
-<a href=#315 id=315 data-nosnippet>315</a>        </span>);
-<a href=#316 id=316 data-nosnippet>316</a>        mock.reply(
-<a href=#317 id=317 data-nosnippet>317</a>            id_poll1,
-<a href=#318 id=318 data-nosnippet>318</a>            <span class="macro">json!</span>({
-<a href=#319 id=319 data-nosnippet>319</a>                <span class="string">"result"</span>: {
-<a href=#320 id=320 data-nosnippet>320</a>                    <span class="string">"type"</span>: <span class="string">"object"</span>,
-<a href=#321 id=321 data-nosnippet>321</a>                    <span class="string">"value"</span>: {
-<a href=#322 id=322 data-nosnippet>322</a>                        <span class="string">"token"</span>: null,
-<a href=#323 id=323 data-nosnippet>323</a>                        <span class="string">"bbox"</span>: { <span class="string">"x"</span>: BBOX_X, <span class="string">"y"</span>: BBOX_Y, <span class="string">"width"</span>: BBOX_W, <span class="string">"height"</span>: BBOX_H },
-<a href=#324 id=324 data-nosnippet>324</a>                        <span class="string">"hasMarkers"</span>: <span class="bool-val">true</span>,
-<a href=#325 id=325 data-nosnippet>325</a>                    }
-<a href=#326 id=326 data-nosnippet>326</a>                }
-<a href=#327 id=327 data-nosnippet>327</a>            }),
-<a href=#328 id=328 data-nosnippet>328</a>        )
-<a href=#329 id=329 data-nosnippet>329</a>        .<span class="kw">await</span>;
-<a href=#330 id=330 data-nosnippet>330</a>
-<a href=#331 id=331 data-nosnippet>331</a>        <span class="comment">// click_at → mouseMoved → mousePressed → mouseReleased.
-<a href=#332 id=332 data-nosnippet>332</a>        </span><span class="kw">let </span>id_move = mock.expect_cmd(<span class="string">"Input.dispatchMouseEvent"</span>).<span class="kw">await</span>;
-<a href=#333 id=333 data-nosnippet>333</a>        <span class="kw">let </span>sent = mock.last_sent();
-<a href=#334 id=334 data-nosnippet>334</a>        <span class="macro">assert_eq!</span>(sent[<span class="string">"params"</span>][<span class="string">"type"</span>], <span class="string">"mouseMoved"</span>);
-<a href=#335 id=335 data-nosnippet>335</a>        <span class="macro">assert_eq!</span>(sent[<span class="string">"params"</span>][<span class="string">"x"</span>], EXPECTED_CLICK_X);
-<a href=#336 id=336 data-nosnippet>336</a>        <span class="macro">assert_eq!</span>(sent[<span class="string">"params"</span>][<span class="string">"y"</span>], EXPECTED_CLICK_Y);
-<a href=#337 id=337 data-nosnippet>337</a>        mock.reply(id_move, <span class="macro">json!</span>({})).<span class="kw">await</span>;
-<a href=#338 id=338 data-nosnippet>338</a>
-<a href=#339 id=339 data-nosnippet>339</a>        <span class="kw">let </span>id_press = mock.expect_cmd(<span class="string">"Input.dispatchMouseEvent"</span>).<span class="kw">await</span>;
-<a href=#340 id=340 data-nosnippet>340</a>        <span class="kw">let </span>sent = mock.last_sent();
-<a href=#341 id=341 data-nosnippet>341</a>        <span class="macro">assert_eq!</span>(sent[<span class="string">"params"</span>][<span class="string">"type"</span>], <span class="string">"mousePressed"</span>);
-<a href=#342 id=342 data-nosnippet>342</a>        <span class="macro">assert_eq!</span>(sent[<span class="string">"params"</span>][<span class="string">"button"</span>], <span class="string">"left"</span>);
-<a href=#343 id=343 data-nosnippet>343</a>        <span class="macro">assert_eq!</span>(sent[<span class="string">"params"</span>][<span class="string">"clickCount"</span>], <span class="number">1</span>);
-<a href=#344 id=344 data-nosnippet>344</a>        <span class="macro">assert_eq!</span>(sent[<span class="string">"params"</span>][<span class="string">"x"</span>], EXPECTED_CLICK_X);
-<a href=#345 id=345 data-nosnippet>345</a>        <span class="macro">assert_eq!</span>(sent[<span class="string">"params"</span>][<span class="string">"y"</span>], EXPECTED_CLICK_Y);
-<a href=#346 id=346 data-nosnippet>346</a>        mock.reply(id_press, <span class="macro">json!</span>({})).<span class="kw">await</span>;
-<a href=#347 id=347 data-nosnippet>347</a>
-<a href=#348 id=348 data-nosnippet>348</a>        <span class="kw">let </span>id_rel = mock.expect_cmd(<span class="string">"Input.dispatchMouseEvent"</span>).<span class="kw">await</span>;
-<a href=#349 id=349 data-nosnippet>349</a>        <span class="kw">let </span>sent = mock.last_sent();
-<a href=#350 id=350 data-nosnippet>350</a>        <span class="macro">assert_eq!</span>(sent[<span class="string">"params"</span>][<span class="string">"type"</span>], <span class="string">"mouseReleased"</span>);
-<a href=#351 id=351 data-nosnippet>351</a>        <span class="macro">assert_eq!</span>(sent[<span class="string">"params"</span>][<span class="string">"button"</span>], <span class="string">"left"</span>);
-<a href=#352 id=352 data-nosnippet>352</a>        <span class="macro">assert_eq!</span>(sent[<span class="string">"params"</span>][<span class="string">"clickCount"</span>], <span class="number">1</span>);
-<a href=#353 id=353 data-nosnippet>353</a>        mock.reply(id_rel, <span class="macro">json!</span>({})).<span class="kw">await</span>;
-<a href=#354 id=354 data-nosnippet>354</a>
-<a href=#355 id=355 data-nosnippet>355</a>        <span class="comment">// Poll #2: token appears → TokenAcquired terminates the loop.
-<a href=#356 id=356 data-nosnippet>356</a>        </span><span class="kw">let </span>id_poll2 = mock.expect_cmd(<span class="string">"Runtime.evaluate"</span>).<span class="kw">await</span>;
-<a href=#357 id=357 data-nosnippet>357</a>        mock.reply(
-<a href=#358 id=358 data-nosnippet>358</a>            id_poll2,
-<a href=#359 id=359 data-nosnippet>359</a>            <span class="macro">json!</span>({
-<a href=#360 id=360 data-nosnippet>360</a>                <span class="string">"result"</span>: {
-<a href=#361 id=361 data-nosnippet>361</a>                    <span class="string">"type"</span>: <span class="string">"object"</span>,
-<a href=#362 id=362 data-nosnippet>362</a>                    <span class="string">"value"</span>: {
-<a href=#363 id=363 data-nosnippet>363</a>                        <span class="string">"token"</span>: <span class="string">"TOKEN_XYZ"</span>,
-<a href=#364 id=364 data-nosnippet>364</a>                        <span class="string">"bbox"</span>: null,
-<a href=#365 id=365 data-nosnippet>365</a>                        <span class="string">"hasMarkers"</span>: <span class="bool-val">true</span>,
-<a href=#366 id=366 data-nosnippet>366</a>                    }
-<a href=#367 id=367 data-nosnippet>367</a>                }
-<a href=#368 id=368 data-nosnippet>368</a>            }),
-<a href=#369 id=369 data-nosnippet>369</a>        )
-<a href=#370 id=370 data-nosnippet>370</a>        .<span class="kw">await</span>;
-<a href=#371 id=371 data-nosnippet>371</a>
-<a href=#372 id=372 data-nosnippet>372</a>        <span class="kw">let </span>outcome = fut.<span class="kw">await</span>.unwrap().unwrap();
-<a href=#373 id=373 data-nosnippet>373</a>        <span class="kw">match </span>outcome {
-<a href=#374 id=374 data-nosnippet>374</a>            ClearanceOutcome::TokenAcquired(t) =&gt; <span class="macro">assert_eq!</span>(t, <span class="string">"TOKEN_XYZ"</span>),
-<a href=#375 id=375 data-nosnippet>375</a>            other =&gt; <span class="macro">panic!</span>(<span class="string">"expected TokenAcquired, got {other:?}"</span>),
-<a href=#376 id=376 data-nosnippet>376</a>        }
-<a href=#377 id=377 data-nosnippet>377</a>        conn.shutdown();
-<a href=#378 id=378 data-nosnippet>378</a>    }
-<a href=#379 id=379 data-nosnippet>379</a>
-<a href=#380 id=380 data-nosnippet>380</a>    <span class="doccomment">/// Invisible-Turnstile path: no iframe ever mounts, the token is
-<a href=#381 id=381 data-nosnippet>381</a>    /// populated directly on the first poll → TokenAcquired without any
-<a href=#382 id=382 data-nosnippet>382</a>    /// click.
-<a href=#383 id=383 data-nosnippet>383</a>    </span><span class="attr">#[tokio::test]
-<a href=#384 id=384 data-nosnippet>384</a>    </span><span class="kw">async fn </span>wait_for_clearance_returns_token_without_click_for_invisible_turnstile() {
-<a href=#385 id=385 data-nosnippet>385</a>        <span class="kw">let </span>(<span class="kw-2">mut </span>mock, conn) = MockConnection::pair();
-<a href=#386 id=386 data-nosnippet>386</a>        <span class="kw">let </span>sess = SessionHandle::new(conn.clone(), <span class="string">"S1"</span>);
-<a href=#387 id=387 data-nosnippet>387</a>
-<a href=#388 id=388 data-nosnippet>388</a>        <span class="kw">let </span>fut = tokio::spawn({
-<a href=#389 id=389 data-nosnippet>389</a>            <span class="kw">let </span>s = sess.clone();
-<a href=#390 id=390 data-nosnippet>390</a>            <span class="kw">async move </span>{
-<a href=#391 id=391 data-nosnippet>391</a>                <span class="kw">let </span>b = CloudflareBypass::new(<span class="kw-2">&amp;</span>s).poll_interval(Duration::from_millis(<span class="number">1</span>));
-<a href=#392 id=392 data-nosnippet>392</a>                b.wait_for_clearance(Duration::from_secs(<span class="number">5</span>)).<span class="kw">await
-<a href=#393 id=393 data-nosnippet>393</a>            </span>}
-<a href=#394 id=394 data-nosnippet>394</a>        });
-<a href=#395 id=395 data-nosnippet>395</a>
-<a href=#396 id=396 data-nosnippet>396</a>        <span class="kw">let </span>id_poll = mock.expect_cmd(<span class="string">"Runtime.evaluate"</span>).<span class="kw">await</span>;
-<a href=#397 id=397 data-nosnippet>397</a>        mock.reply(
-<a href=#398 id=398 data-nosnippet>398</a>            id_poll,
-<a href=#399 id=399 data-nosnippet>399</a>            <span class="macro">json!</span>({
-<a href=#400 id=400 data-nosnippet>400</a>                <span class="string">"result"</span>: {
-<a href=#401 id=401 data-nosnippet>401</a>                    <span class="string">"type"</span>: <span class="string">"object"</span>,
-<a href=#402 id=402 data-nosnippet>402</a>                    <span class="string">"value"</span>: {
-<a href=#403 id=403 data-nosnippet>403</a>                        <span class="string">"token"</span>: <span class="string">"INVISIBLE_TOKEN"</span>,
-<a href=#404 id=404 data-nosnippet>404</a>                        <span class="string">"bbox"</span>: null,
-<a href=#405 id=405 data-nosnippet>405</a>                        <span class="string">"hasMarkers"</span>: <span class="bool-val">true</span>,
-<a href=#406 id=406 data-nosnippet>406</a>                    }
-<a href=#407 id=407 data-nosnippet>407</a>                }
-<a href=#408 id=408 data-nosnippet>408</a>            }),
-<a href=#409 id=409 data-nosnippet>409</a>        )
-<a href=#410 id=410 data-nosnippet>410</a>        .<span class="kw">await</span>;
-<a href=#411 id=411 data-nosnippet>411</a>
-<a href=#412 id=412 data-nosnippet>412</a>        <span class="kw">let </span>outcome = fut.<span class="kw">await</span>.unwrap().unwrap();
-<a href=#413 id=413 data-nosnippet>413</a>        <span class="kw">match </span>outcome {
-<a href=#414 id=414 data-nosnippet>414</a>            ClearanceOutcome::TokenAcquired(t) =&gt; <span class="macro">assert_eq!</span>(t, <span class="string">"INVISIBLE_TOKEN"</span>),
-<a href=#415 id=415 data-nosnippet>415</a>            other =&gt; <span class="macro">panic!</span>(<span class="string">"expected TokenAcquired, got {other:?}"</span>),
-<a href=#416 id=416 data-nosnippet>416</a>        }
-<a href=#417 id=417 data-nosnippet>417</a>        <span class="comment">// No Input.dispatchMouseEvent should have been queued — the invisible
-<a href=#418 id=418 data-nosnippet>418</a>        // path never clicks. The mock connection asserts via its own drop
-<a href=#419 id=419 data-nosnippet>419</a>        // semantics that no pending sends remain.
-<a href=#420 id=420 data-nosnippet>420</a>        </span>conn.shutdown();
-<a href=#421 id=421 data-nosnippet>421</a>    }
-<a href=#422 id=422 data-nosnippet>422</a>
-<a href=#423 id=423 data-nosnippet>423</a>    <span class="doccomment">/// ChallengeGone path: poll #1 yields a bbox → click → poll #2 reports
-<a href=#424 id=424 data-nosnippet>424</a>    /// no bbox and no token → ChallengeGone.
-<a href=#425 id=425 data-nosnippet>425</a>    </span><span class="attr">#[tokio::test]
-<a href=#426 id=426 data-nosnippet>426</a>    </span><span class="kw">async fn </span>wait_for_clearance_returns_challenge_gone_when_iframe_disappears_after_click() {
-<a href=#427 id=427 data-nosnippet>427</a>        <span class="kw">let </span>(<span class="kw-2">mut </span>mock, conn) = MockConnection::pair();
-<a href=#428 id=428 data-nosnippet>428</a>        <span class="kw">let </span>sess = SessionHandle::new(conn.clone(), <span class="string">"S1"</span>);
-<a href=#429 id=429 data-nosnippet>429</a>
-<a href=#430 id=430 data-nosnippet>430</a>        <span class="kw">let </span>fut = tokio::spawn({
-<a href=#431 id=431 data-nosnippet>431</a>            <span class="kw">let </span>s = sess.clone();
-<a href=#432 id=432 data-nosnippet>432</a>            <span class="kw">async move </span>{
-<a href=#433 id=433 data-nosnippet>433</a>                <span class="kw">let </span>b = CloudflareBypass::new(<span class="kw-2">&amp;</span>s).poll_interval(Duration::from_millis(<span class="number">1</span>));
-<a href=#434 id=434 data-nosnippet>434</a>                b.wait_for_clearance(Duration::from_secs(<span class="number">5</span>)).<span class="kw">await
-<a href=#435 id=435 data-nosnippet>435</a>            </span>}
-<a href=#436 id=436 data-nosnippet>436</a>        });
-<a href=#437 id=437 data-nosnippet>437</a>
-<a href=#438 id=438 data-nosnippet>438</a>        <span class="comment">// Poll #1: bbox present.
-<a href=#439 id=439 data-nosnippet>439</a>        </span><span class="kw">let </span>id_poll1 = mock.expect_cmd(<span class="string">"Runtime.evaluate"</span>).<span class="kw">await</span>;
-<a href=#440 id=440 data-nosnippet>440</a>        mock.reply(
-<a href=#441 id=441 data-nosnippet>441</a>            id_poll1,
-<a href=#442 id=442 data-nosnippet>442</a>            <span class="macro">json!</span>({
-<a href=#443 id=443 data-nosnippet>443</a>                <span class="string">"result"</span>: {
-<a href=#444 id=444 data-nosnippet>444</a>                    <span class="string">"type"</span>: <span class="string">"object"</span>,
-<a href=#445 id=445 data-nosnippet>445</a>                    <span class="string">"value"</span>: {
-<a href=#446 id=446 data-nosnippet>446</a>                        <span class="string">"token"</span>: null,
-<a href=#447 id=447 data-nosnippet>447</a>                        <span class="string">"bbox"</span>: { <span class="string">"x"</span>: <span class="number">10.0</span>, <span class="string">"y"</span>: <span class="number">20.0</span>, <span class="string">"width"</span>: <span class="number">40.0</span>, <span class="string">"height"</span>: <span class="number">40.0 </span>},
-<a href=#448 id=448 data-nosnippet>448</a>                        <span class="string">"hasMarkers"</span>: <span class="bool-val">true</span>,
-<a href=#449 id=449 data-nosnippet>449</a>                    }
-<a href=#450 id=450 data-nosnippet>450</a>                }
-<a href=#451 id=451 data-nosnippet>451</a>            }),
-<a href=#452 id=452 data-nosnippet>452</a>        )
-<a href=#453 id=453 data-nosnippet>453</a>        .<span class="kw">await</span>;
-<a href=#454 id=454 data-nosnippet>454</a>
-<a href=#455 id=455 data-nosnippet>455</a>        <span class="comment">// click sequence.
-<a href=#456 id=456 data-nosnippet>456</a>        </span><span class="kw">for _ in </span><span class="number">0</span>..<span class="number">3 </span>{
-<a href=#457 id=457 data-nosnippet>457</a>            <span class="kw">let </span>id = mock.expect_cmd(<span class="string">"Input.dispatchMouseEvent"</span>).<span class="kw">await</span>;
-<a href=#458 id=458 data-nosnippet>458</a>            mock.reply(id, <span class="macro">json!</span>({})).<span class="kw">await</span>;
-<a href=#459 id=459 data-nosnippet>459</a>        }
-<a href=#460 id=460 data-nosnippet>460</a>
-<a href=#461 id=461 data-nosnippet>461</a>        <span class="comment">// Poll #2: iframe gone, no token.
-<a href=#462 id=462 data-nosnippet>462</a>        </span><span class="kw">let </span>id_poll2 = mock.expect_cmd(<span class="string">"Runtime.evaluate"</span>).<span class="kw">await</span>;
-<a href=#463 id=463 data-nosnippet>463</a>        mock.reply(
-<a href=#464 id=464 data-nosnippet>464</a>            id_poll2,
-<a href=#465 id=465 data-nosnippet>465</a>            <span class="macro">json!</span>({
-<a href=#466 id=466 data-nosnippet>466</a>                <span class="string">"result"</span>: {
-<a href=#467 id=467 data-nosnippet>467</a>                    <span class="string">"type"</span>: <span class="string">"object"</span>,
-<a href=#468 id=468 data-nosnippet>468</a>                    <span class="string">"value"</span>: {
-<a href=#469 id=469 data-nosnippet>469</a>                        <span class="string">"token"</span>: null,
-<a href=#470 id=470 data-nosnippet>470</a>                        <span class="string">"bbox"</span>: null,
-<a href=#471 id=471 data-nosnippet>471</a>                        <span class="string">"hasMarkers"</span>: <span class="bool-val">true</span>,
-<a href=#472 id=472 data-nosnippet>472</a>                    }
-<a href=#473 id=473 data-nosnippet>473</a>                }
-<a href=#474 id=474 data-nosnippet>474</a>            }),
-<a href=#475 id=475 data-nosnippet>475</a>        )
-<a href=#476 id=476 data-nosnippet>476</a>        .<span class="kw">await</span>;
-<a href=#477 id=477 data-nosnippet>477</a>
-<a href=#478 id=478 data-nosnippet>478</a>        <span class="kw">let </span>outcome = fut.<span class="kw">await</span>.unwrap().unwrap();
-<a href=#479 id=479 data-nosnippet>479</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(outcome, ClearanceOutcome::ChallengeGone));
-<a href=#480 id=480 data-nosnippet>480</a>        conn.shutdown();
-<a href=#481 id=481 data-nosnippet>481</a>    }
-<a href=#482 id=482 data-nosnippet>482</a>}
+<a href=#129 id=129 data-nosnippet>129</a>        <span class="kw">let </span><span class="kw-2">mut </span>stall_ticks: u32 = <span class="number">0</span>;
+<a href=#130 id=130 data-nosnippet>130</a>        <span class="kw">let </span><span class="kw-2">mut </span>warned_stall = <span class="bool-val">false</span>;
+<a href=#131 id=131 data-nosnippet>131</a>
+<a href=#132 id=132 data-nosnippet>132</a>        <span class="kw">loop </span>{
+<a href=#133 id=133 data-nosnippet>133</a>            <span class="kw">let </span>state = poll_state(<span class="self">self</span>.session).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#134 id=134 data-nosnippet>134</a>            <span class="kw">if </span>state.has_markers {
+<a href=#135 id=135 data-nosnippet>135</a>                ever_seen_markers = <span class="bool-val">true</span>;
+<a href=#136 id=136 data-nosnippet>136</a>            }
+<a href=#137 id=137 data-nosnippet>137</a>
+<a href=#138 id=138 data-nosnippet>138</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(token) = state.token {
+<a href=#139 id=139 data-nosnippet>139</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(ClearanceOutcome::TokenAcquired(token));
+<a href=#140 id=140 data-nosnippet>140</a>            }
+<a href=#141 id=141 data-nosnippet>141</a>
+<a href=#142 id=142 data-nosnippet>142</a>            <span class="kw">match </span>state.bbox {
+<a href=#143 id=143 data-nosnippet>143</a>                <span class="prelude-val">Some</span>(bbox) <span class="kw">if </span>!clicked =&gt; {
+<a href=#144 id=144 data-nosnippet>144</a>                    <span class="kw">let </span>click_x = bbox.x + bbox.width * <span class="number">0.15</span>;
+<a href=#145 id=145 data-nosnippet>145</a>                    <span class="kw">let </span>click_y = bbox.y + bbox.height * <span class="number">0.50</span>;
+<a href=#146 id=146 data-nosnippet>146</a>                    click_at(<span class="self">self</span>.session, click_x, click_y).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#147 id=147 data-nosnippet>147</a>                    clicked = <span class="bool-val">true</span>;
+<a href=#148 id=148 data-nosnippet>148</a>                }
+<a href=#149 id=149 data-nosnippet>149</a>                <span class="prelude-val">None </span><span class="kw">if </span>clicked =&gt; {
+<a href=#150 id=150 data-nosnippet>150</a>                    <span class="comment">// Iframe was present, we clicked, and now the challenge
+<a href=#151 id=151 data-nosnippet>151</a>                    // container has been torn down without a token — the
+<a href=#152 id=152 data-nosnippet>152</a>                    // clearance-cookie shortcut.
+<a href=#153 id=153 data-nosnippet>153</a>                    </span><span class="kw">return </span><span class="prelude-val">Ok</span>(ClearanceOutcome::ChallengeGone);
+<a href=#154 id=154 data-nosnippet>154</a>                }
+<a href=#155 id=155 data-nosnippet>155</a>                <span class="kw">_ </span>=&gt; {
+<a href=#156 id=156 data-nosnippet>156</a>                    stall_ticks += <span class="number">1</span>;
+<a href=#157 id=157 data-nosnippet>157</a>                    <span class="kw">if </span>stall_ticks == <span class="number">10 </span>&amp;&amp; !warned_stall {
+<a href=#158 id=158 data-nosnippet>158</a>                        <span class="macro">tracing::warn!</span>(
+<a href=#159 id=159 data-nosnippet>159</a>                            poll_interval_ms = <span class="self">self</span>.poll_interval.as_millis() <span class="kw">as </span>u64,
+<a href=#160 id=160 data-nosnippet>160</a>                            <span class="string">"cloudflare clearance stalled — is BrowserBuilder::stealth enabled?"
+<a href=#161 id=161 data-nosnippet>161</a>                        </span>);
+<a href=#162 id=162 data-nosnippet>162</a>                        warned_stall = <span class="bool-val">true</span>;
+<a href=#163 id=163 data-nosnippet>163</a>                    }
+<a href=#164 id=164 data-nosnippet>164</a>                }
+<a href=#165 id=165 data-nosnippet>165</a>            }
+<a href=#166 id=166 data-nosnippet>166</a>
+<a href=#167 id=167 data-nosnippet>167</a>            <span class="kw">if </span>Instant::now() &gt;= deadline {
+<a href=#168 id=168 data-nosnippet>168</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="kw">if </span>ever_seen_markers {
+<a href=#169 id=169 data-nosnippet>169</a>                    CloudflareError::ClearanceTimeout
+<a href=#170 id=170 data-nosnippet>170</a>                } <span class="kw">else </span>{
+<a href=#171 id=171 data-nosnippet>171</a>                    CloudflareError::NoChallenge
+<a href=#172 id=172 data-nosnippet>172</a>                });
+<a href=#173 id=173 data-nosnippet>173</a>            }
+<a href=#174 id=174 data-nosnippet>174</a>
+<a href=#175 id=175 data-nosnippet>175</a>            <span class="macro">tokio::select!</span> {
+<a href=#176 id=176 data-nosnippet>176</a>                () = tokio::time::sleep(<span class="self">self</span>.poll_interval) =&gt; {}
+<a href=#177 id=177 data-nosnippet>177</a>                () = tokio::time::sleep_until(deadline) =&gt; {}
+<a href=#178 id=178 data-nosnippet>178</a>            }
+<a href=#179 id=179 data-nosnippet>179</a>        }
+<a href=#180 id=180 data-nosnippet>180</a>    }
+<a href=#181 id=181 data-nosnippet>181</a>}
+<a href=#182 id=182 data-nosnippet>182</a>
+<a href=#183 id=183 data-nosnippet>183</a><span class="doccomment">/// Decoded payload from the unified poll evaluator. Combines token check,
+<a href=#184 id=184 data-nosnippet>184</a>/// iframe bbox, and a coarse "any challenge marker present" flag so each
+<a href=#185 id=185 data-nosnippet>185</a>/// tick is a single CDP round-trip.
+<a href=#186 id=186 data-nosnippet>186</a></span><span class="attr">#[derive(Debug, Deserialize)]
+<a href=#187 id=187 data-nosnippet>187</a></span><span class="kw">struct </span>PollState {
+<a href=#188 id=188 data-nosnippet>188</a>    <span class="doccomment">/// Non-empty `cf-turnstile-response` / `cf_challenge_response` value, if
+<a href=#189 id=189 data-nosnippet>189</a>    /// any.
+<a href=#190 id=190 data-nosnippet>190</a>    </span><span class="attr">#[serde(default)]
+<a href=#191 id=191 data-nosnippet>191</a>    </span>token: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#192 id=192 data-nosnippet>192</a>    <span class="doccomment">/// Bounding box of the Turnstile challenge iframe, if mounted. Walks
+<a href=#193 id=193 data-nosnippet>193</a>    /// shadow roots so closed shadow trees still surface the iframe.
+<a href=#194 id=194 data-nosnippet>194</a>    </span><span class="attr">#[serde(default)]
+<a href=#195 id=195 data-nosnippet>195</a>    </span>bbox: <span class="prelude-ty">Option</span>&lt;BoundingBox&gt;,
+<a href=#196 id=196 data-nosnippet>196</a>    <span class="doccomment">/// `true` when the page has any of: a `.cf-turnstile` / `.turnstile`
+<a href=#197 id=197 data-nosnippet>197</a>    /// container, a `cf-turnstile-response` hidden input, or a live
+<a href=#198 id=198 data-nosnippet>198</a>    /// challenge iframe. Used to distinguish "wrong page" (no markers ever
+<a href=#199 id=199 data-nosnippet>199</a>    /// seen) from "real challenge that timed out".
+<a href=#200 id=200 data-nosnippet>200</a>    </span><span class="attr">#[serde(default, rename = <span class="string">"hasMarkers"</span>)]
+<a href=#201 id=201 data-nosnippet>201</a>    </span>has_markers: bool,
+<a href=#202 id=202 data-nosnippet>202</a>}
+<a href=#203 id=203 data-nosnippet>203</a>
+<a href=#204 id=204 data-nosnippet>204</a><span class="doccomment">/// Unified in-page evaluator. Returns:
+<a href=#205 id=205 data-nosnippet>205</a>/// - `token` — non-empty `cf-turnstile-response` (or legacy
+<a href=#206 id=206 data-nosnippet>206</a>///   `cf_challenge_response`) input value, else null.
+<a href=#207 id=207 data-nosnippet>207</a>/// - `bbox` — the Turnstile challenge iframe's bounding box (shadow-DOM
+<a href=#208 id=208 data-nosnippet>208</a>///   aware walk), else null.
+<a href=#209 id=209 data-nosnippet>209</a>/// - `hasMarkers` — true when *any* Cloudflare challenge marker is present
+<a href=#210 id=210 data-nosnippet>210</a>///   (container, hidden input, or live iframe).
+<a href=#211 id=211 data-nosnippet>211</a>///
+<a href=#212 id=212 data-nosnippet>212</a>/// The shadow-DOM walk is necessary because Cloudflare sometimes hosts the
+<a href=#213 id=213 data-nosnippet>213</a>/// challenge iframe inside an open shadow root attached to a host element on
+<a href=#214 id=214 data-nosnippet>214</a>/// the page. The token input itself is in light DOM by design (page JS reads
+<a href=#215 id=215 data-nosnippet>215</a>/// it to submit forms), so `document.querySelector` is sufficient there.
+<a href=#216 id=216 data-nosnippet>216</a></span><span class="kw">const </span>POLL_JS: <span class="kw-2">&amp;</span>str = <span class="string">r#"
+<a href=#217 id=217 data-nosnippet>217</a>(function () {
+<a href=#218 id=218 data-nosnippet>218</a>    function findBbox(root) {
+<a href=#219 id=219 data-nosnippet>219</a>        var iframes = root.querySelectorAll ? root.querySelectorAll("iframe") : [];
+<a href=#220 id=220 data-nosnippet>220</a>        for (var i = 0; i &lt; iframes.length; i++) {
+<a href=#221 id=221 data-nosnippet>221</a>            var f = iframes[i];
+<a href=#222 id=222 data-nosnippet>222</a>            if (f.src &amp;&amp; f.src.includes("challenges.cloudflare.com")) {
+<a href=#223 id=223 data-nosnippet>223</a>                var r = f.getBoundingClientRect();
+<a href=#224 id=224 data-nosnippet>224</a>                return { x: r.left, y: r.top, width: r.width, height: r.height };
+<a href=#225 id=225 data-nosnippet>225</a>            }
+<a href=#226 id=226 data-nosnippet>226</a>        }
+<a href=#227 id=227 data-nosnippet>227</a>        var all = root.querySelectorAll ? root.querySelectorAll("*") : [];
+<a href=#228 id=228 data-nosnippet>228</a>        for (var j = 0; j &lt; all.length; j++) {
+<a href=#229 id=229 data-nosnippet>229</a>            if (all[j].shadowRoot) {
+<a href=#230 id=230 data-nosnippet>230</a>                var sub = findBbox(all[j].shadowRoot);
+<a href=#231 id=231 data-nosnippet>231</a>                if (sub) return sub;
+<a href=#232 id=232 data-nosnippet>232</a>            }
+<a href=#233 id=233 data-nosnippet>233</a>        }
+<a href=#234 id=234 data-nosnippet>234</a>        return null;
+<a href=#235 id=235 data-nosnippet>235</a>    }
+<a href=#236 id=236 data-nosnippet>236</a>    var bbox = findBbox(document);
+<a href=#237 id=237 data-nosnippet>237</a>    var input =
+<a href=#238 id=238 data-nosnippet>238</a>        document.querySelector('[name="cf-turnstile-response"]') ||
+<a href=#239 id=239 data-nosnippet>239</a>        document.querySelector('[name="cf_challenge_response"]');
+<a href=#240 id=240 data-nosnippet>240</a>    var token = (input &amp;&amp; input.value) ? input.value : null;
+<a href=#241 id=241 data-nosnippet>241</a>    var hasContainer = !!document.querySelector('.cf-turnstile, .turnstile, [data-sitekey]');
+<a href=#242 id=242 data-nosnippet>242</a>    var hasMarkers = hasContainer || !!input || !!bbox;
+<a href=#243 id=243 data-nosnippet>243</a>    return { token: token, bbox: bbox, hasMarkers: hasMarkers };
+<a href=#244 id=244 data-nosnippet>244</a>})()
+<a href=#245 id=245 data-nosnippet>245</a>"#</span>;
+<a href=#246 id=246 data-nosnippet>246</a>
+<a href=#247 id=247 data-nosnippet>247</a><span class="doccomment">/// Run [`POLL_JS`] against `session`'s main world and decode the result.
+<a href=#248 id=248 data-nosnippet>248</a></span><span class="kw">async fn </span>poll_state(session: <span class="kw-2">&amp;</span>SessionHandle) -&gt; <span class="prelude-ty">Result</span>&lt;PollState, CloudflareError&gt; {
+<a href=#249 id=249 data-nosnippet>249</a>    <span class="kw">let </span>res = session
+<a href=#250 id=250 data-nosnippet>250</a>        .call(
+<a href=#251 id=251 data-nosnippet>251</a>            <span class="string">"Runtime.evaluate"</span>,
+<a href=#252 id=252 data-nosnippet>252</a>            <span class="macro">json!</span>({
+<a href=#253 id=253 data-nosnippet>253</a>                <span class="string">"expression"</span>: POLL_JS,
+<a href=#254 id=254 data-nosnippet>254</a>                <span class="string">"returnByValue"</span>: <span class="bool-val">true</span>,
+<a href=#255 id=255 data-nosnippet>255</a>                <span class="string">"awaitPromise"</span>: <span class="bool-val">true</span>,
+<a href=#256 id=256 data-nosnippet>256</a>            }),
+<a href=#257 id=257 data-nosnippet>257</a>        )
+<a href=#258 id=258 data-nosnippet>258</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#259 id=259 data-nosnippet>259</a>
+<a href=#260 id=260 data-nosnippet>260</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(details) = res.get(<span class="string">"exceptionDetails"</span>) {
+<a href=#261 id=261 data-nosnippet>261</a>        <span class="kw">let </span>msg = details
+<a href=#262 id=262 data-nosnippet>262</a>            .get(<span class="string">"exception"</span>)
+<a href=#263 id=263 data-nosnippet>263</a>            .and_then(|e| e.get(<span class="string">"description"</span>))
+<a href=#264 id=264 data-nosnippet>264</a>            .and_then(|d| d.as_str())
+<a href=#265 id=265 data-nosnippet>265</a>            .unwrap_or(<span class="string">"unknown"</span>)
+<a href=#266 id=266 data-nosnippet>266</a>            .to_string();
+<a href=#267 id=267 data-nosnippet>267</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(CloudflareError::JsError(msg));
+<a href=#268 id=268 data-nosnippet>268</a>    }
+<a href=#269 id=269 data-nosnippet>269</a>
+<a href=#270 id=270 data-nosnippet>270</a>    <span class="kw">let </span>value = res
+<a href=#271 id=271 data-nosnippet>271</a>        .get(<span class="string">"result"</span>)
+<a href=#272 id=272 data-nosnippet>272</a>        .and_then(|r| r.get(<span class="string">"value"</span>))
+<a href=#273 id=273 data-nosnippet>273</a>        .cloned()
+<a href=#274 id=274 data-nosnippet>274</a>        .unwrap_or(Value::Null);
+<a href=#275 id=275 data-nosnippet>275</a>
+<a href=#276 id=276 data-nosnippet>276</a>    serde_json::from_value(value)
+<a href=#277 id=277 data-nosnippet>277</a>        .map_err(|e| CloudflareError::JsError(<span class="macro">format!</span>(<span class="string">"invalid poll payload: {e}"</span>)))
+<a href=#278 id=278 data-nosnippet>278</a>}
+<a href=#279 id=279 data-nosnippet>279</a>
+<a href=#280 id=280 data-nosnippet>280</a><span class="attr">#[cfg(test)]
+<a href=#281 id=281 data-nosnippet>281</a>#[allow(clippy::panic, clippy::unwrap_used)]
+<a href=#282 id=282 data-nosnippet>282</a></span><span class="kw">mod </span>tests {
+<a href=#283 id=283 data-nosnippet>283</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
+<a href=#284 id=284 data-nosnippet>284</a>    <span class="kw">use </span>zendriver_transport::testing::MockConnection;
+<a href=#285 id=285 data-nosnippet>285</a>
+<a href=#286 id=286 data-nosnippet>286</a>    <span class="doccomment">/// Interactive happy path: poll #1 yields a bbox → click_at fires the
+<a href=#287 id=287 data-nosnippet>287</a>    /// three mouse events at (15% × width, 50% × height) inside the bbox →
+<a href=#288 id=288 data-nosnippet>288</a>    /// poll #2 observes the token → TokenAcquired.
+<a href=#289 id=289 data-nosnippet>289</a>    </span><span class="attr">#[tokio::test]
+<a href=#290 id=290 data-nosnippet>290</a>    </span><span class="kw">async fn </span>wait_for_clearance_clicks_at_bbox_offset_then_returns_token() {
+<a href=#291 id=291 data-nosnippet>291</a>        <span class="kw">let </span>(<span class="kw-2">mut </span>mock, conn) = MockConnection::pair();
+<a href=#292 id=292 data-nosnippet>292</a>        <span class="kw">let </span>sess = SessionHandle::new(conn.clone(), <span class="string">"S1"</span>);
+<a href=#293 id=293 data-nosnippet>293</a>
+<a href=#294 id=294 data-nosnippet>294</a>        <span class="comment">// bbox at (100, 200) with 60×40 → click at
+<a href=#295 id=295 data-nosnippet>295</a>        //   x = 100 + 60 * 0.15 = 109
+<a href=#296 id=296 data-nosnippet>296</a>        //   y = 200 + 40 * 0.50 = 220
+<a href=#297 id=297 data-nosnippet>297</a>        </span><span class="kw">const </span>BBOX_X: f64 = <span class="number">100.0</span>;
+<a href=#298 id=298 data-nosnippet>298</a>        <span class="kw">const </span>BBOX_Y: f64 = <span class="number">200.0</span>;
+<a href=#299 id=299 data-nosnippet>299</a>        <span class="kw">const </span>BBOX_W: f64 = <span class="number">60.0</span>;
+<a href=#300 id=300 data-nosnippet>300</a>        <span class="kw">const </span>BBOX_H: f64 = <span class="number">40.0</span>;
+<a href=#301 id=301 data-nosnippet>301</a>        <span class="kw">const </span>EXPECTED_CLICK_X: f64 = BBOX_X + BBOX_W * <span class="number">0.15</span>;
+<a href=#302 id=302 data-nosnippet>302</a>        <span class="kw">const </span>EXPECTED_CLICK_Y: f64 = BBOX_Y + BBOX_H * <span class="number">0.50</span>;
+<a href=#303 id=303 data-nosnippet>303</a>
+<a href=#304 id=304 data-nosnippet>304</a>        <span class="kw">let </span>fut = tokio::spawn({
+<a href=#305 id=305 data-nosnippet>305</a>            <span class="kw">let </span>s = sess.clone();
+<a href=#306 id=306 data-nosnippet>306</a>            <span class="kw">async move </span>{
+<a href=#307 id=307 data-nosnippet>307</a>                <span class="kw">let </span>b = CloudflareBypass::new(<span class="kw-2">&amp;</span>s).poll_interval(Duration::from_millis(<span class="number">1</span>));
+<a href=#308 id=308 data-nosnippet>308</a>                b.wait_for_clearance(Duration::from_secs(<span class="number">5</span>)).<span class="kw">await
+<a href=#309 id=309 data-nosnippet>309</a>            </span>}
+<a href=#310 id=310 data-nosnippet>310</a>        });
+<a href=#311 id=311 data-nosnippet>311</a>
+<a href=#312 id=312 data-nosnippet>312</a>        <span class="comment">// Poll #1: unified evaluator returns bbox, no token, markers present.
+<a href=#313 id=313 data-nosnippet>313</a>        </span><span class="kw">let </span>id_poll1 = mock.expect_cmd(<span class="string">"Runtime.evaluate"</span>).<span class="kw">await</span>;
+<a href=#314 id=314 data-nosnippet>314</a>        <span class="macro">assert!</span>(
+<a href=#315 id=315 data-nosnippet>315</a>            mock.last_sent()[<span class="string">"params"</span>][<span class="string">"expression"</span>]
+<a href=#316 id=316 data-nosnippet>316</a>                .as_str()
+<a href=#317 id=317 data-nosnippet>317</a>                .unwrap()
+<a href=#318 id=318 data-nosnippet>318</a>                .contains(<span class="string">"challenges.cloudflare.com"</span>),
+<a href=#319 id=319 data-nosnippet>319</a>            <span class="string">"poll eval should walk for challenges.cloudflare.com iframe"
+<a href=#320 id=320 data-nosnippet>320</a>        </span>);
+<a href=#321 id=321 data-nosnippet>321</a>        <span class="macro">assert!</span>(
+<a href=#322 id=322 data-nosnippet>322</a>            mock.last_sent()[<span class="string">"params"</span>][<span class="string">"expression"</span>]
+<a href=#323 id=323 data-nosnippet>323</a>                .as_str()
+<a href=#324 id=324 data-nosnippet>324</a>                .unwrap()
+<a href=#325 id=325 data-nosnippet>325</a>                .contains(<span class="string">"cf-turnstile-response"</span>),
+<a href=#326 id=326 data-nosnippet>326</a>            <span class="string">"poll eval should look at the cf-turnstile-response input"
+<a href=#327 id=327 data-nosnippet>327</a>        </span>);
+<a href=#328 id=328 data-nosnippet>328</a>        mock.reply(
+<a href=#329 id=329 data-nosnippet>329</a>            id_poll1,
+<a href=#330 id=330 data-nosnippet>330</a>            <span class="macro">json!</span>({
+<a href=#331 id=331 data-nosnippet>331</a>                <span class="string">"result"</span>: {
+<a href=#332 id=332 data-nosnippet>332</a>                    <span class="string">"type"</span>: <span class="string">"object"</span>,
+<a href=#333 id=333 data-nosnippet>333</a>                    <span class="string">"value"</span>: {
+<a href=#334 id=334 data-nosnippet>334</a>                        <span class="string">"token"</span>: null,
+<a href=#335 id=335 data-nosnippet>335</a>                        <span class="string">"bbox"</span>: { <span class="string">"x"</span>: BBOX_X, <span class="string">"y"</span>: BBOX_Y, <span class="string">"width"</span>: BBOX_W, <span class="string">"height"</span>: BBOX_H },
+<a href=#336 id=336 data-nosnippet>336</a>                        <span class="string">"hasMarkers"</span>: <span class="bool-val">true</span>,
+<a href=#337 id=337 data-nosnippet>337</a>                    }
+<a href=#338 id=338 data-nosnippet>338</a>                }
+<a href=#339 id=339 data-nosnippet>339</a>            }),
+<a href=#340 id=340 data-nosnippet>340</a>        )
+<a href=#341 id=341 data-nosnippet>341</a>        .<span class="kw">await</span>;
+<a href=#342 id=342 data-nosnippet>342</a>
+<a href=#343 id=343 data-nosnippet>343</a>        <span class="comment">// click_at → mouseMoved → mousePressed → mouseReleased.
+<a href=#344 id=344 data-nosnippet>344</a>        </span><span class="kw">let </span>id_move = mock.expect_cmd(<span class="string">"Input.dispatchMouseEvent"</span>).<span class="kw">await</span>;
+<a href=#345 id=345 data-nosnippet>345</a>        <span class="kw">let </span>sent = mock.last_sent();
+<a href=#346 id=346 data-nosnippet>346</a>        <span class="macro">assert_eq!</span>(sent[<span class="string">"params"</span>][<span class="string">"type"</span>], <span class="string">"mouseMoved"</span>);
+<a href=#347 id=347 data-nosnippet>347</a>        <span class="macro">assert_eq!</span>(sent[<span class="string">"params"</span>][<span class="string">"x"</span>], EXPECTED_CLICK_X);
+<a href=#348 id=348 data-nosnippet>348</a>        <span class="macro">assert_eq!</span>(sent[<span class="string">"params"</span>][<span class="string">"y"</span>], EXPECTED_CLICK_Y);
+<a href=#349 id=349 data-nosnippet>349</a>        mock.reply(id_move, <span class="macro">json!</span>({})).<span class="kw">await</span>;
+<a href=#350 id=350 data-nosnippet>350</a>
+<a href=#351 id=351 data-nosnippet>351</a>        <span class="kw">let </span>id_press = mock.expect_cmd(<span class="string">"Input.dispatchMouseEvent"</span>).<span class="kw">await</span>;
+<a href=#352 id=352 data-nosnippet>352</a>        <span class="kw">let </span>sent = mock.last_sent();
+<a href=#353 id=353 data-nosnippet>353</a>        <span class="macro">assert_eq!</span>(sent[<span class="string">"params"</span>][<span class="string">"type"</span>], <span class="string">"mousePressed"</span>);
+<a href=#354 id=354 data-nosnippet>354</a>        <span class="macro">assert_eq!</span>(sent[<span class="string">"params"</span>][<span class="string">"button"</span>], <span class="string">"left"</span>);
+<a href=#355 id=355 data-nosnippet>355</a>        <span class="macro">assert_eq!</span>(sent[<span class="string">"params"</span>][<span class="string">"clickCount"</span>], <span class="number">1</span>);
+<a href=#356 id=356 data-nosnippet>356</a>        <span class="macro">assert_eq!</span>(sent[<span class="string">"params"</span>][<span class="string">"x"</span>], EXPECTED_CLICK_X);
+<a href=#357 id=357 data-nosnippet>357</a>        <span class="macro">assert_eq!</span>(sent[<span class="string">"params"</span>][<span class="string">"y"</span>], EXPECTED_CLICK_Y);
+<a href=#358 id=358 data-nosnippet>358</a>        mock.reply(id_press, <span class="macro">json!</span>({})).<span class="kw">await</span>;
+<a href=#359 id=359 data-nosnippet>359</a>
+<a href=#360 id=360 data-nosnippet>360</a>        <span class="kw">let </span>id_rel = mock.expect_cmd(<span class="string">"Input.dispatchMouseEvent"</span>).<span class="kw">await</span>;
+<a href=#361 id=361 data-nosnippet>361</a>        <span class="kw">let </span>sent = mock.last_sent();
+<a href=#362 id=362 data-nosnippet>362</a>        <span class="macro">assert_eq!</span>(sent[<span class="string">"params"</span>][<span class="string">"type"</span>], <span class="string">"mouseReleased"</span>);
+<a href=#363 id=363 data-nosnippet>363</a>        <span class="macro">assert_eq!</span>(sent[<span class="string">"params"</span>][<span class="string">"button"</span>], <span class="string">"left"</span>);
+<a href=#364 id=364 data-nosnippet>364</a>        <span class="macro">assert_eq!</span>(sent[<span class="string">"params"</span>][<span class="string">"clickCount"</span>], <span class="number">1</span>);
+<a href=#365 id=365 data-nosnippet>365</a>        mock.reply(id_rel, <span class="macro">json!</span>({})).<span class="kw">await</span>;
+<a href=#366 id=366 data-nosnippet>366</a>
+<a href=#367 id=367 data-nosnippet>367</a>        <span class="comment">// Poll #2: token appears → TokenAcquired terminates the loop.
+<a href=#368 id=368 data-nosnippet>368</a>        </span><span class="kw">let </span>id_poll2 = mock.expect_cmd(<span class="string">"Runtime.evaluate"</span>).<span class="kw">await</span>;
+<a href=#369 id=369 data-nosnippet>369</a>        mock.reply(
+<a href=#370 id=370 data-nosnippet>370</a>            id_poll2,
+<a href=#371 id=371 data-nosnippet>371</a>            <span class="macro">json!</span>({
+<a href=#372 id=372 data-nosnippet>372</a>                <span class="string">"result"</span>: {
+<a href=#373 id=373 data-nosnippet>373</a>                    <span class="string">"type"</span>: <span class="string">"object"</span>,
+<a href=#374 id=374 data-nosnippet>374</a>                    <span class="string">"value"</span>: {
+<a href=#375 id=375 data-nosnippet>375</a>                        <span class="string">"token"</span>: <span class="string">"TOKEN_XYZ"</span>,
+<a href=#376 id=376 data-nosnippet>376</a>                        <span class="string">"bbox"</span>: null,
+<a href=#377 id=377 data-nosnippet>377</a>                        <span class="string">"hasMarkers"</span>: <span class="bool-val">true</span>,
+<a href=#378 id=378 data-nosnippet>378</a>                    }
+<a href=#379 id=379 data-nosnippet>379</a>                }
+<a href=#380 id=380 data-nosnippet>380</a>            }),
+<a href=#381 id=381 data-nosnippet>381</a>        )
+<a href=#382 id=382 data-nosnippet>382</a>        .<span class="kw">await</span>;
+<a href=#383 id=383 data-nosnippet>383</a>
+<a href=#384 id=384 data-nosnippet>384</a>        <span class="kw">let </span>outcome = fut.<span class="kw">await</span>.unwrap().unwrap();
+<a href=#385 id=385 data-nosnippet>385</a>        <span class="kw">match </span>outcome {
+<a href=#386 id=386 data-nosnippet>386</a>            ClearanceOutcome::TokenAcquired(t) =&gt; <span class="macro">assert_eq!</span>(t, <span class="string">"TOKEN_XYZ"</span>),
+<a href=#387 id=387 data-nosnippet>387</a>            other =&gt; <span class="macro">panic!</span>(<span class="string">"expected TokenAcquired, got {other:?}"</span>),
+<a href=#388 id=388 data-nosnippet>388</a>        }
+<a href=#389 id=389 data-nosnippet>389</a>        conn.shutdown();
+<a href=#390 id=390 data-nosnippet>390</a>    }
+<a href=#391 id=391 data-nosnippet>391</a>
+<a href=#392 id=392 data-nosnippet>392</a>    <span class="doccomment">/// Invisible-Turnstile path: no iframe ever mounts, the token is
+<a href=#393 id=393 data-nosnippet>393</a>    /// populated directly on the first poll → TokenAcquired without any
+<a href=#394 id=394 data-nosnippet>394</a>    /// click.
+<a href=#395 id=395 data-nosnippet>395</a>    </span><span class="attr">#[tokio::test]
+<a href=#396 id=396 data-nosnippet>396</a>    </span><span class="kw">async fn </span>wait_for_clearance_returns_token_without_click_for_invisible_turnstile() {
+<a href=#397 id=397 data-nosnippet>397</a>        <span class="kw">let </span>(<span class="kw-2">mut </span>mock, conn) = MockConnection::pair();
+<a href=#398 id=398 data-nosnippet>398</a>        <span class="kw">let </span>sess = SessionHandle::new(conn.clone(), <span class="string">"S1"</span>);
+<a href=#399 id=399 data-nosnippet>399</a>
+<a href=#400 id=400 data-nosnippet>400</a>        <span class="kw">let </span>fut = tokio::spawn({
+<a href=#401 id=401 data-nosnippet>401</a>            <span class="kw">let </span>s = sess.clone();
+<a href=#402 id=402 data-nosnippet>402</a>            <span class="kw">async move </span>{
+<a href=#403 id=403 data-nosnippet>403</a>                <span class="kw">let </span>b = CloudflareBypass::new(<span class="kw-2">&amp;</span>s).poll_interval(Duration::from_millis(<span class="number">1</span>));
+<a href=#404 id=404 data-nosnippet>404</a>                b.wait_for_clearance(Duration::from_secs(<span class="number">5</span>)).<span class="kw">await
+<a href=#405 id=405 data-nosnippet>405</a>            </span>}
+<a href=#406 id=406 data-nosnippet>406</a>        });
+<a href=#407 id=407 data-nosnippet>407</a>
+<a href=#408 id=408 data-nosnippet>408</a>        <span class="kw">let </span>id_poll = mock.expect_cmd(<span class="string">"Runtime.evaluate"</span>).<span class="kw">await</span>;
+<a href=#409 id=409 data-nosnippet>409</a>        mock.reply(
+<a href=#410 id=410 data-nosnippet>410</a>            id_poll,
+<a href=#411 id=411 data-nosnippet>411</a>            <span class="macro">json!</span>({
+<a href=#412 id=412 data-nosnippet>412</a>                <span class="string">"result"</span>: {
+<a href=#413 id=413 data-nosnippet>413</a>                    <span class="string">"type"</span>: <span class="string">"object"</span>,
+<a href=#414 id=414 data-nosnippet>414</a>                    <span class="string">"value"</span>: {
+<a href=#415 id=415 data-nosnippet>415</a>                        <span class="string">"token"</span>: <span class="string">"INVISIBLE_TOKEN"</span>,
+<a href=#416 id=416 data-nosnippet>416</a>                        <span class="string">"bbox"</span>: null,
+<a href=#417 id=417 data-nosnippet>417</a>                        <span class="string">"hasMarkers"</span>: <span class="bool-val">true</span>,
+<a href=#418 id=418 data-nosnippet>418</a>                    }
+<a href=#419 id=419 data-nosnippet>419</a>                }
+<a href=#420 id=420 data-nosnippet>420</a>            }),
+<a href=#421 id=421 data-nosnippet>421</a>        )
+<a href=#422 id=422 data-nosnippet>422</a>        .<span class="kw">await</span>;
+<a href=#423 id=423 data-nosnippet>423</a>
+<a href=#424 id=424 data-nosnippet>424</a>        <span class="kw">let </span>outcome = fut.<span class="kw">await</span>.unwrap().unwrap();
+<a href=#425 id=425 data-nosnippet>425</a>        <span class="kw">match </span>outcome {
+<a href=#426 id=426 data-nosnippet>426</a>            ClearanceOutcome::TokenAcquired(t) =&gt; <span class="macro">assert_eq!</span>(t, <span class="string">"INVISIBLE_TOKEN"</span>),
+<a href=#427 id=427 data-nosnippet>427</a>            other =&gt; <span class="macro">panic!</span>(<span class="string">"expected TokenAcquired, got {other:?}"</span>),
+<a href=#428 id=428 data-nosnippet>428</a>        }
+<a href=#429 id=429 data-nosnippet>429</a>        <span class="comment">// No Input.dispatchMouseEvent should have been queued — the invisible
+<a href=#430 id=430 data-nosnippet>430</a>        // path never clicks. The mock connection asserts via its own drop
+<a href=#431 id=431 data-nosnippet>431</a>        // semantics that no pending sends remain.
+<a href=#432 id=432 data-nosnippet>432</a>        </span>conn.shutdown();
+<a href=#433 id=433 data-nosnippet>433</a>    }
+<a href=#434 id=434 data-nosnippet>434</a>
+<a href=#435 id=435 data-nosnippet>435</a>    <span class="doccomment">/// ChallengeGone path: poll #1 yields a bbox → click → poll #2 reports
+<a href=#436 id=436 data-nosnippet>436</a>    /// no bbox and no token → ChallengeGone.
+<a href=#437 id=437 data-nosnippet>437</a>    </span><span class="attr">#[tokio::test]
+<a href=#438 id=438 data-nosnippet>438</a>    </span><span class="kw">async fn </span>wait_for_clearance_returns_challenge_gone_when_iframe_disappears_after_click() {
+<a href=#439 id=439 data-nosnippet>439</a>        <span class="kw">let </span>(<span class="kw-2">mut </span>mock, conn) = MockConnection::pair();
+<a href=#440 id=440 data-nosnippet>440</a>        <span class="kw">let </span>sess = SessionHandle::new(conn.clone(), <span class="string">"S1"</span>);
+<a href=#441 id=441 data-nosnippet>441</a>
+<a href=#442 id=442 data-nosnippet>442</a>        <span class="kw">let </span>fut = tokio::spawn({
+<a href=#443 id=443 data-nosnippet>443</a>            <span class="kw">let </span>s = sess.clone();
+<a href=#444 id=444 data-nosnippet>444</a>            <span class="kw">async move </span>{
+<a href=#445 id=445 data-nosnippet>445</a>                <span class="kw">let </span>b = CloudflareBypass::new(<span class="kw-2">&amp;</span>s).poll_interval(Duration::from_millis(<span class="number">1</span>));
+<a href=#446 id=446 data-nosnippet>446</a>                b.wait_for_clearance(Duration::from_secs(<span class="number">5</span>)).<span class="kw">await
+<a href=#447 id=447 data-nosnippet>447</a>            </span>}
+<a href=#448 id=448 data-nosnippet>448</a>        });
+<a href=#449 id=449 data-nosnippet>449</a>
+<a href=#450 id=450 data-nosnippet>450</a>        <span class="comment">// Poll #1: bbox present.
+<a href=#451 id=451 data-nosnippet>451</a>        </span><span class="kw">let </span>id_poll1 = mock.expect_cmd(<span class="string">"Runtime.evaluate"</span>).<span class="kw">await</span>;
+<a href=#452 id=452 data-nosnippet>452</a>        mock.reply(
+<a href=#453 id=453 data-nosnippet>453</a>            id_poll1,
+<a href=#454 id=454 data-nosnippet>454</a>            <span class="macro">json!</span>({
+<a href=#455 id=455 data-nosnippet>455</a>                <span class="string">"result"</span>: {
+<a href=#456 id=456 data-nosnippet>456</a>                    <span class="string">"type"</span>: <span class="string">"object"</span>,
+<a href=#457 id=457 data-nosnippet>457</a>                    <span class="string">"value"</span>: {
+<a href=#458 id=458 data-nosnippet>458</a>                        <span class="string">"token"</span>: null,
+<a href=#459 id=459 data-nosnippet>459</a>                        <span class="string">"bbox"</span>: { <span class="string">"x"</span>: <span class="number">10.0</span>, <span class="string">"y"</span>: <span class="number">20.0</span>, <span class="string">"width"</span>: <span class="number">40.0</span>, <span class="string">"height"</span>: <span class="number">40.0 </span>},
+<a href=#460 id=460 data-nosnippet>460</a>                        <span class="string">"hasMarkers"</span>: <span class="bool-val">true</span>,
+<a href=#461 id=461 data-nosnippet>461</a>                    }
+<a href=#462 id=462 data-nosnippet>462</a>                }
+<a href=#463 id=463 data-nosnippet>463</a>            }),
+<a href=#464 id=464 data-nosnippet>464</a>        )
+<a href=#465 id=465 data-nosnippet>465</a>        .<span class="kw">await</span>;
+<a href=#466 id=466 data-nosnippet>466</a>
+<a href=#467 id=467 data-nosnippet>467</a>        <span class="comment">// click sequence.
+<a href=#468 id=468 data-nosnippet>468</a>        </span><span class="kw">for _ in </span><span class="number">0</span>..<span class="number">3 </span>{
+<a href=#469 id=469 data-nosnippet>469</a>            <span class="kw">let </span>id = mock.expect_cmd(<span class="string">"Input.dispatchMouseEvent"</span>).<span class="kw">await</span>;
+<a href=#470 id=470 data-nosnippet>470</a>            mock.reply(id, <span class="macro">json!</span>({})).<span class="kw">await</span>;
+<a href=#471 id=471 data-nosnippet>471</a>        }
+<a href=#472 id=472 data-nosnippet>472</a>
+<a href=#473 id=473 data-nosnippet>473</a>        <span class="comment">// Poll #2: iframe gone, no token.
+<a href=#474 id=474 data-nosnippet>474</a>        </span><span class="kw">let </span>id_poll2 = mock.expect_cmd(<span class="string">"Runtime.evaluate"</span>).<span class="kw">await</span>;
+<a href=#475 id=475 data-nosnippet>475</a>        mock.reply(
+<a href=#476 id=476 data-nosnippet>476</a>            id_poll2,
+<a href=#477 id=477 data-nosnippet>477</a>            <span class="macro">json!</span>({
+<a href=#478 id=478 data-nosnippet>478</a>                <span class="string">"result"</span>: {
+<a href=#479 id=479 data-nosnippet>479</a>                    <span class="string">"type"</span>: <span class="string">"object"</span>,
+<a href=#480 id=480 data-nosnippet>480</a>                    <span class="string">"value"</span>: {
+<a href=#481 id=481 data-nosnippet>481</a>                        <span class="string">"token"</span>: null,
+<a href=#482 id=482 data-nosnippet>482</a>                        <span class="string">"bbox"</span>: null,
+<a href=#483 id=483 data-nosnippet>483</a>                        <span class="string">"hasMarkers"</span>: <span class="bool-val">true</span>,
+<a href=#484 id=484 data-nosnippet>484</a>                    }
+<a href=#485 id=485 data-nosnippet>485</a>                }
+<a href=#486 id=486 data-nosnippet>486</a>            }),
+<a href=#487 id=487 data-nosnippet>487</a>        )
+<a href=#488 id=488 data-nosnippet>488</a>        .<span class="kw">await</span>;
+<a href=#489 id=489 data-nosnippet>489</a>
+<a href=#490 id=490 data-nosnippet>490</a>        <span class="kw">let </span>outcome = fut.<span class="kw">await</span>.unwrap().unwrap();
+<a href=#491 id=491 data-nosnippet>491</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(outcome, ClearanceOutcome::ChallengeGone));
+<a href=#492 id=492 data-nosnippet>492</a>        conn.shutdown();
+<a href=#493 id=493 data-nosnippet>493</a>    }
+<a href=#494 id=494 data-nosnippet>494</a>}
 </code></pre></div></section></main></body></html>

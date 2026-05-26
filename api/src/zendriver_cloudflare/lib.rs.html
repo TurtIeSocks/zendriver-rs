@@ -4,40 +4,44 @@
 <a href=#4 id=4 data-nosnippet>4</a>//! of the [zendriver-rs user guide](https://turtiesocks.github.io/zendriver-rs/)
 <a href=#5 id=5 data-nosnippet>5</a>//! for end-to-end usage, timeout tuning, and detection-failure diagnostics.
 <a href=#6 id=6 data-nosnippet>6</a>//!
-<a href=#7 id=7 data-nosnippet>7</a>//! Drives the Turnstile checkbox click flow:
-<a href=#8 id=8 data-nosnippet>8</a>//!
-<a href=#9 id=9 data-nosnippet>9</a>//! 1. Detect the Turnstile iframe via a shadow-DOM-aware walk of the page's
-<a href=#10 id=10 data-nosnippet>10</a>//!    main world.
-<a href=#11 id=11 data-nosnippet>11</a>//! 2. Dispatch a raw left-click at the 15% × 50% offset inside the iframe
-<a href=#12 id=12 data-nosnippet>12</a>//!    bbox (the canonical Turnstile checkbox location).
-<a href=#13 id=13 data-nosnippet>13</a>//! 3. Poll for either the `cf-turnstile-response` input gaining a token, or
-<a href=#14 id=14 data-nosnippet>14</a>//!    the challenge container disappearing entirely.
-<a href=#15 id=15 data-nosnippet>15</a>//!
-<a href=#16 id=16 data-nosnippet>16</a>//! Most users go through `zendriver`'s `Tab::cloudflare()` (feature-gated)
-<a href=#17 id=17 data-nosnippet>17</a>//! rather than constructing the bypass directly. The
-<a href=#18 id=18 data-nosnippet>18</a>//! [`CloudflareBypass`] type is the underlying driver.
+<a href=#7 id=7 data-nosnippet>7</a>//! **Stealth recommended.** Cloudflare Turnstile is somewhat forgiving of
+<a href=#8 id=8 data-nosnippet>8</a>//! non-stealth Chrome, but `BrowserBuilder::stealth` significantly raises
+<a href=#9 id=9 data-nosnippet>9</a>//! the clearance success rate.
+<a href=#10 id=10 data-nosnippet>10</a>//!
+<a href=#11 id=11 data-nosnippet>11</a>//! Drives the Turnstile checkbox click flow:
+<a href=#12 id=12 data-nosnippet>12</a>//!
+<a href=#13 id=13 data-nosnippet>13</a>//! 1. Detect the Turnstile iframe via a shadow-DOM-aware walk of the page's
+<a href=#14 id=14 data-nosnippet>14</a>//!    main world.
+<a href=#15 id=15 data-nosnippet>15</a>//! 2. Dispatch a raw left-click at the 15% × 50% offset inside the iframe
+<a href=#16 id=16 data-nosnippet>16</a>//!    bbox (the canonical Turnstile checkbox location).
+<a href=#17 id=17 data-nosnippet>17</a>//! 3. Poll for either the `cf-turnstile-response` input gaining a token, or
+<a href=#18 id=18 data-nosnippet>18</a>//!    the challenge container disappearing entirely.
 <a href=#19 id=19 data-nosnippet>19</a>//!
-<a href=#20 id=20 data-nosnippet>20</a>//! ```no_run
-<a href=#21 id=21 data-nosnippet>21</a>//! # async fn ex(tab: &amp;zendriver_transport::SessionHandle)
-<a href=#22 id=22 data-nosnippet>22</a>//! #   -&gt; Result&lt;(), zendriver_cloudflare::CloudflareError&gt; {
-<a href=#23 id=23 data-nosnippet>23</a>//! use std::time::Duration;
-<a href=#24 id=24 data-nosnippet>24</a>//! use zendriver_cloudflare::{CloudflareBypass, ClearanceOutcome};
-<a href=#25 id=25 data-nosnippet>25</a>//!
-<a href=#26 id=26 data-nosnippet>26</a>//! let outcome = CloudflareBypass::new(tab)
-<a href=#27 id=27 data-nosnippet>27</a>//!     .wait_for_clearance(Duration::from_secs(30))
-<a href=#28 id=28 data-nosnippet>28</a>//!     .await?;
-<a href=#29 id=29 data-nosnippet>29</a>//! match outcome {
-<a href=#30 id=30 data-nosnippet>30</a>//!     ClearanceOutcome::TokenAcquired(token) =&gt; println!("got token: {token}"),
-<a href=#31 id=31 data-nosnippet>31</a>//!     ClearanceOutcome::ChallengeGone =&gt; println!("challenge cleared"),
-<a href=#32 id=32 data-nosnippet>32</a>//! }
-<a href=#33 id=33 data-nosnippet>33</a>//! # Ok(()) }
-<a href=#34 id=34 data-nosnippet>34</a>//! ```
-<a href=#35 id=35 data-nosnippet>35</a>
-<a href=#36 id=36 data-nosnippet>36</a></span><span class="kw">pub mod </span>bypass;
-<a href=#37 id=37 data-nosnippet>37</a><span class="kw">pub mod </span>click;
-<a href=#38 id=38 data-nosnippet>38</a><span class="kw">pub mod </span>detection;
-<a href=#39 id=39 data-nosnippet>39</a><span class="kw">pub mod </span>error;
-<a href=#40 id=40 data-nosnippet>40</a>
-<a href=#41 id=41 data-nosnippet>41</a><span class="kw">pub use </span>bypass::{ClearanceOutcome, CloudflareBypass};
-<a href=#42 id=42 data-nosnippet>42</a><span class="kw">pub use </span>error::CloudflareError;
+<a href=#20 id=20 data-nosnippet>20</a>//! Most users go through `zendriver`'s `Tab::cloudflare()` (feature-gated)
+<a href=#21 id=21 data-nosnippet>21</a>//! rather than constructing the bypass directly. The
+<a href=#22 id=22 data-nosnippet>22</a>//! [`CloudflareBypass`] type is the underlying driver.
+<a href=#23 id=23 data-nosnippet>23</a>//!
+<a href=#24 id=24 data-nosnippet>24</a>//! ```no_run
+<a href=#25 id=25 data-nosnippet>25</a>//! # async fn ex(tab: &amp;zendriver_transport::SessionHandle)
+<a href=#26 id=26 data-nosnippet>26</a>//! #   -&gt; Result&lt;(), zendriver_cloudflare::CloudflareError&gt; {
+<a href=#27 id=27 data-nosnippet>27</a>//! use std::time::Duration;
+<a href=#28 id=28 data-nosnippet>28</a>//! use zendriver_cloudflare::{CloudflareBypass, ClearanceOutcome};
+<a href=#29 id=29 data-nosnippet>29</a>//!
+<a href=#30 id=30 data-nosnippet>30</a>//! let outcome = CloudflareBypass::new(tab)
+<a href=#31 id=31 data-nosnippet>31</a>//!     .wait_for_clearance(Duration::from_secs(30))
+<a href=#32 id=32 data-nosnippet>32</a>//!     .await?;
+<a href=#33 id=33 data-nosnippet>33</a>//! match outcome {
+<a href=#34 id=34 data-nosnippet>34</a>//!     ClearanceOutcome::TokenAcquired(token) =&gt; println!("got token: {token}"),
+<a href=#35 id=35 data-nosnippet>35</a>//!     ClearanceOutcome::ChallengeGone =&gt; println!("challenge cleared"),
+<a href=#36 id=36 data-nosnippet>36</a>//! }
+<a href=#37 id=37 data-nosnippet>37</a>//! # Ok(()) }
+<a href=#38 id=38 data-nosnippet>38</a>//! ```
+<a href=#39 id=39 data-nosnippet>39</a>
+<a href=#40 id=40 data-nosnippet>40</a></span><span class="kw">pub mod </span>bypass;
+<a href=#41 id=41 data-nosnippet>41</a><span class="kw">pub mod </span>click;
+<a href=#42 id=42 data-nosnippet>42</a><span class="kw">pub mod </span>detection;
+<a href=#43 id=43 data-nosnippet>43</a><span class="kw">pub mod </span>error;
+<a href=#44 id=44 data-nosnippet>44</a>
+<a href=#45 id=45 data-nosnippet>45</a><span class="kw">pub use </span>bypass::{ClearanceOutcome, CloudflareBypass};
+<a href=#46 id=46 data-nosnippet>46</a><span class="kw">pub use </span>error::CloudflareError;
 </code></pre></div></section></main></body></html>

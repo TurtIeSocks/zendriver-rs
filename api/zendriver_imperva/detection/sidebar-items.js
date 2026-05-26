@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["CaptchaKind","ImpervaSurface"],"fn":["detect_surface"],"struct":["CookieSnapshot","DetectionSnapshot"]};
