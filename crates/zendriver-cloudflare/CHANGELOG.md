@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-05-26
+
+### Added
+
+- Stalled-poll tracing::warn!
+
+
 ## [0.1.2] - 2026-05-25
 
 ### Fixed
