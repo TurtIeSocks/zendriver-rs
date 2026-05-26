@@ -124,6 +124,11 @@ pub enum ZendriverError {
     #[error("cloudflare: {0}")]
     Cloudflare(Box<zendriver_cloudflare::CloudflareError>),
 
+    /// Imperva bypass sub-crate error. Gated by feature `imperva`.
+    #[cfg(feature = "imperva")]
+    #[error("imperva: {0}")]
+    Imperva(Box<zendriver_imperva::ImpervaError>),
+
     /// Chrome-for-Testing fetcher error. Gated by feature `fetcher`.
     #[cfg(feature = "fetcher")]
     #[error("fetcher: {0}")]
@@ -153,6 +158,13 @@ impl From<zendriver_interception::InterceptionError> for ZendriverError {
 impl From<zendriver_cloudflare::CloudflareError> for ZendriverError {
     fn from(e: zendriver_cloudflare::CloudflareError) -> Self {
         Self::Cloudflare(Box::new(e))
+    }
+}
+
+#[cfg(feature = "imperva")]
+impl From<zendriver_imperva::ImpervaError> for ZendriverError {
+    fn from(e: zendriver_imperva::ImpervaError) -> Self {
+        Self::Imperva(Box::new(e))
     }
 }
 

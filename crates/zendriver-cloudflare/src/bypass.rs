@@ -126,6 +126,9 @@ impl<'a> CloudflareBypass<'a> {
         let mut clicked = false;
         let mut ever_seen_markers = false;
 
+        let mut stall_ticks: u32 = 0;
+        let mut warned_stall = false;
+
         loop {
             let state = poll_state(self.session).await?;
             if state.has_markers {
@@ -149,7 +152,16 @@ impl<'a> CloudflareBypass<'a> {
                     // clearance-cookie shortcut.
                     return Ok(ClearanceOutcome::ChallengeGone);
                 }
-                _ => {}
+                _ => {
+                    stall_ticks += 1;
+                    if stall_ticks == 10 && !warned_stall {
+                        tracing::warn!(
+                            poll_interval_ms = self.poll_interval.as_millis() as u64,
+                            "cloudflare clearance stalled — is BrowserBuilder::stealth enabled?"
+                        );
+                        warned_stall = true;
+                    }
+                }
             }
 
             if Instant::now() >= deadline {

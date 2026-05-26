@@ -8,6 +8,7 @@ members = [
     "crates/zendriver-interception",
     "crates/zendriver-fetcher",
     "crates/zendriver-mcp",
+    "crates/zendriver-imperva",
 ]
 
 [workspace.package]
@@ -26,6 +27,7 @@ zendriver-cloudflare    = { path = "crates/zendriver-cloudflare", version = "0.1
 zendriver-interception  = { path = "crates/zendriver-interception", version = "0.1.1" }
 zendriver-fetcher       = { path = "crates/zendriver-fetcher", version = "0.1.1" }
 zendriver-mcp           = { path = "crates/zendriver-mcp", version = "0.1.2" }
+zendriver-imperva       = { path = "crates/zendriver-imperva", version = "0.1.0" }
 
 # MCP server
 rmcp        = { version = "1.7", default-features = false }

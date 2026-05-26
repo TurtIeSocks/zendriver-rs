@@ -10,6 +10,7 @@
 - [Interception](./interception.md)
 - [Expect()](./expect.md)
 - [Cloudflare](./cloudflare.md)
+- [Imperva WAF / Incapsula](./imperva.md)
 - [Fetcher](./fetcher.md)
 - [MCP server](./mcp.md)
 - [Migration from Playwright](./migration-playwright.md)

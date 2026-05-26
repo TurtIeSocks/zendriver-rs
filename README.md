@@ -51,6 +51,7 @@ More working examples in [`crates/zendriver/examples/`](crates/zendriver/example
 | `interception` | no       | Block/modify requests via CDP `Fetch.*`; rule-based + streams | `zendriver-interception`              |
 | `expect`       | no       | Playwright-style `expect_response()` / `expect_request()`     | (in-tree, no extra crate)             |
 | `cloudflare`   | no       | Solve Cloudflare Turnstile challenges                         | `zendriver-cloudflare`                |
+| `imperva`      | no       | Imperva WAF / Incapsula bypass (reese84 / legacy / CAPTCHA)   | `zendriver-imperva`                   |
 | `fetcher`      | no       | Auto-download a pinned Chrome for Testing build               | `zendriver-fetcher` + `reqwest`/`zip` |
 
 Separate binary crate (not a feature on `zendriver`):
@@ -82,10 +83,10 @@ Same as above — only spell out the feature if you want it visible in `Cargo.to
 **Everything:**
 
 ```bash
-cargo add zendriver --features "interception expect cloudflare fetcher"
+cargo add zendriver --features "interception expect cloudflare imperva fetcher"
 ```
 
-Adds request interception, `expect()` matchers, Cloudflare Turnstile bypass, and the Chrome for Testing fetcher.
+Adds request interception, `expect()` matchers, Cloudflare Turnstile bypass, Imperva WAF / Incapsula bypass, and the Chrome for Testing fetcher.
 
 ## Drive a stealth browser from your AI agent
 

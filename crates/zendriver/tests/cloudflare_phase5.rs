@@ -22,6 +22,7 @@
 //! `zendriver_cloudflare::bypass` tests).
 
 #![cfg(feature = "cloudflare-tests")]
+#![allow(clippy::panic, clippy::unwrap_used)]
 
 use serial_test::serial;
 use std::time::Duration;

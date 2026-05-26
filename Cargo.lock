@@ -3267,6 +3267,7 @@ dependencies = [
  "wiremock",
  "zendriver-cloudflare",
  "zendriver-fetcher",
+ "zendriver-imperva",
  "zendriver-interception",
  "zendriver-stealth",
  "zendriver-transport",
@@ -3282,7 +3283,6 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tracing",
- "zendriver-interception",
  "zendriver-transport",
 ]
 
@@ -3303,6 +3303,22 @@ dependencies = [
  "tracing",
  "wiremock",
  "zip",
+]
+
+[[package]]
+name = "zendriver-imperva"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tokio-util",
+ "tracing",
+ "zendriver-interception",
+ "zendriver-transport",
 ]
 
 [[package]]

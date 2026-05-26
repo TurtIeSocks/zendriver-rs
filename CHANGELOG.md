@@ -13,6 +13,10 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SEMVER.md].
 - `zendriver-interception` — `test-support` cargo feature exposing a
   hidden `InterceptHandle::for_tests()` constructor for downstream
   crates' unit tests. Not intended for production use; default off.
+- `zendriver-imperva` crate: passive bypass for Imperva WAF / Incapsula
+  (reese84, legacy Incapsula, CAPTCHA surfaces). Opt-in Fetch-domain
+  fast-path and opt-in CAPTCHA solver callback. `Tab::imperva()`
+  convenience method gated by the `imperva` cargo feature.
 
 ### Changed
 
@@ -50,6 +54,11 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SEMVER.md].
   authoritative changelog source going forward; this top-level file
   remains for human-curated release narrative. Design and migration
   plan in `docs/superpowers/{specs,plans}/2026-05-25-publish-version-automation*.md`.
+- `zendriver-cloudflare`: dropped stale `zendriver-interception` Cargo
+  dep (never imported). Added Stealth-recommended call-out in lib docs.
+- Both `cloudflare` and `imperva` bypass loops emit one `tracing::warn!`
+  after ~2.5s of stalled clearance, nudging callers toward
+  `BrowserBuilder::stealth`.
 
 ### Known issues
 
