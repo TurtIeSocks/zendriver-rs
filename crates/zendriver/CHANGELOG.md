@@ -5,6 +5,17 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-06-01
+
+### Added
+
+- Add BrowserContext skeleton
+- BrowserInner::dispose_browser_context
+- Drop for BrowserContext schedules dispose
+- Browser::create_browser_context[_with]
+- BrowserContext::new_tab[_at] threads browserContextId
+
+
 ### Added
 
 - `Browser::create_browser_context` and `Browser::create_browser_context_with(proxy_server, proxy_bypass_list)` — high-level wrappers around CDP `Target.createBrowserContext` for per-context proxy and storage isolation.
