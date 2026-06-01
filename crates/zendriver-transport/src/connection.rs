@@ -139,6 +139,25 @@ impl Connection {
     }
 }
 
+/// Ceiling on a single WebSocket message/frame, in bytes (256 MiB). tungstenite
+/// defaults to a 64 MiB message / 16 MiB frame cap, and exceeding it silently
+/// drops the socket — large CDP payloads (full-page screenshots, big response
+/// bodies, DOM dumps) routinely blow past that. Both upstream Python drivers
+/// raise the cap to 256 MiB (`2**28`); we match them.
+const WS_MAX_BYTES: usize = 256 << 20;
+
+/// WebSocket transport config applied at connect time. Factored out of
+/// [`connect_with_observers`] so the cap can be unit-tested without a live
+/// socket. Only the message/frame size limits are overridden; everything else
+/// keeps tungstenite's defaults.
+fn ws_config() -> tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
+    tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
+        max_message_size: Some(WS_MAX_BYTES),
+        max_frame_size: Some(WS_MAX_BYTES),
+        ..Default::default()
+    }
+}
+
 /// Connect to a Chrome DevTools WebSocket URL and spawn the actor with no
 /// observers. Convenience wrapper for [`connect_with_observers`].
 pub async fn connect(ws_url: &str) -> Result<Connection, TransportError> {
@@ -152,8 +171,8 @@ pub async fn connect_with_observers(
     ws_url: &str,
     observers: Vec<Arc<dyn TargetObserver>>,
 ) -> Result<Connection, TransportError> {
-    use tokio_tungstenite::connect_async;
-    let (ws, _resp) = connect_async(ws_url).await?;
+    use tokio_tungstenite::connect_async_with_config;
+    let (ws, _resp) = connect_async_with_config(ws_url, Some(ws_config()), false).await?;
     Ok(spawn_actor_with_observers(ws, observers))
 }
 
@@ -351,5 +370,13 @@ mod tests {
         assert_eq!(res["frameId"], "F1");
 
         conn.shutdown();
+    }
+
+    #[test]
+    fn ws_config_uses_256mib_cap() {
+        assert_eq!(WS_MAX_BYTES, 256 << 20);
+        let cfg = ws_config();
+        assert_eq!(cfg.max_message_size, Some(WS_MAX_BYTES));
+        assert_eq!(cfg.max_frame_size, Some(WS_MAX_BYTES));
     }
 }
