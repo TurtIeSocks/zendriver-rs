@@ -92,17 +92,31 @@ el.click_with(ClickOptions { force: true, ..Default::default() }).await?;
 Builders are checked at compile time — there's no `{ tymeout: ... }`
 typo that silently uses the default.
 
-### No global `Browser` / `BrowserContext` split
+### `Browser` / `BrowserContext` split is opt-in
 
 Playwright separates `Browser` (the process) from `BrowserContext`
-(an isolated cookie/storage scope). zendriver-rs has only `Browser`;
-every `Tab` shares the browser-scope cookie jar and is the equivalent
-of one Playwright page inside the default context.
+(an isolated cookie/storage scope). zendriver-rs supports both —
+which one a `Tab` lives in is up to the caller:
 
-If you need multi-context isolation, launch a second `Browser`. The
-overhead is one extra Chrome subprocess — heavier than a context, but
-the isolation is total (separate user-data-dir, separate cookies,
-separate process). Most testing flows can avoid it.
+- `browser.new_tab().await?` opens a tab in the **default** context.
+  Default-context tabs share the browser-wide cookie jar (this matches
+  the pre-`BrowserContext` behavior — existing code is unaffected).
+- `browser.create_browser_context().await?` returns an isolated
+  [`BrowserContext`](https://docs.rs/zendriver/latest/zendriver/struct.BrowserContext.html)
+  whose `new_tab().await?` lives in its own cookie + storage scope.
+  The context is disposed on drop via `Target.disposeBrowserContext`.
+
+For per-context proxy + bypass-list isolation, use
+`browser.create_browser_context_with(Some(proxy_url), None).await?`.
+See the [Per-context isolation chapter](./browser-context.md) for the
+full surface, including the `Drop`-on-async caveat and a worked
+proxy-rotation example.
+
+Multi-context isolation via a second `Browser` process is still an
+option when total isolation (separate user-data-dir, separate process)
+matters — `BrowserContext` shares the parent Chrome process, so heavy
+isolation needs (e.g. profile-level GPU caches) still warrant a fresh
+`Browser`.
 
 ### Find returns one or many, explicitly
 
