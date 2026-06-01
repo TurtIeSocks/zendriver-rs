@@ -187,6 +187,379 @@ impl KeyModifiers {
     }
 }
 
+/// CDP key-event field bundle for a single printable character.
+///
+/// Returned by [`char_descriptor`]. `code` is the physical-key code
+/// (`"KeyA"`, `"Digit1"`, `"Semicolon"`, ...), `windows_vk` the Windows
+/// virtual key-code, and `shift` whether the character requires the Shift
+/// modifier to produce (uppercase letters, `!`, `:`, etc.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CharDescriptor {
+    /// CDP physical-key `code` (e.g. `"KeyA"`).
+    pub code: &'static str,
+    /// Windows virtual key-code.
+    pub windows_vk: i32,
+    /// Whether Shift is required to type this character.
+    pub shift: bool,
+}
+
+/// Resolve a printable character to its CDP key descriptor, mirroring
+/// zendriver-py's `core/keys.py` lookup tables.
+///
+/// Returns `None` for anything that has no single physical-key origin —
+/// whitespace (callers route space/tab/newline to the matching
+/// [`SpecialKey`]) and every non-ASCII / multi-codepoint / emoji character
+/// (callers send those via a `char`-type CDP event instead).
+pub(crate) fn char_descriptor(c: char) -> Option<CharDescriptor> {
+    // a–z → KeyA..KeyZ, vk = ASCII of the uppercase letter, no shift.
+    if c.is_ascii_lowercase() {
+        let upper = c.to_ascii_uppercase();
+        return Some(CharDescriptor {
+            code: key_code_for_letter(upper),
+            windows_vk: upper as i32,
+            shift: false,
+        });
+    }
+    // A–Z → KeyA..KeyZ, vk = ASCII of the letter, shift.
+    if c.is_ascii_uppercase() {
+        return Some(CharDescriptor {
+            code: key_code_for_letter(c),
+            windows_vk: c as i32,
+            shift: true,
+        });
+    }
+    // 0–9 → Digit0..Digit9, vk = ASCII of the digit, no shift.
+    if c.is_ascii_digit() {
+        return Some(CharDescriptor {
+            code: digit_code_for(c),
+            windows_vk: c as i32,
+            shift: false,
+        });
+    }
+    // Shifted digits: ")!@#$%^&*(" — index is the base digit, Shift held.
+    if let Some(idx) = NUM_SHIFT.iter().position(|&s| s == c) {
+        let base = b'0' + idx as u8;
+        return Some(CharDescriptor {
+            code: digit_code_for(base as char),
+            windows_vk: i32::from(base),
+            shift: true,
+        });
+    }
+    // Unshifted punctuation table.
+    if let Some(&(code, vk)) = SPECIAL_CHAR_MAP.iter().find_map(|(k, v)| (*k == c).then_some(v)) {
+        return Some(CharDescriptor {
+            code,
+            windows_vk: vk,
+            shift: false,
+        });
+    }
+    // Shifted punctuation: reuse the base char's code/vk, Shift held.
+    if let Some(base) = SPECIAL_CHAR_SHIFT_MAP
+        .iter()
+        .find_map(|(k, base)| (*k == c).then_some(*base))
+    {
+        if let Some(&(code, vk)) =
+            SPECIAL_CHAR_MAP.iter().find_map(|(k, v)| (*k == base).then_some(v))
+        {
+            return Some(CharDescriptor {
+                code,
+                windows_vk: vk,
+                shift: true,
+            });
+        }
+    }
+    // Whitespace handled by callers as SpecialKey; everything else (non-ASCII,
+    // accents, emoji, multi-codepoint) routes to a `char`-type event.
+    None
+}
+
+/// `Digit{n}` for an ASCII digit char.
+fn digit_code_for(c: char) -> &'static str {
+    match c {
+        '0' => "Digit0",
+        '1' => "Digit1",
+        '2' => "Digit2",
+        '3' => "Digit3",
+        '4' => "Digit4",
+        '5' => "Digit5",
+        '6' => "Digit6",
+        '7' => "Digit7",
+        '8' => "Digit8",
+        _ => "Digit9",
+    }
+}
+
+/// `Key{X}` for an uppercase ASCII letter.
+fn key_code_for_letter(upper: char) -> &'static str {
+    match upper {
+        'A' => "KeyA",
+        'B' => "KeyB",
+        'C' => "KeyC",
+        'D' => "KeyD",
+        'E' => "KeyE",
+        'F' => "KeyF",
+        'G' => "KeyG",
+        'H' => "KeyH",
+        'I' => "KeyI",
+        'J' => "KeyJ",
+        'K' => "KeyK",
+        'L' => "KeyL",
+        'M' => "KeyM",
+        'N' => "KeyN",
+        'O' => "KeyO",
+        'P' => "KeyP",
+        'Q' => "KeyQ",
+        'R' => "KeyR",
+        'S' => "KeyS",
+        'T' => "KeyT",
+        'U' => "KeyU",
+        'V' => "KeyV",
+        'W' => "KeyW",
+        'X' => "KeyX",
+        'Y' => "KeyY",
+        _ => "KeyZ",
+    }
+}
+
+/// Shifted-digit row, indexed by base digit (0–9): `index → char`.
+const NUM_SHIFT: [char; 10] = [')', '!', '@', '#', '$', '%', '^', '&', '*', '('];
+
+/// Unshifted punctuation → `(code, windowsVirtualKeyCode)`.
+const SPECIAL_CHAR_MAP: [(char, (&str, i32)); 11] = [
+    (';', ("Semicolon", 186)),
+    ('=', ("Equal", 187)),
+    (',', ("Comma", 188)),
+    ('-', ("Minus", 189)),
+    ('.', ("Period", 190)),
+    ('/', ("Slash", 191)),
+    ('`', ("Backquote", 192)),
+    ('[', ("BracketLeft", 219)),
+    ('\\', ("Backslash", 220)),
+    (']', ("BracketRight", 221)),
+    ('\'', ("Quote", 222)),
+];
+
+/// Shifted punctuation → base (unshifted) character whose code/vk it reuses.
+const SPECIAL_CHAR_SHIFT_MAP: [(char, char); 11] = [
+    (':', ';'),
+    ('+', '='),
+    ('<', ','),
+    ('_', '-'),
+    ('>', '.'),
+    ('?', '/'),
+    ('~', '`'),
+    ('{', '['),
+    ('|', '\\'),
+    ('}', ']'),
+    ('"', '\''),
+];
+
+/// How a [`Key`] should be turned into CDP events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeyPress {
+    /// One `char`-type event (text insertion). Used for emoji / non-ASCII /
+    /// multi-codepoint clusters that have no physical-key origin.
+    // Constructed by the A2b public-API layer (`type_keys` / grapheme path).
+    #[allow(dead_code)]
+    Char,
+    /// A full keyDown→keyUp pair (wrapped in modifier keyDown/keyUp events
+    /// when modifiers are active).
+    DownAndUp,
+}
+
+/// A single `Input.dispatchKeyEvent` payload, built by [`key_events`].
+///
+/// Serialized verbatim into the CDP call. `Option` fields are omitted from
+/// the wire payload when `None` (a `char` event carries no `code`/vk; a
+/// special-key event carries no `text`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KeyEventPayload {
+    /// CDP event type: `keyDown` / `keyUp` / `rawKeyDown` / `char`.
+    pub event_type: &'static str,
+    /// Active modifier bitmask at dispatch time.
+    pub modifiers: i32,
+    /// Inserted/typed text, if any.
+    pub text: Option<String>,
+    /// DOM `key` value, if any.
+    pub key: Option<String>,
+    /// Physical-key `code`, if any.
+    pub code: Option<&'static str>,
+    /// Windows virtual key-code, if any.
+    pub windows_vk: Option<i32>,
+}
+
+impl KeyEventPayload {
+    /// Render to the CDP `Input.dispatchKeyEvent` `params` object.
+    pub fn to_cdp_params(&self) -> serde_json::Value {
+        let mut obj = serde_json::Map::new();
+        obj.insert("type".into(), self.event_type.into());
+        obj.insert("modifiers".into(), self.modifiers.into());
+        if let Some(text) = &self.text {
+            obj.insert("text".into(), text.as_str().into());
+        }
+        if let Some(key) = &self.key {
+            obj.insert("key".into(), key.as_str().into());
+        }
+        if let Some(code) = self.code {
+            obj.insert("code".into(), code.into());
+        }
+        if let Some(vk) = self.windows_vk {
+            obj.insert("windowsVirtualKeyCode".into(), vk.into());
+            obj.insert("nativeVirtualKeyCode".into(), vk.into());
+        }
+        serde_json::Value::Object(obj)
+    }
+}
+
+/// CDP descriptor for a modifier key when synthesized as a real keystroke.
+/// Returns `(code, key, windowsVirtualKeyCode)`.
+fn modifier_cdp(m: KeyModifiers) -> (&'static str, &'static str, i32) {
+    match m {
+        KeyModifiers::SHIFT => ("ShiftLeft", "Shift", 16),
+        KeyModifiers::CTRL => ("ControlLeft", "Control", 17),
+        KeyModifiers::ALT => ("AltLeft", "Alt", 18),
+        KeyModifiers::META => ("MetaLeft", "Meta", 91),
+        _ => unreachable!("modifier_cdp called with a non-single modifier"),
+    }
+}
+
+/// Active modifiers in conventional press order: Alt, Ctrl, Meta, Shift.
+fn ordered_modifiers(mods: KeyModifiers) -> impl Iterator<Item = KeyModifiers> {
+    [
+        KeyModifiers::ALT,
+        KeyModifiers::CTRL,
+        KeyModifiers::META,
+        KeyModifiers::SHIFT,
+    ]
+    .into_iter()
+    .filter(move |m| mods.contains(*m))
+}
+
+/// Build the ordered CDP key-event payloads for a single [`Key`] press.
+///
+/// - `KeyPress::Char`, or a `Key::Char` whose [`char_descriptor`] is `None`
+///   (emoji / non-ASCII), emits a single `char`-type event carrying the
+///   character as both `text` and `key`.
+/// - `KeyPress::DownAndUp` on a printable `Key::Char` resolves the effective
+///   modifiers (`mods` plus Shift if the descriptor requires it) and emits,
+///   in conventional order: a keyDown for each active modifier (accumulating
+///   the modifier bitmask) → the main keyDown → the main keyUp → modifier
+///   keyUps in reverse.
+/// - `KeyPress::DownAndUp` on a `Key::Special` does the same modifier wrap,
+///   with the main events a `rawKeyDown`/`keyUp` pair built from
+///   [`SpecialKey::to_cdp`] (no `text`).
+pub(crate) fn key_events(key: Key, mods: KeyModifiers, kind: KeyPress) -> Vec<KeyEventPayload> {
+    // char-event path: explicit Char kind, or a Char with no descriptor.
+    let force_char = matches!(kind, KeyPress::Char);
+    if let Key::Char(c) = key {
+        let Some(d) = char_descriptor(c).filter(|_| !force_char) else {
+            // Explicit Char kind, or emoji / non-ASCII with no descriptor.
+            let s = c.to_string();
+            return vec![KeyEventPayload {
+                event_type: "char",
+                modifiers: mods.cdp_bits(),
+                text: Some(s.clone()),
+                key: Some(s),
+                code: None,
+                windows_vk: None,
+            }];
+        };
+        let effective = if d.shift { mods | KeyModifiers::SHIFT } else { mods };
+        let main_down = KeyEventPayload {
+            event_type: "keyDown",
+            modifiers: effective.cdp_bits(),
+            text: Some(c.to_string()),
+            key: Some(c.to_string()),
+            code: Some(d.code),
+            windows_vk: Some(d.windows_vk),
+        };
+        let main_up = KeyEventPayload {
+            event_type: "keyUp",
+            ..main_down.clone()
+        };
+        return wrap_with_modifiers(effective, main_down, main_up);
+    }
+
+    // Special key.
+    let Key::Special(k) = key else {
+        unreachable!("Key::Char handled above");
+    };
+    if force_char {
+        // char-event for a special key: send its key string as text (space,
+        // enter→"\r", tab→"\t" handled by the caller mapping; here we use the
+        // CDP `key`). Rarely used, but keep the contract total.
+        let (_, key_str, _) = k.to_cdp();
+        return vec![KeyEventPayload {
+            event_type: "char",
+            modifiers: mods.cdp_bits(),
+            text: Some(key_str.to_string()),
+            key: Some(key_str.to_string()),
+            code: None,
+            windows_vk: None,
+        }];
+    }
+    let (code, key_str, vk) = k.to_cdp();
+    let main_down = KeyEventPayload {
+        event_type: "rawKeyDown",
+        modifiers: mods.cdp_bits(),
+        text: None,
+        key: Some(key_str.to_string()),
+        code: Some(code),
+        windows_vk: Some(vk),
+    };
+    let main_up = KeyEventPayload {
+        event_type: "keyUp",
+        ..main_down.clone()
+    };
+    wrap_with_modifiers(mods, main_down, main_up)
+}
+
+/// Wrap a main keyDown/keyUp pair with modifier keyDown (accumulating bits,
+/// conventional order) before and modifier keyUp (reverse, clearing bits)
+/// after. `effective` is the full modifier set to synthesize.
+fn wrap_with_modifiers(
+    effective: KeyModifiers,
+    main_down: KeyEventPayload,
+    main_up: KeyEventPayload,
+) -> Vec<KeyEventPayload> {
+    let active: Vec<KeyModifiers> = ordered_modifiers(effective).collect();
+    let mut events = Vec::with_capacity(active.len() * 2 + 2);
+
+    // Modifier keyDowns, accumulating the bitmask as each is pressed.
+    let mut acc = KeyModifiers::empty();
+    for &m in &active {
+        acc |= m;
+        let (code, key_str, vk) = modifier_cdp(m);
+        events.push(KeyEventPayload {
+            event_type: "keyDown",
+            modifiers: acc.cdp_bits(),
+            text: None,
+            key: Some(key_str.to_string()),
+            code: Some(code),
+            windows_vk: Some(vk),
+        });
+    }
+
+    events.push(main_down);
+    events.push(main_up);
+
+    // Modifier keyUps in reverse, clearing the bitmask as each releases.
+    for &m in active.iter().rev() {
+        acc &= !m;
+        let (code, key_str, vk) = modifier_cdp(m);
+        events.push(KeyEventPayload {
+            event_type: "keyUp",
+            modifiers: acc.cdp_bits(),
+            text: None,
+            key: Some(key_str.to_string()),
+            code: Some(code),
+            windows_vk: Some(vk),
+        });
+    }
+
+    events
+}
+
 /// Returns a plausible nearby QWERTY key for `c`, or None for non-alphanumeric.
 /// Used by realistic typing to inject occasional typos.
 pub(crate) fn neighbor_key(c: char, rng: &mut impl rand::Rng) -> Option<char> {
@@ -281,67 +654,247 @@ mod tests {
         assert!(neighbor_key('!', &mut rng).is_none());
         assert!(neighbor_key(' ', &mut rng).is_none());
     }
+
+    // --- char_descriptor table ---
+
+    #[test]
+    fn char_descriptor_lowercase_letter_no_shift() {
+        let d = char_descriptor('a').expect("a is printable");
+        assert_eq!(d.code, "KeyA");
+        assert_eq!(d.windows_vk, 65);
+        assert!(!d.shift);
+    }
+
+    #[test]
+    fn char_descriptor_uppercase_letter_shift() {
+        let d = char_descriptor('A').expect("A is printable");
+        assert_eq!(d.code, "KeyA");
+        assert_eq!(d.windows_vk, 65);
+        assert!(d.shift);
+        // Lowercase and uppercase share code + vk; only shift differs.
+        let lower = char_descriptor('a').unwrap();
+        assert_eq!(d.code, lower.code);
+        assert_eq!(d.windows_vk, lower.windows_vk);
+    }
+
+    #[test]
+    fn char_descriptor_digit_no_shift() {
+        let d = char_descriptor('1').expect("1 is printable");
+        assert_eq!(d.code, "Digit1");
+        assert_eq!(d.windows_vk, 49);
+        assert!(!d.shift);
+    }
+
+    #[test]
+    fn char_descriptor_shifted_digit_uses_base_digit() {
+        // '!' is shift+1.
+        let d = char_descriptor('!').expect("! is printable");
+        assert_eq!(d.code, "Digit1");
+        assert_eq!(d.windows_vk, 49);
+        assert!(d.shift);
+        // '@' is shift+2.
+        let at = char_descriptor('@').expect("@ is printable");
+        assert_eq!(at.code, "Digit2");
+        assert_eq!(at.windows_vk, 50);
+        assert!(at.shift);
+    }
+
+    #[test]
+    fn char_descriptor_unshifted_punctuation() {
+        let d = char_descriptor(';').expect("; is printable");
+        assert_eq!(d.code, "Semicolon");
+        assert_eq!(d.windows_vk, 186);
+        assert!(!d.shift);
+    }
+
+    #[test]
+    fn char_descriptor_shifted_punctuation_reuses_base() {
+        // ':' is shift+';' → reuses Semicolon/186 with shift.
+        let d = char_descriptor(':').expect(": is printable");
+        assert_eq!(d.code, "Semicolon");
+        assert_eq!(d.windows_vk, 186);
+        assert!(d.shift);
+    }
+
+    #[test]
+    fn char_descriptor_emoji_and_non_ascii_are_none() {
+        assert!(char_descriptor('🚀').is_none());
+        assert!(char_descriptor('é').is_none());
+        assert!(char_descriptor('中').is_none());
+    }
+
+    #[test]
+    fn char_descriptor_whitespace_is_none() {
+        // Space / tab / newline are routed to SpecialKey by callers.
+        assert!(char_descriptor(' ').is_none());
+        assert!(char_descriptor('\t').is_none());
+        assert!(char_descriptor('\n').is_none());
+    }
+
+    // --- key_events builder ---
+
+    #[test]
+    fn key_events_uppercase_emits_shift_wrap() {
+        let events = key_events(Key::Char('A'), KeyModifiers::empty(), KeyPress::DownAndUp);
+        // Shift-down, A-down, A-up, Shift-up.
+        assert_eq!(events.len(), 4);
+
+        assert_eq!(events[0].event_type, "keyDown");
+        assert_eq!(events[0].code, Some("ShiftLeft"));
+        assert_eq!(events[0].windows_vk, Some(16));
+        assert_eq!(events[0].modifiers, KeyModifiers::SHIFT.cdp_bits());
+
+        assert_eq!(events[1].event_type, "keyDown");
+        assert_eq!(events[1].code, Some("KeyA"));
+        assert_eq!(events[1].windows_vk, Some(65));
+        assert_eq!(events[1].key.as_deref(), Some("A"));
+        assert_eq!(events[1].text.as_deref(), Some("A"));
+        assert_eq!(events[1].modifiers, KeyModifiers::SHIFT.cdp_bits());
+
+        assert_eq!(events[2].event_type, "keyUp");
+        assert_eq!(events[2].code, Some("KeyA"));
+
+        assert_eq!(events[3].event_type, "keyUp");
+        assert_eq!(events[3].code, Some("ShiftLeft"));
+        assert_eq!(events[3].modifiers, 0);
+    }
+
+    #[test]
+    fn key_events_ctrl_a_emits_control_wrap() {
+        let events = key_events(Key::Char('a'), KeyModifiers::CTRL, KeyPress::DownAndUp);
+        // Control-down, a-down, a-up, Control-up.
+        assert_eq!(events.len(), 4);
+
+        assert_eq!(events[0].event_type, "keyDown");
+        assert_eq!(events[0].code, Some("ControlLeft"));
+        assert_eq!(events[0].windows_vk, Some(17));
+        assert_eq!(events[0].modifiers, KeyModifiers::CTRL.cdp_bits());
+
+        assert_eq!(events[1].event_type, "keyDown");
+        assert_eq!(events[1].code, Some("KeyA"));
+        assert_eq!(events[1].windows_vk, Some(65));
+        assert_eq!(events[1].modifiers, KeyModifiers::CTRL.cdp_bits());
+
+        assert_eq!(events[2].event_type, "keyUp");
+        assert_eq!(events[2].code, Some("KeyA"));
+
+        assert_eq!(events[3].event_type, "keyUp");
+        assert_eq!(events[3].code, Some("ControlLeft"));
+        assert_eq!(events[3].modifiers, 0);
+    }
+
+    #[test]
+    fn key_events_emoji_char_path_is_single_char_event() {
+        let events = key_events(Key::Char('🚀'), KeyModifiers::empty(), KeyPress::DownAndUp);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "char");
+        assert_eq!(events[0].text.as_deref(), Some("🚀"));
+        assert_eq!(events[0].key.as_deref(), Some("🚀"));
+        assert!(events[0].code.is_none());
+        assert!(events[0].windows_vk.is_none());
+    }
+
+    #[test]
+    fn key_events_char_kind_forces_char_event_even_for_ascii() {
+        let events = key_events(Key::Char('a'), KeyModifiers::empty(), KeyPress::Char);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "char");
+        assert_eq!(events[0].text.as_deref(), Some("a"));
+        assert!(events[0].code.is_none());
+    }
+
+    #[test]
+    fn key_events_special_key_no_modifiers_is_rawkeydown_keyup() {
+        let events = key_events(
+            Key::Special(SpecialKey::Enter),
+            KeyModifiers::empty(),
+            KeyPress::DownAndUp,
+        );
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event_type, "rawKeyDown");
+        assert_eq!(events[0].key.as_deref(), Some("Enter"));
+        assert_eq!(events[0].windows_vk, Some(13));
+        assert!(events[0].text.is_none());
+        assert_eq!(events[1].event_type, "keyUp");
+    }
+
+    #[test]
+    fn key_events_shifted_char_with_extra_modifier_accumulates_bits() {
+        // Ctrl + ':' → Ctrl-down, Shift-down (synthesized from descriptor),
+        // ':'-down, ':'-up, Shift-up, Ctrl-up. Conventional order is
+        // Alt,Ctrl,Meta,Shift, so Ctrl precedes Shift.
+        let events = key_events(Key::Char(':'), KeyModifiers::CTRL, KeyPress::DownAndUp);
+        assert_eq!(events.len(), 6);
+        assert_eq!(events[0].code, Some("ControlLeft"));
+        assert_eq!(events[0].modifiers, KeyModifiers::CTRL.cdp_bits());
+        assert_eq!(events[1].code, Some("ShiftLeft"));
+        assert_eq!(
+            events[1].modifiers,
+            (KeyModifiers::CTRL | KeyModifiers::SHIFT).cdp_bits()
+        );
+        assert_eq!(events[2].code, Some("Semicolon"));
+        assert_eq!(events[2].event_type, "keyDown");
+        assert_eq!(events[3].event_type, "keyUp");
+        assert_eq!(events[3].code, Some("Semicolon"));
+        assert_eq!(events[4].code, Some("ShiftLeft"));
+        assert_eq!(events[4].event_type, "keyUp");
+        assert_eq!(events[4].modifiers, KeyModifiers::CTRL.cdp_bits());
+        assert_eq!(events[5].code, Some("ControlLeft"));
+        assert_eq!(events[5].modifiers, 0);
+    }
 }
 
 use std::time::Duration;
-
-use serde_json::json;
 
 use crate::error::Result;
 use crate::input::InputController;
 use crate::tab::Tab;
 
-/// Dispatch a single character via Input.dispatchKeyEvent (keyDown + keyUp).
-pub(crate) async fn dispatch_char(tab: &Tab, c: char, modifier_bits: i32) -> Result<()> {
-    let s = c.to_string();
-    tab.session()
-        .call(
-            "Input.dispatchKeyEvent",
-            json!({
-                "type": "keyDown", "text": &s, "key": &s,
-                "modifiers": modifier_bits,
-            }),
-        )
-        .await?;
-    tab.session()
-        .call(
-            "Input.dispatchKeyEvent",
-            json!({
-                "type": "keyUp", "text": &s, "key": &s,
-                "modifiers": modifier_bits,
-            }),
-        )
-        .await?;
+/// Dispatch a pre-built sequence of CDP key events in order.
+pub(crate) async fn dispatch_key_events(tab: &Tab, events: &[KeyEventPayload]) -> Result<()> {
+    for ev in events {
+        tab.session()
+            .call("Input.dispatchKeyEvent", ev.to_cdp_params())
+            .await?;
+    }
     Ok(())
 }
 
-/// Dispatch a named special key (Enter, Tab, etc).
+/// Dispatch raw text as a single `char`-type event.
+///
+/// Used for multi-codepoint grapheme clusters (emoji with ZWJ/skin-tone
+/// modifiers, combining sequences) that have no single physical-key origin.
+// Consumed by the A2b public-API layer (`type_text` grapheme path).
+#[allow(dead_code)]
+pub(crate) async fn dispatch_char_text(tab: &Tab, text: &str) -> Result<()> {
+    let payload = KeyEventPayload {
+        event_type: "char",
+        modifiers: 0,
+        text: Some(text.to_string()),
+        key: Some(text.to_string()),
+        code: None,
+        windows_vk: None,
+    };
+    dispatch_key_events(tab, std::slice::from_ref(&payload)).await
+}
+
+/// Dispatch a single character as a full keyDown/keyUp pair (with shift /
+/// code / vk synthesis via [`key_events`]).
+///
+/// `modifier_bits` are the caller's already-held modifiers; emoji /
+/// non-ASCII chars fall back to a `char`-type event automatically.
+pub(crate) async fn dispatch_char(tab: &Tab, c: char, modifier_bits: i32) -> Result<()> {
+    let mods = KeyModifiers::from_bits_truncate(modifier_bits as u8);
+    let events = key_events(Key::Char(c), mods, KeyPress::DownAndUp);
+    dispatch_key_events(tab, &events).await
+}
+
+/// Dispatch a named special key (Enter, Tab, etc) as a rawKeyDown/keyUp pair.
 #[allow(dead_code)]
 pub(crate) async fn dispatch_special(tab: &Tab, k: SpecialKey, modifier_bits: i32) -> Result<()> {
-    let (code, key, vk) = k.to_cdp();
-    tab.session()
-        .call(
-            "Input.dispatchKeyEvent",
-            json!({
-                "type": "rawKeyDown",
-                "code": code, "key": key,
-                "windowsVirtualKeyCode": vk,
-                "modifiers": modifier_bits,
-            }),
-        )
-        .await?;
-    tab.session()
-        .call(
-            "Input.dispatchKeyEvent",
-            json!({
-                "type": "keyUp",
-                "code": code, "key": key,
-                "windowsVirtualKeyCode": vk,
-                "modifiers": modifier_bits,
-            }),
-        )
-        .await?;
-    Ok(())
+    let mods = KeyModifiers::from_bits_truncate(modifier_bits as u8);
+    let events = key_events(Key::Special(k), mods, KeyPress::DownAndUp);
+    dispatch_key_events(tab, &events).await
 }
 
 /// Type `text` with realistic per-character timing, occasional typos, and
