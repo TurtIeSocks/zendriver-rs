@@ -721,6 +721,13 @@ pub(crate) struct BrowserInner {
     pub(crate) main_tab: Tab,
     pub(crate) child: tokio::sync::Mutex<Option<Child>>,
     pub(crate) _user_data: Option<TempDir>,
+    /// Whether this handle owns the underlying Chrome process. `true` for a
+    /// browser produced by [`BrowserBuilder::launch`] (we spawned Chrome, so
+    /// `close()` / `Drop` terminate it); `false` for one produced by
+    /// [`BrowserBuilder::connect`] (we attached to an already-running debug
+    /// session and must leave the process alone — `close()` only shuts down
+    /// the transport, and no `Child` is held so `kill_on_drop` never fires).
+    pub(crate) owns_process: bool,
     /// Cached `InputProfile` from the active `StealthProfile` (or
     /// `InputProfile::native` when stealth is off). `Browser::new_tab` and
     /// the [`TabRegistrar`] observer read this to build a fresh per-Tab
@@ -818,6 +825,7 @@ pub(crate) fn test_only_inner_from_conn(conn: Connection) -> Arc<BrowserInner> {
             main_tab,
             child: tokio::sync::Mutex::new(None),
             _user_data: None,
+            owns_process: false,
             stealth_input_profile: input_profile,
             tabs: tokio::sync::RwLock::new(map),
             debug_host_port: None,
@@ -974,6 +982,234 @@ impl TargetObserver for TabRegistrar {
 
 const WS_ENDPOINT_TIMEOUT: Duration = Duration::from_secs(15);
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+/// How long [`resolve_ws_from_http`] waits for the `/json/version` round-trip.
+const JSON_VERSION_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Inputs to [`finish_connect`] — the post-connect handshake shared by
+/// [`BrowserBuilder::launch`] (spawn) and [`BrowserBuilder::connect`]
+/// (attach). Bundled into a struct to keep the function signature readable
+/// (clippy `too_many_arguments`) and to make the spawn-vs-attach differences
+/// explicit at the call site.
+pub(crate) struct FinishConnect {
+    /// The freshly-established transport (already wired with the observer
+    /// chain via `connect_with_observers`).
+    pub(crate) conn: Connection,
+    /// The tab registrar from the observer chain; its weak `BrowserInner`
+    /// ref is wired here once the cyclic `Arc` resolves.
+    pub(crate) registrar: Arc<TabRegistrar>,
+    /// Per-tab input profile cached on `BrowserInner` for new-tab construction.
+    pub(crate) input_profile: zendriver_stealth::InputProfile,
+    /// Owned Chrome child process — `Some` for `launch`, `None` for `connect`.
+    pub(crate) child: Option<Child>,
+    /// Owned `user_data_dir` tempdir — `Some` only when `launch` allocated one.
+    pub(crate) owned_tmp: Option<TempDir>,
+    /// `host:port` of the debug endpoint, for [`Tab::inspector_url`].
+    pub(crate) debug_host_port: Option<String>,
+    /// Whether the resulting handle owns (and must terminate) the process.
+    pub(crate) owns_process: bool,
+}
+
+/// Run the post-connect CDP handshake and assemble [`BrowserInner`].
+///
+/// Shared by [`BrowserBuilder::launch`] and [`BrowserBuilder::connect`]: both
+/// arrive here with a live [`Connection`] (observer chain already attached)
+/// and need the same sequence — enable browser-scoped auto-attach, discover +
+/// attach the main page target, build the self-referential `Arc<BrowserInner>`,
+/// then backfill the registrar's weak ref and the main-tab registry entry.
+///
+/// The only spawn-vs-attach differences are carried in [`FinishConnect`]: the
+/// owned `Child` / `TempDir` (present only for `launch`) and the
+/// `owns_process` flag.
+pub(crate) async fn finish_connect(
+    args: FinishConnect,
+) -> Result<Arc<BrowserInner>, ZendriverError> {
+    let FinishConnect {
+        conn,
+        registrar,
+        input_profile,
+        child,
+        owned_tmp,
+        debug_host_port,
+        owns_process,
+    } = args;
+
+    // Enable auto-attach with debugger-pause BEFORE attaching to the initial
+    // target. Sent at browser scope (no session_id) so it covers both the
+    // initial target and any subsequently-opened pages/iframes.
+    conn.call_raw(
+        "Target.setAutoAttach",
+        json!({
+            "autoAttach": true,
+            "waitForDebuggerOnStart": true,
+            "flatten": true,
+        }),
+        None,
+    )
+    .await?;
+
+    // Discover the initial target via Target.getTargets (prefer a page).
+    let list = conn.call_raw("Target.getTargets", json!({}), None).await?;
+    let target_id = list["targetInfos"]
+        .as_array()
+        .and_then(|arr| {
+            arr.iter()
+                .find(|t| t["type"] == "page")
+                .or_else(|| arr.first())
+        })
+        .and_then(|t| t["targetId"].as_str())
+        .ok_or_else(|| ZendriverError::Navigation("no initial target found".into()))?
+        .to_string();
+
+    // Attach to the initial target. This triggers `Target.attachedToTarget`
+    // which the actor routes through observers (`on_target_attached`) and
+    // then releases via `Runtime.runIfWaitingForDebugger`.
+    //
+    // The `TabRegistrar` observer (in the chain) will try to insert into
+    // `BrowserInner.tabs` for the main tab too. That insertion is a no-op
+    // because the weak ref isn't wired yet (`OnceLock` empty → observer warns
+    // + skips). We re-insert the main tab manually below so the registry is
+    // consistent post-connect.
+    let attach = conn
+        .call_raw(
+            "Target.attachToTarget",
+            json!({ "targetId": target_id, "flatten": true }),
+            None,
+        )
+        .await?;
+    let session_id = attach["sessionId"]
+        .as_str()
+        .ok_or_else(|| ZendriverError::Navigation("attach returned no sessionId".into()))?
+        .to_string();
+
+    // Wrap session in Tab; build BrowserInner via the canonical
+    // `Arc::new_cyclic` self-referential pattern.
+    let session_id_for_registry = session_id.clone();
+    let target_id_for_main_tab = target_id.clone();
+    let inner = Arc::new_cyclic(|weak: &std::sync::Weak<BrowserInner>| {
+        let session = SessionHandle::new(conn.clone(), session_id);
+        let main_tab_input = InputController::new(input_profile.clone());
+        let main_tab = Tab::new(session, weak.clone(), main_tab_input, target_id_for_main_tab);
+        BrowserInner {
+            conn,
+            main_tab,
+            child: tokio::sync::Mutex::new(child),
+            _user_data: owned_tmp,
+            owns_process,
+            stealth_input_profile: input_profile,
+            tabs: tokio::sync::RwLock::new(HashMap::new()),
+            debug_host_port,
+            tabs_changed: tokio::sync::Notify::new(),
+            #[cfg(feature = "interception")]
+            proxy_auth_handle: std::sync::OnceLock::new(),
+        }
+    });
+
+    // Wire the registrar's weak ref + manually insert the main tab (it was
+    // attached before the weak ref existed, so the observer bailed early).
+    registrar.set_browser(Arc::downgrade(&inner));
+    inner
+        .tabs
+        .write()
+        .await
+        .insert(session_id_for_registry, inner.main_tab.clone());
+
+    Ok(inner)
+}
+
+/// Resolve a `webSocketDebuggerUrl` from a DevTools HTTP base by issuing a
+/// minimal `GET {endpoint}/json/version` over a raw [`tokio::net::TcpStream`].
+///
+/// Hand-rolled (HTTP/1.0, read-until-close, split headers from body, parse the
+/// JSON body) so the always-on dependency set does not grow an HTTP client —
+/// `connect`'s `ws://` path needs no HTTP at all, and the `fetcher`-gated
+/// `reqwest` must not leak into the default build. Mirrors nodriver /
+/// zendriver-py, which read the same `webSocketDebuggerUrl` field.
+///
+/// # Errors
+///
+/// Returns [`BrowserError::DevtoolsParse`] when the endpoint is malformed, the
+/// TCP round-trip fails / times out, the response has no body, or the JSON
+/// lacks a string `webSocketDebuggerUrl`.
+pub(crate) async fn resolve_ws_from_http(endpoint: &str) -> Result<String, ZendriverError> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    // Parse `scheme://host[:port]` → (host, port). Strip any trailing path.
+    let after_scheme = endpoint
+        .strip_prefix("http://")
+        .or_else(|| endpoint.strip_prefix("https://"))
+        .ok_or(BrowserError::DevtoolsParse)?;
+    let authority = after_scheme
+        .split('/')
+        .next()
+        .unwrap_or(after_scheme)
+        .trim();
+    if authority.is_empty() {
+        return Err(BrowserError::DevtoolsParse.into());
+    }
+    // host:port split — default to 80 when no explicit port (DevTools is
+    // typically explicit, e.g. 9222, but be lenient).
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((h, p)) => (
+            h,
+            p.parse::<u16>().map_err(|_| BrowserError::DevtoolsParse)?,
+        ),
+        None => (authority, 80u16),
+    };
+
+    let body = timeout(JSON_VERSION_TIMEOUT, async {
+        let mut stream = TcpStream::connect((host, port))
+            .await
+            .map_err(BrowserError::SpawnFailed)?;
+        // HTTP/1.0 + Connection: close → server closes the socket after the
+        // response, so a read-to-end cleanly delimits the message.
+        let req = format!(
+            "GET /json/version HTTP/1.0\r\nHost: {authority}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+        );
+        stream
+            .write_all(req.as_bytes())
+            .await
+            .map_err(BrowserError::SpawnFailed)?;
+        stream.flush().await.map_err(BrowserError::SpawnFailed)?;
+        let mut buf = Vec::new();
+        stream
+            .read_to_end(&mut buf)
+            .await
+            .map_err(BrowserError::SpawnFailed)?;
+        Ok::<Vec<u8>, ZendriverError>(buf)
+    })
+    .await
+    .map_err(|_| BrowserError::WsTimeout)??;
+
+    parse_ws_from_json_version(&body)
+}
+
+/// Split an HTTP/1.x response into its body and parse the
+/// `webSocketDebuggerUrl` field from the JSON.
+///
+/// Factored out of [`resolve_ws_from_http`] so the parse — the part most worth
+/// asserting — is unit-testable without a socket. Splits on the first
+/// `\r\n\r\n` (header/body boundary); if absent, treats the whole buffer as the
+/// JSON body (lenient toward bodies returned without standard headers in
+/// tests).
+pub(crate) fn parse_ws_from_json_version(raw: &[u8]) -> Result<String, ZendriverError> {
+    let text = String::from_utf8_lossy(raw);
+    // Header/body split on the blank line; fall back to the whole buffer.
+    let body = text
+        .split_once("\r\n\r\n")
+        .map(|(_, b)| b)
+        .unwrap_or(&text)
+        .trim();
+    if body.is_empty() {
+        return Err(BrowserError::DevtoolsParse.into());
+    }
+    let parsed: serde_json::Value =
+        serde_json::from_str(body).map_err(|_| BrowserError::DevtoolsParse)?;
+    parsed["webSocketDebuggerUrl"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| BrowserError::DevtoolsParse.into())
+}
 
 impl BrowserBuilder {
     /// Spawn Chrome and attach. Returns once the main tab is bound.
@@ -1116,101 +1352,21 @@ impl BrowserBuilder {
         debug!(ws_url = %ws_url, "connecting to chrome");
         let conn = zendriver_transport::connect_with_observers(&ws_url, observers).await?;
 
-        // 8. Enable auto-attach with debugger-pause BEFORE attaching to the
-        // initial target. Sent at browser scope (no session_id) so it covers
-        // both the initial target and any subsequently-opened pages/iframes.
-        conn.call_raw(
-            "Target.setAutoAttach",
-            json!({
-                "autoAttach": true,
-                "waitForDebuggerOnStart": true,
-                "flatten": true,
-            }),
-            None,
-        )
+        // 8–12. Shared post-connect handshake (auto-attach, main-tab
+        // discovery + attach, BrowserInner construction, registrar wiring).
+        // Identical for spawn (`launch`) and attach (`connect`); the only
+        // differences are the owned `Child` / `TempDir` we hand it and the
+        // `owns_process` flag (true here — we spawned Chrome).
+        let inner = finish_connect(FinishConnect {
+            conn,
+            registrar,
+            input_profile,
+            child: Some(child),
+            owned_tmp,
+            debug_host_port: debug_host_port_from_ws(&ws_url),
+            owns_process: true,
+        })
         .await?;
-
-        // 9. Discover initial target via Target.getTargets.
-        let list = conn.call_raw("Target.getTargets", json!({}), None).await?;
-        let target_id = list["targetInfos"]
-            .as_array()
-            .and_then(|arr| {
-                arr.iter()
-                    .find(|t| t["type"] == "page")
-                    .or_else(|| arr.first())
-            })
-            .and_then(|t| t["targetId"].as_str())
-            .ok_or_else(|| ZendriverError::Navigation("no initial target found".into()))?
-            .to_string();
-
-        // 10. Attach to the initial target. This triggers `Target.attachedToTarget`
-        // which the actor routes through observers (`on_target_attached`) and
-        // then releases via `Runtime.runIfWaitingForDebugger`.
-        //
-        // The `TabRegistrar` observer (in the chain) will try to insert into
-        // `BrowserInner.tabs` for the main tab too. That insertion is a
-        // no-op because the weak ref isn't wired yet (`OnceLock` empty →
-        // observer warns + skips). We re-insert the main tab manually in
-        // step 12 so the registry is consistent post-launch.
-        let attach = conn
-            .call_raw(
-                "Target.attachToTarget",
-                json!({ "targetId": target_id, "flatten": true }),
-                None,
-            )
-            .await?;
-        let session_id = attach["sessionId"]
-            .as_str()
-            .ok_or_else(|| ZendriverError::Navigation("attach returned no sessionId".into()))?
-            .to_string();
-
-        // 11. Wrap session in Tab; build BrowserInner.
-        //
-        // `Arc::new_cyclic` is the canonical pattern for building
-        // self-referential Arc graphs: the inner closure receives a
-        // `Weak<BrowserInner>` it can hand to the Tab. The Tab uses that
-        // weak ref for later access to Browser-wide resources (CookieJar,
-        // tabs registry); the per-Tab `InputController` is constructed
-        // inline here from the cached `input_profile`.
-        let session_id_for_registry = session_id.clone();
-        let target_id_for_main_tab = target_id.clone();
-        let debug_host_port = debug_host_port_from_ws(&ws_url);
-        let inner = Arc::new_cyclic(|weak: &std::sync::Weak<BrowserInner>| {
-            let session = SessionHandle::new(conn.clone(), session_id);
-            let main_tab_input = InputController::new(input_profile.clone());
-            let main_tab = Tab::new(
-                session,
-                weak.clone(),
-                main_tab_input,
-                target_id_for_main_tab,
-            );
-            BrowserInner {
-                conn,
-                main_tab,
-                child: tokio::sync::Mutex::new(Some(child)),
-                _user_data: owned_tmp,
-                stealth_input_profile: input_profile,
-                tabs: tokio::sync::RwLock::new(HashMap::new()),
-                debug_host_port,
-                tabs_changed: tokio::sync::Notify::new(),
-                #[cfg(feature = "interception")]
-                proxy_auth_handle: std::sync::OnceLock::new(),
-            }
-        });
-
-        // 12. Wire the registrar's weak ref + manually insert the main tab.
-        //
-        // The main tab was attached BEFORE the registrar had a usable weak
-        // ref (the `Arc::new_cyclic` block above only just resolved), so
-        // the registrar's `on_target_attached` ran with `OnceLock` empty
-        // and bailed early. Backfill the registry here so callers see the
-        // expected 1-entry state immediately after `launch`.
-        registrar.set_browser(Arc::downgrade(&inner));
-        inner
-            .tabs
-            .write()
-            .await
-            .insert(session_id_for_registry, inner.main_tab.clone());
 
         // 13. If a custom downloads_dir was set, configure browser-scoped
         // download behavior so all tabs (current + future) save into it.
@@ -1244,6 +1400,114 @@ impl BrowserBuilder {
                 .start();
             let _ = inner.proxy_auth_handle.set(handle);
         }
+
+        Ok(Browser { inner })
+    }
+
+    /// Attach to an already-running Chrome debug session instead of spawning
+    /// a new process.
+    ///
+    /// `endpoint` is detected by scheme:
+    /// - `ws://…` / `wss://…` — used directly as the DevTools browser
+    ///   WebSocket URL (the `webSocketDebuggerUrl` Chrome prints to stderr as
+    ///   `DevTools listening on …`).
+    /// - `http://host:port` / `https://host:port` — a DevTools HTTP base;
+    ///   `connect` performs `GET {endpoint}/json/version` and reads
+    ///   `webSocketDebuggerUrl` from the JSON body (matching nodriver /
+    ///   zendriver-py).
+    ///
+    /// The connected [`Browser`] does **not** own the Chrome process: its
+    /// [`Browser::close`] shuts down only the transport, and dropping it does
+    /// **not** terminate Chrome. Use this to drive a long-lived browser you
+    /// started elsewhere.
+    ///
+    /// `.stealth(profile)` and `.observer(..)` still apply, but only to
+    /// targets attached **after** this call — the stealth observer is wired
+    /// into the same browser-wide `Target.setAutoAttach { flatten: true }`
+    /// that fires on newly-attached targets. Tabs already open when you
+    /// connect predate the observer chain and are **not** patched.
+    ///
+    /// The spawn-only builder fields — [`BrowserBuilder::executable`],
+    /// [`BrowserBuilder::user_data_dir`], [`BrowserBuilder::downloads_dir`],
+    /// and any launch flags ([`BrowserBuilder::arg`] / headless / sandbox /
+    /// channel / lang / user-agent) — are **ignored** on the connect path,
+    /// since no process is launched.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Browser`] when an `http(s)://` endpoint
+    /// cannot be resolved to a `webSocketDebuggerUrl`, and
+    /// [`ZendriverError::Transport`] when the WebSocket attach fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// // Chrome already started with `--remote-debugging-port=9222`.
+    /// let browser = zendriver::Browser::builder()
+    ///     .connect("http://127.0.0.1:9222").await?;
+    /// let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// // Does NOT kill the Chrome we attached to:
+    /// browser.close().await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn connect(self, endpoint: impl Into<String>) -> Result<Browser, ZendriverError> {
+        let endpoint = endpoint.into();
+
+        // Resolve the browser WebSocket URL from the endpoint scheme.
+        let ws_url = if endpoint.starts_with("ws://") || endpoint.starts_with("wss://") {
+            endpoint
+        } else if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+            resolve_ws_from_http(&endpoint).await?
+        } else {
+            return Err(BrowserError::DevtoolsParse.into());
+        };
+
+        // Resolve the per-tab InputProfile + build the observer chain exactly
+        // like `launch` does (stealth observer → tab registrar → user
+        // observers). The spawn-only branches (`executable`, flags, TempDir)
+        // are intentionally skipped — `connect` never launches a process.
+        let input_profile = self
+            .stealth
+            .as_ref()
+            .map_or_else(zendriver_stealth::InputProfile::native, |sp| {
+                sp.input_profile()
+            });
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let observers: Vec<Arc<dyn TargetObserver>> = if let Some(ref profile) = self.stealth {
+            // No executable to resolve a fingerprint from on the connect path;
+            // fall back to the profile's default fingerprint.
+            let fp = profile.resolve_fingerprint(Path::new(""))?;
+            let stealth_obs: Arc<dyn TargetObserver> =
+                Arc::new(StealthObserver::new(profile.clone(), fp));
+            let mut obs_vec = Vec::with_capacity(2 + self.extra_observers.len());
+            obs_vec.push(stealth_obs);
+            obs_vec.push(registrar.clone() as Arc<dyn TargetObserver>);
+            obs_vec.extend(self.extra_observers.iter().cloned());
+            obs_vec
+        } else {
+            let mut obs_vec = Vec::with_capacity(1 + self.extra_observers.len());
+            obs_vec.push(registrar.clone() as Arc<dyn TargetObserver>);
+            obs_vec.extend(self.extra_observers.iter().cloned());
+            obs_vec
+        };
+
+        debug!(ws_url = %ws_url, "attaching to running chrome");
+        let conn = zendriver_transport::connect_with_observers(&ws_url, observers).await?;
+
+        // Same post-connect handshake as `launch`, but with no owned process:
+        // no `Child`, no `TempDir`, `owns_process = false`.
+        let inner = finish_connect(FinishConnect {
+            conn,
+            registrar,
+            input_profile,
+            child: None,
+            owned_tmp: None,
+            debug_host_port: debug_host_port_from_ws(&ws_url),
+            owns_process: false,
+        })
+        .await?;
 
         Ok(Browser { inner })
     }
@@ -1447,6 +1711,29 @@ impl Browser {
     #[must_use]
     pub fn builder() -> BrowserBuilder {
         BrowserBuilder::new()
+    }
+
+    /// Attach to an already-running Chrome debug session instead of spawning.
+    ///
+    /// Shortcut for [`Browser::builder().connect(endpoint)`][BrowserBuilder::connect]
+    /// — see that method for endpoint formats (`ws://…` / `http://host:port`),
+    /// the non-owning lifecycle (`close` / drop never kill the attached
+    /// process), and which builder fields are ignored on the connect path.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`BrowserBuilder::connect`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// let browser = zendriver::Browser::connect("http://127.0.0.1:9222").await?;
+    /// # browser.close().await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn connect(endpoint: impl Into<String>) -> Result<Browser, ZendriverError> {
+        BrowserBuilder::new().connect(endpoint).await
     }
 
     /// Handle for the tab that exists when Chrome launches.
@@ -1778,6 +2065,10 @@ impl Browser {
     /// SIGKILLs on timeout. Cleans up the `user_data_dir` tempdir if one was
     /// allocated at launch time.
     ///
+    /// For a browser produced by [`BrowserBuilder::connect`] (we did not spawn
+    /// Chrome) this shuts down only the transport and leaves the attached
+    /// process running.
+    ///
     /// # Examples
     ///
     /// ```no_run
@@ -1789,6 +2080,11 @@ impl Browser {
     /// ```
     pub async fn close(self) -> Result<(), ZendriverError> {
         self.inner.conn.shutdown();
+        // Attached (non-owning) sessions must never terminate the process we
+        // connected to — only the transport is torn down above. Spawn-only.
+        if !self.inner.owns_process {
+            return Ok(());
+        }
         let mut child_guard = self.inner.child.lock().await;
         if let Some(mut child) = child_guard.take() {
             // Try graceful exit first. On Unix, tokio's `start_kill` is
@@ -1945,6 +2241,10 @@ impl Browser {
 /// In short: dropping the [`Browser`] is the panic-safety / scope-exit path.
 /// For a graceful shutdown that flushes Chrome state cleanly, call
 /// [`Browser::close`] explicitly before the [`Browser`] goes out of scope.
+///
+/// For a browser produced by [`BrowserBuilder::connect`] (`owns_process ==
+/// false`) there is no owned `Child`, so step 2 is a no-op: dropping detaches
+/// the transport but never signals the attached Chrome process.
 impl Drop for BrowserInner {
     fn drop(&mut self) {
         self.conn.shutdown();
@@ -1952,6 +2252,13 @@ impl Drop for BrowserInner {
         // we rely on `kill_on_drop(true)` set on the spawned Command, which
         // causes tokio to SIGKILL the child when the Child is dropped.
         // The TempDir for user_data_dir is dropped here too.
+        //
+        // Attached (`connect`) browsers hold no `Child` — `owns_process` is
+        // false and the field is `None` — so nothing is killed here.
+        debug_assert!(
+            self.owns_process || self.child.try_lock().map(|g| g.is_none()).unwrap_or(true),
+            "a non-owning Browser must not hold a Child handle",
+        );
     }
 }
 
@@ -2191,6 +2498,7 @@ mod tests {
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
                 _user_data: None,
+                owns_process: false,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
@@ -2277,6 +2585,7 @@ mod tests {
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
                 _user_data: None,
+                owns_process: false,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
@@ -2379,6 +2688,7 @@ mod tests {
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
                 _user_data: None,
+                owns_process: false,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
@@ -2474,6 +2784,7 @@ mod tests {
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
                 _user_data: None,
+                owns_process: false,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
@@ -2536,6 +2847,7 @@ mod tests {
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
                 _user_data: None,
+                owns_process: false,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
@@ -2599,6 +2911,7 @@ mod tests {
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
                 _user_data: None,
+                owns_process: false,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
@@ -2653,6 +2966,7 @@ mod tests {
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
                 _user_data: None,
+                owns_process: false,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
@@ -2784,6 +3098,7 @@ mod tests {
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
                 _user_data: None,
+                owns_process: false,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
@@ -3078,5 +3393,144 @@ mod tests {
             "clipboardReadWrite"
         );
         assert_eq!(PermissionType::MidiSysex.as_cdp(), "midiSysex");
+    }
+
+    // ----- BrowserBuilder::connect (C1) ----------------------------------
+
+    /// Unit-test the `/json/version` body parse used by the `http(s)://`
+    /// connect path: a `webSocketDebuggerUrl` string is extracted, with and
+    /// without a leading HTTP/1.x header block.
+    #[test]
+    fn resolve_ws_from_http_parses_web_socket_debugger_url() {
+        let ws = "ws://127.0.0.1:9222/devtools/browser/abc";
+
+        // Bare JSON body (header/body split absent → whole buffer is JSON).
+        let body = format!("{{\"webSocketDebuggerUrl\":\"{ws}\"}}");
+        assert_eq!(parse_ws_from_json_version(body.as_bytes()).unwrap(), ws);
+
+        // Full HTTP/1.1 response — header block must be stripped first.
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{{\"Browser\":\"Chrome/120.0.0.0\",\"webSocketDebuggerUrl\":\"{ws}\"}}"
+        );
+        assert_eq!(parse_ws_from_json_version(resp.as_bytes()).unwrap(), ws);
+
+        // Missing field → DevtoolsParse.
+        let bad = b"HTTP/1.1 200 OK\r\n\r\n{\"Browser\":\"Chrome/120\"}";
+        assert!(matches!(
+            parse_ws_from_json_version(bad),
+            Err(ZendriverError::Browser(BrowserError::DevtoolsParse))
+        ));
+    }
+
+    /// The `connect` post-connect handshake (`finish_connect`) drives the same
+    /// CDP sequence as launch over a [`MockConnection`] — proving the `ws://`
+    /// connect path attaches via the already-established transport rather than
+    /// spawning a process — and produces a `BrowserInner` that does NOT own a
+    /// process: `owns_process` is false and no `Child` handle is held.
+    #[tokio::test]
+    async fn connect_ws_endpoint_does_not_spawn() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+
+        // Run the exact post-connect handshake `connect` invokes: no child,
+        // no tempdir, owns_process = false.
+        let fut = tokio::spawn(async move {
+            finish_connect(FinishConnect {
+                conn,
+                registrar,
+                input_profile,
+                child: None,
+                owned_tmp: None,
+                debug_host_port: debug_host_port_from_ws(
+                    "ws://127.0.0.1:9222/devtools/browser/abc",
+                ),
+                owns_process: false,
+            })
+            .await
+        });
+
+        // 1. Browser-scoped auto-attach.
+        let id = mock.expect_cmd("Target.setAutoAttach").await;
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["flatten"], true);
+        assert!(sent.get("sessionId").is_none(), "auto-attach is browser-scope");
+        mock.reply(id, json!({})).await;
+
+        // 2. Initial-target discovery.
+        let id = mock.expect_cmd("Target.getTargets").await;
+        mock.reply(
+            id,
+            json!({ "targetInfos": [{ "targetId": "T1", "type": "page", "url": "about:blank" }] }),
+        )
+        .await;
+
+        // 3. Attach to the discovered target.
+        let id = mock.expect_cmd("Target.attachToTarget").await;
+        assert_eq!(mock.last_sent()["params"]["targetId"], "T1");
+        mock.reply(id, json!({ "sessionId": "S1" })).await;
+
+        let inner = fut.await.unwrap().unwrap();
+
+        // Ownership: attached, not spawned.
+        assert!(!inner.owns_process, "connect path must not own the process");
+        assert!(
+            inner.child.lock().await.is_none(),
+            "connect path holds no Child handle",
+        );
+        // Main tab registered under the attach sessionId.
+        assert_eq!(inner.tabs.read().await.len(), 1);
+        assert!(inner.tabs.read().await.contains_key("S1"));
+
+        inner.conn.shutdown();
+    }
+
+    /// A connected (non-owning) [`Browser`] has `owns_process == false`, and
+    /// [`Browser::close`] tears down only the transport: it returns `Ok`
+    /// without attempting process termination (there is no `Child` to kill,
+    /// and the `owns_process` guard short-circuits before the kill path).
+    #[tokio::test]
+    async fn connect_sets_owns_process_false_and_skips_kill() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+
+        let fut = tokio::spawn(async move {
+            finish_connect(FinishConnect {
+                conn,
+                registrar,
+                input_profile,
+                child: None,
+                owned_tmp: None,
+                debug_host_port: None,
+                owns_process: false,
+            })
+            .await
+        });
+
+        let id = mock.expect_cmd("Target.setAutoAttach").await;
+        mock.reply(id, json!({})).await;
+        let id = mock.expect_cmd("Target.getTargets").await;
+        mock.reply(
+            id,
+            json!({ "targetInfos": [{ "targetId": "T1", "type": "page", "url": "about:blank" }] }),
+        )
+        .await;
+        let id = mock.expect_cmd("Target.attachToTarget").await;
+        mock.reply(id, json!({ "sessionId": "S1" })).await;
+
+        let inner = fut.await.unwrap().unwrap();
+        assert!(!inner.owns_process);
+
+        let browser = Browser { inner };
+        // close() on a non-owning browser: shuts the transport, skips the
+        // kill path entirely. No panic, no hang, returns Ok.
+        browser.close().await.unwrap();
     }
 }
