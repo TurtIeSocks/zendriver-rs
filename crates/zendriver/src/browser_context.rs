@@ -131,14 +131,19 @@ mod drop_tests {
         let inner = crate::browser::test_only_inner_from_conn(conn.clone());
 
         {
-            let _ctx = BrowserContext { browser: inner.clone(), id: "ctx-drop-test".into() };
+            let _ctx = BrowserContext {
+                browser: inner.clone(),
+                id: "ctx-drop-test".into(),
+            };
         }
 
         // Drop has spawned a task — wait for it to land on the mock.
         let id = tokio::time::timeout(
             std::time::Duration::from_secs(2),
             mock.expect_cmd("Target.disposeBrowserContext"),
-        ).await.expect("dispose did not fire within 2s");
+        )
+        .await
+        .expect("dispose did not fire within 2s");
 
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["browserContextId"], "ctx-drop-test");
@@ -165,7 +170,10 @@ mod new_tab_tests {
     async fn new_tab_at_passes_browser_context_id() {
         let (mut mock, conn) = MockConnection::pair();
         let inner = crate::browser::test_only_inner_from_conn(conn.clone());
-        let ctx = BrowserContext { browser: inner, id: "ctx-tab-test".into() };
+        let ctx = BrowserContext {
+            browser: inner,
+            id: "ctx-tab-test".into(),
+        };
 
         let fut = tokio::spawn(async move { ctx.new_tab_at("about:blank").await });
 
@@ -173,7 +181,8 @@ mod new_tab_tests {
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["url"], "about:blank");
         assert_eq!(sent["params"]["browserContextId"], "ctx-tab-test");
-        mock.reply(id, serde_json::json!({ "targetId": "target-1" })).await;
+        mock.reply(id, serde_json::json!({ "targetId": "target-1" }))
+            .await;
 
         // Registrar wait blocks on a `Target.attachedToTarget` event the
         // mock won't fire; bound the test with a short timeout.

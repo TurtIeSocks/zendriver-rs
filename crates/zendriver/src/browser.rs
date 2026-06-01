@@ -1107,7 +1107,10 @@ impl Browser {
     ) -> Result<crate::BrowserContext, ZendriverError> {
         let mut params = serde_json::Map::new();
         if let Some(p) = proxy_server {
-            params.insert("proxyServer".into(), serde_json::Value::String(p.to_string()));
+            params.insert(
+                "proxyServer".into(),
+                serde_json::Value::String(p.to_string()),
+            );
         }
         if let Some(b) = proxy_bypass_list {
             params.insert(
@@ -2058,9 +2061,8 @@ mod tests {
         let inner = test_only_inner_from_conn(conn.clone());
 
         let inner_for_task = inner.clone();
-        let fut = tokio::spawn(async move {
-            inner_for_task.dispose_browser_context("ctx-abc").await
-        });
+        let fut =
+            tokio::spawn(async move { inner_for_task.dispose_browser_context("ctx-abc").await });
 
         let id = mock.expect_cmd("Target.disposeBrowserContext").await;
         assert_eq!(mock.last_sent()["params"]["browserContextId"], "ctx-abc");
@@ -2103,7 +2105,8 @@ mod tests {
             "http://user:pass@p.webshare.io:80"
         );
         assert_eq!(sent["params"]["proxyBypassList"], "<-loopback>");
-        mock.reply(id, json!({ "browserContextId": "ctx-new" })).await;
+        mock.reply(id, json!({ "browserContextId": "ctx-new" }))
+            .await;
 
         let ctx = fut.await.unwrap().unwrap();
         assert_eq!(ctx.id(), "ctx-new");
