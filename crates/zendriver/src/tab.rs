@@ -1688,6 +1688,99 @@ pointer-events:none;opacity:0.85;'; \
         Ok(())
     }
 
+    /// Bring this tab's page to the front of its browser window.
+    ///
+    /// Dispatches `Page.bringToFront` on this tab's session. Distinct from
+    /// [`Tab::activate`], which sends the browser-scope
+    /// `Target.activateTarget` to switch the active tab — `bring_to_front`
+    /// raises the page within its window (focus + paint) at session scope.
+    /// nodriver exposes both; they serve slightly different purposes, so
+    /// zendriver keeps both.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.bring_to_front().await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn bring_to_front(&self) -> Result<()> {
+        self.call("Page.bringToFront", json!({})).await?;
+        Ok(())
+    }
+
+    /// Dismiss Chrome's "Your connection is not private" interstitial by
+    /// typing the magic bypass phrase.
+    ///
+    /// On the SSL/cert warning page, Chrome accepts the literal keystrokes
+    /// `thisisunsafe` (typed anywhere with the page focused) as a proceed
+    /// gesture. This focuses the page `<body>` and fast-types that phrase.
+    /// No-op-ish on normal pages (the keystrokes go to the body and are
+    /// harmless). Mirrors nodriver's `select("body").send_keys("thisisunsafe")`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::ElementNotFound`] if the page has no `<body>`
+    /// to focus (should not happen on a real interstitial).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://self-signed.badssl.com").await?;
+    /// tab.bypass_insecure_connection_warning().await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn bypass_insecure_connection_warning(&self) -> Result<()> {
+        let body = self.find().css("body").one().await?;
+        body.type_text_fast("thisisunsafe").await
+    }
+
+    /// Compose the DevTools front-end "inspector" URL for this tab.
+    ///
+    /// Returns a string of the form
+    /// `http://{host}:{port}/devtools/inspector.html?ws={host}:{port}/devtools/page/{target_id}`,
+    /// where `{host}:{port}` is the remote-debugging endpoint the owning
+    /// [`crate::Browser`] connected to (parsed from Chrome's
+    /// `DevTools listening on ws://HOST:PORT/...` launch line). Open the
+    /// returned URL in any Chromium browser to attach the DevTools UI to this
+    /// page. This returns the URL only — it does not launch a browser.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Navigation`] when the owning browser has been
+    /// dropped or its debug endpoint is unknown (e.g. a Tab constructed
+    /// outside of a real `launch`, or a future transport that doesn't surface
+    /// the endpoint).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let url = tab.inspector_url()?;
+    /// println!("open this to inspect: {url}");
+    /// # Ok(()) }
+    /// ```
+    pub fn inspector_url(&self) -> Result<String> {
+        let browser = self.inner.browser.upgrade().ok_or_else(|| {
+            ZendriverError::Navigation("inspector_url: owning Browser has been dropped".into())
+        })?;
+        let host_port = browser.debug_host_port.as_deref().ok_or_else(|| {
+            ZendriverError::Navigation(
+                "inspector_url: browser debug endpoint not known (not launched via Browser::builder?)".into(),
+            )
+        })?;
+        let target_id = self.target_id();
+        Ok(format!(
+            "http://{host_port}/devtools/inspector.html?ws={host_port}/devtools/page/{target_id}"
+        ))
+    }
 }
 
 impl Tab {
@@ -3392,6 +3485,163 @@ mod tests {
             .await;
 
         fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    // --- B8: bring_to_front / bypass_insecure_connection_warning / inspector_url
+
+    #[tokio::test]
+    async fn bring_to_front_dispatches_page_bring_to_front() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.bring_to_front().await }
+        });
+
+        let id = mock.expect_cmd("Page.bringToFront").await;
+        // Session-scope command (unlike activate's browser-scope
+        // Target.activateTarget): the MockConnection session call path is used.
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn bypass_insecure_connection_warning_focuses_body_and_types_phrase() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.bypass_insecure_connection_warning().await }
+        });
+
+        // Step 1: find().css("body").one() resolves via querySelectorAll →
+        // getProperties → describeNode.
+        let id_q = mock.expect_cmd("Runtime.evaluate").await;
+        let expr = mock.last_sent()["params"]["expression"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        assert!(
+            expr.contains("document.querySelectorAll") && expr.contains("body"),
+            "expected querySelectorAll for body, got: {expr}"
+        );
+        mock.reply(
+            id_q,
+            json!({ "result": { "objectId": "RArr", "type": "object", "subtype": "array" } }),
+        )
+        .await;
+        let id_p = mock.expect_cmd("Runtime.getProperties").await;
+        mock.reply(
+            id_p,
+            json!({
+                "result": [
+                    { "name": "0", "value": { "objectId": "RBody", "type": "object", "subtype": "node" } },
+                    { "name": "length", "value": { "value": 1, "type": "number" } }
+                ]
+            }),
+        )
+        .await;
+        let id_d = mock.expect_cmd("DOM.describeNode").await;
+        mock.reply(id_d, json!({ "node": { "backendNodeId": 7 } }))
+            .await;
+
+        // Step 2: type_text_fast focuses the body first — actionability gate
+        // (TEXT_INPUT = visible → enabled, 2 callFunctionOn) then this.focus()
+        // (1 callFunctionOn). Reply truthy/undefined to each.
+        for _ in 0..2 {
+            let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+            mock.reply(id, json!({ "result": { "value": true, "type": "boolean" } }))
+                .await;
+        }
+        let id_focus = mock.expect_cmd("Runtime.callFunctionOn").await;
+        mock.reply(id_focus, json!({ "result": { "type": "undefined" } }))
+            .await;
+
+        // Step 3: each of the 12 chars of "thisisunsafe" emits a keyDown +
+        // keyUp via Input.dispatchKeyEvent. Drain them all and reconstruct
+        // the typed string from the keyDown events.
+        let phrase = "thisisunsafe";
+        let mut typed = String::new();
+        loop {
+            let next = tokio::time::timeout(
+                Duration::from_millis(500),
+                mock.expect_cmd("Input.dispatchKeyEvent"),
+            )
+            .await;
+            match next {
+                Ok(id) => {
+                    let sent = mock.last_sent();
+                    if sent["params"]["type"] == "keyDown" {
+                        if let Some(k) = sent["params"]["key"].as_str() {
+                            typed.push_str(k);
+                        }
+                    }
+                    mock.reply(id, json!({})).await;
+                }
+                Err(_) => break,
+            }
+        }
+
+        fut.await.unwrap().unwrap();
+        assert_eq!(typed, phrase, "must type the literal bypass phrase");
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn inspector_url_composes_expected_string() {
+        // `inspector_url` reaches the owning browser's `debug_host_port` via
+        // the Tab's Weak<BrowserInner>. Build a real BrowserInner (test
+        // helper) and set the endpoint, then mint a Tab bound to it.
+        let (_mock, conn) = MockConnection::pair();
+        let inner = crate::browser::test_only_inner_from_conn(conn.clone());
+        // Endpoint is `None` for the test helper by default → error path.
+        let tab = inner.main_tab.clone();
+        let err = tab.inspector_url().unwrap_err();
+        assert!(
+            matches!(err, ZendriverError::Navigation(_)),
+            "missing endpoint should surface Navigation error, got {err:?}"
+        );
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn inspector_url_with_endpoint_builds_devtools_frontend_url() {
+        let (_mock, conn) = MockConnection::pair();
+        // Construct a BrowserInner with a known debug endpoint + main tab
+        // target id so we can assert the exact composed URL.
+        let inner = std::sync::Arc::new_cyclic(|weak: &std::sync::Weak<crate::browser::BrowserInner>| {
+            let session = SessionHandle::new(conn.clone(), "S1");
+            let input = crate::input::InputController::new(
+                zendriver_stealth::InputProfile::native(),
+            );
+            let main_tab = Tab::new(session, weak.clone(), input, "TARGET-XYZ".to_string());
+            let mut map = std::collections::HashMap::new();
+            map.insert("S1".to_string(), main_tab.clone());
+            crate::browser::BrowserInner {
+                conn: conn.clone(),
+                main_tab,
+                child: tokio::sync::Mutex::new(None),
+                _user_data: None,
+                stealth_input_profile: zendriver_stealth::InputProfile::native(),
+                tabs: tokio::sync::RwLock::new(map),
+                debug_host_port: Some("127.0.0.1:9222".to_string()),
+                tabs_changed: tokio::sync::Notify::new(),
+                #[cfg(feature = "interception")]
+                proxy_auth_handle: std::sync::OnceLock::new(),
+            }
+        });
+        let url = inner.main_tab.inspector_url().unwrap();
+        assert_eq!(
+            url,
+            "http://127.0.0.1:9222/devtools/inspector.html?ws=127.0.0.1:9222/devtools/page/TARGET-XYZ"
+        );
         conn.shutdown();
     }
 }

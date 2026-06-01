@@ -135,6 +135,29 @@ fn which_on_path(name: &str) -> Option<PathBuf> {
     None
 }
 
+/// Extract the `host:port` authority from a `ws://HOST:PORT/...` (or `wss://`)
+/// DevTools endpoint URL.
+///
+/// Returns `None` for inputs that don't carry a recognizable
+/// `scheme://authority` shape. Used to compose [`Tab::inspector_url`] from the
+/// endpoint the browser connected to.
+pub(crate) fn debug_host_port_from_ws(ws_url: &str) -> Option<String> {
+    // Strip the scheme, then take everything up to the first `/` (the path).
+    let after_scheme = ws_url
+        .strip_prefix("ws://")
+        .or_else(|| ws_url.strip_prefix("wss://"))?;
+    let authority = after_scheme
+        .split('/')
+        .next()
+        .unwrap_or(after_scheme)
+        .trim();
+    if authority.is_empty() {
+        None
+    } else {
+        Some(authority.to_string())
+    }
+}
+
 /// Parse a `DevTools listening on ws://...` line from Chrome's stderr.
 pub(crate) fn parse_devtools_line(line: &str) -> Option<String> {
     // Format: `DevTools listening on ws://127.0.0.1:NNNN/devtools/browser/UUID`
@@ -480,6 +503,12 @@ pub(crate) struct BrowserInner {
     /// the [`Tab`] handle for a freshly-created page target and by
     /// `Browser::tabs` / `Browser::tab_count` for snapshot reads.
     pub(crate) tabs: tokio::sync::RwLock<HashMap<String, Tab>>,
+    /// `host:port` of the remote-debugging endpoint Chrome was launched with,
+    /// parsed from the `DevTools listening on ws://HOST:PORT/...` stderr line
+    /// at launch. `None` for test-constructed browsers that never launched a
+    /// real Chrome. Consumed by [`Tab::inspector_url`] (reached via the Tab's
+    /// `Weak<BrowserInner>`) to compose the DevTools front-end URL.
+    pub(crate) debug_host_port: Option<String>,
     /// Fires every time the [`TabRegistrar`] observer mutates [`Self::tabs`]
     /// (insert on attach, remove on detach). [`Browser::new_tab_at`] waits
     /// on this in lieu of the previous 50ms polling loop — it arms the
@@ -554,6 +583,7 @@ pub(crate) fn test_only_inner_from_conn(conn: Connection) -> Arc<BrowserInner> {
             _user_data: None,
             stealth_input_profile: input_profile,
             tabs: tokio::sync::RwLock::new(map),
+            debug_host_port: None,
             tabs_changed: tokio::sync::Notify::new(),
             #[cfg(feature = "interception")]
             proxy_auth_handle: std::sync::OnceLock::new(),
@@ -906,6 +936,7 @@ impl BrowserBuilder {
         // inline here from the cached `input_profile`.
         let session_id_for_registry = session_id.clone();
         let target_id_for_main_tab = target_id.clone();
+        let debug_host_port = debug_host_port_from_ws(&ws_url);
         let inner = Arc::new_cyclic(|weak: &std::sync::Weak<BrowserInner>| {
             let session = SessionHandle::new(conn.clone(), session_id);
             let main_tab_input = InputController::new(input_profile.clone());
@@ -922,6 +953,7 @@ impl BrowserBuilder {
                 _user_data: owned_tmp,
                 stealth_input_profile: input_profile,
                 tabs: tokio::sync::RwLock::new(HashMap::new()),
+                debug_host_port,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
@@ -1209,11 +1241,66 @@ impl Browser {
     /// # Ok(()) }
     /// ```
     pub async fn new_tab_at(&self, url: impl Into<String>) -> Result<Tab, ZendriverError> {
-        let url = url.into();
+        self.create_target(url.into(), false).await
+    }
+
+    /// Open a new top-level OS window navigated to `about:blank`.
+    ///
+    /// Like [`Browser::new_tab`] but passes `newWindow: true` to
+    /// `Target.createTarget`, so Chrome opens a separate browser window rather
+    /// than a tab in the existing one. The returned [`Tab`] is registered via
+    /// the same observer path as `new_tab`. Mirrors nodriver's
+    /// `get(new_window=True)`.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Browser::new_tab`]: [`ZendriverError::TabNotFound`] if the
+    /// registrar fails to register the new window's tab within the wait
+    /// window.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// let browser = zendriver::Browser::builder().launch().await?;
+    /// let win = browser.new_window().await?;
+    /// win.goto("https://example.com").await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn new_window(&self) -> Result<Tab, ZendriverError> {
+        self.create_target("about:blank".to_string(), true).await
+    }
+
+    /// Open a new top-level OS window navigated to `url`.
+    ///
+    /// [`Browser::new_window`] with a custom initial URL. Issue
+    /// `.wait_for_load()` on the returned [`Tab`] to block on the navigation.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// let win = browser.new_window_at("https://example.com").await?;
+    /// win.wait_for_load().await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn new_window_at(&self, url: impl Into<String>) -> Result<Tab, ZendriverError> {
+        self.create_target(url.into(), true).await
+    }
+
+    /// Shared `Target.createTarget` → registrar-wait path behind
+    /// [`Browser::new_tab_at`] (`new_window = false`) and
+    /// [`Browser::new_window_at`] (`new_window = true`).
+    async fn create_target(&self, url: String, new_window: bool) -> Result<Tab, ZendriverError> {
+        let mut params = json!({ "url": url });
+        if new_window {
+            params["newWindow"] = serde_json::Value::Bool(true);
+        }
         let res = self
             .inner
             .conn
-            .call_raw("Target.createTarget", json!({ "url": url }), None)
+            .call_raw("Target.createTarget", params, None)
             .await?;
         let target_id = res
             .get("targetId")
@@ -1411,6 +1498,26 @@ mod tests {
     }
 
     #[test]
+    fn debug_host_port_from_ws_extracts_authority() {
+        assert_eq!(
+            debug_host_port_from_ws("ws://127.0.0.1:9222/devtools/browser/abc").as_deref(),
+            Some("127.0.0.1:9222")
+        );
+        assert_eq!(
+            debug_host_port_from_ws("wss://example.test:1/x").as_deref(),
+            Some("example.test:1")
+        );
+        // No path component still yields the authority.
+        assert_eq!(
+            debug_host_port_from_ws("ws://localhost:5555").as_deref(),
+            Some("localhost:5555")
+        );
+        // Non-ws schemes / garbage → None.
+        assert_eq!(debug_host_port_from_ws("http://x:1/y"), None);
+        assert_eq!(debug_host_port_from_ws("nonsense"), None);
+    }
+
+    #[test]
     fn build_flags_default_is_headless() {
         let b = BrowserBuilder::new();
         let flags = b.build_flags(Path::new("/tmp/x"));
@@ -1502,6 +1609,7 @@ mod tests {
                 _user_data: None,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
+                debug_host_port: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
@@ -1587,6 +1695,7 @@ mod tests {
                 _user_data: None,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
+                debug_host_port: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
@@ -1663,6 +1772,94 @@ mod tests {
         conn.shutdown();
     }
 
+    /// [`Browser::new_window_at`] must pass `newWindow: true` to
+    /// `Target.createTarget` (vs `new_tab_at`, which omits the flag), while
+    /// reusing the same registrar-wait registration path.
+    #[tokio::test]
+    async fn new_window_at_passes_new_window_true() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+
+        let inner = Arc::new_cyclic(|weak: &Weak<BrowserInner>| {
+            let main_session = SessionHandle::new(conn.clone(), "S1");
+            let main_input = InputController::new(input_profile.clone());
+            let main_tab = Tab::new(main_session, weak.clone(), main_input, "T1".to_string());
+            let mut map = HashMap::new();
+            map.insert("S1".to_string(), main_tab.clone());
+            BrowserInner {
+                conn: conn.clone(),
+                main_tab,
+                child: tokio::sync::Mutex::new(None),
+                _user_data: None,
+                stealth_input_profile: input_profile.clone(),
+                tabs: tokio::sync::RwLock::new(map),
+                debug_host_port: None,
+                tabs_changed: tokio::sync::Notify::new(),
+                #[cfg(feature = "interception")]
+                proxy_auth_handle: std::sync::OnceLock::new(),
+            }
+        });
+        registrar.set_browser(Arc::downgrade(&inner));
+        let browser = Browser {
+            inner: inner.clone(),
+        };
+
+        let fut = tokio::spawn({
+            let b = browser.clone();
+            async move { b.new_window_at("https://example.com").await }
+        });
+
+        let create_id = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            mock.expect_cmd("Target.createTarget"),
+        )
+        .await
+        .expect("Target.createTarget not sent within 2s");
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["url"], "https://example.com");
+        assert_eq!(
+            sent["params"]["newWindow"], true,
+            "new_window_at must set newWindow:true"
+        );
+        mock.reply(create_id, json!({ "targetId": "TW" })).await;
+
+        mock.emit_event(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": "SW",
+                "targetInfo": {
+                    "targetId": "TW",
+                    "type": "page",
+                    "url": "https://example.com",
+                    "attached": true,
+                },
+                "waitingForDebugger": true,
+            }),
+        )
+        .await;
+
+        let release_id = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            mock.expect_cmd("Runtime.runIfWaitingForDebugger"),
+        )
+        .await
+        .expect("debugger-release did not fire within 2s");
+        mock.reply(release_id, json!({})).await;
+
+        let win = tokio::time::timeout(std::time::Duration::from_secs(2), fut)
+            .await
+            .expect("new_window_at future did not resolve within 2s")
+            .expect("spawned task panicked")
+            .expect("new_window_at returned Err");
+        assert_eq!(win.target_id(), "TW");
+
+        conn.shutdown();
+    }
+
     /// Mock-drive a `Target.detachedFromTarget` event with the second tab's
     /// `sessionId` and assert the [`TabRegistrar::on_target_detached`]
     /// handler removes it from the browser-wide tabs registry. Counterpart
@@ -1695,6 +1892,7 @@ mod tests {
                 _user_data: None,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
+                debug_host_port: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
@@ -1756,6 +1954,7 @@ mod tests {
                 _user_data: None,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
+                debug_host_port: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
@@ -1818,6 +2017,7 @@ mod tests {
                 _user_data: None,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
+                debug_host_port: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
@@ -1871,6 +2071,7 @@ mod tests {
                 _user_data: None,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
+                debug_host_port: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
@@ -2001,6 +2202,7 @@ mod tests {
                 _user_data: None,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
+                debug_host_port: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
