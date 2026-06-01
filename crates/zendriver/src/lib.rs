@@ -97,7 +97,7 @@ pub use input::{Key, KeyModifiers, KeySequence, MouseButton, SpecialKey};
 pub use query::{AriaRole, BoundingBox, FindBuilder};
 pub use screenshot::{Format, ScreenshotBuilder};
 pub use storage::Storage;
-pub use tab::{ReloadOptions, ScrollOptions, Tab};
+pub use tab::{ReloadOptions, ScrollOptions, Tab, UserAgentOverride};
 pub use traits::{Evaluable, Queryable};
 
 // Re-export selected transport types for advanced users.
@@ -228,6 +228,9 @@ mod auto_trait_assertions {
         assert_send_sync::<SpecialKey>();
         assert_send_sync::<KeyModifiers>();
         assert_send_sync::<ClickOptions>();
+        assert_send_sync::<ReloadOptions>();
+        assert_send_sync::<ScrollOptions>();
+        assert_send_sync::<UserAgentOverride>();
         assert_send_sync::<ZendriverError>();
         assert_send_sync::<BrowserError>();
     }

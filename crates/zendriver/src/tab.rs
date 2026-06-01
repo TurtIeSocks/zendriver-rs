@@ -114,6 +114,52 @@ pub struct ScrollOptions {
     pub speed: Option<i64>,
 }
 
+/// Runtime user-agent override for [`Tab::set_user_agent_with`].
+///
+/// `accept_language` / `platform` are optional refinements — leave them
+/// `None` to override only the UA string. Each `None` field is omitted from
+/// the `Emulation.setUserAgentOverride` dispatch entirely (not sent as
+/// `null`).
+///
+/// # Stealth interaction (read before using under a stealth profile)
+///
+/// The active [`StealthProfile`](zendriver_stealth::StealthProfile) observer
+/// already issues `Emulation.setUserAgentOverride` carrying a coherent
+/// `userAgentMetadata` block (UA Client-Hints). This override is
+/// **last-write-wins and sends NO `userAgentMetadata`**, so applying it under
+/// the Spoofed profile *clobbers* that Client-Hints coherence and can
+/// *increase* fingerprint detectability (the UA string and the UA-CH high
+/// entropy values would disagree). For stealth, prefer setting the UA through
+/// the stealth profile instead. Use this for non-stealth tabs or a deliberate
+/// per-tab UA change where you accept the coherence trade-off.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn ex() -> zendriver::Result<()> {
+/// use zendriver::UserAgentOverride;
+/// # let browser = zendriver::Browser::builder().launch().await?;
+/// # let tab = browser.main_tab();
+/// tab.set_user_agent_with(UserAgentOverride {
+///     user_agent: "Mozilla/5.0 (custom) Gecko/20100101 Firefox/123.0".into(),
+///     accept_language: Some("en-US,en;q=0.9".into()),
+///     platform: Some("Linux x86_64".into()),
+/// }).await?;
+/// # Ok(()) }
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct UserAgentOverride {
+    /// Full `User-Agent` request-header / `navigator.userAgent` string
+    /// (`Emulation.setUserAgentOverride.userAgent`). Required.
+    pub user_agent: String,
+    /// `Accept-Language` header + `navigator.language(s)` override
+    /// (`Emulation.setUserAgentOverride.acceptLanguage`). Omitted when `None`.
+    pub accept_language: Option<String>,
+    /// `navigator.platform` override
+    /// (`Emulation.setUserAgentOverride.platform`). Omitted when `None`.
+    pub platform: Option<String>,
+}
+
 /// Handle to a single CDP target session — one open page in Chrome.
 ///
 /// `Tab` is `Clone` (cheap — wraps an `Arc`) and `Send + Sync`, so the same
@@ -1436,6 +1482,79 @@ impl Tab {
             }
         }
     }
+
+    /// Override this tab's user-agent string at runtime.
+    ///
+    /// Dispatches `Emulation.setUserAgentOverride { userAgent }`. Convenience
+    /// shortcut over [`Tab::set_user_agent_with`] for the UA-only case (no
+    /// `acceptLanguage` / `platform`).
+    ///
+    /// # Stealth warning
+    ///
+    /// This is **last-write-wins** over the stealth observer's own UA override
+    /// and sends NO `userAgentMetadata`, so under the Spoofed stealth profile
+    /// it clobbers the UA Client-Hints coherence the profile set up and can
+    /// *increase* detectability. Prefer the stealth profile's UA for stealth;
+    /// use this for non-stealth tabs or a deliberate per-tab UA change. See
+    /// [`UserAgentOverride`] for the full rationale.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.set_user_agent("Mozilla/5.0 (compatible; MyBot/1.0)").await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn set_user_agent(&self, user_agent: impl Into<String>) -> Result<()> {
+        self.set_user_agent_with(UserAgentOverride {
+            user_agent: user_agent.into(),
+            ..Default::default()
+        })
+        .await
+    }
+
+    /// Override this tab's user-agent (and optionally `Accept-Language` /
+    /// platform) at runtime.
+    ///
+    /// Dispatches `Emulation.setUserAgentOverride` with `userAgent` always set
+    /// and `acceptLanguage` / `platform` included only when the corresponding
+    /// [`UserAgentOverride`] field is `Some` (omitted, not `null`, otherwise).
+    /// For the UA-only case use the [`Tab::set_user_agent`] shortcut.
+    ///
+    /// # Stealth warning
+    ///
+    /// Same caveat as [`Tab::set_user_agent`]: this is last-write-wins and
+    /// sends no `userAgentMetadata`, so under the Spoofed stealth profile it
+    /// clobbers UA Client-Hints coherence. See [`UserAgentOverride`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// use zendriver::UserAgentOverride;
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.set_user_agent_with(UserAgentOverride {
+    ///     user_agent: "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/123.0".into(),
+    ///     accept_language: Some("de-DE,de;q=0.9".into()),
+    ///     platform: Some("Linux x86_64".into()),
+    /// }).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn set_user_agent_with(&self, ovr: UserAgentOverride) -> Result<()> {
+        let mut params = json!({ "userAgent": ovr.user_agent });
+        if let Some(lang) = ovr.accept_language {
+            params["acceptLanguage"] = Value::String(lang);
+        }
+        if let Some(platform) = ovr.platform {
+            params["platform"] = Value::String(platform);
+        }
+        self.call("Emulation.setUserAgentOverride", params).await?;
+        Ok(())
+    }
+
 }
 
 impl Tab {
@@ -2471,6 +2590,7 @@ mod tests {
                 _user_data: None,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
+                debug_host_port: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
@@ -2953,6 +3073,63 @@ mod tests {
             .expect("stop() task panicked")
             .expect("stop() returned Err");
 
+        conn.shutdown();
+    }
+
+    // --- B4: set_user_agent --------------------------------------------
+
+    #[tokio::test]
+    async fn set_user_agent_dispatches_emulation_override() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.set_user_agent("Mozilla/5.0 (compatible; MyBot/1.0)").await }
+        });
+
+        let id = mock.expect_cmd("Emulation.setUserAgentOverride").await;
+        let sent = mock.last_sent();
+        assert_eq!(
+            sent["params"]["userAgent"],
+            "Mozilla/5.0 (compatible; MyBot/1.0)"
+        );
+        // UA-only shortcut omits the optional fields entirely.
+        assert!(sent["params"].get("acceptLanguage").is_none());
+        assert!(sent["params"].get("platform").is_none());
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn set_user_agent_with_includes_lang_and_platform() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                t.set_user_agent_with(UserAgentOverride {
+                    user_agent: "UA/1.0".into(),
+                    accept_language: Some("en-US,en;q=0.9".into()),
+                    platform: Some("Linux x86_64".into()),
+                })
+                .await
+            }
+        });
+
+        let id = mock.expect_cmd("Emulation.setUserAgentOverride").await;
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["userAgent"], "UA/1.0");
+        assert_eq!(sent["params"]["acceptLanguage"], "en-US,en;q=0.9");
+        assert_eq!(sent["params"]["platform"], "Linux x86_64");
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
         conn.shutdown();
     }
 }
