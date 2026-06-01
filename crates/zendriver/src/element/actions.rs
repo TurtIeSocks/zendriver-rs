@@ -36,7 +36,7 @@ use serde_json::json;
 
 use crate::element::Element;
 use crate::error::{Result, ZendriverError};
-use crate::input::keyboard::KeyModifiers;
+use crate::input::keyboard::{Key, KeyModifiers, SpecialKey};
 use crate::input::mouse::{self, MouseButton};
 use crate::query::actionability::{self, ActionabilityCheck};
 
@@ -44,6 +44,39 @@ use crate::query::actionability::{self, ActionabilityCheck};
 /// the value the spec calls out for P3; per-call override land in P4 when
 /// the per-action options structs grow.
 const DEFAULT_ACTIONABILITY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// JS body that assigns `arguments[1].value` through the *native* prototype
+/// value-setter and fires bubbled `input` + `change` events.
+///
+/// React installs a per-instance `_valueTracker` whose own `value` setter
+/// shadows the prototype's. A direct `this.value = v` goes through that
+/// tracker, which updates its cached value and the DOM together — so the
+/// `input` event it then sees reports "no change" and React skips `onChange`,
+/// reverting the field on the next render. Calling the *prototype's*
+/// `value` setter (resolved via `Object.getOwnPropertyDescriptor`) bypasses
+/// the tracker, leaving its cached value stale so React fires `onChange`
+/// correctly. Falls back to a plain assignment when the descriptor has no
+/// setter (non-input elements). Resolves the `<textarea>` prototype for
+/// textareas and the `<input>` prototype otherwise.
+const NATIVE_VALUE_SETTER_JS: &str = "function(el, v){ \
+        const proto = this instanceof HTMLTextAreaElement \
+            ? HTMLTextAreaElement.prototype \
+            : HTMLInputElement.prototype; \
+        const d = Object.getOwnPropertyDescriptor(proto, 'value'); \
+        if (d && d.set) { d.set.call(this, v); } else { this.value = v; } \
+        this.dispatchEvent(new Event('input', {bubbles: true})); \
+        this.dispatchEvent(new Event('change', {bubbles: true})); \
+    }";
+
+/// Extra Backspace presses [`Element::clear_by_deleting`] issues beyond the
+/// reported value length — covers off-by-one reporting and IME composition
+/// tails so a near-empty field still ends up fully cleared.
+const CLEAR_BY_DELETING_SLACK: usize = 2;
+
+/// Hard ceiling on Backspace presses in [`Element::clear_by_deleting`].
+/// Bounds the keystroke loop so a pathological / lying `value.length` can't
+/// spin it unboundedly.
+const CLEAR_BY_DELETING_MAX: usize = 4096;
 
 /// Per-call knobs for [`Element::click_with`].
 ///
@@ -366,13 +399,15 @@ impl Element {
         .await
     }
 
-    /// Set this element's `value` directly + fire `input` and `change`
-    /// events.
+    /// Set this element's `value` + fire bubbled `input` and `change` events.
     ///
-    /// Bypasses keydown/keyup (use [`Element::type_text`] for a real
-    /// keystroke sequence) but dispatches the bubbled `input` + `change`
-    /// events so React-style controlled inputs see the update through their
-    /// onChange handlers.
+    /// Assigns through the element's *native* prototype value-setter rather
+    /// than a direct `this.value =` so React's per-instance `_valueTracker`
+    /// can't silently revert the change on the next render. See
+    /// [`NATIVE_VALUE_SETTER_JS`] for the full rationale. Bypasses
+    /// keydown/keyup (use [`Element::type_text`] for a real keystroke
+    /// sequence) but the bubbled `input` + `change` events let React-style
+    /// controlled inputs see the update through their onChange handlers.
     ///
     /// No actionability gate — `set_value` is the fast-path for tests +
     /// automation flows that don't care about visibility/enabledness. If
@@ -394,14 +429,7 @@ impl Element {
             let value = value.clone();
             async move {
                 let _ = self
-                    .call_on_main(
-                        "function(el, v){ \
-                            this.value = v; \
-                            this.dispatchEvent(new Event('input', {bubbles: true})); \
-                            this.dispatchEvent(new Event('change', {bubbles: true})); \
-                        }",
-                        json!([{ "value": value }]),
-                    )
+                    .call_on_main(NATIVE_VALUE_SETTER_JS, json!([{ "value": value }]))
                     .await?;
                 Ok(())
             }
@@ -409,12 +437,15 @@ impl Element {
         .await
     }
 
-    /// Clear this element's `value` by assigning `''` and firing a bubbled
-    /// `input` event.
+    /// Clear this element's `value` by setting it to the empty string + firing
+    /// bubbled `input` and `change` events.
     ///
-    /// Omits the `change` event + focus + Backspace sequence — for
-    /// contenteditable / non-`<input>` clearing semantics, use
-    /// [`Element::type_text`].
+    /// Routes through the same native prototype value-setter as
+    /// [`Element::set_value`] (see [`NATIVE_VALUE_SETTER_JS`]) so React
+    /// controlled inputs don't revert the clear on the next render. For inputs
+    /// that ignore a programmatic value-set entirely (custom keystroke
+    /// handling), use [`Element::clear_by_deleting`]; for contenteditable /
+    /// non-`<input>` clearing, use [`Element::type_text`].
     ///
     /// No actionability gate — same rationale as [`Element::set_value`].
     ///
@@ -431,14 +462,69 @@ impl Element {
     pub async fn clear(&self) -> Result<()> {
         self.with_refresh(|| async move {
             let _ = self
-                .call_on_main(
-                    "function(){ \
-                        this.value = ''; \
-                        this.dispatchEvent(new Event('input', {bubbles: true})); \
-                    }",
-                    json!([]),
-                )
+                .call_on_main(NATIVE_VALUE_SETTER_JS, json!([{ "value": "" }]))
                 .await?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Clear this element by keystroke: focus, select-all, then press
+    /// Backspace until the field empties.
+    ///
+    /// A real-keystroke fallback for inputs that ignore a programmatic
+    /// value-set (e.g. fields with custom `onKeyDown` handling that
+    /// [`Element::clear`] can't drive). Sequence:
+    ///
+    /// 1. [`Element::focus`] the element.
+    /// 2. Select-all chord — `Cmd+A` on macOS, `Ctrl+A` elsewhere — so the
+    ///    whole value is selected before deletion.
+    /// 3. Read the current `value.length`, then press
+    ///    [`SpecialKey::Backspace`] that many times plus a small slack
+    ///    ([`CLEAR_BY_DELETING_SLACK`]), bounded by [`CLEAR_BY_DELETING_MAX`].
+    ///
+    /// Deletes backward (Backspace) only — never forward-Delete — because
+    /// `VK_DELETE` at caret position 0 is treated as a backward delete on some
+    /// VM environments, which would no-op and spin forever.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let input = tab.find().css("input.react-controlled").one().await?;
+    /// input.clear_by_deleting().await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn clear_by_deleting(&self) -> Result<()> {
+        self.with_refresh(|| async move {
+            self.focus().await?;
+            // Select-all so the field's whole value is highlighted; Backspace
+            // then clears the selection in one stroke before falling back to
+            // per-character deletion for any stragglers.
+            let select_all = if cfg!(target_os = "macos") {
+                KeyModifiers::META
+            } else {
+                KeyModifiers::CTRL
+            };
+            self.press_with(Key::Char('a'), select_all).await?;
+
+            let len: usize = {
+                let res = self
+                    .call_on_main("function(){ return (this.value || '').length; }", json!([]))
+                    .await?;
+                res.get("value")
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|n| usize::try_from(n).ok())
+                    .unwrap_or(0)
+            };
+            let presses = len
+                .saturating_add(CLEAR_BY_DELETING_SLACK)
+                .min(CLEAR_BY_DELETING_MAX);
+            for _ in 0..presses {
+                self.press(Key::Special(SpecialKey::Backspace)).await?;
+            }
             Ok(())
         })
         .await
@@ -710,7 +796,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_value_dispatches_call_function_on_with_value_argument() {
+    async fn set_value_uses_native_prototype_setter() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
         let tab = Tab::new_for_test(sess);
@@ -724,8 +810,15 @@ mod tests {
         let id = mock.expect_cmd("Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
         let decl = sent["params"]["functionDeclaration"].as_str().unwrap();
-        // JS body fires both input + change events for React-style listeners.
-        assert!(decl.contains("this.value = v"));
+        // Assign through the native prototype value-setter so React's
+        // instance-level `_valueTracker` doesn't revert the change on the
+        // next render (a direct `this.value = v` would).
+        assert!(decl.contains("getOwnPropertyDescriptor"));
+        assert!(decl.contains(".set.call"));
+        // Resolves the right prototype for <textarea> vs <input>.
+        assert!(decl.contains("HTMLTextAreaElement"));
+        assert!(decl.contains("HTMLInputElement"));
+        // Fires both input + change events for React-style listeners.
         assert!(decl.contains("'input'"));
         assert!(decl.contains("'change'"));
         // call_on_main prepends the element {objectId:...}; the user-supplied
@@ -738,6 +831,158 @@ mod tests {
             .await;
 
         fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn clear_uses_native_setter_with_empty() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+        let el = Element::from_jsret(tab, 7, "R1".to_string());
+
+        let fut = tokio::spawn({
+            let e = el.clone();
+            async move { e.clear().await }
+        });
+
+        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let sent = mock.last_sent();
+        let decl = sent["params"]["functionDeclaration"].as_str().unwrap();
+        // `clear` routes through the same native-setter JS as `set_value`,
+        // assigning an empty string.
+        assert!(decl.contains("getOwnPropertyDescriptor"));
+        assert!(decl.contains(".set.call"));
+        assert!(decl.contains("HTMLTextAreaElement"));
+        assert!(decl.contains("HTMLInputElement"));
+        assert!(decl.contains("'input'"));
+        assert!(decl.contains("'change'"));
+        // The cleared value is the empty string, passed at arguments[1].
+        let args = sent["params"]["arguments"].as_array().unwrap();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0]["objectId"], "R1");
+        assert_eq!(args[1]["value"], "");
+        mock.reply(id, json!({ "result": { "type": "undefined" } }))
+            .await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn clear_by_deleting_focuses_then_selects_then_backspaces() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+        let el = Element::from_jsret(tab, 7, "R1".to_string());
+
+        let fut = tokio::spawn({
+            let e = el.clone();
+            async move { e.clear_by_deleting().await }
+        });
+
+        // Step 1: explicit focus() — actionability gate (visible → enabled)
+        // then this.focus().
+        for _ in 0..2 {
+            let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+            mock.reply(
+                id,
+                json!({ "result": { "value": true, "type": "boolean" } }),
+            )
+            .await;
+        }
+        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let sent = mock.last_sent();
+        assert!(
+            sent["params"]["functionDeclaration"]
+                .as_str()
+                .unwrap()
+                .contains("this.focus()")
+        );
+        mock.reply(id, json!({ "result": { "type": "undefined" } }))
+            .await;
+
+        // Step 2: select-all chord via press_with(Key::Char('a'), Ctrl|Meta).
+        // press_with focuses first (gate visible → enabled, then this.focus()),
+        // then dispatches the 'a' keyDown + keyUp with a modifier bit set.
+        for _ in 0..2 {
+            let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+            mock.reply(
+                id,
+                json!({ "result": { "value": true, "type": "boolean" } }),
+            )
+            .await;
+        }
+        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        mock.reply(id, json!({ "result": { "type": "undefined" } }))
+            .await;
+        // 'a' keyDown — Ctrl (Windows/Linux) or Meta (macOS) bit must be set.
+        let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["type"], "keyDown");
+        assert_eq!(sent["params"]["key"], "a");
+        let mods = sent["params"]["modifiers"].as_i64().unwrap();
+        let ctrl = i64::from(KeyModifiers::CTRL.cdp_bits());
+        let meta = i64::from(KeyModifiers::META.cdp_bits());
+        assert!(
+            mods == ctrl || mods == meta,
+            "select-all chord must hold Ctrl or Meta, got {mods}"
+        );
+        mock.reply(id, json!({})).await;
+        // 'a' keyUp.
+        let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+        assert_eq!(mock.last_sent()["params"]["type"], "keyUp");
+        mock.reply(id, json!({})).await;
+
+        // Step 3: read current value length via call_on_main. Reply length 0
+        // so only the fixed slack-count of Backspaces follows — keeps the
+        // remaining frame sequence deterministic regardless of the value the
+        // page reports.
+        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let sent = mock.last_sent();
+        assert!(
+            sent["params"]["functionDeclaration"]
+                .as_str()
+                .unwrap()
+                .contains(".value")
+        );
+        mock.reply(id, json!({ "result": { "value": 0, "type": "number" } }))
+            .await;
+
+        // Step 4: with reported length 0 the impl still presses Backspace a
+        // small fixed slack number of times so a near-empty field still gets
+        // a couple of deletes. Each press(Backspace) re-focuses (gate:
+        // visible → enabled, then this.focus()) then dispatches
+        // rawKeyDown + keyUp for the Backspace virtual key. The whole
+        // sequence is deterministic; drive every frame explicitly.
+        let mut saw_backspace = false;
+        for _ in 0..CLEAR_BY_DELETING_SLACK {
+            // press(Backspace) focus: 2 gate calls + this.focus().
+            for _ in 0..2 {
+                let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+                mock.reply(id, json!({ "result": { "value": true, "type": "boolean" } }))
+                    .await;
+            }
+            let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+            mock.reply(id, json!({ "result": { "type": "undefined" } }))
+                .await;
+            // rawKeyDown for Backspace (never forward Delete).
+            let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+            let sent = mock.last_sent();
+            assert_eq!(sent["params"]["type"], "rawKeyDown");
+            assert_eq!(sent["params"]["key"], "Backspace");
+            assert_ne!(sent["params"]["key"], "Delete", "must never forward-Delete");
+            saw_backspace = true;
+            mock.reply(id, json!({})).await;
+            // keyUp.
+            let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+            assert_eq!(mock.last_sent()["params"]["type"], "keyUp");
+            mock.reply(id, json!({})).await;
+        }
+
+        let res = fut.await.unwrap();
+        res.unwrap();
+        assert!(saw_backspace, "expected at least one Backspace keyDown");
         conn.shutdown();
     }
 
