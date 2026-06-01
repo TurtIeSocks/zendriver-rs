@@ -321,6 +321,10 @@ pub struct BrowserBuilder {
     /// Which browser [`Channel`] to discover when no explicit `executable` is
     /// set. Defaults to [`Channel::Auto`].
     pub(crate) channel: Channel,
+    /// Unpacked-extension directory (or `.crx`) paths to side-load. See
+    /// [`BrowserBuilder::add_extension`]. `.crx` entries are unzipped to a
+    /// tempdir at launch; directory entries pass through unchanged.
+    pub(crate) extensions: Vec<PathBuf>,
     pub(crate) extra_args: Vec<String>,
     pub(crate) stealth: Option<StealthProfile>,
     pub(crate) extra_observers: Vec<Arc<dyn TargetObserver>>,
@@ -346,6 +350,7 @@ impl std::fmt::Debug for BrowserBuilder {
             .field("user_agent", &self.user_agent)
             .field("sandbox", &self.sandbox)
             .field("channel", &self.channel)
+            .field("extensions", &self.extensions)
             .field("extra_args", &self.extra_args)
             .field("stealth", &self.stealth)
             .field(
@@ -583,6 +588,54 @@ impl BrowserBuilder {
         self
     }
 
+    /// Side-load a single unpacked extension directory (or a `.crx` file).
+    ///
+    /// Extensions accumulate; call this once per extension or use
+    /// [`BrowserBuilder::extensions`] for a batch. At launch the resolved
+    /// directories are passed via `--load-extension=<dir1,dir2,…>`, paired with
+    /// `--disable-extensions-except=<dir1,dir2,…>` and
+    /// `--enable-unsafe-extension-debugging`. zendriver also forces the
+    /// `DisableLoadExtensionCommandLineSwitch` feature off regardless of the
+    /// active [`StealthProfile`] — Chrome 136+ otherwise ignores
+    /// `--load-extension` entirely (see the type-level note on this builder).
+    ///
+    /// A `.crx` path is unzipped into a temporary directory that lives for the
+    /// [`Browser`]'s lifetime; directory paths are used as-is. Mixing the two
+    /// is fine.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let builder = zendriver::Browser::builder()
+    ///     .add_extension("/path/to/unpacked-ext")
+    ///     .add_extension("/path/to/packed.crx");
+    /// ```
+    #[must_use]
+    pub fn add_extension(mut self, path: impl Into<PathBuf>) -> Self {
+        self.extensions.push(path.into());
+        self
+    }
+
+    /// Side-load several extensions at once.
+    ///
+    /// Equivalent to calling [`BrowserBuilder::add_extension`] for each entry;
+    /// see it for the flag set and `.crx` handling.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use std::path::PathBuf;
+    /// let builder = zendriver::Browser::builder().extensions([
+    ///     PathBuf::from("/ext/one"),
+    ///     PathBuf::from("/ext/two"),
+    /// ]);
+    /// ```
+    #[must_use]
+    pub fn extensions(mut self, paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        self.extensions.extend(paths);
+        self
+    }
+
     /// Append a single command-line flag to the Chrome launch argv.
     ///
     /// Flags accumulate; later calls do NOT replace earlier ones.
@@ -671,12 +724,42 @@ impl BrowserBuilder {
         // See cdpdriver/zendriver#13.
         v.push("--password-store=basic".to_string());
         v.push("--disable-save-password-bubble".to_string());
-        v.push(
-            "--disable-features=PasswordManagerOnboarding,AutofillServerCommunication".to_string(),
-        );
+        // Base disable-features set. When extensions are requested we MUST also
+        // turn off `DisableLoadExtensionCommandLineSwitch`, or Chrome 136+
+        // silently ignores `--load-extension`. The stealth profiles carry that
+        // feature in their own `--disable-features=IsolateOrigins,…` line, but
+        // an Off profile would otherwise miss it, so merge it into the base
+        // line here — Chrome unions every `--disable-features` occurrence, so
+        // the redundancy under a stealth profile is harmless.
+        if self.extensions.is_empty() {
+            v.push(
+                "--disable-features=PasswordManagerOnboarding,AutofillServerCommunication"
+                    .to_string(),
+            );
+        } else {
+            v.push(
+                "--disable-features=PasswordManagerOnboarding,AutofillServerCommunication,DisableLoadExtensionCommandLineSwitch"
+                    .to_string(),
+            );
+        }
         if self.headless.unwrap_or(true) {
             v.push("--headless=new".to_string());
             v.push("--disable-gpu".to_string());
+        }
+        // Extension side-loading flags. `self.extensions` holds already-resolved
+        // directories at this point (`launch` unzips any `.crx` into tempdirs
+        // and rewrites the list before calling `build_flags`). Skipped entirely
+        // when no extensions are configured so the default argv is untouched.
+        if !self.extensions.is_empty() {
+            let joined = self
+                .extensions
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            v.push(format!("--load-extension={joined}"));
+            v.push(format!("--disable-extensions-except={joined}"));
+            v.push("--enable-unsafe-extension-debugging".to_string());
         }
         // C4 dedicated flags. Emitted only when explicitly configured so the
         // default-builder flag set (and its snapshots) is unchanged. Placed
@@ -721,6 +804,11 @@ pub(crate) struct BrowserInner {
     pub(crate) main_tab: Tab,
     pub(crate) child: tokio::sync::Mutex<Option<Child>>,
     pub(crate) _user_data: Option<TempDir>,
+    /// Tempdirs holding `.crx` extensions unzipped at launch. Held here so the
+    /// extracted unpacked directories outlive the Chrome process that was
+    /// pointed at them via `--load-extension`; dropped with the [`Browser`].
+    /// Empty when no `.crx` extensions were configured.
+    pub(crate) _extension_dirs: Vec<TempDir>,
     /// Whether this handle owns the underlying Chrome process. `true` for a
     /// browser produced by [`BrowserBuilder::launch`] (we spawned Chrome, so
     /// `close()` / `Drop` terminate it); `false` for one produced by
@@ -825,6 +913,7 @@ pub(crate) fn test_only_inner_from_conn(conn: Connection) -> Arc<BrowserInner> {
             main_tab,
             child: tokio::sync::Mutex::new(None),
             _user_data: None,
+            _extension_dirs: Vec::new(),
             owns_process: false,
             stealth_input_profile: input_profile,
             tabs: tokio::sync::RwLock::new(map),
@@ -1003,6 +1092,9 @@ pub(crate) struct FinishConnect {
     pub(crate) child: Option<Child>,
     /// Owned `user_data_dir` tempdir — `Some` only when `launch` allocated one.
     pub(crate) owned_tmp: Option<TempDir>,
+    /// Tempdirs for any `.crx` extensions `launch` unzipped. Empty for
+    /// `connect` (no process launched) and when no `.crx` was configured.
+    pub(crate) extension_dirs: Vec<TempDir>,
     /// `host:port` of the debug endpoint, for [`Tab::inspector_url`].
     pub(crate) debug_host_port: Option<String>,
     /// Whether the resulting handle owns (and must terminate) the process.
@@ -1029,6 +1121,7 @@ pub(crate) async fn finish_connect(
         input_profile,
         child,
         owned_tmp,
+        extension_dirs,
         debug_host_port,
         owns_process,
     } = args;
@@ -1094,6 +1187,7 @@ pub(crate) async fn finish_connect(
             main_tab,
             child: tokio::sync::Mutex::new(child),
             _user_data: owned_tmp,
+            _extension_dirs: extension_dirs,
             owns_process,
             stealth_input_profile: input_profile,
             tabs: tokio::sync::RwLock::new(HashMap::new()),
@@ -1211,6 +1305,160 @@ pub(crate) fn parse_ws_from_json_version(raw: &[u8]) -> Result<String, Zendriver
         .ok_or_else(|| BrowserError::DevtoolsParse.into())
 }
 
+/// Resolve every entry in `extensions` to an unpacked-extension *directory*,
+/// in place, returning the tempdirs that back any unzipped `.crx` archives.
+///
+/// `--load-extension` only accepts directories, so a `.crx` file is unzipped
+/// into a fresh [`TempDir`] and the slot is rewritten to that directory.
+/// Entries that are already directories pass through unchanged. The returned
+/// tempdirs MUST be kept alive for as long as Chrome runs (they are parked on
+/// [`BrowserInner`]); dropping one deletes the extracted extension out from
+/// under the running browser.
+///
+/// A `.crx` is a ZIP with a short binary header (magic `Cr24` + version +
+/// signature lengths) prepended; we locate the embedded ZIP by scanning for
+/// the local-file-header magic (`PK\x03\x04`) and unzip from there, so both
+/// CRX2 and CRX3 layouts work without parsing the header fields.
+///
+/// # Errors
+///
+/// Returns [`BrowserError::ExtensionLoad`] when a configured path does not
+/// exist, when a `.crx` cannot be read / contains no ZIP payload / fails to
+/// unzip, or when an entry is neither a directory nor a `.crx` file.
+async fn resolve_extension_dirs(
+    extensions: &mut [PathBuf],
+) -> Result<Vec<TempDir>, ZendriverError> {
+    let mut tempdirs = Vec::new();
+    for slot in extensions.iter_mut() {
+        if slot.is_dir() {
+            continue;
+        }
+        let is_crx = slot
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("crx"));
+        if !is_crx {
+            return Err(BrowserError::ExtensionLoad {
+                path: slot.clone(),
+                reason: if slot.exists() {
+                    "extension path is neither a directory nor a .crx file".into()
+                } else {
+                    "extension path does not exist".into()
+                },
+            }
+            .into());
+        }
+        let (dir, td) = unzip_crx(slot).await?;
+        *slot = dir;
+        tempdirs.push(td);
+    }
+    Ok(tempdirs)
+}
+
+/// Unzip a single `.crx` at `crx_path` into a fresh [`TempDir`], returning the
+/// extracted directory path alongside the owning tempdir handle.
+///
+/// The blocking ZIP walk runs on [`tokio::task::spawn_blocking`]. Path safety
+/// mirrors the fetcher's extractor: entries with absolute / parent-traversal
+/// paths and (on Unix) symlink entries are rejected so a hostile `.crx` can't
+/// escape the tempdir.
+async fn unzip_crx(crx_path: &Path) -> Result<(PathBuf, TempDir), ZendriverError> {
+    let crx_path = crx_path.to_path_buf();
+    let td = tempfile::Builder::new()
+        .prefix("zendriver-ext-")
+        .tempdir()
+        .map_err(BrowserError::SpawnFailed)?;
+    let dest = td.path().to_path_buf();
+    let dest_for_blocking = dest.clone();
+    let crx_for_blocking = crx_path.clone();
+
+    tokio::task::spawn_blocking(move || unzip_crx_blocking(&crx_for_blocking, &dest_for_blocking))
+        .await
+        .map_err(|e| BrowserError::ExtensionLoad {
+            path: crx_path.clone(),
+            reason: format!("unzip task join error: {e}"),
+        })??;
+
+    Ok((dest, td))
+}
+
+/// Synchronous `.crx` → directory unzip body (runs on a blocking thread).
+fn unzip_crx_blocking(crx_path: &Path, dest_dir: &Path) -> Result<(), ZendriverError> {
+    use std::io::Cursor;
+
+    let bytes = std::fs::read(crx_path).map_err(|e| BrowserError::ExtensionLoad {
+        path: crx_path.to_path_buf(),
+        reason: format!("read failed: {e}"),
+    })?;
+    // A `.crx` prepends a binary header before the ZIP. Find the first ZIP
+    // local-file-header signature (`PK\x03\x04`) and treat everything from
+    // there as the archive. A bare `.zip` (no CRX header) also works since the
+    // signature is at offset 0.
+    let zip_start = bytes
+        .windows(4)
+        .position(|w| w == [0x50, 0x4B, 0x03, 0x04])
+        .ok_or_else(|| BrowserError::ExtensionLoad {
+            path: crx_path.to_path_buf(),
+            reason: "no ZIP payload found in .crx".into(),
+        })?;
+    let mut archive = zip::ZipArchive::new(Cursor::new(&bytes[zip_start..])).map_err(|e| {
+        BrowserError::ExtensionLoad {
+            path: crx_path.to_path_buf(),
+            reason: format!("not a valid ZIP: {e}"),
+        }
+    })?;
+
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| BrowserError::ExtensionLoad {
+            path: crx_path.to_path_buf(),
+            reason: format!("zip entry {i}: {e}"),
+        })?;
+        // Reject unsafe paths (absolute / parent-traversal).
+        let Some(rel_path) = entry.enclosed_name() else {
+            return Err(BrowserError::ExtensionLoad {
+                path: crx_path.to_path_buf(),
+                reason: format!("zip entry has unsafe path: {}", entry.name()),
+            }
+            .into());
+        };
+        // Refuse symlink entries — the primary zip-slip follow-on vector.
+        #[cfg(unix)]
+        if let Some(mode) = entry.unix_mode() {
+            const S_IFMT: u32 = 0o170_000;
+            const S_IFLNK: u32 = 0o120_000;
+            if mode & S_IFMT == S_IFLNK {
+                return Err(BrowserError::ExtensionLoad {
+                    path: crx_path.to_path_buf(),
+                    reason: format!("zip entry {rel_path:?} is a symlink; refusing"),
+                }
+                .into());
+            }
+        }
+        let out_path = dest_dir.join(&rel_path);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&out_path).map_err(|e| BrowserError::ExtensionLoad {
+                path: crx_path.to_path_buf(),
+                reason: format!("mkdir {out_path:?}: {e}"),
+            })?;
+            continue;
+        }
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| BrowserError::ExtensionLoad {
+                path: crx_path.to_path_buf(),
+                reason: format!("mkdir {parent:?}: {e}"),
+            })?;
+        }
+        let mut out = std::fs::File::create(&out_path).map_err(|e| BrowserError::ExtensionLoad {
+            path: crx_path.to_path_buf(),
+            reason: format!("create {out_path:?}: {e}"),
+        })?;
+        std::io::copy(&mut entry, &mut out).map_err(|e| BrowserError::ExtensionLoad {
+            path: crx_path.to_path_buf(),
+            reason: format!("write {out_path:?}: {e}"),
+        })?;
+    }
+    Ok(())
+}
+
 impl BrowserBuilder {
     /// Spawn Chrome and attach. Returns once the main tab is bound.
     ///
@@ -1238,7 +1486,7 @@ impl BrowserBuilder {
     /// # browser.close().await?;
     /// # Ok(()) }
     /// ```
-    pub async fn launch(self) -> Result<Browser, ZendriverError> {
+    pub async fn launch(mut self) -> Result<Browser, ZendriverError> {
         // 1. Resolve Chrome executable.
         // Precedence: explicit `.executable(...)` > `CHROME_BIN` env var >
         // per-channel platform discovery. The env-var hop lets CI (and local
@@ -1252,6 +1500,13 @@ impl BrowserBuilder {
                 None => find_chrome_executable_for_channel(self.channel)?,
             },
         };
+
+        // 1b. Resolve extensions: unzip any `.crx` into a tempdir and rewrite
+        // `self.extensions` to the resolved unpacked-directory paths so
+        // `build_flags` emits `--load-extension=<dir,…>`. Directory entries
+        // pass through untouched. The returned tempdirs are handed to
+        // `BrowserInner` below so the extracted dirs outlive Chrome.
+        let extension_dirs = resolve_extension_dirs(&mut self.extensions).await?;
 
         // 2. Resolve the per-tab InputProfile from the active StealthProfile
         // (or zero-overhead `native` when stealth is off). Cached on
@@ -1363,6 +1618,7 @@ impl BrowserBuilder {
             input_profile,
             child: Some(child),
             owned_tmp,
+            extension_dirs,
             debug_host_port: debug_host_port_from_ws(&ws_url),
             owns_process: true,
         })
@@ -1504,6 +1760,7 @@ impl BrowserBuilder {
             input_profile,
             child: None,
             owned_tmp: None,
+            extension_dirs: Vec::new(),
             debug_host_port: debug_host_port_from_ws(&ws_url),
             owns_process: false,
         })
@@ -2405,6 +2662,124 @@ mod tests {
         assert!(!flags.contains(&"--no-sandbox".to_string()));
     }
 
+    // ----- C3: extensions ------------------------------------------------
+
+    #[test]
+    fn extensions_add_load_and_disable_except_flags() {
+        let b = BrowserBuilder::new()
+            .add_extension("a")
+            .add_extension("b");
+        let flags = b.build_flags(Path::new("/tmp/x"));
+        assert!(
+            flags.contains(&"--load-extension=a,b".to_string()),
+            "expected --load-extension=a,b in {flags:?}"
+        );
+        assert!(
+            flags.contains(&"--disable-extensions-except=a,b".to_string()),
+            "expected --disable-extensions-except=a,b in {flags:?}"
+        );
+        assert!(
+            flags.contains(&"--enable-unsafe-extension-debugging".to_string()),
+            "expected --enable-unsafe-extension-debugging in {flags:?}"
+        );
+    }
+
+    #[test]
+    fn extensions_force_disable_load_extension_feature_even_off_profile() {
+        // Stealth Off + extensions: build_flags is stealth-agnostic, so the
+        // DisableLoadExtensionCommandLineSwitch feature must ride in the base
+        // --disable-features line whenever extensions are present (otherwise
+        // an Off-profile launch silently fails to load them on Chrome 136+).
+        let b = BrowserBuilder::new()
+            .stealth(StealthProfile::off())
+            .add_extension("ext");
+        let flags = b.build_flags(Path::new("/tmp/x"));
+        assert!(
+            flags
+                .iter()
+                .any(|f| f.starts_with("--disable-features=")
+                    && f.contains("DisableLoadExtensionCommandLineSwitch")),
+            "expected DisableLoadExtensionCommandLineSwitch in a --disable-features line: {flags:?}"
+        );
+    }
+
+    #[test]
+    fn no_extensions_omits_extension_flags() {
+        // Default builder must not emit any extension flags (keeps the default
+        // argv + snapshots unchanged).
+        let flags = BrowserBuilder::new().build_flags(Path::new("/tmp/x"));
+        assert!(!flags.iter().any(|f| f.starts_with("--load-extension")));
+        assert!(
+            !flags
+                .iter()
+                .any(|f| f.starts_with("--disable-extensions-except"))
+        );
+        assert!(!flags.contains(&"--enable-unsafe-extension-debugging".to_string()));
+        assert!(
+            !flags
+                .iter()
+                .any(|f| f.contains("DisableLoadExtensionCommandLineSwitch")),
+            "default build must not carry the extension feature toggle: {flags:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_extension_dirs_passes_through_directories() {
+        // A directory entry is used as-is (no tempdir allocated).
+        let dir = tempfile::tempdir().unwrap();
+        let mut exts = vec![dir.path().to_path_buf()];
+        let tempdirs = resolve_extension_dirs(&mut exts).await.unwrap();
+        assert!(tempdirs.is_empty(), "directories should not allocate tempdirs");
+        assert_eq!(exts, vec![dir.path().to_path_buf()]);
+    }
+
+    #[tokio::test]
+    async fn resolve_extension_dirs_unzips_crx_to_tempdir() {
+        // Build a minimal CRX (CRX3-ish: `Cr24` magic + a fake header, then a
+        // ZIP carrying manifest.json) and assert it unzips to a real dir.
+        use std::io::Write;
+        let mut zip_buf = Vec::new();
+        {
+            let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_buf));
+            w.start_file("manifest.json", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            w.write_all(br#"{"name":"t","version":"1","manifest_version":3}"#)
+                .unwrap();
+            w.finish().unwrap();
+        }
+        // Prepend a token CRX header before the ZIP payload.
+        let mut crx = Vec::new();
+        crx.extend_from_slice(b"Cr24");
+        crx.extend_from_slice(&3u32.to_le_bytes()); // version
+        crx.extend_from_slice(&0u32.to_le_bytes()); // header length (ignored)
+        crx.extend_from_slice(&zip_buf);
+
+        let crx_file = tempfile::Builder::new()
+            .suffix(".crx")
+            .tempfile()
+            .unwrap();
+        std::fs::write(crx_file.path(), &crx).unwrap();
+
+        let mut exts = vec![crx_file.path().to_path_buf()];
+        let tempdirs = resolve_extension_dirs(&mut exts).await.unwrap();
+        assert_eq!(tempdirs.len(), 1, "crx should allocate one tempdir");
+        // The slot was rewritten to the extracted directory…
+        assert!(exts[0].is_dir(), "crx slot should resolve to a directory");
+        assert_ne!(exts[0], crx_file.path());
+        // …and the manifest landed inside it.
+        assert!(exts[0].join("manifest.json").is_file());
+    }
+
+    #[tokio::test]
+    async fn resolve_extension_dirs_errors_on_missing_path() {
+        let mut exts = vec![PathBuf::from("/nonexistent/zzz-does-not-exist")];
+        let err = resolve_extension_dirs(&mut exts).await.unwrap_err();
+        assert!(
+            matches!(err, ZendriverError::Browser(BrowserError::ExtensionLoad { .. })),
+            "expected ExtensionLoad, got {err:?}"
+        );
+    }
+
     #[test]
     fn channel_brave_resolves_brave_path() {
         // Probe the candidate-path table directly so the test does not
@@ -2498,6 +2873,7 @@ mod tests {
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
                 _user_data: None,
+                _extension_dirs: Vec::new(),
                 owns_process: false,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
@@ -2585,6 +2961,7 @@ mod tests {
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
                 _user_data: None,
+                _extension_dirs: Vec::new(),
                 owns_process: false,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
@@ -2688,6 +3065,7 @@ mod tests {
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
                 _user_data: None,
+                _extension_dirs: Vec::new(),
                 owns_process: false,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
@@ -2784,6 +3162,7 @@ mod tests {
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
                 _user_data: None,
+                _extension_dirs: Vec::new(),
                 owns_process: false,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
@@ -2847,6 +3226,7 @@ mod tests {
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
                 _user_data: None,
+                _extension_dirs: Vec::new(),
                 owns_process: false,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
@@ -2911,6 +3291,7 @@ mod tests {
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
                 _user_data: None,
+                _extension_dirs: Vec::new(),
                 owns_process: false,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
@@ -2966,6 +3347,7 @@ mod tests {
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
                 _user_data: None,
+                _extension_dirs: Vec::new(),
                 owns_process: false,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
@@ -3098,6 +3480,7 @@ mod tests {
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
                 _user_data: None,
+                _extension_dirs: Vec::new(),
                 owns_process: false,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
@@ -3445,6 +3828,7 @@ mod tests {
                 input_profile,
                 child: None,
                 owned_tmp: None,
+                extension_dirs: Vec::new(),
                 debug_host_port: debug_host_port_from_ws(
                     "ws://127.0.0.1:9222/devtools/browser/abc",
                 ),
@@ -3508,6 +3892,7 @@ mod tests {
                 input_profile,
                 child: None,
                 owned_tmp: None,
+                extension_dirs: Vec::new(),
                 debug_host_port: None,
                 owns_process: false,
             })

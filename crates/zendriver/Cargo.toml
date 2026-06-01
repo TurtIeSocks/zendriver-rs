@@ -70,6 +70,7 @@ bitflags.workspace            = true
 unicode-segmentation.workspace = true
 rand.workspace                = true
 base64.workspace              = true
+zip.workspace                 = true
 # Optional: only enabled by the integration-tests feature so the deps
 # can be gated via `dep:` syntax (dev-dependencies are not addressable
 # from `[features]`).

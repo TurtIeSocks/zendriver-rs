@@ -241,6 +241,16 @@ pub enum BrowserError {
     /// `tempfile` cleanup of the `user_data_dir` failed.
     #[error("failed to clean user_data_dir: {0}")]
     Cleanup(#[source] std::io::Error),
+
+    /// A configured extension could not be resolved — the path is missing, is
+    /// neither a directory nor a `.crx`, or a `.crx` failed to unzip.
+    #[error("failed to load extension {path:?}: {reason}")]
+    ExtensionLoad {
+        /// The configured extension path that failed.
+        path: PathBuf,
+        /// Human-readable cause (missing path, bad archive, IO error, …).
+        reason: String,
+    },
 }
 
 #[cfg(test)]

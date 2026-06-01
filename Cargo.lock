@@ -3278,6 +3278,7 @@ dependencies = [
  "zendriver-interception",
  "zendriver-stealth",
  "zendriver-transport",
+ "zip",
 ]
 
 [[package]]
