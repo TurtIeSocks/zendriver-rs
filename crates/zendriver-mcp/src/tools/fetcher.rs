@@ -38,7 +38,11 @@ use rmcp::ErrorData;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use zendriver::{Channel, Fetcher, VersionSpec, ZendriverError};
+// `Channel` here is the fetcher's release channel (Stable/Beta/Dev/Canary).
+// The crate root renamed it to `FetcherChannel` in the parity work (the bare
+// `Channel` name now belongs to the browser-brand enum); alias it back so the
+// fetcher-channel parsing below reads naturally.
+use zendriver::{Fetcher, FetcherChannel as Channel, VersionSpec, ZendriverError};
 
 use crate::errors::{McpServerError, map_error};
 use crate::state::SessionState;
