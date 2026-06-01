@@ -37,6 +37,38 @@ use crate::screenshot::ScreenshotBuilder;
 
 const DEFAULT_LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Per-call knobs for [`Tab::reload_with`].
+///
+/// `Default` reloads with `ignore_cache: false` and no injected script —
+/// the same behavior as the plain [`Tab::reload`] shortcut. Set
+/// `ignore_cache: true` for a hard refresh, and/or
+/// `script_to_evaluate_on_load` to inject a script that runs on every frame
+/// load triggered by the reload.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn ex() -> zendriver::Result<()> {
+/// use zendriver::ReloadOptions;
+/// # let browser = zendriver::Browser::builder().launch().await?;
+/// # let tab = browser.main_tab();
+/// tab.reload_with(ReloadOptions {
+///     ignore_cache: true,
+///     ..Default::default()
+/// }).await?;
+/// # Ok(()) }
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct ReloadOptions {
+    /// Bypass the HTTP cache for the reload (`Page.reload.ignoreCache`).
+    /// `false` by default — a soft refresh.
+    pub ignore_cache: bool,
+    /// Script source injected before any other page script on each frame
+    /// loaded by the reload (`Page.reload.scriptToEvaluateOnLoad`). Omitted
+    /// from the dispatch entirely when `None`.
+    pub script_to_evaluate_on_load: Option<String>,
+}
+
 /// Handle to a single CDP target session — one open page in Chrome.
 ///
 /// `Tab` is `Clone` (cheap — wraps an `Arc`) and `Send + Sync`, so the same
@@ -1090,6 +1122,37 @@ impl Tab {
         Ok(())
     }
 
+    /// Reload the tab's current page with explicit options.
+    ///
+    /// Dispatches `Page.reload` with the `ignoreCache` flag from `opts` and,
+    /// when `opts.script_to_evaluate_on_load` is `Some`, a
+    /// `scriptToEvaluateOnLoad` that runs before any other script on each
+    /// frame the reload loads. The script field is omitted from the dispatch
+    /// when `None`. For a plain soft refresh, use the [`Tab::reload`]
+    /// shortcut.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// use zendriver::ReloadOptions;
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.reload_with(ReloadOptions {
+    ///     ignore_cache: true,
+    ///     script_to_evaluate_on_load: Some("window.__reloaded = true".into()),
+    /// }).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn reload_with(&self, opts: ReloadOptions) -> Result<()> {
+        let mut params = json!({ "ignoreCache": opts.ignore_cache });
+        if let Some(script) = opts.script_to_evaluate_on_load {
+            params["scriptToEvaluateOnLoad"] = Value::String(script);
+        }
+        self.call("Page.reload", params).await?;
+        Ok(())
+    }
+
     /// Full HTML source of the tab's current page.
     ///
     /// Dispatches `DOM.getDocument { depth: 0 }` to resolve the document's
@@ -2042,6 +2105,63 @@ mod tests {
 
         let id = mock.expect_cmd("Page.reload").await;
         assert_eq!(mock.last_sent()["params"]["ignoreCache"], false);
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn reload_with_sets_ignore_cache_and_script() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                t.reload_with(ReloadOptions {
+                    ignore_cache: true,
+                    script_to_evaluate_on_load: Some("x".into()),
+                })
+                .await
+            }
+        });
+
+        let id = mock.expect_cmd("Page.reload").await;
+        assert_eq!(mock.last_sent()["params"]["ignoreCache"], true);
+        assert_eq!(mock.last_sent()["params"]["scriptToEvaluateOnLoad"], "x");
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn reload_with_omits_script_when_none() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                t.reload_with(ReloadOptions {
+                    ignore_cache: false,
+                    script_to_evaluate_on_load: None,
+                })
+                .await
+            }
+        });
+
+        let id = mock.expect_cmd("Page.reload").await;
+        assert_eq!(mock.last_sent()["params"]["ignoreCache"], false);
+        // scriptToEvaluateOnLoad must be omitted entirely when None.
+        assert!(
+            mock.last_sent()["params"]
+                .get("scriptToEvaluateOnLoad")
+                .is_none()
+        );
         mock.reply(id, json!({})).await;
 
         fut.await.unwrap().unwrap();
