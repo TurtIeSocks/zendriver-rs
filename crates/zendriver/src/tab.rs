@@ -1555,6 +1555,139 @@ impl Tab {
         Ok(())
     }
 
+    /// Move the cursor to `(x, y)` in viewport coordinates along a realistic
+    /// Bezier path.
+    ///
+    /// Tab-level analogue of [`crate::Element::hover`] for an arbitrary
+    /// coordinate (no element required) — useful for canvas/widget targets
+    /// and CAPTCHA-checkbox flows where the hit point is a fixed pixel rather
+    /// than a DOM node. Emits a sequence of `Input.dispatchMouseEvent
+    /// { type: "mouseMoved" }` calls and advances the per-tab cursor state.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.mouse_move(120.0, 240.0).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn mouse_move(&self, x: f64, y: f64) -> Result<()> {
+        let input = self.input().clone();
+        crate::input::mouse::move_realistic(&input, self, x, y).await
+    }
+
+    /// Click at `(x, y)` in viewport coordinates: a left, single, realistic
+    /// click.
+    ///
+    /// Moves the cursor to the point along a Bezier path, then emits the
+    /// `mousePressed` + `mouseReleased` pair. Tab-level analogue of
+    /// [`crate::Element::click`] for a raw coordinate. For right-click /
+    /// modifier-held / double-click / raw-teleport variants use
+    /// [`Tab::mouse_click_with`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.mouse_click(120.0, 240.0).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn mouse_click(&self, x: f64, y: f64) -> Result<()> {
+        let input = self.input().clone();
+        crate::input::mouse::click_at(
+            &input,
+            self,
+            x,
+            y,
+            crate::input::mouse::MouseButton::Left,
+            1,
+            true,
+        )
+        .await
+    }
+
+    /// Click at `(x, y)` in viewport coordinates with explicit
+    /// [`crate::ClickOptions`].
+    ///
+    /// Maps `opts.button` / `opts.click_count` / `opts.realistic` onto the
+    /// dispatch. Unlike [`crate::Element::click_with`], there is no element to
+    /// gate on, so `opts.force` and `opts.position` are ignored — the click
+    /// lands at the supplied `(x, y)` regardless. Use this for right-clicks /
+    /// modifier-held clicks / double-clicks / raw teleports at a coordinate.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// use zendriver::{ClickOptions, MouseButton};
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.mouse_click_with(50.0, 60.0, ClickOptions {
+    ///     button: MouseButton::Right,
+    ///     ..Default::default()
+    /// }).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn mouse_click_with(
+        &self,
+        x: f64,
+        y: f64,
+        opts: crate::element::actions::ClickOptions,
+    ) -> Result<()> {
+        let input = self.input().clone();
+        crate::input::mouse::click_at(
+            &input,
+            self,
+            x,
+            y,
+            opts.button,
+            opts.click_count,
+            opts.realistic,
+        )
+        .await
+    }
+
+    /// Flash a transient red dot at `(x, y)` for ~1 second — a visual debug
+    /// aid.
+    ///
+    /// Injects a small absolutely-positioned `<div>` at the viewport
+    /// coordinate via [`Tab::evaluate_main`], then schedules its own removal
+    /// after roughly a second. Handy for eyeballing where [`Tab::mouse_click`]
+    /// / [`Tab::mouse_move`] targets land when debugging coordinate math
+    /// against a headful Chrome. Has no effect on input state and is not
+    /// intended for production paths.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.flash_point(120.0, 240.0).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn flash_point(&self, x: f64, y: f64) -> Result<()> {
+        // Build the dot in the page main world so it's painted into the real
+        // document the user is watching. `returnByValue` short-circuits to
+        // undefined; we only care about the side effect.
+        let js = format!(
+            "(() => {{ \
+                const d = document.createElement('div'); \
+                d.style.cssText = 'position:fixed;left:{x}px;top:{y}px;width:10px;height:10px;\
+margin:-5px 0 0 -5px;border-radius:50%;background:red;z-index:2147483647;\
+pointer-events:none;opacity:0.85;'; \
+                document.body.appendChild(d); \
+                setTimeout(() => d.remove(), 1000); \
+            }})()"
+        );
+        let _: Value = self.evaluate_main(js).await?;
+        Ok(())
+    }
+
 }
 
 impl Tab {
@@ -3128,6 +3261,135 @@ mod tests {
         assert_eq!(sent["params"]["acceptLanguage"], "en-US,en;q=0.9");
         assert_eq!(sent["params"]["platform"], "Linux x86_64");
         mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    // --- B5: raw mouse + flash_point -----------------------------------
+
+    #[tokio::test]
+    async fn mouse_click_emits_pressed_released_at_coords() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.mouse_click(123.0, 456.0).await }
+        });
+
+        // Realistic click: N mouseMoved frames (Bezier), then exactly one
+        // mousePressed + one mouseReleased. Drain every dispatch; the final
+        // two must be mousePressed then mouseReleased at (123, 456).
+        let mut saw_pressed = false;
+        let mut saw_released = false;
+        let mut last_two: Vec<String> = Vec::new();
+        loop {
+            let next = tokio::time::timeout(
+                Duration::from_millis(500),
+                mock.expect_cmd("Input.dispatchMouseEvent"),
+            )
+            .await;
+            match next {
+                Ok(id) => {
+                    let sent = mock.last_sent();
+                    let kind = sent["params"]["type"].as_str().unwrap_or("").to_string();
+                    if kind == "mousePressed" || kind == "mouseReleased" {
+                        // Press/release land at the exact target coordinate.
+                        assert_eq!(sent["params"]["x"], 123.0);
+                        assert_eq!(sent["params"]["y"], 456.0);
+                        assert_eq!(sent["params"]["button"], "left");
+                        if kind == "mousePressed" {
+                            saw_pressed = true;
+                        } else {
+                            saw_released = true;
+                        }
+                    }
+                    last_two.push(kind);
+                    mock.reply(id, json!({})).await;
+                }
+                Err(_) => break,
+            }
+        }
+
+        fut.await.unwrap().unwrap();
+        assert!(saw_pressed, "expected a mousePressed dispatch");
+        assert!(saw_released, "expected a mouseReleased dispatch");
+        let tail: Vec<&str> = last_two.iter().rev().take(2).map(String::as_str).collect();
+        // Reversed: [released, pressed] — i.e. the final two in order are
+        // mousePressed then mouseReleased.
+        assert_eq!(
+            tail,
+            vec!["mouseReleased", "mousePressed"],
+            "final two dispatches must be mousePressed then mouseReleased"
+        );
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn mouse_move_emits_mousemoved() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.mouse_move(50.0, 60.0).await }
+        });
+
+        // Realistic move emits one-or-more mouseMoved dispatches and NO
+        // press/release. Drain them all, asserting type along the way.
+        let mut saw_moved = false;
+        loop {
+            let next = tokio::time::timeout(
+                Duration::from_millis(500),
+                mock.expect_cmd("Input.dispatchMouseEvent"),
+            )
+            .await;
+            match next {
+                Ok(id) => {
+                    let kind = mock.last_sent()["params"]["type"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string();
+                    assert_eq!(kind, "mouseMoved", "mouse_move must only emit mouseMoved");
+                    saw_moved = true;
+                    mock.reply(id, json!({})).await;
+                }
+                Err(_) => break,
+            }
+        }
+
+        fut.await.unwrap().unwrap();
+        assert!(saw_moved, "expected at least one mouseMoved dispatch");
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn flash_point_dispatches_evaluate() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.flash_point(12.0, 34.0).await }
+        });
+
+        // flash_point injects a transient dot via a single main-world
+        // Runtime.evaluate. Assert the JS references the coordinates and a
+        // self-removal timer.
+        let id = mock.expect_cmd("Runtime.evaluate").await;
+        let expr = mock.last_sent()["params"]["expression"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        assert!(expr.contains("createElement"), "should build a dot element");
+        assert!(expr.contains("12px") && expr.contains("34px"), "should position at (x, y)");
+        assert!(expr.contains("setTimeout") && expr.contains("remove"), "should self-remove");
+        mock.reply(id, json!({ "result": { "type": "undefined" } }))
+            .await;
 
         fut.await.unwrap().unwrap();
         conn.shutdown();
