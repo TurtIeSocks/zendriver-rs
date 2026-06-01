@@ -74,6 +74,7 @@ pub mod browser_context;
 pub mod cookies;
 pub mod element;
 pub mod error;
+pub(crate) mod expert;
 #[cfg(feature = "expect")]
 pub mod expect;
 pub mod frame;

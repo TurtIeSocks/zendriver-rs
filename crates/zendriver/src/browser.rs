@@ -325,6 +325,15 @@ pub struct BrowserBuilder {
     /// [`BrowserBuilder::add_extension`]. `.crx` entries are unzipped to a
     /// tempdir at launch; directory entries pass through unchanged.
     pub(crate) extensions: Vec<PathBuf>,
+    /// Expert-mode toggle. When `true`, `build_flags` emits
+    /// `--disable-web-security` + `--disable-site-isolation-trials`. See
+    /// [`BrowserBuilder::expert`].
+    pub(crate) expert: bool,
+    /// When `true`, a [`ShadowRootObserver`] is added to the observer chain so
+    /// every new target gets an `Element.prototype.attachShadow` override that
+    /// forces `{mode: "open"}`. See
+    /// [`BrowserBuilder::force_open_shadow_roots`]. **Detectable.**
+    pub(crate) force_open_shadow_roots: bool,
     pub(crate) extra_args: Vec<String>,
     pub(crate) stealth: Option<StealthProfile>,
     pub(crate) extra_observers: Vec<Arc<dyn TargetObserver>>,
@@ -351,6 +360,8 @@ impl std::fmt::Debug for BrowserBuilder {
             .field("sandbox", &self.sandbox)
             .field("channel", &self.channel)
             .field("extensions", &self.extensions)
+            .field("expert", &self.expert)
+            .field("force_open_shadow_roots", &self.force_open_shadow_roots)
             .field("extra_args", &self.extra_args)
             .field("stealth", &self.stealth)
             .field(
@@ -636,6 +647,64 @@ impl BrowserBuilder {
         self
     }
 
+    /// Relax Chrome's web-security + site-isolation guards (default: **off**).
+    ///
+    /// When `on`, `build_flags` appends `--disable-web-security` (drops the
+    /// same-origin policy for cross-origin `fetch` / DOM access) and
+    /// `--disable-site-isolation-trials` (so cross-origin frames stay
+    /// in-process and are reachable from the parent). Mirrors nodriver's
+    /// `start(expert=True)` / zendriver-py's expert launch.
+    ///
+    /// This is **flags only** — it does not touch the JS environment. For the
+    /// closed-shadow-root walk that nodriver's expert mode also enables, opt in
+    /// separately via [`BrowserBuilder::force_open_shadow_roots`].
+    ///
+    /// Disabling web security weakens the browser's origin isolation; use only
+    /// in trusted, throwaway automation contexts.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let builder = zendriver::Browser::builder().expert(true);
+    /// ```
+    #[must_use]
+    pub fn expert(mut self, on: bool) -> Self {
+        self.expert = on;
+        self
+    }
+
+    /// Force every `Element.prototype.attachShadow` call to open mode so closed
+    /// shadow roots become walkable (default: **off**).
+    ///
+    /// When `on`, a small built-in [`TargetObserver`] injects a
+    /// `Page.addScriptToEvaluateOnNewDocument` patch into every new target that
+    /// rewrites the `attachShadow` init dict to `{ mode: "open" }` (other init
+    /// keys are preserved). The patched element's `shadowRoot` is then
+    /// reachable from automation even when the page requested a closed root.
+    /// This runs independently of the [`StealthProfile`] — it works with
+    /// stealth off and does **not** become part of the spoofed fingerprint
+    /// bundle.
+    ///
+    /// # Detectability
+    ///
+    /// **This patch is detectable.** A page can notice that `attachShadow`
+    /// always yields an open root (e.g. by calling it with `{ mode: "closed" }`
+    /// and observing a non-null `.shadowRoot`), so anti-bot scripts can use it
+    /// as a signal. Enable it only when you genuinely need to traverse closed
+    /// shadow roots (some challenge widgets), and prefer leaving it off for
+    /// stealth-sensitive workloads.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let builder = zendriver::Browser::builder().force_open_shadow_roots(true);
+    /// ```
+    #[must_use]
+    pub fn force_open_shadow_roots(mut self, on: bool) -> Self {
+        self.force_open_shadow_roots = on;
+        self
+    }
+
     /// Append a single command-line flag to the Chrome launch argv.
     ///
     /// Flags accumulate; later calls do NOT replace earlier ones.
@@ -745,6 +814,12 @@ impl BrowserBuilder {
         if self.headless.unwrap_or(true) {
             v.push("--headless=new".to_string());
             v.push("--disable-gpu".to_string());
+        }
+        // Expert mode: relax web-security + site isolation. Emitted only when
+        // `expert(true)` so the default flag set / snapshots are unchanged.
+        if self.expert {
+            v.push("--disable-web-security".to_string());
+            v.push("--disable-site-isolation-trials".to_string());
         }
         // Extension side-loading flags. `self.extensions` holds already-resolved
         // directories at this point (`launch` unzips any `.crx` into tempdirs
@@ -1529,23 +1604,31 @@ impl BrowserBuilder {
 
         // 4. Resolve fingerprint + build observer chain + profile flags.
         // Observer order: stealth (patches each new target) → tab registrar
-        // (records the resulting Tab handle) → user-supplied observers.
-        let (observers, extra_flags): (Vec<Arc<dyn TargetObserver>>, Vec<String>) =
+        // (records the resulting Tab handle) → user-supplied observers →
+        // force-open-shadow-roots (independent of the stealth bundle).
+        let (mut observers, extra_flags): (Vec<Arc<dyn TargetObserver>>, Vec<String>) =
             if let Some(ref profile) = self.stealth {
                 let fp = profile.resolve_fingerprint(&exe)?;
                 let stealth_obs: Arc<dyn TargetObserver> =
                     Arc::new(StealthObserver::new(profile.clone(), fp));
-                let mut obs_vec = Vec::with_capacity(2 + self.extra_observers.len());
+                let mut obs_vec = Vec::with_capacity(3 + self.extra_observers.len());
                 obs_vec.push(stealth_obs);
                 obs_vec.push(registrar.clone() as Arc<dyn TargetObserver>);
                 obs_vec.extend(self.extra_observers.iter().cloned());
                 (obs_vec, profile.build_flags())
             } else {
-                let mut obs_vec = Vec::with_capacity(1 + self.extra_observers.len());
+                let mut obs_vec = Vec::with_capacity(2 + self.extra_observers.len());
                 obs_vec.push(registrar.clone() as Arc<dyn TargetObserver>);
                 obs_vec.extend(self.extra_observers.iter().cloned());
                 (obs_vec, Vec::new())
             };
+        // Append the force-open-shadow-roots observer last so its injected
+        // attachShadow override runs independently of (and after) the stealth
+        // bundle. Only added when the caller opted in — keeps the default
+        // observer chain untouched.
+        if self.force_open_shadow_roots {
+            observers.push(Arc::new(crate::expert::ShadowRootObserver) as Arc<dyn TargetObserver>);
+        }
 
         // 5. Allocate user_data_dir (or use a TempDir we keep alive until shutdown).
         let (user_data_path, owned_tmp) = match self.user_data_dir.clone() {
@@ -1731,23 +1814,27 @@ impl BrowserBuilder {
                 sp.input_profile()
             });
         let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
-        let observers: Vec<Arc<dyn TargetObserver>> = if let Some(ref profile) = self.stealth {
+        let mut observers: Vec<Arc<dyn TargetObserver>> = if let Some(ref profile) = self.stealth {
             // No executable to resolve a fingerprint from on the connect path;
             // fall back to the profile's default fingerprint.
             let fp = profile.resolve_fingerprint(Path::new(""))?;
             let stealth_obs: Arc<dyn TargetObserver> =
                 Arc::new(StealthObserver::new(profile.clone(), fp));
-            let mut obs_vec = Vec::with_capacity(2 + self.extra_observers.len());
+            let mut obs_vec = Vec::with_capacity(3 + self.extra_observers.len());
             obs_vec.push(stealth_obs);
             obs_vec.push(registrar.clone() as Arc<dyn TargetObserver>);
             obs_vec.extend(self.extra_observers.iter().cloned());
             obs_vec
         } else {
-            let mut obs_vec = Vec::with_capacity(1 + self.extra_observers.len());
+            let mut obs_vec = Vec::with_capacity(2 + self.extra_observers.len());
             obs_vec.push(registrar.clone() as Arc<dyn TargetObserver>);
             obs_vec.extend(self.extra_observers.iter().cloned());
             obs_vec
         };
+        // Same opt-in force-open-shadow-roots observer as the launch path.
+        if self.force_open_shadow_roots {
+            observers.push(Arc::new(crate::expert::ShadowRootObserver) as Arc<dyn TargetObserver>);
+        }
 
         debug!(ws_url = %ws_url, "attaching to running chrome");
         let conn = zendriver_transport::connect_with_observers(&ws_url, observers).await?;
@@ -2660,6 +2747,29 @@ mod tests {
         let b = BrowserBuilder::new();
         let flags = b.build_flags(Path::new("/tmp/x"));
         assert!(!flags.contains(&"--no-sandbox".to_string()));
+    }
+
+    // ----- C2: expert mode -----------------------------------------------
+
+    #[test]
+    fn expert_adds_web_security_and_site_isolation_flags() {
+        let b = BrowserBuilder::new().expert(true);
+        let flags = b.build_flags(Path::new("/tmp/x"));
+        assert!(
+            flags.contains(&"--disable-web-security".to_string()),
+            "expected --disable-web-security in {flags:?}"
+        );
+        assert!(
+            flags.contains(&"--disable-site-isolation-trials".to_string()),
+            "expected --disable-site-isolation-trials in {flags:?}"
+        );
+    }
+
+    #[test]
+    fn expert_off_omits_expert_flags() {
+        let flags = BrowserBuilder::new().build_flags(Path::new("/tmp/x"));
+        assert!(!flags.contains(&"--disable-web-security".to_string()));
+        assert!(!flags.contains(&"--disable-site-isolation-trials".to_string()));
     }
 
     // ----- C3: extensions ------------------------------------------------
