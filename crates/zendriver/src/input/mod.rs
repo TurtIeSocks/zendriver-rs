@@ -7,6 +7,7 @@
 //! - [`Key`] — single-key dispatch target.
 //! - [`SpecialKey`] — named non-character keys (Enter, F1, ...).
 //! - [`KeyModifiers`] — composable modifier bitflags.
+//! - [`KeySequence`] — mixed text / key / chord builder for `type_keys`.
 //! - [`MouseButton`] — mouse button enum.
 
 use std::sync::Arc;
@@ -22,7 +23,7 @@ pub mod keyboard;
 pub mod mouse;
 pub mod pointer_state;
 
-pub use keyboard::{Key, KeyModifiers, SpecialKey};
+pub use keyboard::{Key, KeyModifiers, KeySequence, SpecialKey};
 pub use mouse::MouseButton;
 
 /// Per-Tab input state holder.

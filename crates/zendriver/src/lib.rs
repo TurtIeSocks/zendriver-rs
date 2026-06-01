@@ -93,7 +93,7 @@ pub use element::Element;
 pub use element::actions::ClickOptions;
 pub use error::{BrowserError, Result, ZendriverError};
 pub use frame::Frame;
-pub use input::{Key, KeyModifiers, MouseButton, SpecialKey};
+pub use input::{Key, KeyModifiers, KeySequence, MouseButton, SpecialKey};
 pub use query::{AriaRole, BoundingBox, FindBuilder};
 pub use screenshot::{Format, ScreenshotBuilder};
 pub use storage::Storage;

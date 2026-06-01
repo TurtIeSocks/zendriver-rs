@@ -4,6 +4,7 @@
 //! to dispatch single keystrokes.
 
 use bitflags::bitflags;
+use unicode_segmentation::UnicodeSegmentation;
 
 /// A single key dispatch target — either a typed character or a named
 /// special key.
@@ -560,6 +561,139 @@ fn wrap_with_modifiers(
     events
 }
 
+/// Map a whitespace character to the [`SpecialKey`] that produces it.
+///
+/// Space → `Space`, tab → `Tab`, newline / carriage-return → `Enter`. These
+/// are the three whitespace forms `char_descriptor` deliberately returns
+/// `None` for, so typing paths route them here instead of a `char` event.
+pub(crate) fn whitespace_special(c: char) -> Option<SpecialKey> {
+    match c {
+        ' ' => Some(SpecialKey::Space),
+        '\t' => Some(SpecialKey::Tab),
+        '\n' | '\r' => Some(SpecialKey::Enter),
+        _ => None,
+    }
+}
+
+/// Build the CDP events for one grapheme cluster, with `mods` held.
+///
+/// - A single `char` with a [`char_descriptor`] → `DownAndUp` (shift / code /
+///   vk synthesis).
+/// - A single whitespace `char` → the matching [`SpecialKey`] `DownAndUp`.
+/// - Anything else (emoji with modifiers, combining sequences, CJK, accents)
+///   → one `char`-type event carrying the whole cluster as text.
+pub(crate) fn cluster_events(cluster: &str, mods: KeyModifiers) -> Vec<KeyEventPayload> {
+    let mut chars = cluster.chars();
+    if let (Some(c), None) = (chars.next(), chars.clone().next()) {
+        // Exactly one char in the cluster.
+        if char_descriptor(c).is_some() {
+            return key_events(Key::Char(c), mods, KeyPress::DownAndUp);
+        }
+        if let Some(special) = whitespace_special(c) {
+            return key_events(Key::Special(special), mods, KeyPress::DownAndUp);
+        }
+    }
+    // Multi-codepoint cluster, or a single char with no descriptor → char event.
+    vec![KeyEventPayload {
+        event_type: "char",
+        modifiers: mods.cdp_bits(),
+        text: Some(cluster.to_string()),
+        key: Some(cluster.to_string()),
+        code: None,
+        windows_vk: None,
+    }]
+}
+
+/// One step in a [`KeySequence`].
+#[derive(Debug, Clone)]
+enum KeyStep {
+    /// Literal text, typed grapheme-by-grapheme like
+    /// [`crate::Element::type_text`].
+    Text(String),
+    /// A single named key, pressed and released.
+    Key(SpecialKey),
+    /// A key held with modifier(s) — a chord like Ctrl+A.
+    Chord(Key, KeyModifiers),
+}
+
+/// An ordered mixed sequence of typed text, special-key presses, and modifier
+/// chords — parity with zendriver-py's `from_mixed_input`.
+///
+/// Build with the chainable methods, then dispatch via
+/// [`crate::Element::type_keys`]. Steps flatten to CDP key events in the order
+/// they were added.
+///
+/// # Examples
+///
+/// ```
+/// use zendriver::{Key, KeyModifiers, KeySequence, SpecialKey};
+/// let seq = KeySequence::new()
+///     .text("Hello ")
+///     .key(SpecialKey::Enter)
+///     .chord(Key::Char('a'), KeyModifiers::CTRL); // Ctrl+A
+/// # let _ = seq;
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct KeySequence {
+    steps: Vec<KeyStep>,
+}
+
+impl KeySequence {
+    /// Start an empty sequence.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Append literal text (typed grapheme-by-grapheme, with shift / emoji
+    /// handling identical to [`crate::Element::type_text`]).
+    #[must_use]
+    pub fn text(mut self, text: impl Into<String>) -> Self {
+        self.steps.push(KeyStep::Text(text.into()));
+        self
+    }
+
+    /// Append a single special-key press (down + up).
+    #[must_use]
+    pub fn key(mut self, key: SpecialKey) -> Self {
+        self.steps.push(KeyStep::Key(key));
+        self
+    }
+
+    /// Append a modifier chord — `key` pressed while `mods` are held, with
+    /// real modifier keyDown/keyUp wrapper events.
+    #[must_use]
+    pub fn chord(mut self, key: Key, mods: KeyModifiers) -> Self {
+        self.steps.push(KeyStep::Chord(key, mods));
+        self
+    }
+
+    /// Flatten the whole sequence to ordered CDP key-event payloads.
+    pub(crate) fn to_events(&self) -> Vec<KeyEventPayload> {
+        let mut out = Vec::new();
+        for step in &self.steps {
+            match step {
+                KeyStep::Text(text) => {
+                    for cluster in UnicodeSegmentation::graphemes(text.as_str(), true) {
+                        out.extend(cluster_events(cluster, KeyModifiers::empty()));
+                    }
+                }
+                KeyStep::Key(k) => {
+                    out.extend(key_events(
+                        Key::Special(*k),
+                        KeyModifiers::empty(),
+                        KeyPress::DownAndUp,
+                    ));
+                }
+                KeyStep::Chord(key, mods) => {
+                    out.extend(key_events(*key, *mods, KeyPress::DownAndUp));
+                }
+            }
+        }
+        out
+    }
+}
+
 /// Returns a plausible nearby QWERTY key for `c`, or None for non-alphanumeric.
 /// Used by realistic typing to inject occasional typos.
 pub(crate) fn neighbor_key(c: char, rng: &mut impl rand::Rng) -> Option<char> {
@@ -842,6 +976,156 @@ mod tests {
         assert_eq!(events[5].code, Some("ControlLeft"));
         assert_eq!(events[5].modifiers, 0);
     }
+
+    // --- to_cdp_params serialization ---
+
+    #[test]
+    fn char_event_params_omit_code_and_vk() {
+        let p = KeyEventPayload {
+            event_type: "char",
+            modifiers: 0,
+            text: Some("🚀".to_string()),
+            key: Some("🚀".to_string()),
+            code: None,
+            windows_vk: None,
+        };
+        let v = p.to_cdp_params();
+        assert_eq!(v["type"], "char");
+        assert_eq!(v["text"], "🚀");
+        assert_eq!(v["key"], "🚀");
+        assert!(v.get("code").is_none());
+        assert!(v.get("windowsVirtualKeyCode").is_none());
+    }
+
+    #[test]
+    fn keydown_params_include_code_and_both_vk_fields() {
+        let events = key_events(Key::Char('A'), KeyModifiers::empty(), KeyPress::DownAndUp);
+        // events[1] is the main A keyDown.
+        let v = events[1].to_cdp_params();
+        assert_eq!(v["type"], "keyDown");
+        assert_eq!(v["code"], "KeyA");
+        assert_eq!(v["windowsVirtualKeyCode"], 65);
+        assert_eq!(v["nativeVirtualKeyCode"], 65);
+        assert_eq!(v["text"], "A");
+    }
+
+    // --- cluster_events (the per-grapheme path type_text uses) ---
+
+    fn flatten_text(text: &str) -> Vec<KeyEventPayload> {
+        UnicodeSegmentation::graphemes(text, true)
+            .flat_map(|c| cluster_events(c, KeyModifiers::empty()))
+            .collect()
+    }
+
+    #[test]
+    fn cluster_events_for_aa_bang_emits_expected_sequence() {
+        // "Aa!" → [Shift,A,A,Shift] + [a,a] + [Shift,'!',? ,Shift]
+        // i.e. Shift-down,A-down,A-up,Shift-up, a-down,a-up,
+        //      Shift-down,1-down('!'),1-up,Shift-up.
+        let events = flatten_text("Aa!");
+        let kinds: Vec<(&str, Option<&str>)> = events
+            .iter()
+            .map(|e| (e.event_type, e.code))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                ("keyDown", Some("ShiftLeft")),
+                ("keyDown", Some("KeyA")),
+                ("keyUp", Some("KeyA")),
+                ("keyUp", Some("ShiftLeft")),
+                ("keyDown", Some("KeyA")),
+                ("keyUp", Some("KeyA")),
+                ("keyDown", Some("ShiftLeft")),
+                ("keyDown", Some("Digit1")),
+                ("keyUp", Some("Digit1")),
+                ("keyUp", Some("ShiftLeft")),
+            ]
+        );
+        // The '!' main key carries text "!" (not "1").
+        assert_eq!(events[7].text.as_deref(), Some("!"));
+        assert_eq!(events[7].key.as_deref(), Some("!"));
+    }
+
+    #[test]
+    fn cluster_events_emoji_is_single_char_event() {
+        let events = flatten_text("🚀");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "char");
+        assert_eq!(events[0].text.as_deref(), Some("🚀"));
+    }
+
+    #[test]
+    fn cluster_events_multi_codepoint_grapheme_is_one_char_event() {
+        // Family emoji = several codepoints joined with ZWJ → one cluster.
+        let family = "👨‍👩‍👧";
+        let events = flatten_text(family);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "char");
+        assert_eq!(events[0].text.as_deref(), Some(family));
+    }
+
+    #[test]
+    fn cluster_events_space_routes_to_special_key() {
+        let events = flatten_text(" ");
+        // Space → SpecialKey::Space DownAndUp (rawKeyDown + keyUp).
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event_type, "rawKeyDown");
+        assert_eq!(events[0].code, Some("Space"));
+        assert_eq!(events[0].windows_vk, Some(32));
+        assert_eq!(events[1].event_type, "keyUp");
+    }
+
+    #[test]
+    fn cluster_events_newline_routes_to_enter() {
+        let events = flatten_text("\n");
+        assert_eq!(events[0].code, Some("Enter"));
+        assert_eq!(events[0].windows_vk, Some(13));
+    }
+
+    // --- KeySequence flattening ---
+
+    #[test]
+    fn key_sequence_flattens_steps_in_order() {
+        let seq = KeySequence::new()
+            .text("hi")
+            .key(SpecialKey::Enter)
+            .chord(Key::Char('a'), KeyModifiers::CTRL);
+        let events = seq.to_events();
+
+        // "hi": h-down,h-up,i-down,i-up (both lowercase, no shift).
+        assert_eq!(events[0].event_type, "keyDown");
+        assert_eq!(events[0].code, Some("KeyH"));
+        assert_eq!(events[1].event_type, "keyUp");
+        assert_eq!(events[2].code, Some("KeyI"));
+        assert_eq!(events[3].event_type, "keyUp");
+        // Enter: rawKeyDown + keyUp.
+        assert_eq!(events[4].event_type, "rawKeyDown");
+        assert_eq!(events[4].code, Some("Enter"));
+        assert_eq!(events[5].event_type, "keyUp");
+        assert_eq!(events[5].code, Some("Enter"));
+        // Ctrl+a: Control-down, a-down, a-up, Control-up.
+        assert_eq!(events[6].code, Some("ControlLeft"));
+        assert_eq!(events[6].event_type, "keyDown");
+        assert_eq!(events[7].code, Some("KeyA"));
+        assert_eq!(events[7].modifiers, KeyModifiers::CTRL.cdp_bits());
+        assert_eq!(events[8].event_type, "keyUp");
+        assert_eq!(events[8].code, Some("KeyA"));
+        assert_eq!(events[9].code, Some("ControlLeft"));
+        assert_eq!(events[9].event_type, "keyUp");
+        assert_eq!(events.len(), 10);
+    }
+
+    #[test]
+    fn key_sequence_text_with_emoji_uses_char_event() {
+        let seq = KeySequence::new().text("a🚀");
+        let events = seq.to_events();
+        // a → down/up (2), 🚀 → char (1).
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].code, Some("KeyA"));
+        assert_eq!(events[2].event_type, "char");
+        assert_eq!(events[2].text.as_deref(), Some("🚀"));
+    }
 }
 
 use std::time::Duration;
@@ -899,6 +1183,12 @@ pub(crate) async fn dispatch_special(tab: &Tab, k: SpecialKey, modifier_bits: i3
 
 /// Type `text` with realistic per-character timing, occasional typos, and
 /// inter-word "thinking" pauses pulled from the InputProfile.
+///
+/// Text is segmented into grapheme clusters; each cluster dispatches via
+/// [`cluster_events`] (so uppercase / symbols synthesize Shift, emoji / CJK
+/// route to a `char` event, and space / tab / newline become the matching
+/// [`SpecialKey`]). The per-cluster delay / typo / thinking-pause wrapper is
+/// preserved; typos still apply only to ASCII letters (via [`neighbor_key`]).
 #[allow(dead_code)]
 pub(crate) async fn type_text_realistic(
     input: &InputController,
@@ -906,8 +1196,11 @@ pub(crate) async fn type_text_realistic(
     text: &str,
 ) -> Result<()> {
     let profile = input.profile.clone();
-    for ch in text.chars() {
-        let (per_char_delay_ms, mods, do_typo, typo_char, thinking_pause_ms) = {
+    for cluster in UnicodeSegmentation::graphemes(text, true) {
+        // Leading char drives the typo / thinking-pause heuristics; the actual
+        // keystroke uses the whole cluster (handles multi-codepoint emoji).
+        let lead = cluster.chars().next().unwrap_or('\0');
+        let (per_char_delay_ms, held_mods, do_typo, typo_char, thinking_pause_ms) = {
             let mut s = input.state.lock().await;
             let per_char = if profile.per_char_delay_ms_range.0 == 0
                 && profile.per_char_delay_ms_range.1 == 0
@@ -922,11 +1215,11 @@ pub(crate) async fn type_text_realistic(
             let do_typo =
                 profile.typo_rate > 0.0 && rand::Rng::r#gen::<f32>(&mut s.rng) < profile.typo_rate;
             let typo_char = if do_typo {
-                neighbor_key(ch, &mut s.rng)
+                neighbor_key(lead, &mut s.rng)
             } else {
                 None
             };
-            let thinking = if ch == ' '
+            let thinking = if lead == ' '
                 && profile.thinking_pause_ms_range.0 > 0
                 && rand::Rng::r#gen::<f32>(&mut s.rng) < 0.05
             {
@@ -939,7 +1232,7 @@ pub(crate) async fn type_text_realistic(
             };
             (
                 per_char,
-                s.modifiers_held.cdp_bits(),
+                s.modifiers_held,
                 do_typo,
                 typo_char,
                 thinking,
@@ -953,22 +1246,26 @@ pub(crate) async fn type_text_realistic(
         }
         if do_typo {
             if let Some(wrong) = typo_char {
-                dispatch_char(tab, wrong, mods).await?;
+                dispatch_char(tab, wrong, held_mods.cdp_bits()).await?;
                 tokio::time::sleep(Duration::from_millis(80)).await;
-                dispatch_special(tab, SpecialKey::Backspace, mods).await?;
+                dispatch_special(tab, SpecialKey::Backspace, held_mods.cdp_bits()).await?;
             }
         }
-        dispatch_char(tab, ch, mods).await?;
+        dispatch_key_events(tab, &cluster_events(cluster, held_mods)).await?;
     }
     Ok(())
 }
 
 /// Type `text` as fast as possible — no delays, no typos.
+///
+/// Segments into grapheme clusters and dispatches each via
+/// [`cluster_events`], so the full unicode / shift / special-key handling of
+/// the realistic path applies without any timing jitter.
 #[allow(dead_code)]
 pub(crate) async fn type_text_fast(input: &InputController, tab: &Tab, text: &str) -> Result<()> {
-    let mods = input.state.lock().await.modifiers_held.cdp_bits();
-    for ch in text.chars() {
-        dispatch_char(tab, ch, mods).await?;
+    let held_mods = input.state.lock().await.modifiers_held;
+    for cluster in UnicodeSegmentation::graphemes(text, true) {
+        dispatch_key_events(tab, &cluster_events(cluster, held_mods)).await?;
     }
     Ok(())
 }

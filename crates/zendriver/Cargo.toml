@@ -67,6 +67,7 @@ tempfile.workspace            = true
 futures.workspace             = true
 regex.workspace               = true
 bitflags.workspace            = true
+unicode-segmentation.workspace = true
 rand.workspace                = true
 base64.workspace              = true
 # Optional: only enabled by the integration-tests feature so the deps
