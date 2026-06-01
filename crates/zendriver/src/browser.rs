@@ -1039,6 +1039,160 @@ impl BrowserBuilder {
     }
 }
 
+/// A browser permission that can be granted or denied via
+/// [`Browser::grant_permissions`].
+///
+/// Mirrors the CDP [`Browser.PermissionType`][1] enum. Each variant maps to a
+/// camelCase wire string via [`PermissionType::as_cdp`]; the full set is
+/// available as [`PermissionType::ALL`] (used by
+/// [`Browser::grant_all_permissions`]).
+///
+/// [1]: https://chromedevtools.github.io/devtools-protocol/tot/Browser/#type-PermissionType
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum PermissionType {
+    /// `accessibilityEvents` — accessibility event delivery.
+    AccessibilityEvents,
+    /// `audioCapture` — microphone access (alias of [`Self::Microphone`] on
+    /// the wire).
+    AudioCapture,
+    /// `backgroundSync` — Background Sync API.
+    BackgroundSync,
+    /// `backgroundFetch` — Background Fetch API.
+    BackgroundFetch,
+    /// Camera access. Ergonomic alias of [`Self::VideoCapture`]; both map to
+    /// the `videoCapture` wire string.
+    Camera,
+    /// `clipboardReadWrite` — unsanitized clipboard read + write.
+    ClipboardReadWrite,
+    /// `clipboardSanitizedWrite` — sanitized clipboard write.
+    ClipboardSanitizedWrite,
+    /// `displayCapture` — screen / window capture.
+    DisplayCapture,
+    /// `durableStorage` — persistent storage grant.
+    DurableStorage,
+    /// `geolocation` — location access.
+    Geolocation,
+    /// `idleDetection` — Idle Detection API.
+    IdleDetection,
+    /// `localFonts` — local font enumeration.
+    LocalFonts,
+    /// `midi` — Web MIDI access (no SysEx).
+    Midi,
+    /// `midiSysex` — Web MIDI access including SysEx messages.
+    MidiSysex,
+    /// Microphone access. Ergonomic alias of [`Self::AudioCapture`]; both map
+    /// to the `audioCapture` wire string.
+    Microphone,
+    /// `nfc` — Web NFC access.
+    Nfc,
+    /// `notifications` — desktop notifications.
+    Notifications,
+    /// `paymentHandler` — Payment Handler API.
+    PaymentHandler,
+    /// `periodicBackgroundSync` — Periodic Background Sync API.
+    PeriodicBackgroundSync,
+    /// `protectedMediaIdentifier` — protected media (EME) identifier.
+    ProtectedMediaIdentifier,
+    /// `sensors` — generic sensor access (accelerometer, gyroscope, …).
+    Sensors,
+    /// `storageAccess` — Storage Access API.
+    StorageAccess,
+    /// `topLevelStorageAccess` — top-level Storage Access API.
+    TopLevelStorageAccess,
+    /// `videoCapture` — camera access (alias of [`Self::Camera`] on the wire).
+    VideoCapture,
+    /// `videoCapturePanTiltZoom` — camera pan/tilt/zoom control.
+    VideoCapturePanTiltZoom,
+    /// `wakeLockScreen` — screen wake lock.
+    WakeLockScreen,
+    /// `wakeLockSystem` — system wake lock.
+    WakeLockSystem,
+    /// `windowManagement` — multi-screen window placement.
+    WindowManagement,
+}
+
+impl PermissionType {
+    /// Every [`PermissionType`] variant — the list
+    /// [`Browser::grant_all_permissions`] grants.
+    ///
+    /// Mirrors nodriver's `grant_all_permissions`: the complete CDP permission
+    /// set. `Camera` / `Microphone` are intentionally omitted because they are
+    /// wire-string aliases of [`Self::VideoCapture`] / [`Self::AudioCapture`]
+    /// (CDP would reject the duplicate strings).
+    pub const ALL: &'static [PermissionType] = &[
+        PermissionType::AccessibilityEvents,
+        PermissionType::AudioCapture,
+        PermissionType::BackgroundSync,
+        PermissionType::BackgroundFetch,
+        PermissionType::ClipboardReadWrite,
+        PermissionType::ClipboardSanitizedWrite,
+        PermissionType::DisplayCapture,
+        PermissionType::DurableStorage,
+        PermissionType::Geolocation,
+        PermissionType::IdleDetection,
+        PermissionType::LocalFonts,
+        PermissionType::Midi,
+        PermissionType::MidiSysex,
+        PermissionType::Nfc,
+        PermissionType::Notifications,
+        PermissionType::PaymentHandler,
+        PermissionType::PeriodicBackgroundSync,
+        PermissionType::ProtectedMediaIdentifier,
+        PermissionType::Sensors,
+        PermissionType::StorageAccess,
+        PermissionType::TopLevelStorageAccess,
+        PermissionType::VideoCapture,
+        PermissionType::VideoCapturePanTiltZoom,
+        PermissionType::WakeLockScreen,
+        PermissionType::WakeLockSystem,
+        PermissionType::WindowManagement,
+    ];
+
+    /// The camelCase CDP wire string for this permission (e.g. `"geolocation"`,
+    /// `"videoCapture"`).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use zendriver::PermissionType;
+    /// assert_eq!(PermissionType::ClipboardReadWrite.as_cdp(), "clipboardReadWrite");
+    /// ```
+    #[must_use]
+    pub fn as_cdp(&self) -> &'static str {
+        match self {
+            PermissionType::AccessibilityEvents => "accessibilityEvents",
+            // `Camera` / `Microphone` map to the same wire strings, so both
+            // alias spellings collapse here.
+            PermissionType::AudioCapture | PermissionType::Microphone => "audioCapture",
+            PermissionType::BackgroundSync => "backgroundSync",
+            PermissionType::BackgroundFetch => "backgroundFetch",
+            PermissionType::ClipboardReadWrite => "clipboardReadWrite",
+            PermissionType::ClipboardSanitizedWrite => "clipboardSanitizedWrite",
+            PermissionType::DisplayCapture => "displayCapture",
+            PermissionType::DurableStorage => "durableStorage",
+            PermissionType::Geolocation => "geolocation",
+            PermissionType::IdleDetection => "idleDetection",
+            PermissionType::LocalFonts => "localFonts",
+            PermissionType::Midi => "midi",
+            PermissionType::MidiSysex => "midiSysex",
+            PermissionType::Nfc => "nfc",
+            PermissionType::Notifications => "notifications",
+            PermissionType::PaymentHandler => "paymentHandler",
+            PermissionType::PeriodicBackgroundSync => "periodicBackgroundSync",
+            PermissionType::ProtectedMediaIdentifier => "protectedMediaIdentifier",
+            PermissionType::Sensors => "sensors",
+            PermissionType::StorageAccess => "storageAccess",
+            PermissionType::TopLevelStorageAccess => "topLevelStorageAccess",
+            PermissionType::VideoCapture | PermissionType::Camera => "videoCapture",
+            PermissionType::VideoCapturePanTiltZoom => "videoCapturePanTiltZoom",
+            PermissionType::WakeLockScreen => "wakeLockScreen",
+            PermissionType::WakeLockSystem => "wakeLockSystem",
+            PermissionType::WindowManagement => "windowManagement",
+        }
+    }
+}
+
 impl Browser {
     /// Construct a fresh [`BrowserBuilder`] (with stealth on by default).
     ///
@@ -1424,6 +1578,117 @@ impl Browser {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Grant `perms` to `origin` (or browser-wide when `origin` is `None`).
+    ///
+    /// Wraps the CDP [`Browser.grantPermissions`][1] command, sent at browser
+    /// scope (no `sessionId`). Each [`PermissionType`] is mapped to its
+    /// camelCase wire string. When `origin` is `Some`, the grant is scoped to
+    /// that origin (e.g. `"https://example.com"`); when `None`, the `origin`
+    /// key is omitted so the grant applies browser-wide.
+    ///
+    /// Granting a permission pre-authorizes it without the usual user prompt —
+    /// useful for unattended automation that would otherwise stall on a
+    /// permission dialog (geolocation, clipboard, notifications, …).
+    ///
+    /// [1]: https://chromedevtools.github.io/devtools-protocol/tot/Browser/#method-grantPermissions
+    ///
+    /// # Errors
+    ///
+    /// Bubbles up any transport-level error from the underlying `call_raw`
+    /// (e.g. the connection was shut down).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use zendriver::PermissionType;
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// browser
+    ///     .grant_permissions(
+    ///         &[PermissionType::Geolocation, PermissionType::Notifications],
+    ///         Some("https://example.com"),
+    ///     )
+    ///     .await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn grant_permissions(
+        &self,
+        perms: &[PermissionType],
+        origin: Option<&str>,
+    ) -> Result<(), ZendriverError> {
+        let mut params = serde_json::Map::new();
+        let permissions: Vec<serde_json::Value> = perms
+            .iter()
+            .map(|p| serde_json::Value::String(p.as_cdp().to_string()))
+            .collect();
+        params.insert("permissions".into(), serde_json::Value::Array(permissions));
+        // Omit `origin` entirely when None — a browser-wide grant. Some CDP
+        // versions reject an explicit null here.
+        if let Some(o) = origin {
+            params.insert("origin".into(), serde_json::Value::String(o.to_string()));
+        }
+        self.inner
+            .conn
+            .call_raw(
+                "Browser.grantPermissions",
+                serde_json::Value::Object(params),
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Grant every [`PermissionType`] browser-wide.
+    ///
+    /// Convenience wrapper over [`Browser::grant_permissions`] called with
+    /// [`PermissionType::ALL`] and no origin — mirrors nodriver /
+    /// zendriver-py's `grant_all_permissions`. Pre-authorizes the full CDP
+    /// permission set so automated runs never stall on a permission prompt.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Browser::grant_permissions`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// browser.grant_all_permissions().await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn grant_all_permissions(&self) -> Result<(), ZendriverError> {
+        self.grant_permissions(PermissionType::ALL, None).await
+    }
+
+    /// Reset all previously-granted permissions to their default prompt state.
+    ///
+    /// Wraps the CDP [`Browser.resetPermissions`][1] command, sent at browser
+    /// scope (no `sessionId`). Clears every override installed via
+    /// [`Browser::grant_permissions`] / [`Browser::grant_all_permissions`].
+    ///
+    /// [1]: https://chromedevtools.github.io/devtools-protocol/tot/Browser/#method-resetPermissions
+    ///
+    /// # Errors
+    ///
+    /// Bubbles up any transport-level error from the underlying `call_raw`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// browser.reset_permissions().await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn reset_permissions(&self) -> Result<(), ZendriverError> {
+        self.inner
+            .conn
+            .call_raw("Browser.resetPermissions", json!({}), None)
+            .await?;
         Ok(())
     }
 }
@@ -2347,5 +2612,152 @@ mod tests {
         assert_eq!(ctx.id(), "ctx-plain");
 
         conn.shutdown();
+    }
+
+    // ----- Browser::grant_permissions / reset_permissions (C5) -----------
+
+    /// [`Browser::grant_permissions`] maps each [`PermissionType`] to its
+    /// CDP camelCase string and dispatches `Browser.grantPermissions` at
+    /// browser scope (no `sessionId`) carrying both the `permissions` array
+    /// and the supplied `origin`.
+    #[tokio::test]
+    async fn grant_permissions_dispatches_with_mapped_strings_and_origin() {
+        use zendriver_transport::testing::MockConnection;
+
+        let (mut mock, conn) = MockConnection::pair();
+        let browser = test_only_browser_from_conn(conn.clone());
+
+        let fut = tokio::spawn({
+            let b = browser.clone();
+            async move {
+                b.grant_permissions(
+                    &[
+                        PermissionType::Geolocation,
+                        PermissionType::VideoCapture,
+                        PermissionType::ClipboardReadWrite,
+                    ],
+                    Some("https://example.com"),
+                )
+                .await
+            }
+        });
+
+        let id = mock.expect_cmd("Browser.grantPermissions").await;
+        let sent = mock.last_sent();
+        let perms = sent["params"]["permissions"]
+            .as_array()
+            .expect("permissions must be an array");
+        assert_eq!(
+            perms,
+            &vec![
+                json!("geolocation"),
+                json!("videoCapture"),
+                json!("clipboardReadWrite"),
+            ]
+        );
+        assert_eq!(sent["params"]["origin"], "https://example.com");
+        // Browser-scope command — no session_id.
+        assert!(sent.get("sessionId").is_none());
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    /// When `origin` is `None`, the `origin` key is omitted entirely from the
+    /// params (granted browser-wide), not sent as `null`.
+    #[tokio::test]
+    async fn grant_permissions_omits_origin_when_none() {
+        use zendriver_transport::testing::MockConnection;
+
+        let (mut mock, conn) = MockConnection::pair();
+        let browser = test_only_browser_from_conn(conn.clone());
+
+        let fut = tokio::spawn({
+            let b = browser.clone();
+            async move { b.grant_permissions(&[PermissionType::Notifications], None).await }
+        });
+
+        let id = mock.expect_cmd("Browser.grantPermissions").await;
+        let sent = mock.last_sent();
+        assert_eq!(
+            sent["params"]["permissions"].as_array().unwrap(),
+            &vec![json!("notifications")]
+        );
+        let origin_field = sent["params"].get("origin");
+        assert!(
+            origin_field.is_none() || origin_field.unwrap().is_null(),
+            "origin must be omitted when None"
+        );
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    /// [`Browser::reset_permissions`] dispatches `Browser.resetPermissions`
+    /// at browser scope.
+    #[tokio::test]
+    async fn reset_permissions_dispatches() {
+        use zendriver_transport::testing::MockConnection;
+
+        let (mut mock, conn) = MockConnection::pair();
+        let browser = test_only_browser_from_conn(conn.clone());
+
+        let fut = tokio::spawn({
+            let b = browser.clone();
+            async move { b.reset_permissions().await }
+        });
+
+        let id = mock.expect_cmd("Browser.resetPermissions").await;
+        // Browser-scope command — no session_id.
+        assert!(mock.last_sent().get("sessionId").is_none());
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    /// `grant_all_permissions` sends the full [`PermissionType::ALL`] list as
+    /// mapped CDP strings, with no origin (browser-wide).
+    #[tokio::test]
+    async fn grant_all_permissions_sends_full_list() {
+        use zendriver_transport::testing::MockConnection;
+
+        let (mut mock, conn) = MockConnection::pair();
+        let browser = test_only_browser_from_conn(conn.clone());
+
+        let fut = tokio::spawn({
+            let b = browser.clone();
+            async move { b.grant_all_permissions().await }
+        });
+
+        let id = mock.expect_cmd("Browser.grantPermissions").await;
+        let sent = mock.last_sent();
+        let perms = sent["params"]["permissions"]
+            .as_array()
+            .expect("permissions must be an array");
+        assert_eq!(perms.len(), PermissionType::ALL.len());
+        // Spot-check a couple of the mapped strings are present.
+        assert!(perms.contains(&json!("geolocation")));
+        assert!(perms.contains(&json!("midiSysex")));
+        let origin_field = sent["params"].get("origin");
+        assert!(origin_field.is_none() || origin_field.unwrap().is_null());
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[test]
+    fn permission_type_as_cdp_round_trips_known_strings() {
+        assert_eq!(PermissionType::Geolocation.as_cdp(), "geolocation");
+        assert_eq!(PermissionType::VideoCapture.as_cdp(), "videoCapture");
+        assert_eq!(PermissionType::AudioCapture.as_cdp(), "audioCapture");
+        assert_eq!(
+            PermissionType::ClipboardReadWrite.as_cdp(),
+            "clipboardReadWrite"
+        );
+        assert_eq!(PermissionType::MidiSysex.as_cdp(), "midiSysex");
     }
 }

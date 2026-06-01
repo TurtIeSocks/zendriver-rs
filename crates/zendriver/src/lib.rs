@@ -88,7 +88,7 @@ pub mod tab;
 pub mod traits;
 pub mod window;
 
-pub use browser::{Browser, BrowserBuilder};
+pub use browser::{Browser, BrowserBuilder, PermissionType};
 pub use browser_context::BrowserContext;
 pub use cookies::{Cookie, CookieJar, SameSite};
 pub use element::Element;
@@ -217,6 +217,7 @@ mod auto_trait_assertions {
     fn public_surface_is_send_sync() {
         assert_send_sync::<Browser>();
         assert_send_sync::<BrowserBuilder>();
+        assert_send_sync::<PermissionType>();
         assert_send_sync::<Tab>();
         assert_send_sync::<Element>();
         assert_send_sync::<Frame>();
