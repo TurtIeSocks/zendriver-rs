@@ -904,6 +904,168 @@ for h in handles {
 underlying CDP traffic is sequenced — but every <code>await</code> point yields,
 letting other tab workers make progress. The aggregate throughput is
 limited by CDP RTT rather than your spawn count.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="per-context-isolation"><a class="header" href="#per-context-isolation">Per-context isolation</a></h1>
+<p>A <a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserContext.html"><code>BrowserContext</code></a>
+is a thin RAII wrapper over a Chrome
+<a href="https://chromedevtools.github.io/devtools-protocol/tot/Browser/#type-BrowserContextID"><code>BrowserContextID</code></a>
+— the CDP-side primitive for cookie + storage isolation within a
+single Chrome process. Tabs opened in a <code>BrowserContext</code> see their
+own cookie jar, IndexedDB, and (optionally) their own proxy; tabs in
+the default context still share the browser-wide jar, exactly as
+before. The two APIs coexist; existing code that calls
+<code>browser.new_tab()</code> is unaffected.</p>
+<blockquote>
+<p><strong>When to use it.</strong> Per-request proxy bindings, parallel sessions
+with different logins under one Chrome process, A/B fingerprint
+tests where the cookie state must not bleed across runs. If you
+need separate user-data-dir, separate GPU caches, or
+process-level isolation, launch a second <a href="./multi-tab.html"><code>Browser</code></a>
+instead.</p>
+</blockquote>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick start</a></h2>
+<pre><pre class="playground"><code class="language-rust no_run">use zendriver::Browser;
+
+#[tokio::main]
+async fn main() -&gt; zendriver::Result&lt;()&gt; {
+    let browser = Browser::builder().launch().await?;
+
+    let ctx = browser.create_browser_context().await?;
+    let tab = ctx.new_tab().await?;
+    tab.goto("https://example.com").await?;
+    tab.wait_for_load().await?;
+
+    // ctx dropped at end of scope -&gt; Target.disposeBrowserContext
+    // is scheduled on the runtime, tearing down cookies + tabs.
+    Ok(())
+}</code></pre></pre>
+<p><code>Browser::create_browser_context</code> rejects if the underlying connection
+is closed; otherwise it returns the new guard immediately — the CDP
+round-trip is sub-millisecond.</p>
+<h2 id="per-context-proxy"><a class="header" href="#per-context-proxy">Per-context proxy</a></h2>
+<p>Use <a href="https://docs.rs/zendriver/latest/zendriver/struct.Browser.html#method.create_browser_context_with"><code>create_browser_context_with</code></a>
+when the isolated context should route through its own upstream
+proxy:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">use zendriver::Browser;
+</span><span class="boring">async fn ex(browser: &amp;Browser) -&gt; zendriver::Result&lt;()&gt; {
+</span>let ctx = browser
+    .create_browser_context_with(
+        Some("http://proxy.example.com:8080".into()),
+        // bypass list — same shape as Chrome's --proxy-bypass-list
+        Some("&lt;-loopback&gt;".into()),
+    )
+    .await?;
+let tab = ctx.new_tab().await?;
+tab.goto("https://api.ipify.org").await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p><code>proxy_server</code> is forwarded to CDP <code>Target.createBrowserContext</code> as the
+<code>proxyServer</code> field. Chrome accepts the same URL shapes as the
+<code>--proxy-server</code> command-line flag (<code>http://</code>, <code>socks5://</code>,
+<code>host:port</code> without scheme). <code>proxy_bypass_list</code> defaults to none.</p>
+<p>Note: proxy authentication is <strong>not</strong> carried by <code>proxyServer</code> — Chrome
+will issue a 407 if the upstream requires Basic auth. Pair the per-
+context proxy with <code>BrowserBuilder::proxy_auth</code> at launch time (the
+auth applies browser-wide; per-context auth is on the roadmap).</p>
+<h2 id="tabs-in-a-context"><a class="header" href="#tabs-in-a-context">Tabs in a context</a></h2>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">use zendriver::{Browser, BrowserContext};
+</span><span class="boring">async fn ex(ctx: &amp;BrowserContext) -&gt; zendriver::Result&lt;()&gt; {
+</span>// One tab on about:blank — same defaults as `Browser::new_tab`.
+let blank = ctx.new_tab().await?;
+
+// Or start at a specific URL — saves one `goto` round-trip.
+let preset = ctx.new_tab_at("https://example.com").await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p>Both methods thread <code>ctx.id()</code> into <code>Target.createTarget</code> so the new
+target is bound to this context. Cross-context tabs cannot share
+cookies; the test suite exercises this on every CI run.</p>
+<h2 id="drop-semantics"><a class="header" href="#drop-semantics">Drop semantics</a></h2>
+<p><code>BrowserContext::drop</code> schedules <code>Target.disposeBrowserContext</code> on the
+current Tokio runtime via <code>tokio::spawn</code> (the CDP call is async, but
+<code>Drop</code> is sync). Two implications:</p>
+<ul>
+<li><strong>Disposal is fire-and-forget.</strong> If the parent runtime is shutting
+down at the same instant the guard drops, the dispose may not land
+before the process exits. The Chrome side cleans up at process exit
+anyway; this only matters for long-lived browsers reused across
+many contexts.</li>
+<li><strong>Drop order matters for observability.</strong> Drop the <code>Tab</code> handles
+first (they hold references into the context's targets), then the
+<code>BrowserContext</code>. The Rust borrow checker enforces this for you —
+the example below compiles only because <code>tab</code> goes out of scope
+before <code>ctx</code>.</li>
+</ul>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">use zendriver::Browser;
+</span><span class="boring">async fn ex(browser: &amp;Browser) -&gt; zendriver::Result&lt;()&gt; {
+</span>let ctx = browser.create_browser_context().await?;
+{
+    let tab = ctx.new_tab().await?;
+    tab.goto("https://example.com").await?;
+    // `tab` drops here.
+}
+// `ctx` drops next. dispose() spawned now.
+<span class="boring">drop(ctx); Ok(())
+</span><span class="boring">}
+</span><span class="boring">}</span></code></pre></pre>
+<p>If you need to wait for disposal to complete before continuing (e.g.
+before launching a second context that shares the proxy host), use
+the explicit
+<a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserContext.html#method.dispose"><code>BrowserContext::dispose</code></a>
+method, which awaits the CDP call and returns its <code>Result</code>.</p>
+<h2 id="worked-example-rotating-proxy-session-pool"><a class="header" href="#worked-example-rotating-proxy-session-pool">Worked example: rotating-proxy session pool</a></h2>
+<p>A common pattern: pool of independent sessions, each pinned to a
+different upstream proxy, recycled per request. Each iteration spawns
+a fresh <code>BrowserContext</code> and disposes it via <code>Drop</code> once the request
+result is captured.</p>
+<pre><pre class="playground"><code class="language-rust no_run">use zendriver::Browser;
+
+#[tokio::main]
+async fn main() -&gt; zendriver::Result&lt;()&gt; {
+    let browser = Browser::builder().launch().await?;
+    let proxies = [
+        "http://proxy-a.example.com:8080",
+        "http://proxy-b.example.com:8080",
+        "http://proxy-c.example.com:8080",
+    ];
+
+    for proxy in proxies {
+        let ctx = browser
+            .create_browser_context_with(Some(proxy.into()), None)
+            .await?;
+        let tab = ctx.new_tab_at("https://httpbin.org/ip").await?;
+        tab.wait_for_load().await?;
+        let body = tab.find().css("pre").one().await?.inner_text().await?;
+        println!("via {proxy}: {body}");
+        // ctx + tab drop here — context disposed before next iter.
+    }
+
+    Ok(())
+}</code></pre></pre>
+<p>See <code>examples/browser_context_isolation.rs</code> in the source tree for a
+runnable variant exercising the full round-trip against a local mock
+proxy.</p>
+<h2 id="limitations"><a class="header" href="#limitations">Limitations</a></h2>
+<ul>
+<li><strong>Single Chrome process.</strong> Contexts share Chromium binaries, GPU
+process, GPU cache, and the user-data-dir. A compromised renderer
+in one context can in principle observe shared state. If process-
+level isolation matters, launch a second <code>Browser</code>.</li>
+<li><strong>No per-context auth yet.</strong> <code>create_browser_context_with</code> accepts a
+<code>proxy_server</code> but not a username/password. Pair with
+<code>BrowserBuilder::proxy_auth</code> browser-wide, or use a per-tab
+<a href="./interception.html">interception handler</a> for finer control.</li>
+<li><strong>Extension scoping.</strong> Chrome only loads <code>--load-extension</code> content
+scripts into the default context. Tabs opened in a non-default
+<code>BrowserContext</code> will not see your extensions. Workaround: stay on
+the default context when extensions are required, or inject
+equivalent scripts via <code>Page.addScriptToEvaluateOnNewDocument</code>.</li>
+</ul>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="frames"><a class="header" href="#frames">Frames</a></h1>
 <p>A page is a tree of frames: one main frame (the top-level document) plus
 zero or more child frames (typically <code>&lt;iframe&gt;</code> elements). zendriver-rs
@@ -1896,7 +2058,7 @@ token) and the challenge container (for removal from the DOM).</li>
 <li><strong>Return.</strong> First condition to fire wins; deadline elapsed →
 <code>ClearanceTimeout</code>.</li>
 </ol>
-<h2 id="limitations"><a class="header" href="#limitations">Limitations</a></h2>
+<h2 id="limitations-1"><a class="header" href="#limitations-1">Limitations</a></h2>
 <p>This driver <strong>only handles the visible interactive Turnstile checkbox</strong>.
 It does not solve:</p>
 <ul>
@@ -1980,7 +2142,28 @@ markers cleared — are observed.</p>
 fingerprint check. Run with <code>BrowserBuilder::stealth</code> enabled or the
 bypass will fail on nearly all real Imperva-protected sites.</p>
 </blockquote>
-<h2 id="quick-start"><a class="header" href="#quick-start">Quick start</a></h2>
+<h2 id="limitations-2"><a class="header" href="#limitations-2">Limitations</a></h2>
+<p>This crate observes the page; it does not modify Imperva's response. A
+<code>TokenAcquired</code> result means the JS challenge completed and the
+<code>reese84</code> cookie landed — it does <em>not</em> guarantee the next request will
+be accepted. Imperva runs a second validation pass on every request
+that ships the token; if its scoring of the fingerprint collected
+during the challenge falls below threshold, the next request returns a
+403 challenge page with <code>edet=15</code> / <code>B15(x,y,z)</code> (general bot
+protection). Root causes for that are upstream of this crate:</p>
+<ul>
+<li><strong>Browser stealth gaps.</strong> Missing fingerprint shim — canvas, audio,
+WebGL, client hints — leaks "automation" even when the challenge JS
+itself runs to completion.</li>
+<li><strong>IP reputation.</strong> Residential / datacenter pools flagged at the
+edge return <code>B15</code> before the JS challenge runs at all.</li>
+<li><strong>UA-vs-binary drift.</strong> Claiming <code>Chrome/146</code> from a Chromium 148
+binary leaks JS-API behavior inconsistent with the claimed version.</li>
+</ul>
+<p>If <code>wait_for_clearance</code> returns <code>TokenAcquired</code> but subsequent requests
+still hit <code>edet=15</code>, look upstream — the fingerprint the browser
+emitted is the problem, not the clearance detection.</p>
+<h2 id="quick-start-1"><a class="header" href="#quick-start-1">Quick start</a></h2>
 <pre><pre class="playground"><code class="language-rust no_run">use std::time::Duration;
 use zendriver::stealth::StealthProfile;
 use zendriver::{Browser, ImpervaClearanceOutcome};
@@ -2409,15 +2592,29 @@ let el = tab.find().css("button")
 el.click_with(ClickOptions { force: true, ..Default::default() }).await?;</code></pre>
 <p>Builders are checked at compile time — there's no <code>{ tymeout: ... }</code>
 typo that silently uses the default.</p>
-<h3 id="no-global-browser--browsercontext-split"><a class="header" href="#no-global-browser--browsercontext-split">No global <code>Browser</code> / <code>BrowserContext</code> split</a></h3>
+<h3 id="browser--browsercontext-split-is-opt-in"><a class="header" href="#browser--browsercontext-split-is-opt-in"><code>Browser</code> / <code>BrowserContext</code> split is opt-in</a></h3>
 <p>Playwright separates <code>Browser</code> (the process) from <code>BrowserContext</code>
-(an isolated cookie/storage scope). zendriver-rs has only <code>Browser</code>;
-every <code>Tab</code> shares the browser-scope cookie jar and is the equivalent
-of one Playwright page inside the default context.</p>
-<p>If you need multi-context isolation, launch a second <code>Browser</code>. The
-overhead is one extra Chrome subprocess — heavier than a context, but
-the isolation is total (separate user-data-dir, separate cookies,
-separate process). Most testing flows can avoid it.</p>
+(an isolated cookie/storage scope). zendriver-rs supports both —
+which one a <code>Tab</code> lives in is up to the caller:</p>
+<ul>
+<li><code>browser.new_tab().await?</code> opens a tab in the <strong>default</strong> context.
+Default-context tabs share the browser-wide cookie jar (this matches
+the pre-<code>BrowserContext</code> behavior — existing code is unaffected).</li>
+<li><code>browser.create_browser_context().await?</code> returns an isolated
+<a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserContext.html"><code>BrowserContext</code></a>
+whose <code>new_tab().await?</code> lives in its own cookie + storage scope.
+The context is disposed on drop via <code>Target.disposeBrowserContext</code>.</li>
+</ul>
+<p>For per-context proxy + bypass-list isolation, use
+<code>browser.create_browser_context_with(Some(proxy_url), None).await?</code>.
+See the <a href="./browser-context.html">Per-context isolation chapter</a> for the
+full surface, including the <code>Drop</code>-on-async caveat and a worked
+proxy-rotation example.</p>
+<p>Multi-context isolation via a second <code>Browser</code> process is still an
+option when total isolation (separate user-data-dir, separate process)
+matters — <code>BrowserContext</code> shares the parent Chrome process, so heavy
+isolation needs (e.g. profile-level GPU caches) still warrant a fresh
+<code>Browser</code>.</p>
 <h3 id="find-returns-one-or-many-explicitly"><a class="header" href="#find-returns-one-or-many-explicitly">Find returns one or many, explicitly</a></h3>
 <p>Playwright's <code>locator()</code> lazily evaluates to "zero or more matches"
 until you call a terminal action. zendriver-rs forces the choice at

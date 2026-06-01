@@ -193,6 +193,27 @@ markers cleared — are observed.</p>
 fingerprint check. Run with <code>BrowserBuilder::stealth</code> enabled or the
 bypass will fail on nearly all real Imperva-protected sites.</p>
 </blockquote>
+<h2 id="limitations"><a class="header" href="#limitations">Limitations</a></h2>
+<p>This crate observes the page; it does not modify Imperva's response. A
+<code>TokenAcquired</code> result means the JS challenge completed and the
+<code>reese84</code> cookie landed — it does <em>not</em> guarantee the next request will
+be accepted. Imperva runs a second validation pass on every request
+that ships the token; if its scoring of the fingerprint collected
+during the challenge falls below threshold, the next request returns a
+403 challenge page with <code>edet=15</code> / <code>B15(x,y,z)</code> (general bot
+protection). Root causes for that are upstream of this crate:</p>
+<ul>
+<li><strong>Browser stealth gaps.</strong> Missing fingerprint shim — canvas, audio,
+WebGL, client hints — leaks "automation" even when the challenge JS
+itself runs to completion.</li>
+<li><strong>IP reputation.</strong> Residential / datacenter pools flagged at the
+edge return <code>B15</code> before the JS challenge runs at all.</li>
+<li><strong>UA-vs-binary drift.</strong> Claiming <code>Chrome/146</code> from a Chromium 148
+binary leaks JS-API behavior inconsistent with the claimed version.</li>
+</ul>
+<p>If <code>wait_for_clearance</code> returns <code>TokenAcquired</code> but subsequent requests
+still hit <code>edet=15</code>, look upstream — the fingerprint the browser
+emitted is the problem, not the clearance detection.</p>
 <h2 id="quick-start"><a class="header" href="#quick-start">Quick start</a></h2>
 <pre><pre class="playground"><code class="language-rust no_run">use std::time::Duration;
 use zendriver::stealth::StealthProfile;

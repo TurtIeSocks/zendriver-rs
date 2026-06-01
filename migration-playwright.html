@@ -253,15 +253,29 @@ let el = tab.find().css("button")
 el.click_with(ClickOptions { force: true, ..Default::default() }).await?;</code></pre>
 <p>Builders are checked at compile time — there's no <code>{ tymeout: ... }</code>
 typo that silently uses the default.</p>
-<h3 id="no-global-browser--browsercontext-split"><a class="header" href="#no-global-browser--browsercontext-split">No global <code>Browser</code> / <code>BrowserContext</code> split</a></h3>
+<h3 id="browser--browsercontext-split-is-opt-in"><a class="header" href="#browser--browsercontext-split-is-opt-in"><code>Browser</code> / <code>BrowserContext</code> split is opt-in</a></h3>
 <p>Playwright separates <code>Browser</code> (the process) from <code>BrowserContext</code>
-(an isolated cookie/storage scope). zendriver-rs has only <code>Browser</code>;
-every <code>Tab</code> shares the browser-scope cookie jar and is the equivalent
-of one Playwright page inside the default context.</p>
-<p>If you need multi-context isolation, launch a second <code>Browser</code>. The
-overhead is one extra Chrome subprocess — heavier than a context, but
-the isolation is total (separate user-data-dir, separate cookies,
-separate process). Most testing flows can avoid it.</p>
+(an isolated cookie/storage scope). zendriver-rs supports both —
+which one a <code>Tab</code> lives in is up to the caller:</p>
+<ul>
+<li><code>browser.new_tab().await?</code> opens a tab in the <strong>default</strong> context.
+Default-context tabs share the browser-wide cookie jar (this matches
+the pre-<code>BrowserContext</code> behavior — existing code is unaffected).</li>
+<li><code>browser.create_browser_context().await?</code> returns an isolated
+<a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserContext.html"><code>BrowserContext</code></a>
+whose <code>new_tab().await?</code> lives in its own cookie + storage scope.
+The context is disposed on drop via <code>Target.disposeBrowserContext</code>.</li>
+</ul>
+<p>For per-context proxy + bypass-list isolation, use
+<code>browser.create_browser_context_with(Some(proxy_url), None).await?</code>.
+See the <a href="./browser-context.html">Per-context isolation chapter</a> for the
+full surface, including the <code>Drop</code>-on-async caveat and a worked
+proxy-rotation example.</p>
+<p>Multi-context isolation via a second <code>Browser</code> process is still an
+option when total isolation (separate user-data-dir, separate process)
+matters — <code>BrowserContext</code> shares the parent Chrome process, so heavy
+isolation needs (e.g. profile-level GPU caches) still warrant a fresh
+<code>Browser</code>.</p>
 <h3 id="find-returns-one-or-many-explicitly"><a class="header" href="#find-returns-one-or-many-explicitly">Find returns one or many, explicitly</a></h3>
 <p>Playwright's <code>locator()</code> lazily evaluates to "zero or more matches"
 until you call a terminal action. zendriver-rs forces the choice at
