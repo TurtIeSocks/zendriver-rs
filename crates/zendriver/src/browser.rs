@@ -39,12 +39,41 @@ use crate::error::{BrowserError, ZendriverError};
 use crate::input::InputController;
 use crate::tab::Tab;
 
+/// Which Chromium-family browser channel to discover at launch.
+///
+/// Passed via [`BrowserBuilder::channel`]; consumed by
+/// [`find_chrome_executable_for_channel`] to pick the per-OS candidate path
+/// table. [`BrowserBuilder::executable`] still overrides channel discovery
+/// entirely.
+///
+/// # Examples
+///
+/// ```no_run
+/// use zendriver::Channel;
+/// let builder = zendriver::Browser::builder().channel(Channel::Brave);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Channel {
+    /// Google Chrome (stable). Same discovery as [`Channel::Auto`] minus the
+    /// Chromium fallbacks.
+    Chrome,
+    /// Open-source Chromium build.
+    Chromium,
+    /// Brave Browser.
+    Brave,
+    /// Microsoft Edge.
+    Edge,
+    /// First Chromium-family browser found — the historical default (Chrome,
+    /// then Chromium). Use a specific channel to force Brave / Edge.
+    #[default]
+    Auto,
+}
+
 /// Look for a Chromium-family binary on PATH and in conventional locations.
 ///
-/// Returns the first path that exists. Checks PATH for the canonical
-/// binaries (`google-chrome`, `chromium`, `chrome`) then platform-specific
-/// install locations (macOS `/Applications`, Linux `/usr/bin`, Windows
-/// `Program Files`).
+/// Returns the first path that exists, scanning the [`Channel::Auto`]
+/// candidate table (Chrome, then Chromium). For a specific browser channel
+/// (Brave / Edge / …) use [`find_chrome_executable_for_channel`].
 ///
 /// # Errors
 ///
@@ -60,7 +89,21 @@ use crate::tab::Tab;
 /// }
 /// ```
 pub fn find_chrome_executable() -> Result<PathBuf, BrowserError> {
-    let candidates = candidate_paths();
+    find_chrome_executable_for_channel(Channel::Auto)
+}
+
+/// Look for the binary of a specific [`Channel`] on PATH and in conventional
+/// per-OS install locations.
+///
+/// Returns the first candidate that exists. [`Channel::Auto`] reproduces the
+/// historical first-found behavior (Chrome, then Chromium).
+///
+/// # Errors
+///
+/// Returns [`BrowserError::ExecutableNotFound`] with the searched candidate
+/// list when none of the channel's paths exist.
+pub fn find_chrome_executable_for_channel(channel: Channel) -> Result<PathBuf, BrowserError> {
+    let candidates = candidate_paths_for_channel(channel);
     for c in &candidates {
         if c.exists() {
             return Ok(c.clone());
@@ -71,47 +114,119 @@ pub fn find_chrome_executable() -> Result<PathBuf, BrowserError> {
     })
 }
 
-fn candidate_paths() -> Vec<PathBuf> {
+/// Build the ordered candidate-path list for `channel`.
+///
+/// PATH lookups come first (so a PATH-resolved binary wins over a fixed
+/// install dir), followed by the per-OS conventional install locations for
+/// the requested channel. Factored out (and `pub(crate)`) so unit tests can
+/// assert the table without requiring the browser installed.
+pub(crate) fn candidate_paths_for_channel(channel: Channel) -> Vec<PathBuf> {
     let mut v = Vec::new();
 
-    // PATH lookups.
-    for name in [
-        "google-chrome",
-        "google-chrome-stable",
-        "chromium",
-        "chromium-browser",
-        "chrome",
-    ] {
+    // PATH lookups — names vary by channel.
+    let path_names: &[&str] = match channel {
+        Channel::Chrome => &["google-chrome", "google-chrome-stable", "chrome"],
+        Channel::Chromium => &["chromium", "chromium-browser"],
+        Channel::Brave => &["brave-browser", "brave"],
+        Channel::Edge => &["microsoft-edge", "microsoft-edge-stable"],
+        Channel::Auto => &[
+            "google-chrome",
+            "google-chrome-stable",
+            "chromium",
+            "chromium-browser",
+            "chrome",
+        ],
+    };
+    for name in path_names {
         if let Some(p) = which_on_path(name) {
             v.push(p);
         }
     }
 
-    // Platform-specific known locations.
+    // Platform-specific known locations, per channel.
     #[cfg(target_os = "macos")]
     {
-        v.push(PathBuf::from(
-            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        ));
-        v.push(PathBuf::from(
-            "/Applications/Chromium.app/Contents/MacOS/Chromium",
-        ));
+        let chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+        let chromium = "/Applications/Chromium.app/Contents/MacOS/Chromium";
+        let brave =
+            "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser";
+        let edge = "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge";
+        match channel {
+            Channel::Chrome => v.push(PathBuf::from(chrome)),
+            Channel::Chromium => v.push(PathBuf::from(chromium)),
+            Channel::Brave => v.push(PathBuf::from(brave)),
+            Channel::Edge => v.push(PathBuf::from(edge)),
+            Channel::Auto => {
+                v.push(PathBuf::from(chrome));
+                v.push(PathBuf::from(chromium));
+            }
+        }
     }
     #[cfg(target_os = "linux")]
     {
-        v.push(PathBuf::from("/usr/bin/google-chrome"));
-        v.push(PathBuf::from("/usr/bin/chromium"));
-        v.push(PathBuf::from("/usr/bin/chromium-browser"));
-        v.push(PathBuf::from("/snap/bin/chromium"));
+        match channel {
+            Channel::Chrome => {
+                v.push(PathBuf::from("/usr/bin/google-chrome"));
+                v.push(PathBuf::from("/usr/bin/google-chrome-stable"));
+            }
+            Channel::Chromium => {
+                v.push(PathBuf::from("/usr/bin/chromium"));
+                v.push(PathBuf::from("/usr/bin/chromium-browser"));
+                v.push(PathBuf::from("/snap/bin/chromium"));
+            }
+            Channel::Brave => {
+                v.push(PathBuf::from("/usr/bin/brave-browser"));
+                v.push(PathBuf::from("/usr/bin/brave"));
+                v.push(PathBuf::from(
+                    "/opt/brave.com/brave/brave-browser",
+                ));
+            }
+            Channel::Edge => {
+                v.push(PathBuf::from("/usr/bin/microsoft-edge"));
+                v.push(PathBuf::from("/usr/bin/microsoft-edge-stable"));
+                v.push(PathBuf::from(
+                    "/opt/microsoft/msedge/microsoft-edge",
+                ));
+            }
+            Channel::Auto => {
+                v.push(PathBuf::from("/usr/bin/google-chrome"));
+                v.push(PathBuf::from("/usr/bin/chromium"));
+                v.push(PathBuf::from("/usr/bin/chromium-browser"));
+                v.push(PathBuf::from("/snap/bin/chromium"));
+            }
+        }
     }
     #[cfg(target_os = "windows")]
     {
-        v.push(PathBuf::from(
+        let chrome = [
             r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-        ));
-        v.push(PathBuf::from(
             r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-        ));
+        ];
+        let brave = [
+            r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
+            r"C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe",
+        ];
+        let edge = [
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        ];
+        match channel {
+            Channel::Chrome | Channel::Chromium | Channel::Auto => {
+                for p in chrome {
+                    v.push(PathBuf::from(p));
+                }
+            }
+            Channel::Brave => {
+                for p in brave {
+                    v.push(PathBuf::from(p));
+                }
+            }
+            Channel::Edge => {
+                for p in edge {
+                    v.push(PathBuf::from(p));
+                }
+            }
+        }
     }
 
     v
@@ -195,6 +310,17 @@ pub struct BrowserBuilder {
     pub(crate) executable: Option<PathBuf>,
     pub(crate) user_data_dir: Option<PathBuf>,
     pub(crate) downloads_dir: Option<PathBuf>,
+    /// `--lang=<v>` UI locale override. See [`BrowserBuilder::lang`].
+    pub(crate) lang: Option<String>,
+    /// Static `--user-agent=<v>` launch override. See
+    /// [`BrowserBuilder::user_agent`].
+    pub(crate) user_agent: Option<String>,
+    /// Sandbox toggle. `None`/`Some(true)` = sandbox on (no flag);
+    /// `Some(false)` = emit `--no-sandbox`. See [`BrowserBuilder::sandbox`].
+    pub(crate) sandbox: Option<bool>,
+    /// Which browser [`Channel`] to discover when no explicit `executable` is
+    /// set. Defaults to [`Channel::Auto`].
+    pub(crate) channel: Channel,
     pub(crate) extra_args: Vec<String>,
     pub(crate) stealth: Option<StealthProfile>,
     pub(crate) extra_observers: Vec<Arc<dyn TargetObserver>>,
@@ -216,6 +342,10 @@ impl std::fmt::Debug for BrowserBuilder {
             .field("executable", &self.executable)
             .field("user_data_dir", &self.user_data_dir)
             .field("downloads_dir", &self.downloads_dir)
+            .field("lang", &self.lang)
+            .field("user_agent", &self.user_agent)
+            .field("sandbox", &self.sandbox)
+            .field("channel", &self.channel)
             .field("extra_args", &self.extra_args)
             .field("stealth", &self.stealth)
             .field(
@@ -364,6 +494,95 @@ impl BrowserBuilder {
         self
     }
 
+    /// Set Chrome's UI locale via `--lang=<v>` (e.g. `"en-US"`, `"de-DE"`).
+    ///
+    /// Influences the browser-chrome language and the default
+    /// `Accept-Language` header. For full stealth-coherent locale spoofing,
+    /// prefer configuring it through the [`StealthProfile`] instead.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let builder = zendriver::Browser::builder().lang("en-US");
+    /// ```
+    #[must_use]
+    pub fn lang(mut self, lang: impl Into<String>) -> Self {
+        self.lang = Some(lang.into());
+        self
+    }
+
+    /// Set a static `--user-agent=<v>` for the launched Chrome process.
+    ///
+    /// This is the **launch-time** User-Agent override. Two other UA paths
+    /// exist and are usually a better fit:
+    /// - [`Tab::set_user_agent`] — a runtime per-tab override (also sets
+    ///   `Accept-Language` + UA-CH client hints) applied after launch.
+    /// - the stealth-profile UA — a fingerprint-coherent UA (with matching
+    ///   UA-CH metadata) set via the [`StealthProfile`]; preferred when
+    ///   stealth is on, since a bare `--user-agent` flag leaves the
+    ///   JS-visible UA-CH hints inconsistent with the header.
+    ///
+    /// Use this flag only when you need the UA fixed at process start for
+    /// every tab and don't need UA-CH coherence.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let builder = zendriver::Browser::builder()
+    ///     .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36");
+    /// ```
+    #[must_use]
+    pub fn user_agent(mut self, ua: impl Into<String>) -> Self {
+        self.user_agent = Some(ua.into());
+        self
+    }
+
+    /// Toggle Chrome's setuid/namespace sandbox (default: **on**).
+    ///
+    /// Passing `false` appends `--no-sandbox`. Leaving it unset (or `true`)
+    /// keeps the sandbox enabled and emits no flag.
+    ///
+    /// Independent of the CI auto-disable: when the `CI` env var is set,
+    /// `launch` still auto-adds `--no-sandbox` + `--disable-dev-shm-usage`
+    /// (the GitHub-Actions / Docker containers run as root, where the
+    /// user-namespace sandbox refuses to start). Calling `sandbox(false)`
+    /// just opts in explicitly outside CI.
+    ///
+    /// Disabling the sandbox weakens Chrome's process isolation — only do so
+    /// in trusted, throwaway environments (containers, ephemeral VMs).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let builder = zendriver::Browser::builder().sandbox(false);
+    /// ```
+    #[must_use]
+    pub fn sandbox(mut self, on: bool) -> Self {
+        self.sandbox = Some(on);
+        self
+    }
+
+    /// Pick which browser [`Channel`] to discover at launch (default:
+    /// [`Channel::Auto`]).
+    ///
+    /// Selects the per-OS candidate-path table used to locate the browser
+    /// binary — e.g. [`Channel::Brave`] / [`Channel::Edge`] resolve their
+    /// real install locations. [`BrowserBuilder::executable`] still overrides
+    /// channel discovery entirely; when an explicit executable is set the
+    /// channel is ignored.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use zendriver::Channel;
+    /// let builder = zendriver::Browser::builder().channel(Channel::Brave);
+    /// ```
+    #[must_use]
+    pub fn channel(mut self, channel: Channel) -> Self {
+        self.channel = channel;
+        self
+    }
+
     /// Append a single command-line flag to the Chrome launch argv.
     ///
     /// Flags accumulate; later calls do NOT replace earlier ones.
@@ -458,6 +677,24 @@ impl BrowserBuilder {
         if self.headless.unwrap_or(true) {
             v.push("--headless=new".to_string());
             v.push("--disable-gpu".to_string());
+        }
+        // C4 dedicated flags. Emitted only when explicitly configured so the
+        // default-builder flag set (and its snapshots) is unchanged. Placed
+        // before user `extra_args` so caller-supplied flags still come last.
+        if let Some(lang) = self.lang.as_ref() {
+            v.push(format!("--lang={lang}"));
+        }
+        if let Some(ua) = self.user_agent.as_ref() {
+            v.push(format!("--user-agent={ua}"));
+        }
+        // Sandbox off → --no-sandbox. Default (None / Some(true)) emits
+        // nothing; the CI auto-disable is handled separately in `launch`.
+        // NOTE: root-uid (euid 0) auto-disable is intentionally NOT done here
+        // — that needs a `geteuid` syscall (no std API) and we decline to add
+        // a `rustix` / `unsafe libc` dependency for it. Callers running as
+        // root should opt in explicitly with `.sandbox(false)`.
+        if self.sandbox == Some(false) {
+            v.push("--no-sandbox".to_string());
         }
         v.extend(self.extra_args.iter().cloned());
         v
@@ -768,14 +1005,15 @@ impl BrowserBuilder {
     pub async fn launch(self) -> Result<Browser, ZendriverError> {
         // 1. Resolve Chrome executable.
         // Precedence: explicit `.executable(...)` > `CHROME_BIN` env var >
-        // platform discovery. The env-var hop lets CI (and local devs
-        // pointing at Canary / a downloaded Chrome-for-Testing build)
-        // override the discovery path without code changes.
+        // per-channel platform discovery. The env-var hop lets CI (and local
+        // devs pointing at Canary / a downloaded Chrome-for-Testing build)
+        // override the discovery path without code changes. The configured
+        // `channel` (default `Auto`) only steers the final discovery step.
         let exe = match self.executable.clone() {
             Some(p) => p,
             None => match std::env::var("CHROME_BIN").ok().filter(|s| !s.is_empty()) {
                 Some(p) => PathBuf::from(p),
-                None => find_chrome_executable()?,
+                None => find_chrome_executable_for_channel(self.channel)?,
             },
         };
 
@@ -1724,7 +1962,7 @@ mod tests {
 
     #[test]
     fn candidate_paths_is_nonempty() {
-        let v = candidate_paths();
+        let v = candidate_paths_for_channel(Channel::Auto);
         assert!(!v.is_empty());
     }
 
@@ -1825,6 +2063,87 @@ mod tests {
             .unwrap();
         let lang = flags.iter().position(|f| f == "--lang=en-US").unwrap();
         assert!(proxy < lang);
+    }
+
+    // ----- C4: lang / user_agent / sandbox / channel ---------------------
+
+    #[test]
+    fn lang_flag_present() {
+        let b = BrowserBuilder::new().lang("en-US");
+        let flags = b.build_flags(Path::new("/tmp/x"));
+        assert!(flags.contains(&"--lang=en-US".to_string()));
+    }
+
+    #[test]
+    fn user_agent_flag_present() {
+        let b = BrowserBuilder::new().user_agent("MyAgent/1.0");
+        let flags = b.build_flags(Path::new("/tmp/x"));
+        assert!(flags.contains(&"--user-agent=MyAgent/1.0".to_string()));
+    }
+
+    #[test]
+    fn sandbox_false_adds_no_sandbox() {
+        let b = BrowserBuilder::new().sandbox(false);
+        let flags = b.build_flags(Path::new("/tmp/x"));
+        assert!(flags.contains(&"--no-sandbox".to_string()));
+    }
+
+    #[test]
+    fn sandbox_default_on_omits_no_sandbox() {
+        // Default builder (sandbox on) must NOT emit --no-sandbox from
+        // build_flags. The CI auto-add lives in `launch`, not build_flags,
+        // so this is unaffected by the CI env var.
+        let b = BrowserBuilder::new();
+        let flags = b.build_flags(Path::new("/tmp/x"));
+        assert!(!flags.contains(&"--no-sandbox".to_string()));
+    }
+
+    #[test]
+    fn channel_brave_resolves_brave_path() {
+        // Probe the candidate-path table directly so the test does not
+        // require Brave to be installed. Every Brave candidate path must
+        // mention "brave" somewhere (per-OS install dirs / binary names),
+        // compared case-insensitively (Linux uses lowercase `brave-browser`,
+        // macOS/Windows use `Brave Browser` / `Brave-Browser`).
+        let paths = candidate_paths_for_channel(Channel::Brave);
+        assert!(!paths.is_empty(), "Brave channel must yield candidates");
+        assert!(
+            paths
+                .iter()
+                .all(|p| p.to_string_lossy().to_lowercase().contains("brave")),
+            "every Brave candidate path should reference Brave: {paths:?}"
+        );
+    }
+
+    #[test]
+    fn channel_edge_resolves_edge_path() {
+        let paths = candidate_paths_for_channel(Channel::Edge);
+        assert!(!paths.is_empty(), "Edge channel must yield candidates");
+        assert!(
+            paths
+                .iter()
+                .all(|p| p.to_string_lossy().to_lowercase().contains("edge")),
+            "every Edge candidate path should reference Edge: {paths:?}"
+        );
+    }
+
+    #[test]
+    fn channel_auto_includes_chrome_family_candidates() {
+        // Auto preserves the historical first-found behavior: it offers both
+        // the Chrome and Chromium fallbacks (so neither a Chrome-only nor a
+        // Chromium-only box regresses). `find_chrome_executable()` delegates
+        // straight to this table.
+        let paths = candidate_paths_for_channel(Channel::Auto);
+        assert!(!paths.is_empty(), "Auto must yield candidates");
+        let joined = paths
+            .iter()
+            .map(|p| p.to_string_lossy().to_lowercase())
+            .collect::<Vec<_>>()
+            .join("|");
+        assert!(
+            joined.contains("chrom"),
+            "Auto candidates should reference a Chrome/Chromium binary: {paths:?}"
+        );
     }
 
     #[test]

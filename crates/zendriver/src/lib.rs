@@ -88,7 +88,7 @@ pub mod tab;
 pub mod traits;
 pub mod window;
 
-pub use browser::{Browser, BrowserBuilder, PermissionType};
+pub use browser::{Browser, BrowserBuilder, Channel, PermissionType};
 pub use browser_context::BrowserContext;
 pub use cookies::{Cookie, CookieJar, SameSite};
 pub use element::Element;
@@ -174,9 +174,16 @@ pub use expect::download::{
 /// [`BrowserBuilder::ensure_chrome`] for the common "just download Chrome"
 /// case, or instantiate [`Fetcher`] directly for version/channel/cache
 /// customization.
+///
+/// The fetcher's release-channel enum is re-exported as `FetcherChannel` to
+/// avoid colliding with the browser-discovery [`Channel`] enum (Chrome /
+/// Chromium / Brave / Edge / Auto): the two name different concepts — a
+/// Chrome-for-Testing *release* channel (Stable/Beta/Dev/Canary) versus which
+/// installed *browser* to launch.
 #[cfg(feature = "fetcher")]
 pub use zendriver_fetcher::{
-    Channel, Fetcher, FetcherError, FetcherPhase, FetcherProgress, Platform, VersionSpec,
+    Channel as FetcherChannel, Fetcher, FetcherError, FetcherPhase, FetcherProgress, Platform,
+    VersionSpec,
 };
 
 /// Stealth profile + fingerprint configuration re-exported from `zendriver-stealth`.
@@ -217,6 +224,7 @@ mod auto_trait_assertions {
     fn public_surface_is_send_sync() {
         assert_send_sync::<Browser>();
         assert_send_sync::<BrowserBuilder>();
+        assert_send_sync::<Channel>();
         assert_send_sync::<PermissionType>();
         assert_send_sync::<Tab>();
         assert_send_sync::<Element>();
@@ -311,7 +319,7 @@ mod auto_trait_assertions {
         assert_send_sync::<FetcherProgress>();
         assert_send_sync::<Platform>();
         assert_send_sync::<VersionSpec>();
-        assert_send_sync::<Channel>();
+        assert_send_sync::<FetcherChannel>();
     }
 
     #[test]
