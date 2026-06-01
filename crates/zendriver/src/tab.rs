@@ -1090,6 +1090,43 @@ impl Tab {
         Ok(())
     }
 
+    /// Full HTML source of the tab's current page.
+    ///
+    /// Dispatches `DOM.getDocument { depth: 0 }` to resolve the document's
+    /// root `nodeId`, then `DOM.getOuterHTML { nodeId }` to serialize it.
+    /// The result is the complete document markup including the doctype —
+    /// the page-level analogue of [`crate::Frame::content`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Navigation`] when Chrome's response is
+    /// missing the root `nodeId` or the serialized `outerHTML`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// let html = tab.content().await?;
+    /// assert!(html.contains("<html"));
+    /// # Ok(()) }
+    /// ```
+    pub async fn content(&self) -> Result<String> {
+        let doc = self.call("DOM.getDocument", json!({ "depth": 0 })).await?;
+        let node_id = doc["root"]["nodeId"].as_i64().ok_or_else(|| {
+            ZendriverError::Navigation("DOM.getDocument missing root.nodeId".into())
+        })?;
+        let res = self
+            .call("DOM.getOuterHTML", json!({ "nodeId": node_id }))
+            .await?;
+        res["outerHTML"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| ZendriverError::Navigation("DOM.getOuterHTML missing outerHTML".into()))
+    }
+
     /// Wait until the tab's network has been idle (0 in-flight requests)
     /// for 500ms, with a 30s outer timeout. Playwright `networkidle`
     /// semantics.
@@ -2008,6 +2045,38 @@ mod tests {
         mock.reply(id, json!({})).await;
 
         fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    // --- Tab::content (B1) ---------------------------------------------
+
+    #[tokio::test]
+    async fn content_dispatches_get_document_then_outer_html() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.content().await }
+        });
+
+        // 1. DOM.getDocument { depth: 0 } → root nodeId.
+        let id_doc = mock.expect_cmd("DOM.getDocument").await;
+        assert_eq!(mock.last_sent()["params"]["depth"], 0);
+        mock.reply(id_doc, json!({ "root": { "nodeId": 7 } })).await;
+
+        // 2. DOM.getOuterHTML { nodeId } → outerHTML string.
+        let id_html = mock.expect_cmd("DOM.getOuterHTML").await;
+        assert_eq!(mock.last_sent()["params"]["nodeId"], 7);
+        mock.reply(
+            id_html,
+            json!({ "outerHTML": "<!DOCTYPE html><html><body>hi</body></html>" }),
+        )
+        .await;
+
+        let html = fut.await.unwrap().unwrap();
+        assert_eq!(html, "<!DOCTYPE html><html><body>hi</body></html>");
         conn.shutdown();
     }
 
