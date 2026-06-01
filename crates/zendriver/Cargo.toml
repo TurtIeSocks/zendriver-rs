@@ -137,6 +137,10 @@ name = "proxy_auth"
 required-features = ["interception"]
 
 [[example]]
+name = "browser_context_isolation"
+required-features = ["interception"]
+
+[[example]]
 name = "intercept_block_ads"
 required-features = ["interception"]
 

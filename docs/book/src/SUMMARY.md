@@ -5,6 +5,7 @@
 - [Quickstart](./quickstart.md)
 - [Stealth](./stealth.md)
 - [Multi-tab](./multi-tab.md)
+- [Per-context isolation](./browser-context.md)
 - [Frames](./frames.md)
 - [Input](./input.md)
 - [Interception](./interception.md)

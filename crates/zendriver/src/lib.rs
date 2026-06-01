@@ -70,6 +70,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod browser;
+pub mod browser_context;
 pub mod cookies;
 pub mod element;
 pub mod error;
@@ -86,6 +87,7 @@ pub mod tab;
 pub mod traits;
 
 pub use browser::{Browser, BrowserBuilder};
+pub use browser_context::BrowserContext;
 pub use cookies::{Cookie, CookieJar, SameSite};
 pub use element::Element;
 pub use element::actions::ClickOptions;

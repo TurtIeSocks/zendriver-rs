@@ -3,6 +3,15 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `Browser::create_browser_context` and `Browser::create_browser_context_with(proxy_server, proxy_bypass_list)` — high-level wrappers around CDP `Target.createBrowserContext` for per-context proxy and storage isolation.
+- `BrowserContext` RAII guard with `new_tab` / `new_tab_at` (threads `browserContextId` into `Target.createTarget`) and a `Drop` impl that schedules `Target.disposeBrowserContext` via the underlying connection.
+- `examples/browser_context_isolation` demonstrating per-context proxy bindings against a rotating upstream.
+
+
 ## [0.1.3] - 2026-05-26
 
 ### Added

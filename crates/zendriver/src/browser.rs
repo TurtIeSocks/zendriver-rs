@@ -496,6 +496,71 @@ pub(crate) struct BrowserInner {
     pub(crate) proxy_auth_handle: std::sync::OnceLock<zendriver_interception::InterceptHandle>,
 }
 
+impl BrowserInner {
+    /// Wraps `Target.disposeBrowserContext`, the CDP command that destroys
+    /// an incognito-style [browser context][1] previously created via
+    /// `Target.createBrowserContext`. Sent at browser scope (no
+    /// `sessionId`).
+    ///
+    /// Used by [`crate::BrowserContext`]'s `Drop` impl to free its backing
+    /// context when the handle goes out of scope.
+    ///
+    /// [1]: https://chromedevtools.github.io/devtools-protocol/tot/Target/#method-disposeBrowserContext
+    pub(crate) async fn dispose_browser_context(&self, id: &str) -> Result<(), ZendriverError> {
+        self.conn
+            .call_raw(
+                "Target.disposeBrowserContext",
+                json!({ "browserContextId": id }),
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+}
+
+/// Test-only helper that wraps [`test_only_inner_from_conn`] in a real
+/// [`Browser`] handle. Used by inline unit tests that need to exercise
+/// `Browser`-level methods (e.g. `create_browser_context_with`) without
+/// launching Chrome.
+#[cfg(test)]
+pub(crate) fn test_only_browser_from_conn(conn: Connection) -> Browser {
+    Browser {
+        inner: test_only_inner_from_conn(conn),
+    }
+}
+
+/// Test-only helper that constructs a minimal [`BrowserInner`] backed by a
+/// caller-supplied [`Connection`] (typically the consumer side of a
+/// [`zendriver_transport::testing::MockConnection`] pair). Mirrors the
+/// shape `launch` produces post-step-12: a main tab keyed under `"S1"` /
+/// target id `"T1"` in the registry.
+///
+/// Used by inline unit tests that need to exercise [`BrowserInner`]
+/// methods without launching Chrome. Subsequent tasks in this series
+/// (per-context proxy support) reuse the same helper.
+#[cfg(test)]
+pub(crate) fn test_only_inner_from_conn(conn: Connection) -> Arc<BrowserInner> {
+    let input_profile = zendriver_stealth::InputProfile::native();
+    Arc::new_cyclic(|weak: &std::sync::Weak<BrowserInner>| {
+        let main_session = SessionHandle::new(conn.clone(), "S1");
+        let main_input = InputController::new(input_profile.clone());
+        let main_tab = Tab::new(main_session, weak.clone(), main_input, "T1".to_string());
+        let mut map = HashMap::new();
+        map.insert("S1".to_string(), main_tab.clone());
+        BrowserInner {
+            conn,
+            main_tab,
+            child: tokio::sync::Mutex::new(None),
+            _user_data: None,
+            stealth_input_profile: input_profile,
+            tabs: tokio::sync::RwLock::new(map),
+            tabs_changed: tokio::sync::Notify::new(),
+            #[cfg(feature = "interception")]
+            proxy_auth_handle: std::sync::OnceLock::new(),
+        }
+    })
+}
+
 /// [`TargetObserver`] that maintains [`BrowserInner::tabs`] in step with
 /// CDP target lifecycle events.
 ///
@@ -1010,6 +1075,86 @@ impl Browser {
     #[must_use]
     pub fn cookies(&self) -> crate::CookieJar {
         crate::CookieJar::new(self.inner.conn.clone())
+    }
+
+    /// Create a new isolated [`crate::BrowserContext`] bound to an optional
+    /// proxy.
+    ///
+    /// Wraps the CDP [`Target.createBrowserContext`][1] command: when
+    /// `proxy_server` is `Some`, the returned context routes all network
+    /// traffic through that upstream (mirroring Chrome's `--proxy-server`
+    /// flag — e.g. `"http://host:port"` or
+    /// `"http://user:pass@host:port"`). When `proxy_bypass_list` is `Some`,
+    /// hosts matching the pattern (e.g. `"<-loopback>"` or
+    /// `"*.internal.example.com"`) bypass the proxy. Either field is
+    /// **omitted** from the params when `None`, not sent as `null` — some
+    /// CDP versions reject unknown null fields.
+    ///
+    /// Drop the returned handle to schedule asynchronous disposal via
+    /// `Target.disposeBrowserContext`.
+    ///
+    /// [1]: https://chromedevtools.github.io/devtools-protocol/tot/Target/#method-createBrowserContext
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Navigation`] if the CDP response is missing
+    /// the `browserContextId` field; bubbles up any transport-level error
+    /// from the underlying `call_raw`.
+    pub async fn create_browser_context_with(
+        &self,
+        proxy_server: Option<&str>,
+        proxy_bypass_list: Option<&str>,
+    ) -> Result<crate::BrowserContext, ZendriverError> {
+        let mut params = serde_json::Map::new();
+        if let Some(p) = proxy_server {
+            params.insert(
+                "proxyServer".into(),
+                serde_json::Value::String(p.to_string()),
+            );
+        }
+        if let Some(b) = proxy_bypass_list {
+            params.insert(
+                "proxyBypassList".into(),
+                serde_json::Value::String(b.to_string()),
+            );
+        }
+
+        let res = self
+            .inner
+            .conn
+            .call_raw(
+                "Target.createBrowserContext",
+                serde_json::Value::Object(params),
+                None,
+            )
+            .await?;
+
+        let id = res
+            .get("browserContextId")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                ZendriverError::Navigation(
+                    "Target.createBrowserContext returned no browserContextId".into(),
+                )
+            })?
+            .to_string();
+
+        Ok(crate::BrowserContext {
+            browser: self.inner.clone(),
+            id,
+        })
+    }
+
+    /// Create a new default [`crate::BrowserContext`] (no proxy, no bypass).
+    ///
+    /// Convenience wrapper over [`Browser::create_browser_context_with`]
+    /// called with both arguments as `None`.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Browser::create_browser_context_with`].
+    pub async fn create_browser_context(&self) -> Result<crate::BrowserContext, ZendriverError> {
+        self.create_browser_context_with(None, None).await
     }
 
     /// Open a new tab navigated to `about:blank`.
@@ -1894,6 +2039,110 @@ mod tests {
         assert_eq!(inner.tabs.read().await.len(), 1);
         let parent_tab = inner.tabs.read().await.get("S1").cloned().unwrap();
         assert!(parent_tab.inner.frames.read().await.is_empty());
+
+        conn.shutdown();
+    }
+
+    // ----- BrowserInner::dispose_browser_context (per-context proxy) -----
+
+    /// Asserts [`BrowserInner::dispose_browser_context`] issues exactly one
+    /// `Target.disposeBrowserContext` CDP command at browser scope (no
+    /// `sessionId`) carrying the supplied `browserContextId`, and that the
+    /// awaited future resolves `Ok` once the mock replies.
+    ///
+    /// Wired into the per-context proxy support series: [`crate::BrowserContext`]'s
+    /// `Drop` impl calls this method to release the context when the handle
+    /// goes out of scope.
+    #[tokio::test]
+    async fn dispose_browser_context_sends_target_dispose() {
+        use zendriver_transport::testing::MockConnection;
+
+        let (mut mock, conn) = MockConnection::pair();
+        let inner = test_only_inner_from_conn(conn.clone());
+
+        let inner_for_task = inner.clone();
+        let fut =
+            tokio::spawn(async move { inner_for_task.dispose_browser_context("ctx-abc").await });
+
+        let id = mock.expect_cmd("Target.disposeBrowserContext").await;
+        assert_eq!(mock.last_sent()["params"]["browserContextId"], "ctx-abc");
+        // Browser-scope command — no session_id.
+        assert!(mock.last_sent().get("sessionId").is_none());
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    // ----- Browser::create_browser_context[_with] (per-context proxy) ----
+
+    /// Asserts [`Browser::create_browser_context_with`] sends a
+    /// `Target.createBrowserContext` command carrying `proxyServer` and
+    /// `proxyBypassList` exactly as supplied, and that the returned
+    /// [`BrowserContext`] handle exposes the `browserContextId` from the
+    /// CDP reply.
+    #[tokio::test]
+    async fn create_browser_context_with_sends_correct_cdp() {
+        use zendriver_transport::testing::MockConnection;
+        let (mut mock, conn) = MockConnection::pair();
+        let browser = test_only_browser_from_conn(conn.clone());
+
+        let fut = tokio::spawn({
+            let b = browser.clone();
+            async move {
+                b.create_browser_context_with(
+                    Some("http://user:pass@p.webshare.io:80"),
+                    Some("<-loopback>"),
+                )
+                .await
+            }
+        });
+
+        let id = mock.expect_cmd("Target.createBrowserContext").await;
+        let sent = mock.last_sent();
+        assert_eq!(
+            sent["params"]["proxyServer"],
+            "http://user:pass@p.webshare.io:80"
+        );
+        assert_eq!(sent["params"]["proxyBypassList"], "<-loopback>");
+        mock.reply(id, json!({ "browserContextId": "ctx-new" }))
+            .await;
+
+        let ctx = fut.await.unwrap().unwrap();
+        assert_eq!(ctx.id(), "ctx-new");
+
+        conn.shutdown();
+    }
+
+    /// Asserts that when both `proxy_server` and `proxy_bypass_list` are
+    /// `None`, neither key is sent as a non-null value. CDP rejects unknown
+    /// null fields on some commands, so the implementation must **omit**
+    /// the keys entirely from the params object (a `null` value is also
+    /// accepted for forward-compat, but `Some(value)` of any kind would
+    /// fail the assertion).
+    #[tokio::test]
+    async fn create_browser_context_without_proxy_omits_fields() {
+        use zendriver_transport::testing::MockConnection;
+        let (mut mock, conn) = MockConnection::pair();
+        let browser = test_only_browser_from_conn(conn.clone());
+
+        let fut = tokio::spawn({
+            let b = browser.clone();
+            async move { b.create_browser_context_with(None, None).await }
+        });
+
+        let id = mock.expect_cmd("Target.createBrowserContext").await;
+        let sent = mock.last_sent();
+        let proxy_server_field = sent["params"].get("proxyServer");
+        assert!(proxy_server_field.is_none() || proxy_server_field.unwrap().is_null());
+        let bypass_field = sent["params"].get("proxyBypassList");
+        assert!(bypass_field.is_none() || bypass_field.unwrap().is_null());
+
+        mock.reply(id, json!({ "browserContextId": "ctx-plain" }))
+            .await;
+
+        let ctx = fut.await.unwrap().unwrap();
+        assert_eq!(ctx.id(), "ctx-plain");
 
         conn.shutdown();
     }
