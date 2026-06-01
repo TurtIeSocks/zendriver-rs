@@ -57,7 +57,7 @@ use tokio::time::Instant;
 use crate::element::Element;
 use crate::error::{Result, ZendriverError};
 use crate::frame::Frame;
-use crate::query::selectors::{QueryScope, SelectorKind};
+use crate::query::selectors::{QueryScope, RemoteRef, SelectorKind, text_len_of};
 use crate::tab::Tab;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -112,6 +112,18 @@ pub struct FindBuilder<'scope> {
     /// even if the builder was originally rooted on a Tab. Element
     /// scope still takes precedence over both.
     pub(crate) in_frame: Option<&'scope Frame>,
+    /// Opt-in cross-frame fan-out (default `false`). When `true` and the
+    /// builder is Tab-scoped, the terminal resolves the main document
+    /// **and** every [`Frame`] from [`Tab::frames`]. No-op for
+    /// element/frame/`in_frame`-scoped builders. Set via
+    /// [`FindBuilder::include_frames`].
+    pub(crate) include_frames: bool,
+    /// Opt-in closest-text-length matching (default `false`). When
+    /// `true`, text selectors (`text`/`text_exact`/`text_regex`) return
+    /// the candidate minimizing `abs(elementTextLen - needleLen)`; a
+    /// no-op (+ debug log) on css/xpath/role. Set via
+    /// [`FindBuilder::best_match`].
+    pub(crate) best_match: bool,
 }
 
 impl<'scope> FindBuilder<'scope> {
@@ -125,6 +137,8 @@ impl<'scope> FindBuilder<'scope> {
             nth: None,
             visible_only: false,
             in_frame: None,
+            include_frames: false,
+            best_match: false,
         }
     }
 
@@ -143,6 +157,8 @@ impl<'scope> FindBuilder<'scope> {
             nth: None,
             visible_only: false,
             in_frame: None,
+            include_frames: false,
+            best_match: false,
         }
     }
 
@@ -161,6 +177,8 @@ impl<'scope> FindBuilder<'scope> {
             nth: None,
             visible_only: false,
             in_frame: None,
+            include_frames: false,
+            best_match: false,
         }
     }
 
@@ -424,7 +442,61 @@ impl<'scope> FindBuilder<'scope> {
             nth: self.nth,
             visible_only: self.visible_only,
             in_frame: Some(frame),
+            include_frames: self.include_frames,
+            best_match: self.best_match,
         }
+    }
+
+    /// Fan the query across the main document **and** every [`Frame`] in
+    /// [`Tab::frames`] (each frame dispatches on its own CDP session).
+    ///
+    /// Opt-in (default off). `.one()` without [`Self::best_match`]
+    /// resolves the main scope first and returns the first hit, only
+    /// descending into frames on a miss (registry order, first frame hit
+    /// wins). With `best_match` it gathers each scope's top candidate and
+    /// picks the global closest-length winner. Only meaningful for a
+    /// Tab-scoped builder — a no-op when the builder is element-, frame-,
+    /// or [`Self::in_frame`]-scoped.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let cb = tab.find().text("verify you are human").include_frames().one().await?;
+    /// # let _ = cb;
+    /// # Ok(()) }
+    /// ```
+    #[must_use]
+    pub fn include_frames(mut self) -> Self {
+        self.include_frames = true;
+        self
+    }
+
+    /// Among text-selector candidates, pick the one whose rendered text
+    /// length is closest to the search needle (`abs(len(text) -
+    /// len(needle))`).
+    ///
+    /// Opt-in (default off). Applies to [`Self::text`],
+    /// [`Self::text_exact`], and [`Self::text_regex`] only — a no-op (with
+    /// a `tracing::debug!` note) on css/xpath/role selectors, where text
+    /// length is meaningless.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let btn = tab.find().text("accept all").best_match().one().await?;
+    /// # let _ = btn;
+    /// # Ok(()) }
+    /// ```
+    #[must_use]
+    pub fn best_match(mut self) -> Self {
+        self.best_match = true;
+        self
     }
 
     /// Override the default 10s timeout for the terminal's poll loop.
@@ -472,6 +544,21 @@ impl<'scope> FindBuilder<'scope> {
             )
         })?;
         let deadline = Instant::now() + self.timeout;
+        let best_match = effective_best_match(self.best_match, &selector);
+        let want_nth = self.nth.unwrap_or(0);
+
+        // `include_frames` only fans out for a plain Tab-scoped builder.
+        // Element/in_frame/Frame scopes are intentionally narrow, so the
+        // modifier is a documented no-op there.
+        let fan_frames = self.include_frames
+            && self.element.is_none()
+            && self.in_frame.is_none()
+            && self.frame.is_none();
+
+        if let (true, Some(tab)) = (fan_frames, self.tab) {
+            return one_across_frames(tab, &selector, best_match, want_nth, deadline).await;
+        }
+
         // Precedence: Element > in_frame override > Frame > Tab.
         // - Element-scoped queries always win (they were built via
         //   `Element::find` and constrain to that subtree explicitly).
@@ -491,9 +578,8 @@ impl<'scope> FindBuilder<'scope> {
                 ));
             }
         };
-        let want_nth = self.nth.unwrap_or(0);
         loop {
-            let candidates = selector.resolve_many(&scope).await?;
+            let candidates = selector.resolve_many_inner(&scope, best_match).await?;
 
             // Visible-only filter: TODO(T16) — depends on
             // `actionability::check_visible`, which depends on
@@ -580,6 +666,14 @@ pub struct FindAllBuilder<'scope> {
     /// the corresponding field on [`FindBuilder`] for the precedence
     /// rationale.
     pub(crate) in_frame: Option<&'scope Frame>,
+    /// Opt-in cross-frame fan-out (default `false`). See
+    /// [`FindBuilder::include_frames`]; for `many()` the results are
+    /// concatenated main-first then per-frame in registry order.
+    pub(crate) include_frames: bool,
+    /// Opt-in closest-text-length ordering (default `false`). See
+    /// [`FindBuilder::best_match`]; for `many()` it orders the returned
+    /// Vec closest-length first within each scope.
+    pub(crate) best_match: bool,
 }
 
 impl<'scope> FindAllBuilder<'scope> {
@@ -592,6 +686,8 @@ impl<'scope> FindAllBuilder<'scope> {
             timeout: DEFAULT_TIMEOUT,
             visible_only: false,
             in_frame: None,
+            include_frames: false,
+            best_match: false,
         }
     }
 
@@ -608,6 +704,8 @@ impl<'scope> FindAllBuilder<'scope> {
             timeout: DEFAULT_TIMEOUT,
             visible_only: false,
             in_frame: None,
+            include_frames: false,
+            best_match: false,
         }
     }
 
@@ -623,6 +721,8 @@ impl<'scope> FindAllBuilder<'scope> {
             timeout: DEFAULT_TIMEOUT,
             visible_only: false,
             in_frame: None,
+            include_frames: false,
+            best_match: false,
         }
     }
 
@@ -725,7 +825,28 @@ impl<'scope> FindAllBuilder<'scope> {
             timeout: self.timeout,
             visible_only: self.visible_only,
             in_frame: Some(frame),
+            include_frames: self.include_frames,
+            best_match: self.best_match,
         }
+    }
+
+    /// Fan the query across the main document and every [`Frame`].
+    /// See [`FindBuilder::include_frames`]. For `many()` the matches are
+    /// concatenated main-first then per-frame in registry order. No-op
+    /// for element/frame/`in_frame`-scoped builders.
+    #[must_use]
+    pub fn include_frames(mut self) -> Self {
+        self.include_frames = true;
+        self
+    }
+
+    /// Order text-selector matches closest-text-length first.
+    /// See [`FindBuilder::best_match`]. A no-op (+ debug log) on
+    /// css/xpath/role.
+    #[must_use]
+    pub fn best_match(mut self) -> Self {
+        self.best_match = true;
+        self
     }
 
     /// Override the default 10s timeout for the poll loop.
@@ -777,6 +898,17 @@ impl<'scope> FindAllBuilder<'scope> {
             )
         })?;
         let deadline = Instant::now() + self.timeout;
+        let best_match = effective_best_match(self.best_match, &selector);
+
+        let fan_frames = self.include_frames
+            && self.element.is_none()
+            && self.in_frame.is_none()
+            && self.frame.is_none();
+
+        if let (true, Some(tab)) = (fan_frames, self.tab) {
+            return many_across_frames(tab, &selector, best_match, deadline).await;
+        }
+
         // See `FindBuilder::one` for the precedence rationale.
         let scope = match (self.element, self.in_frame, self.frame, self.tab) {
             (Some(el), _, _, _) => QueryScope::Element(el),
@@ -790,7 +922,7 @@ impl<'scope> FindAllBuilder<'scope> {
             }
         };
         loop {
-            let candidates = selector.resolve_many(&scope).await?;
+            let candidates = selector.resolve_many_inner(&scope, best_match).await?;
 
             // Visible-only filter: TODO(T16) — depends on
             // `actionability::check_visible`, which depends on
@@ -839,6 +971,209 @@ impl<'scope> FindAllBuilder<'scope> {
             Err(e) => Err(e),
         }
     }
+}
+
+/// `true` for text selectors (`text` / `text_exact` / `text_regex`),
+/// the only kinds for which `best_match` (closest-text-length scoring)
+/// is meaningful.
+fn selector_is_text(sel: &SelectorKind) -> bool {
+    matches!(
+        sel,
+        SelectorKind::Text { .. } | SelectorKind::TextRegex { .. }
+    )
+}
+
+/// Length (in `char`s) of the needle a text selector compares against —
+/// the literal needle for `Text`, or the pattern string as the only
+/// well-defined proxy for `TextRegex`. `None` for non-text selectors
+/// (which never reach the `best_match` cross-scope path). Mirrors the
+/// per-scope JS sort key so cross-scope scoring is consistent with the
+/// in-scope ordering.
+fn needle_len_of(sel: &SelectorKind) -> Option<usize> {
+    match sel {
+        SelectorKind::Text { needle, .. } => Some(needle.chars().count()),
+        SelectorKind::TextRegex { pattern, .. } => Some(pattern.chars().count()),
+        _ => None,
+    }
+}
+
+/// Resolve the caller's `best_match` request against the selector kind:
+/// honored for text selectors, ignored (with a `tracing::debug!` note)
+/// for css/xpath/role where text length is meaningless.
+fn effective_best_match(requested: bool, sel: &SelectorKind) -> bool {
+    if requested && !selector_is_text(sel) {
+        tracing::debug!("best_match ignored for non-text selector");
+        return false;
+    }
+    requested && selector_is_text(sel)
+}
+
+/// One poll of a cross-frame `.one()`: resolve the main document scope
+/// first, then descend into each [`Frame`] from [`Tab::frames`].
+///
+/// Without `best_match`, the first hit wins (main, then frames in
+/// registry order) — early-return keeps the common case cheap. With
+/// `best_match`, every scope's top candidate is read for its text length
+/// (one extra `Runtime.callFunctionOn` per scope) and the global
+/// closest-length winner is returned; ties resolve to the earliest scope
+/// (main before frames, frames in registry order).
+async fn one_across_frames(
+    tab: &Tab,
+    selector: &SelectorKind,
+    best_match: bool,
+    want_nth: usize,
+    deadline: Instant,
+) -> Result<Element> {
+    loop {
+        let frames = tab.frames().await?;
+
+        if best_match {
+            // Gather each scope's nth candidate + its text-length distance
+            // to the needle, then pick the global minimum. The per-scope
+            // JS sort already puts the closest-length candidate at index
+            // `want_nth`; we re-read its raw length here and recompute the
+            // distance to compare *across* scopes.
+            let needle_len = needle_len_of(selector).unwrap_or(0);
+            let mut best: Option<(usize, RemoteRef, ScopeTag)> = None;
+            let main_scope = QueryScope::Tab(tab);
+            consider_scope_best(
+                &main_scope,
+                selector,
+                want_nth,
+                needle_len,
+                ScopeTag::Main,
+                &mut best,
+            )
+            .await?;
+            for (i, frame) in frames.iter().enumerate() {
+                let scope = QueryScope::Frame(frame);
+                consider_scope_best(
+                    &scope,
+                    selector,
+                    want_nth,
+                    needle_len,
+                    ScopeTag::Frame(i),
+                    &mut best,
+                )
+                .await?;
+            }
+            if let Some((_, picked, tag)) = best {
+                let scope = match tag {
+                    ScopeTag::Main => QueryScope::Tab(tab),
+                    ScopeTag::Frame(i) => QueryScope::Frame(&frames[i]),
+                };
+                return Ok(Element::synthesize_query(picked, &scope, selector, want_nth));
+            }
+        } else {
+            // First hit wins: main first, then frames in registry order.
+            let main_scope = QueryScope::Tab(tab);
+            let main_hits = selector.resolve_many_inner(&main_scope, false).await?;
+            if let Some(picked) = main_hits.into_iter().nth(want_nth) {
+                return Ok(Element::synthesize_query(
+                    picked,
+                    &main_scope,
+                    selector,
+                    want_nth,
+                ));
+            }
+            for frame in &frames {
+                let scope = QueryScope::Frame(frame);
+                let hits = selector.resolve_many_inner(&scope, false).await?;
+                if let Some(picked) = hits.into_iter().nth(want_nth) {
+                    return Ok(Element::synthesize_query(picked, &scope, selector, want_nth));
+                }
+            }
+        }
+
+        if Instant::now() >= deadline {
+            return Err(ZendriverError::ElementNotFound {
+                selector: describe_selector(selector),
+            });
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+/// One poll of a cross-frame `.many()`: gather matches from the main
+/// document **and** every [`Frame`], concatenated main-first then
+/// per-frame in registry order. Polls until the aggregate is non-empty
+/// or the deadline passes (mirroring the single-scope `many()` loop).
+async fn many_across_frames(
+    tab: &Tab,
+    selector: &SelectorKind,
+    best_match: bool,
+    deadline: Instant,
+) -> Result<Vec<Element>> {
+    loop {
+        let frames = tab.frames().await?;
+        let mut elements: Vec<Element> = Vec::new();
+
+        let main_scope = QueryScope::Tab(tab);
+        for (i, r) in selector
+            .resolve_many_inner(&main_scope, best_match)
+            .await?
+            .into_iter()
+            .enumerate()
+        {
+            elements.push(Element::synthesize_query(r, &main_scope, selector, i));
+        }
+        for frame in &frames {
+            let scope = QueryScope::Frame(frame);
+            for (i, r) in selector
+                .resolve_many_inner(&scope, best_match)
+                .await?
+                .into_iter()
+                .enumerate()
+            {
+                elements.push(Element::synthesize_query(r, &scope, selector, i));
+            }
+        }
+
+        if !elements.is_empty() {
+            return Ok(elements);
+        }
+        if Instant::now() >= deadline {
+            return Err(ZendriverError::ElementNotFound {
+                selector: describe_selector(selector),
+            });
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+/// Identifies which scope a cross-frame candidate came from so ties
+/// resolve deterministically (main before any frame; frames by registry
+/// index).
+#[derive(Clone, Copy)]
+enum ScopeTag {
+    Main,
+    Frame(usize),
+}
+
+/// Resolve `selector` against `scope`, take its `nth` candidate, read
+/// that candidate's text-length distance to `needle_len`, and update
+/// `best` if this scope beats the current global minimum. Strictly-less
+/// comparison keeps ties on the earliest scope (callers invoke main
+/// first, then frames in order). The stored key is `abs(len -
+/// needle_len)`, matching the per-scope JS sort.
+async fn consider_scope_best(
+    scope: &QueryScope<'_>,
+    selector: &SelectorKind,
+    want_nth: usize,
+    needle_len: usize,
+    tag: ScopeTag,
+    best: &mut Option<(usize, RemoteRef, ScopeTag)>,
+) -> Result<()> {
+    let hits = selector.resolve_many_inner(scope, true).await?;
+    let Some(candidate) = hits.into_iter().nth(want_nth) else {
+        return Ok(());
+    };
+    let len = text_len_of(scope, &candidate).await?;
+    let dist = len.abs_diff(needle_len);
+    if best.as_ref().is_none_or(|(best_dist, _, _)| dist < *best_dist) {
+        *best = Some((dist, candidate, tag));
+    }
+    Ok(())
 }
 
 /// Render a short, log-friendly description of a `SelectorKind` so the
@@ -1411,6 +1746,235 @@ mod tests {
             Some("R1")
         );
         assert_eq!(*el.inner.backend_node_id.lock().await, Some(11));
+        conn.shutdown();
+    }
+
+    // --- A1: best_match (closest-text-length) -------------------------
+
+    /// `.text(...).best_match().one()` must dispatch a text collector whose
+    /// JS sorts candidates ascending by `abs(len(elementText) - len(needle))`
+    /// so `.one()` takes the closest-length match. We assert the dispatched
+    /// expression contains the distance sort (`Math.abs` + `.length` +
+    /// `.sort`) and that `.one()` picks the first (post-sort) entry.
+    #[tokio::test]
+    async fn best_match_one_picks_closest_length() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.find().text("accept all").best_match().one().await }
+        });
+
+        let id_q = mock.expect_cmd("Runtime.evaluate").await;
+        let sent = mock.last_sent()["params"]["expression"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            sent.contains("Math.abs"),
+            "best_match collector must score by abs distance; got: {sent}"
+        );
+        assert!(
+            sent.contains(".length"),
+            "best_match collector must compare text length; got: {sent}"
+        );
+        assert!(
+            sent.contains(".sort"),
+            "best_match collector must sort candidates; got: {sent}"
+        );
+        // Returns an array already sorted JS-side; .one() takes [0].
+        mock.reply(
+            id_q,
+            json!({ "result": { "objectId": "RArr", "type": "object", "subtype": "array" } }),
+        )
+        .await;
+
+        let id_p = mock.expect_cmd("Runtime.getProperties").await;
+        mock.reply(
+            id_p,
+            json!({
+                "result": [
+                    { "name": "0", "value": { "objectId": "RBest", "type": "object", "subtype": "node" } },
+                    { "name": "1", "value": { "objectId": "RFar", "type": "object", "subtype": "node" } },
+                    { "name": "length", "value": { "value": 2, "type": "number" } }
+                ]
+            }),
+        )
+        .await;
+
+        let id_d0 = mock.expect_cmd("DOM.describeNode").await;
+        assert_eq!(mock.last_sent()["params"]["objectId"], "RBest");
+        mock.reply(id_d0, json!({ "node": { "backendNodeId": 1 } }))
+            .await;
+        let id_d1 = mock.expect_cmd("DOM.describeNode").await;
+        mock.reply(id_d1, json!({ "node": { "backendNodeId": 2 } }))
+            .await;
+
+        let el = fut.await.unwrap().unwrap();
+        assert_eq!(
+            el.inner.remote_object_id.lock().await.as_deref(),
+            Some("RBest"),
+            "best_match .one() must take the first (closest-length) candidate"
+        );
+        conn.shutdown();
+    }
+
+    /// `.css("x").best_match().one()` must behave exactly like the plain
+    /// query: best_match is a no-op on non-text selectors (it only logs a
+    /// debug warning). The dispatched JS must remain the bare
+    /// `document.querySelectorAll` form with NO distance sort injected.
+    #[tokio::test]
+    async fn best_match_noop_on_css_logs() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.find().css("#b").best_match().one().await }
+        });
+
+        let id_q = mock.expect_cmd("Runtime.evaluate").await;
+        let sent = mock.last_sent()["params"]["expression"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            sent.contains("document.querySelectorAll") && sent.contains("#b"),
+            "css path must dispatch plain querySelectorAll; got: {sent}"
+        );
+        assert!(
+            !sent.contains("Math.abs"),
+            "best_match must NOT inject a distance sort on css selectors; got: {sent}"
+        );
+        mock.reply(
+            id_q,
+            json!({ "result": { "objectId": "RArr", "type": "object", "subtype": "array" } }),
+        )
+        .await;
+
+        let id_p = mock.expect_cmd("Runtime.getProperties").await;
+        mock.reply(
+            id_p,
+            json!({
+                "result": [
+                    { "name": "0", "value": { "objectId": "R1", "type": "object", "subtype": "node" } },
+                    { "name": "length", "value": { "value": 1, "type": "number" } }
+                ]
+            }),
+        )
+        .await;
+
+        let id_d = mock.expect_cmd("DOM.describeNode").await;
+        mock.reply(id_d, json!({ "node": { "backendNodeId": 7 } }))
+            .await;
+
+        let el = fut.await.unwrap().unwrap();
+        assert_eq!(
+            el.inner.remote_object_id.lock().await.as_deref(),
+            Some("R1")
+        );
+        conn.shutdown();
+    }
+
+    // --- A1: include_frames (cross-frame fan-out) ---------------------
+
+    /// `.include_frames().one()` (without best_match): resolve the main
+    /// document scope first; on a miss, descend into the tab's registered
+    /// frames in registry order and return the first frame hit. Here the
+    /// main scope returns an empty array, then the single registered frame's
+    /// session resolves one node — `.one()` must return it, dispatching the
+    /// frame query on the frame's own session.
+    #[tokio::test]
+    async fn include_frames_one_falls_through_to_frame() {
+        let (mut mock, conn) = MockConnection::pair();
+        let tab_sess = SessionHandle::new(conn.clone(), "S_TAB");
+        let frame_sess = SessionHandle::new(conn.clone(), "S_FRAME");
+        let tab = Tab::new_for_test(tab_sess);
+
+        // Register one frame on its own session so we can assert the
+        // fall-through dispatch routes to S_FRAME.
+        let frame = Frame::new(
+            "F_CHILD".into(),
+            Some("F_ROOT".into()),
+            String::new(),
+            None,
+            frame_sess,
+            std::sync::Arc::downgrade(&tab.inner),
+        );
+        tab.inner
+            .frames
+            .write()
+            .await
+            .insert("F_CHILD".into(), frame);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.find().css("button").include_frames().one().await }
+        });
+
+        // Main (Tab) scope resolves first and returns an empty array.
+        let id_q = mock.expect_cmd("Runtime.evaluate").await;
+        assert_eq!(
+            mock.last_sent()["sessionId"], "S_TAB",
+            "main scope must resolve on the Tab's session first"
+        );
+        mock.reply(
+            id_q,
+            json!({ "result": { "objectId": "RArrEmpty", "type": "object", "subtype": "array" } }),
+        )
+        .await;
+        let id_p = mock.expect_cmd("Runtime.getProperties").await;
+        mock.reply(
+            id_p,
+            json!({ "result": [
+                { "name": "length", "value": { "value": 0, "type": "number" } }
+            ] }),
+        )
+        .await;
+
+        // Miss on main → descend into the frame. Frame scope first allocates
+        // its isolated world on the frame's session.
+        let id_iso = mock.expect_cmd("Page.createIsolatedWorld").await;
+        assert_eq!(
+            mock.last_sent()["sessionId"], "S_FRAME",
+            "frame fall-through must dispatch on the Frame's session"
+        );
+        assert_eq!(mock.last_sent()["params"]["frameId"], "F_CHILD");
+        mock.reply(id_iso, json!({ "executionContextId": 4242 }))
+            .await;
+
+        let id_qf = mock.expect_cmd("Runtime.evaluate").await;
+        assert_eq!(mock.last_sent()["sessionId"], "S_FRAME");
+        assert_eq!(mock.last_sent()["params"]["contextId"], 4242);
+        mock.reply(
+            id_qf,
+            json!({ "result": { "objectId": "RArrF", "type": "object", "subtype": "array" } }),
+        )
+        .await;
+        let id_pf = mock.expect_cmd("Runtime.getProperties").await;
+        mock.reply(
+            id_pf,
+            json!({ "result": [
+                { "name": "0", "value": { "objectId": "RInFrame", "type": "object", "subtype": "node" } },
+                { "name": "length", "value": { "value": 1, "type": "number" } }
+            ] }),
+        )
+        .await;
+        let id_df = mock.expect_cmd("DOM.describeNode").await;
+        assert_eq!(mock.last_sent()["objectId"].as_str().or_else(|| mock.last_sent()["params"]["objectId"].as_str()), Some("RInFrame"));
+        mock.reply(id_df, json!({ "node": { "backendNodeId": 88 } }))
+            .await;
+
+        let el = fut.await.unwrap().unwrap();
+        assert_eq!(
+            el.inner.remote_object_id.lock().await.as_deref(),
+            Some("RInFrame"),
+            "include_frames .one() must return the in-frame hit on main miss"
+        );
+        assert_eq!(*el.inner.backend_node_id.lock().await, Some(88));
         conn.shutdown();
     }
 }
