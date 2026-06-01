@@ -904,7 +904,10 @@ mod tests {
 
         // Step 2: select-all chord via press_with(Key::Char('a'), Ctrl|Meta).
         // press_with focuses first (gate visible → enabled, then this.focus()),
-        // then dispatches the 'a' keyDown + keyUp with a modifier bit set.
+        // then emits the chord. Since A2 (full keyboard parity) press_with
+        // dispatches the modifier as REAL wrapper key events, so the chord is
+        // four dispatches: modifier keyDown → 'a' keyDown → 'a' keyUp →
+        // modifier keyUp. Ctrl on Windows/Linux, Meta on macOS.
         for _ in 0..2 {
             let id = mock.expect_cmd("Runtime.callFunctionOn").await;
             mock.reply(
@@ -916,20 +919,34 @@ mod tests {
         let id = mock.expect_cmd("Runtime.callFunctionOn").await;
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
-        // 'a' keyDown — Ctrl (Windows/Linux) or Meta (macOS) bit must be set.
+        let ctrl = i64::from(KeyModifiers::CTRL.cdp_bits());
+        let meta = i64::from(KeyModifiers::META.cdp_bits());
+        // 1: modifier keyDown (Meta or Control).
+        let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["type"], "keyDown");
+        let mod_key = sent["params"]["key"].as_str().unwrap();
+        assert!(
+            mod_key == "Meta" || mod_key == "Control",
+            "select-all chord must wrap with a Meta/Control keyDown, got {mod_key}"
+        );
+        mock.reply(id, json!({})).await;
+        // 2: 'a' keyDown with the modifier bit set.
         let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["type"], "keyDown");
         assert_eq!(sent["params"]["key"], "a");
         let mods = sent["params"]["modifiers"].as_i64().unwrap();
-        let ctrl = i64::from(KeyModifiers::CTRL.cdp_bits());
-        let meta = i64::from(KeyModifiers::META.cdp_bits());
         assert!(
             mods == ctrl || mods == meta,
-            "select-all chord must hold Ctrl or Meta, got {mods}"
+            "select-all 'a' must hold Ctrl or Meta, got {mods}"
         );
         mock.reply(id, json!({})).await;
-        // 'a' keyUp.
+        // 3: 'a' keyUp.
+        let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+        assert_eq!(mock.last_sent()["params"]["type"], "keyUp");
+        mock.reply(id, json!({})).await;
+        // 4: modifier keyUp.
         let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
         assert_eq!(mock.last_sent()["params"]["type"], "keyUp");
         mock.reply(id, json!({})).await;
