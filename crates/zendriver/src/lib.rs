@@ -86,6 +86,7 @@ pub mod screenshot;
 pub mod storage;
 pub mod tab;
 pub mod traits;
+pub mod window;
 
 pub use browser::{Browser, BrowserBuilder};
 pub use browser_context::BrowserContext;
@@ -101,6 +102,7 @@ pub use screenshot::{Format, ScreenshotBuilder};
 pub use storage::Storage;
 pub use tab::{ReloadOptions, ScrollOptions, Tab, UserAgentOverride};
 pub use traits::{Evaluable, Queryable};
+pub use window::{WindowBounds, WindowState};
 
 // Re-export selected transport types for advanced users.
 pub use zendriver_transport::{CallError, Connection, SessionHandle, TransportError};
@@ -233,6 +235,8 @@ mod auto_trait_assertions {
         assert_send_sync::<ReloadOptions>();
         assert_send_sync::<ScrollOptions>();
         assert_send_sync::<UserAgentOverride>();
+        assert_send_sync::<WindowBounds>();
+        assert_send_sync::<WindowState>();
         assert_send_sync::<ZendriverError>();
         assert_send_sync::<BrowserError>();
     }
