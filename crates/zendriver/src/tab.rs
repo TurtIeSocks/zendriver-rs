@@ -37,6 +37,12 @@ use crate::screenshot::ScreenshotBuilder;
 
 const DEFAULT_LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Fixed `(x, y)` viewport anchor for [`Tab::scroll_with`] gestures. A
+/// constant in-viewport point keeps page scrolls deterministic and
+/// single-dispatch (no `Page.getLayoutMetrics` round-trip to derive a
+/// center) — the scroll *distance* is what matters, not the anchor.
+const SCROLL_ANCHOR: (f64, f64) = (100.0, 100.0);
+
 /// Per-call knobs for [`Tab::reload_with`].
 ///
 /// `Default` reloads with `ignore_cache: false` and no injected script —
@@ -67,6 +73,45 @@ pub struct ReloadOptions {
     /// loaded by the reload (`Page.reload.scriptToEvaluateOnLoad`). Omitted
     /// from the dispatch entirely when `None`.
     pub script_to_evaluate_on_load: Option<String>,
+}
+
+/// Per-call knobs for [`Tab::scroll_with`].
+///
+/// `dx` / `dy` are signed pixel distances forwarded verbatim to
+/// `Input.synthesizeScrollGesture`'s `xDistance` / `yDistance`. Following
+/// the CDP convention a **negative** `dy` scrolls the page *down* (content
+/// moves up); a positive `dy` scrolls up. `speed` (px/s) plumbs through to
+/// the gesture's `speed` field when `Some`, and is omitted otherwise (Chrome
+/// picks its default).
+///
+/// For the common cases prefer the [`Tab::scroll_down`] / [`Tab::scroll_up`]
+/// shortcuts, which take an unsigned pixel amount and pick the sign for you.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn ex() -> zendriver::Result<()> {
+/// use zendriver::ScrollOptions;
+/// # let browser = zendriver::Browser::builder().launch().await?;
+/// # let tab = browser.main_tab();
+/// // Scroll down 400px and right 50px at a fixed speed.
+/// tab.scroll_with(ScrollOptions {
+///     dx: 50.0,
+///     dy: -400.0,
+///     speed: Some(800),
+/// }).await?;
+/// # Ok(()) }
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct ScrollOptions {
+    /// Horizontal scroll distance in pixels (`synthesizeScrollGesture.xDistance`).
+    pub dx: f64,
+    /// Vertical scroll distance in pixels (`synthesizeScrollGesture.yDistance`).
+    /// Negative scrolls the page down (CDP convention); positive scrolls up.
+    pub dy: f64,
+    /// Optional gesture speed in pixels/second (`synthesizeScrollGesture.speed`).
+    /// Omitted from the dispatch when `None`.
+    pub speed: Option<i64>,
 }
 
 /// Handle to a single CDP target session — one open page in Chrome.
@@ -1190,6 +1235,95 @@ impl Tab {
             .ok_or_else(|| ZendriverError::Navigation("DOM.getOuterHTML missing outerHTML".into()))
     }
 
+    /// Scroll the page down by `pixels`.
+    ///
+    /// Dispatches `Input.synthesizeScrollGesture` anchored at a fixed
+    /// viewport point with a **negative** `yDistance` of `pixels` — the CDP
+    /// convention where a negative `yDistance` moves the page content up
+    /// (i.e. scrolls down). For horizontal scrolling, a custom speed, or
+    /// scrolling up, see [`Tab::scroll_with`] / [`Tab::scroll_up`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// tab.scroll_down(500.0).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn scroll_down(&self, pixels: f64) -> Result<()> {
+        self.scroll_with(ScrollOptions {
+            dx: 0.0,
+            dy: -pixels,
+            speed: None,
+        })
+        .await
+    }
+
+    /// Scroll the page up by `pixels`.
+    ///
+    /// Mirror of [`Tab::scroll_down`] with a **positive** `yDistance` of
+    /// `pixels`, which moves the page content down (scrolls up).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// tab.scroll_down(500.0).await?;
+    /// tab.scroll_up(200.0).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn scroll_up(&self, pixels: f64) -> Result<()> {
+        self.scroll_with(ScrollOptions {
+            dx: 0.0,
+            dy: pixels,
+            speed: None,
+        })
+        .await
+    }
+
+    /// Scroll the page by an explicit signed distance with optional speed.
+    ///
+    /// Dispatches `Input.synthesizeScrollGesture` anchored at a fixed
+    /// viewport point (`x: 100, y: 100` — a stable, in-viewport anchor that
+    /// avoids a `Page.getLayoutMetrics` round-trip), forwarding
+    /// [`ScrollOptions::dx`] / [`ScrollOptions::dy`] to `xDistance` /
+    /// `yDistance` and [`ScrollOptions::speed`] to `speed` when `Some`.
+    /// Negative `dy` scrolls the page down (CDP convention).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// use zendriver::ScrollOptions;
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.scroll_with(ScrollOptions { dx: 0.0, dy: -300.0, speed: Some(1200) }).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn scroll_with(&self, opts: ScrollOptions) -> Result<()> {
+        // Fixed in-viewport anchor for the gesture. Picking a constant point
+        // keeps the call deterministic + single-dispatch (no
+        // Page.getLayoutMetrics round-trip to compute a center); the scroll
+        // distance, not the anchor, is what callers care about.
+        let mut params = json!({
+            "x": SCROLL_ANCHOR.0,
+            "y": SCROLL_ANCHOR.1,
+            "xDistance": opts.dx,
+            "yDistance": opts.dy,
+        });
+        if let Some(speed) = opts.speed {
+            params["speed"] = Value::from(speed);
+        }
+        self.call("Input.synthesizeScrollGesture", params).await?;
+        Ok(())
+    }
+
     /// Wait until the tab's network has been idle (0 in-flight requests)
     /// for 500ms, with a 30s outer timeout. Playwright `networkidle`
     /// semantics.
@@ -2197,6 +2331,112 @@ mod tests {
 
         let html = fut.await.unwrap().unwrap();
         assert_eq!(html, "<!DOCTYPE html><html><body>hi</body></html>");
+        conn.shutdown();
+    }
+
+    // --- Tab scroll (B3) -----------------------------------------------
+
+    #[tokio::test]
+    async fn scroll_down_synthesizes_negative_y_gesture() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.scroll_down(300.0).await }
+        });
+
+        let id = mock.expect_cmd("Input.synthesizeScrollGesture").await;
+        let p = mock.last_sent();
+        // scroll_down(px) maps to a NEGATIVE yDistance (CDP: negative
+        // yDistance scrolls the page down / content up).
+        assert_eq!(p["params"]["yDistance"], -300.0);
+        assert_eq!(p["params"]["xDistance"], 0.0);
+        // Anchored at the fixed viewport point (100, 100).
+        assert_eq!(p["params"]["x"], 100.0);
+        assert_eq!(p["params"]["y"], 100.0);
+        // No speed override by default.
+        assert!(p["params"].get("speed").is_none());
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn scroll_up_synthesizes_positive_y_gesture() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.scroll_up(150.0).await }
+        });
+
+        let id = mock.expect_cmd("Input.synthesizeScrollGesture").await;
+        // scroll_up(px) maps to a POSITIVE yDistance.
+        assert_eq!(mock.last_sent()["params"]["yDistance"], 150.0);
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn scroll_with_forwards_speed() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                t.scroll_with(ScrollOptions {
+                    dx: 25.0,
+                    dy: -400.0,
+                    speed: Some(800),
+                })
+                .await
+            }
+        });
+
+        let id = mock.expect_cmd("Input.synthesizeScrollGesture").await;
+        let p = mock.last_sent();
+        // dx/dy forward verbatim to xDistance/yDistance; speed plumbs through.
+        assert_eq!(p["params"]["xDistance"], 25.0);
+        assert_eq!(p["params"]["yDistance"], -400.0);
+        assert_eq!(p["params"]["speed"], 800);
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn scroll_with_omits_speed_when_none() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                t.scroll_with(ScrollOptions {
+                    dx: 0.0,
+                    dy: 100.0,
+                    speed: None,
+                })
+                .await
+            }
+        });
+
+        let id = mock.expect_cmd("Input.synthesizeScrollGesture").await;
+        assert!(mock.last_sent()["params"].get("speed").is_none());
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
         conn.shutdown();
     }
 

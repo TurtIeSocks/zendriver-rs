@@ -97,7 +97,7 @@ pub use input::{Key, KeyModifiers, KeySequence, MouseButton, SpecialKey};
 pub use query::{AriaRole, BoundingBox, FindBuilder};
 pub use screenshot::{Format, ScreenshotBuilder};
 pub use storage::Storage;
-pub use tab::{ReloadOptions, Tab};
+pub use tab::{ReloadOptions, ScrollOptions, Tab};
 pub use traits::{Evaluable, Queryable};
 
 // Re-export selected transport types for advanced users.
