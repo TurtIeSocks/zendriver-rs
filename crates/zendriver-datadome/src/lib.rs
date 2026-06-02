@@ -26,8 +26,12 @@
 //!
 //! [`BrowserBuilder::stealth`]: https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.stealth
 
+pub mod bypass;
+pub mod captcha;
 pub mod detection;
 pub mod error;
 
+pub use bypass::{ClearanceOutcome, DataDomeBypass};
+pub use captcha::{DataDomeChallenge, DataDomeSolution};
 pub use detection::{DataDomeSurface, DdConfig, DetectionSnapshot, detect_surface};
 pub use error::DataDomeError;
