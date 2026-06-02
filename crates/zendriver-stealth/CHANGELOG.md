@@ -3,6 +3,36 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.2.0] - 2026-06-02
+
+### Added
+
+- Seed type (random/from_system/from_u64)
+- Per-surface persona spec types
+- Persona struct + serde
+- Persona::overlay field-wise merge
+- Persona JSON ingestion (try_from_json + FromStr)
+- PersonaBuilder
+- Persona::system() host probe (cached)
+- Persona patch-templating accessors
+- Surface/Strategy + per-kind resolution
+- Canvas farble patch
+- Audio farble patch
+- Webgl vendor/renderer substitution
+- Font metrics + enumeration patch
+- ClientRects sub-pixel patch
+- Webrtc ip-leak guard
+- Hardware surface patch
+- Lib.rs top-level re-exports + clippy fix
+- Bootstrap_script(persona, identity) + surface patch wiring
+- Persona::from_browser live-probe via JsProbe trait
+- Browser builder .persona/.persona_overlay/.surface
+
+### Fixed
+
+- Canvas restore + audio guard + getClientRects consistency
+
+
 ## [0.1.4] - 2026-06-02
 
 

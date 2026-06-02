@@ -5,6 +5,15 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-06-02
+
+### Added
+
+- Persona::from_browser live-probe via JsProbe trait
+- Browser builder .persona/.persona_overlay/.surface
+- Persist persona seed alongside user_data_dir
+
+
 ## [0.2.2] - 2026-06-02
 
 
