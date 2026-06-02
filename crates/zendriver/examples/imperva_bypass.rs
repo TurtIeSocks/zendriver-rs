@@ -29,7 +29,7 @@
 use std::time::Duration;
 
 use zendriver::stealth::StealthProfile;
-use zendriver::{Browser, ImpervaError};
+use zendriver::{Browser, ImpervaClearanceOutcome, ImpervaError};
 
 #[tokio::main]
 #[allow(clippy::result_large_err)]
@@ -55,12 +55,12 @@ async fn main() -> zendriver::Result<()> {
         .wait_for_clearance()
         .await
     {
+        Ok(ImpervaClearanceOutcome::TimedOut { last_surface }) => {
+            println!("clearance timed out; last_surface = {last_surface:?}");
+        }
         Ok(outcome) => println!("cleared: {outcome:?}"),
         Err(ImpervaError::CaptchaRequired { kind }) => {
             println!("captcha required ({kind:?}); register .on_captcha(...) to solve");
-        }
-        Err(ImpervaError::Timeout { last_surface, .. }) => {
-            println!("clearance timed out; last_surface = {last_surface:?}");
         }
         Err(e) => return Err(e.into()),
     }
