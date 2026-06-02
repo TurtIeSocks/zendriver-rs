@@ -3904,7 +3904,10 @@ mod tests {
 
         let fut = tokio::spawn({
             let t = tab.clone();
-            async move { t.set_user_agent("Mozilla/5.0 (compatible; MyBot/1.0)").await }
+            async move {
+                t.set_user_agent("Mozilla/5.0 (compatible; MyBot/1.0)")
+                    .await
+            }
         });
 
         let id = mock.expect_cmd("Emulation.setUserAgentOverride").await;
@@ -4071,8 +4074,14 @@ mod tests {
             .unwrap_or("")
             .to_string();
         assert!(expr.contains("createElement"), "should build a dot element");
-        assert!(expr.contains("12px") && expr.contains("34px"), "should position at (x, y)");
-        assert!(expr.contains("setTimeout") && expr.contains("remove"), "should self-remove");
+        assert!(
+            expr.contains("12px") && expr.contains("34px"),
+            "should position at (x, y)"
+        );
+        assert!(
+            expr.contains("setTimeout") && expr.contains("remove"),
+            "should self-remove"
+        );
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
 
@@ -4149,8 +4158,11 @@ mod tests {
         // (1 callFunctionOn). Reply truthy/undefined to each.
         for _ in 0..2 {
             let id = mock.expect_cmd("Runtime.callFunctionOn").await;
-            mock.reply(id, json!({ "result": { "value": true, "type": "boolean" } }))
-                .await;
+            mock.reply(
+                id,
+                json!({ "result": { "value": true, "type": "boolean" } }),
+            )
+            .await;
         }
         let id_focus = mock.expect_cmd("Runtime.callFunctionOn").await;
         mock.reply(id_focus, json!({ "result": { "type": "undefined" } }))
@@ -4208,30 +4220,30 @@ mod tests {
         let (_mock, conn) = MockConnection::pair();
         // Construct a BrowserInner with a known debug endpoint + main tab
         // target id so we can assert the exact composed URL.
-        let inner = std::sync::Arc::new_cyclic(|weak: &std::sync::Weak<crate::browser::BrowserInner>| {
-            let session = SessionHandle::new(conn.clone(), "S1");
-            let input = crate::input::InputController::new(
-                zendriver_stealth::InputProfile::native(),
-            );
-            let main_tab = Tab::new(session, weak.clone(), input, "TARGET-XYZ".to_string());
-            let mut map = std::collections::HashMap::new();
-            map.insert("S1".to_string(), main_tab.clone());
-            crate::browser::BrowserInner {
-                conn: conn.clone(),
-                main_tab,
-                child: tokio::sync::Mutex::new(None),
-                _user_data: None,
-                _extension_dirs: Vec::new(),
-                owns_process: false,
-                stealth_input_profile: zendriver_stealth::InputProfile::native(),
-                tabs: tokio::sync::RwLock::new(map),
-                debug_host_port: Some("127.0.0.1:9222".to_string()),
-                ws_url: None,
-                tabs_changed: tokio::sync::Notify::new(),
-                #[cfg(feature = "interception")]
-                proxy_auth_handle: std::sync::OnceLock::new(),
-            }
-        });
+        let inner =
+            std::sync::Arc::new_cyclic(|weak: &std::sync::Weak<crate::browser::BrowserInner>| {
+                let session = SessionHandle::new(conn.clone(), "S1");
+                let input =
+                    crate::input::InputController::new(zendriver_stealth::InputProfile::native());
+                let main_tab = Tab::new(session, weak.clone(), input, "TARGET-XYZ".to_string());
+                let mut map = std::collections::HashMap::new();
+                map.insert("S1".to_string(), main_tab.clone());
+                crate::browser::BrowserInner {
+                    conn: conn.clone(),
+                    main_tab,
+                    child: tokio::sync::Mutex::new(None),
+                    _user_data: None,
+                    _extension_dirs: Vec::new(),
+                    owns_process: false,
+                    stealth_input_profile: zendriver_stealth::InputProfile::native(),
+                    tabs: tokio::sync::RwLock::new(map),
+                    debug_host_port: Some("127.0.0.1:9222".to_string()),
+                    ws_url: None,
+                    tabs_changed: tokio::sync::Notify::new(),
+                    #[cfg(feature = "interception")]
+                    proxy_auth_handle: std::sync::OnceLock::new(),
+                }
+            });
         let url = inner.main_tab.inspector_url().unwrap();
         assert_eq!(
             url,

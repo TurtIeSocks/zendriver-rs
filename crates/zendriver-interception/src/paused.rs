@@ -490,7 +490,13 @@ mod tests {
         assert_eq!(sent["params"]["requestId"], "REQ-CR");
         assert_eq!(sent["params"]["responseCode"], 204);
         // `phrase: None` must be omitted entirely, not sent as null.
-        assert!(sent["params"].as_object().unwrap().get("responsePhrase").is_none());
+        assert!(
+            sent["params"]
+                .as_object()
+                .unwrap()
+                .get("responsePhrase")
+                .is_none()
+        );
         let headers = sent["params"]["responseHeaders"].as_array().unwrap();
         assert_eq!(headers.len(), 1);
         assert_eq!(headers[0]["name"], "x");

@@ -1218,8 +1218,11 @@ mod tests {
             // press(Backspace) focus: 2 gate calls + this.focus().
             for _ in 0..2 {
                 let id = mock.expect_cmd("Runtime.callFunctionOn").await;
-                mock.reply(id, json!({ "result": { "value": true, "type": "boolean" } }))
-                    .await;
+                mock.reply(
+                    id,
+                    json!({ "result": { "value": true, "type": "boolean" } }),
+                )
+                .await;
             }
             let id = mock.expect_cmd("Runtime.callFunctionOn").await;
             mock.reply(id, json!({ "result": { "type": "undefined" } }))

@@ -685,10 +685,7 @@ mod tests {
 
         // Chrome sends an unsolicited Close frame — the connection dropped, this
         // is NOT a caller-requested shutdown.
-        test_tx
-            .send(Ok(Message::Close(None)))
-            .await
-            .unwrap();
+        test_tx.send(Ok(Message::Close(None))).await.unwrap();
 
         let res = reply_rx.await.unwrap();
         let err = res.unwrap_err();

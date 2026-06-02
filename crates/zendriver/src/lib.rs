@@ -74,9 +74,9 @@ pub mod browser_context;
 pub mod cookies;
 pub mod element;
 pub mod error;
-pub(crate) mod expert;
 #[cfg(feature = "expect")]
 pub mod expect;
+pub(crate) mod expert;
 pub mod frame;
 pub mod input;
 pub(crate) mod isolated_world;
@@ -101,7 +101,9 @@ pub use pdf::PdfBuilder;
 pub use query::{AriaRole, BoundingBox, FindBuilder, PageBox};
 pub use screenshot::{Format, ScreenshotBuilder};
 pub use storage::Storage;
-pub use tab::{FrameResourceMatch, ReadyState, ReloadOptions, ScrollOptions, Tab, UserAgentOverride};
+pub use tab::{
+    FrameResourceMatch, ReadyState, ReloadOptions, ScrollOptions, Tab, UserAgentOverride,
+};
 pub use traits::{Evaluable, Queryable};
 pub use window::{WindowBounds, WindowState};
 

@@ -139,9 +139,7 @@ impl Connection {
                 // a code-only check is unambiguous.
                 match rpc_err.code {
                     SHUTDOWN_DRAIN_CODE => Err(CallError::Transport(TransportError::Shutdown)),
-                    DISCONNECTED_CODE => {
-                        Err(CallError::Transport(TransportError::Disconnected))
-                    }
+                    DISCONNECTED_CODE => Err(CallError::Transport(TransportError::Disconnected)),
                     _ => Err(CallError::Rpc(rpc_err.code, rpc_err.message, rpc_err.data)),
                 }
             }
@@ -624,12 +622,11 @@ mod tests {
         .unwrap()["id"]
             .as_u64()
             .unwrap();
-        tx_b
-            .send(Ok(Message::text(
-                json!({ "id": id, "result": { "frameId": "F-new" } }).to_string(),
-            )))
-            .await
-            .unwrap();
+        tx_b.send(Ok(Message::text(
+            json!({ "id": id, "result": { "frameId": "F-new" } }).to_string(),
+        )))
+        .await
+        .unwrap();
         let res = call.await.unwrap().unwrap();
         assert_eq!(res["frameId"], "F-new");
 
@@ -658,7 +655,10 @@ mod tests {
                 .await
             }
         });
-        let sent = rx_b.recv().await.expect("setAutoAttach routed to new socket");
+        let sent = rx_b
+            .recv()
+            .await
+            .expect("setAutoAttach routed to new socket");
         let v: Value = serde_json::from_str(match &sent {
             Message::Text(t) => t,
             _ => panic!("expected text frame"),
@@ -667,12 +667,11 @@ mod tests {
         assert_eq!(v["method"], "Target.setAutoAttach");
         assert_eq!(v["params"]["flatten"], true);
         let id = v["id"].as_u64().unwrap();
-        tx_b
-            .send(Ok(Message::text(
-                json!({ "id": id, "result": {} }).to_string(),
-            )))
-            .await
-            .unwrap();
+        tx_b.send(Ok(Message::text(
+            json!({ "id": id, "result": {} }).to_string(),
+        )))
+        .await
+        .unwrap();
         call.await.unwrap().unwrap();
 
         conn.shutdown();
@@ -691,12 +690,11 @@ mod tests {
         conn.reconnect(ws_b);
 
         // Emit an event on the NEW socket; the pre-existing subscriber sees it.
-        tx_b
-            .send(Ok(Message::text(
-                json!({ "method": "Page.loadEventFired", "params": {} }).to_string(),
-            )))
-            .await
-            .unwrap();
+        tx_b.send(Ok(Message::text(
+            json!({ "method": "Page.loadEventFired", "params": {} }).to_string(),
+        )))
+        .await
+        .unwrap();
 
         let ev = tokio::time::timeout(std::time::Duration::from_secs(1), sub.next())
             .await

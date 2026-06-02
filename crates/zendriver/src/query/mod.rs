@@ -82,7 +82,10 @@ impl PageBox {
     /// coordinates.
     #[must_use]
     pub fn abs_origin(&self) -> (f64, f64) {
-        (self.viewport.x + self.scroll_x, self.viewport.y + self.scroll_y)
+        (
+            self.viewport.x + self.scroll_x,
+            self.viewport.y + self.scroll_y,
+        )
     }
 
     /// Page-absolute center of the box (origin + half the box size + scroll).
@@ -1108,7 +1111,9 @@ async fn one_across_frames(
                     ScopeTag::Main => QueryScope::Tab(tab),
                     ScopeTag::Frame(i) => QueryScope::Frame(&frames[i]),
                 };
-                return Ok(Element::synthesize_query(picked, &scope, selector, want_nth));
+                return Ok(Element::synthesize_query(
+                    picked, &scope, selector, want_nth,
+                ));
             }
         } else {
             // First hit wins: main first, then frames in registry order.
@@ -1126,7 +1131,9 @@ async fn one_across_frames(
                 let scope = QueryScope::Frame(frame);
                 let hits = selector.resolve_many_inner(&scope, false).await?;
                 if let Some(picked) = hits.into_iter().nth(want_nth) {
-                    return Ok(Element::synthesize_query(picked, &scope, selector, want_nth));
+                    return Ok(Element::synthesize_query(
+                        picked, &scope, selector, want_nth,
+                    ));
                 }
             }
         }
@@ -1216,7 +1223,10 @@ async fn consider_scope_best(
     };
     let len = text_len_of(scope, &candidate).await?;
     let dist = len.abs_diff(needle_len);
-    if best.as_ref().is_none_or(|(best_dist, _, _)| dist < *best_dist) {
+    if best
+        .as_ref()
+        .is_none_or(|(best_dist, _, _)| dist < *best_dist)
+    {
         *best = Some((dist, candidate, tag));
     }
     Ok(())
@@ -1964,7 +1974,8 @@ mod tests {
         // Main (Tab) scope resolves first and returns an empty array.
         let id_q = mock.expect_cmd("Runtime.evaluate").await;
         assert_eq!(
-            mock.last_sent()["sessionId"], "S_TAB",
+            mock.last_sent()["sessionId"],
+            "S_TAB",
             "main scope must resolve on the Tab's session first"
         );
         mock.reply(
@@ -1985,7 +1996,8 @@ mod tests {
         // its isolated world on the frame's session.
         let id_iso = mock.expect_cmd("Page.createIsolatedWorld").await;
         assert_eq!(
-            mock.last_sent()["sessionId"], "S_FRAME",
+            mock.last_sent()["sessionId"],
+            "S_FRAME",
             "frame fall-through must dispatch on the Frame's session"
         );
         assert_eq!(mock.last_sent()["params"]["frameId"], "F_CHILD");
@@ -2010,7 +2022,12 @@ mod tests {
         )
         .await;
         let id_df = mock.expect_cmd("DOM.describeNode").await;
-        assert_eq!(mock.last_sent()["objectId"].as_str().or_else(|| mock.last_sent()["params"]["objectId"].as_str()), Some("RInFrame"));
+        assert_eq!(
+            mock.last_sent()["objectId"]
+                .as_str()
+                .or_else(|| mock.last_sent()["params"]["objectId"].as_str()),
+            Some("RInFrame")
+        );
         mock.reply(id_df, json!({ "node": { "backendNodeId": 88 } }))
             .await;
 

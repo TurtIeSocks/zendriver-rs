@@ -148,8 +148,7 @@ pub(crate) fn candidate_paths_for_channel(channel: Channel) -> Vec<PathBuf> {
     {
         let chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
         let chromium = "/Applications/Chromium.app/Contents/MacOS/Chromium";
-        let brave =
-            "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser";
+        let brave = "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser";
         let edge = "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge";
         match channel {
             Channel::Chrome => v.push(PathBuf::from(chrome)),
@@ -177,16 +176,12 @@ pub(crate) fn candidate_paths_for_channel(channel: Channel) -> Vec<PathBuf> {
             Channel::Brave => {
                 v.push(PathBuf::from("/usr/bin/brave-browser"));
                 v.push(PathBuf::from("/usr/bin/brave"));
-                v.push(PathBuf::from(
-                    "/opt/brave.com/brave/brave-browser",
-                ));
+                v.push(PathBuf::from("/opt/brave.com/brave/brave-browser"));
             }
             Channel::Edge => {
                 v.push(PathBuf::from("/usr/bin/microsoft-edge"));
                 v.push(PathBuf::from("/usr/bin/microsoft-edge-stable"));
-                v.push(PathBuf::from(
-                    "/opt/microsoft/msedge/microsoft-edge",
-                ));
+                v.push(PathBuf::from("/opt/microsoft/msedge/microsoft-edge"));
             }
             Channel::Auto => {
                 v.push(PathBuf::from("/usr/bin/google-chrome"));
@@ -1268,7 +1263,12 @@ pub(crate) async fn finish_connect(
     let inner = Arc::new_cyclic(|weak: &std::sync::Weak<BrowserInner>| {
         let session = SessionHandle::new(conn.clone(), session_id);
         let main_tab_input = InputController::new(input_profile.clone());
-        let main_tab = Tab::new(session, weak.clone(), main_tab_input, target_id_for_main_tab);
+        let main_tab = Tab::new(
+            session,
+            weak.clone(),
+            main_tab_input,
+            target_id_for_main_tab,
+        );
         BrowserInner {
             conn,
             main_tab,
@@ -1496,10 +1496,12 @@ fn unzip_crx_blocking(crx_path: &Path, dest_dir: &Path) -> Result<(), ZendriverE
     })?;
 
     for i in 0..archive.len() {
-        let mut entry = archive.by_index(i).map_err(|e| BrowserError::ExtensionLoad {
-            path: crx_path.to_path_buf(),
-            reason: format!("zip entry {i}: {e}"),
-        })?;
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| BrowserError::ExtensionLoad {
+                path: crx_path.to_path_buf(),
+                reason: format!("zip entry {i}: {e}"),
+            })?;
         // Reject unsafe paths (absolute / parent-traversal).
         let Some(rel_path) = entry.enclosed_name() else {
             return Err(BrowserError::ExtensionLoad {
@@ -1535,10 +1537,11 @@ fn unzip_crx_blocking(crx_path: &Path, dest_dir: &Path) -> Result<(), ZendriverE
                 reason: format!("mkdir {parent:?}: {e}"),
             })?;
         }
-        let mut out = std::fs::File::create(&out_path).map_err(|e| BrowserError::ExtensionLoad {
-            path: crx_path.to_path_buf(),
-            reason: format!("create {out_path:?}: {e}"),
-        })?;
+        let mut out =
+            std::fs::File::create(&out_path).map_err(|e| BrowserError::ExtensionLoad {
+                path: crx_path.to_path_buf(),
+                reason: format!("create {out_path:?}: {e}"),
+            })?;
         std::io::copy(&mut entry, &mut out).map_err(|e| BrowserError::ExtensionLoad {
             path: crx_path.to_path_buf(),
             reason: format!("write {out_path:?}: {e}"),
@@ -2936,9 +2939,7 @@ mod tests {
 
     #[test]
     fn extensions_add_load_and_disable_except_flags() {
-        let b = BrowserBuilder::new()
-            .add_extension("a")
-            .add_extension("b");
+        let b = BrowserBuilder::new().add_extension("a").add_extension("b");
         let flags = b.build_flags(Path::new("/tmp/x"));
         assert!(
             flags.contains(&"--load-extension=a,b".to_string()),
@@ -2965,10 +2966,8 @@ mod tests {
             .add_extension("ext");
         let flags = b.build_flags(Path::new("/tmp/x"));
         assert!(
-            flags
-                .iter()
-                .any(|f| f.starts_with("--disable-features=")
-                    && f.contains("DisableLoadExtensionCommandLineSwitch")),
+            flags.iter().any(|f| f.starts_with("--disable-features=")
+                && f.contains("DisableLoadExtensionCommandLineSwitch")),
             "expected DisableLoadExtensionCommandLineSwitch in a --disable-features line: {flags:?}"
         );
     }
@@ -2999,7 +2998,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut exts = vec![dir.path().to_path_buf()];
         let tempdirs = resolve_extension_dirs(&mut exts).await.unwrap();
-        assert!(tempdirs.is_empty(), "directories should not allocate tempdirs");
+        assert!(
+            tempdirs.is_empty(),
+            "directories should not allocate tempdirs"
+        );
         assert_eq!(exts, vec![dir.path().to_path_buf()]);
     }
 
@@ -3024,10 +3026,7 @@ mod tests {
         crx.extend_from_slice(&0u32.to_le_bytes()); // header length (ignored)
         crx.extend_from_slice(&zip_buf);
 
-        let crx_file = tempfile::Builder::new()
-            .suffix(".crx")
-            .tempfile()
-            .unwrap();
+        let crx_file = tempfile::Builder::new().suffix(".crx").tempfile().unwrap();
         std::fs::write(crx_file.path(), &crx).unwrap();
 
         let mut exts = vec![crx_file.path().to_path_buf()];
@@ -3045,7 +3044,10 @@ mod tests {
         let mut exts = vec![PathBuf::from("/nonexistent/zzz-does-not-exist")];
         let err = resolve_extension_dirs(&mut exts).await.unwrap_err();
         assert!(
-            matches!(err, ZendriverError::Browser(BrowserError::ExtensionLoad { .. })),
+            matches!(
+                err,
+                ZendriverError::Browser(BrowserError::ExtensionLoad { .. })
+            ),
             "expected ExtensionLoad, got {err:?}"
         );
     }
@@ -3987,7 +3989,10 @@ mod tests {
 
         let fut = tokio::spawn({
             let b = browser.clone();
-            async move { b.grant_permissions(&[PermissionType::Notifications], None).await }
+            async move {
+                b.grant_permissions(&[PermissionType::Notifications], None)
+                    .await
+            }
         });
 
         let id = mock.expect_cmd("Browser.grantPermissions").await;
@@ -4137,7 +4142,10 @@ mod tests {
         let id = mock.expect_cmd("Target.setAutoAttach").await;
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["flatten"], true);
-        assert!(sent.get("sessionId").is_none(), "auto-attach is browser-scope");
+        assert!(
+            sent.get("sessionId").is_none(),
+            "auto-attach is browser-scope"
+        );
         mock.reply(id, json!({})).await;
 
         // 2. Initial-target discovery.

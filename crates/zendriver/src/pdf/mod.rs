@@ -372,10 +372,14 @@ impl<'tab> PdfBuilder<'tab> {
             params.insert("preferCSSPageSize".to_string(), Value::Bool(v));
         }
 
-        let res = self.tab.call("Page.printToPDF", Value::Object(params)).await?;
-        let data = res.get("data").and_then(|v| v.as_str()).ok_or_else(|| {
-            ZendriverError::Navigation("Page.printToPDF returned no data".into())
-        })?;
+        let res = self
+            .tab
+            .call("Page.printToPDF", Value::Object(params))
+            .await?;
+        let data = res
+            .get("data")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ZendriverError::Navigation("Page.printToPDF returned no data".into()))?;
         BASE64
             .decode(data)
             .map_err(|e| ZendriverError::Navigation(format!("invalid base64 in pdf: {e}")))
@@ -591,8 +595,11 @@ mod tests {
         let id = mock.expect_cmd("Page.captureSnapshot").await;
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["format"], "mhtml");
-        mock.reply(id, json!({ "data": "From: <Saved by Chrome>\r\nMIME-Version: 1.0\r\n" }))
-            .await;
+        mock.reply(
+            id,
+            json!({ "data": "From: <Saved by Chrome>\r\nMIME-Version: 1.0\r\n" }),
+        )
+        .await;
 
         fut.await.unwrap().unwrap();
         let written = std::fs::read_to_string(&path).unwrap();

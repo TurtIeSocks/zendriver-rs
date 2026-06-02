@@ -111,8 +111,12 @@ impl CookieJar {
         path: impl AsRef<Path>,
         filter: impl Fn(&crate::cookies::Cookie) -> bool,
     ) -> Result<()> {
-        let cookies: Vec<crate::cookies::Cookie> =
-            self.all().await?.into_iter().filter(|c| filter(c)).collect();
+        let cookies: Vec<crate::cookies::Cookie> = self
+            .all()
+            .await?
+            .into_iter()
+            .filter(|c| filter(c))
+            .collect();
         let bytes = serde_json::to_vec_pretty(&cookies)?;
         fs::write(path, bytes).await?;
         Ok(())

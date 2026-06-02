@@ -247,7 +247,10 @@ pub(crate) fn char_descriptor(c: char) -> Option<CharDescriptor> {
         });
     }
     // Unshifted punctuation table.
-    if let Some(&(code, vk)) = SPECIAL_CHAR_MAP.iter().find_map(|(k, v)| (*k == c).then_some(v)) {
+    if let Some(&(code, vk)) = SPECIAL_CHAR_MAP
+        .iter()
+        .find_map(|(k, v)| (*k == c).then_some(v))
+    {
         return Some(CharDescriptor {
             code,
             windows_vk: vk,
@@ -259,8 +262,9 @@ pub(crate) fn char_descriptor(c: char) -> Option<CharDescriptor> {
         .iter()
         .find_map(|(k, base)| (*k == c).then_some(*base))
     {
-        if let Some(&(code, vk)) =
-            SPECIAL_CHAR_MAP.iter().find_map(|(k, v)| (*k == base).then_some(v))
+        if let Some(&(code, vk)) = SPECIAL_CHAR_MAP
+            .iter()
+            .find_map(|(k, v)| (*k == base).then_some(v))
         {
             return Some(CharDescriptor {
                 code,
@@ -465,7 +469,11 @@ pub(crate) fn key_events(key: Key, mods: KeyModifiers, kind: KeyPress) -> Vec<Ke
                 windows_vk: None,
             }];
         };
-        let effective = if d.shift { mods | KeyModifiers::SHIFT } else { mods };
+        let effective = if d.shift {
+            mods | KeyModifiers::SHIFT
+        } else {
+            mods
+        };
         let main_down = KeyEventPayload {
             event_type: "keyDown",
             modifiers: effective.cdp_bits(),
@@ -1023,10 +1031,8 @@ mod tests {
         // i.e. Shift-down,A-down,A-up,Shift-up, a-down,a-up,
         //      Shift-down,1-down('!'),1-up,Shift-up.
         let events = flatten_text("Aa!");
-        let kinds: Vec<(&str, Option<&str>)> = events
-            .iter()
-            .map(|e| (e.event_type, e.code))
-            .collect();
+        let kinds: Vec<(&str, Option<&str>)> =
+            events.iter().map(|e| (e.event_type, e.code)).collect();
         assert_eq!(
             kinds,
             vec![
@@ -1230,13 +1236,7 @@ pub(crate) async fn type_text_realistic(
             } else {
                 0
             };
-            (
-                per_char,
-                s.modifiers_held,
-                do_typo,
-                typo_char,
-                thinking,
-            )
+            (per_char, s.modifiers_held, do_typo, typo_char, thinking)
         };
         if per_char_delay_ms > 0 {
             tokio::time::sleep(Duration::from_millis(per_char_delay_ms as u64)).await;
