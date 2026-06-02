@@ -364,6 +364,10 @@ pub struct BrowserBuilder {
     /// persona. See [`BrowserBuilder::surface`].
     pub(crate) surface_overrides: Vec<(Surface, Strategy)>,
     pub(crate) extra_observers: Vec<Arc<dyn TargetObserver>>,
+    /// Chrome profile preferences (dotted key + JSON value), merged into the
+    /// profile's `Default/Preferences` at launch. User entries override the
+    /// default suppression set. See [`BrowserBuilder::preference`].
+    pub(crate) preferences: Vec<(String, serde_json::Value)>,
     /// Optional `(username, password)` for proxy / HTTP basic-auth handling.
     /// Only honored when the `interception` feature is enabled; when present
     /// at launch, an interception actor is spawned on the main tab session
@@ -397,7 +401,8 @@ impl std::fmt::Debug for BrowserBuilder {
             .field(
                 "extra_observers",
                 &format_args!("<{} observers>", self.extra_observers.len()),
-            );
+            )
+            .field("preferences", &self.preferences);
         #[cfg(feature = "interception")]
         s.field(
             "proxy_auth",
@@ -767,6 +772,21 @@ impl BrowserBuilder {
     #[must_use]
     pub fn args(mut self, flags: impl IntoIterator<Item = String>) -> Self {
         self.extra_args.extend(flags);
+        self
+    }
+
+    /// Set a Chrome profile preference, e.g.
+    /// `.preference("profile.password_manager_enabled", serde_json::json!(false))`.
+    ///
+    /// Merged into `<user_data_dir>/Default/Preferences` at launch (dotted keys
+    /// expand to nested objects). User preferences override the default
+    /// popup-suppression set. For a *user-supplied* `user_data_dir`, ONLY your
+    /// explicit preferences are written (the defaults are not, to avoid mutating
+    /// a real profile); for a port-created temp profile, defaults + yours are
+    /// written.
+    #[must_use]
+    pub fn preference(mut self, key: impl Into<String>, value: serde_json::Value) -> Self {
+        self.preferences.push((key.into(), value));
         self
     }
 
@@ -1797,6 +1817,14 @@ impl BrowserBuilder {
                 (td.path().to_path_buf(), Some(td))
             }
         };
+
+        // Write Chrome profile preferences (popup suppression for owned temp
+        // profiles; explicit user prefs always). Best-effort — see preferences.rs.
+        crate::preferences::write_preferences(
+            &user_data_path,
+            owned_tmp.is_some(),
+            &self.preferences,
+        );
 
         let mut flags = self.build_flags(&user_data_path);
         flags.extend(extra_flags);
@@ -4418,5 +4446,14 @@ mod tests {
         // close() on a non-owning browser: shuts the transport, skips the
         // kill path entirely. No panic, no hang, returns Ok.
         browser.close().await.unwrap();
+    }
+
+    #[test]
+    fn preference_accumulates_on_builder() {
+        let b = Browser::builder()
+            .preference("a.b", serde_json::json!(false))
+            .preference("c", serde_json::json!(1));
+        assert_eq!(b.preferences.len(), 2);
+        assert_eq!(b.preferences[0].0, "a.b");
     }
 }
