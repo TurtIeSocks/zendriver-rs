@@ -198,18 +198,16 @@ fn push_webgpu(out: &mut String, cfg: Option<&SurfaceCfg>, webgl: Option<&WebglS
     use crate::persona::webgpu_adapter::adapter_for_renderer;
     let strat = Surface::Webgpu.resolve_strategy(cfg.and_then(|c| c.strategy));
     if strat == Strategy::Native {
-        return; // leave the real navigator.gpu untouched
+        return;
     }
-    // Default coherent renderer must match webgl.js's hardcoded fallback.
     const DEFAULT_RENDERER: &str =
         "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)";
     let renderer = webgl
         .and_then(|w| w.unmasked_renderer.as_deref())
         .unwrap_or(DEFAULT_RENDERER);
     let adapter = adapter_for_renderer(renderer);
-    let (vendor, arch, desc, mode) = if strat == Strategy::Block {
+    let (vendor, arch, mode) = if strat == Strategy::Block {
         (
-            "null".to_string(),
             "null".to_string(),
             "null".to_string(),
             "\"block\"".to_string(),
@@ -218,7 +216,6 @@ fn push_webgpu(out: &mut String, cfg: Option<&SurfaceCfg>, webgl: Option<&WebglS
         (
             serde_json::to_string(&adapter.vendor).unwrap_or_else(|_| "null".into()),
             serde_json::to_string(&adapter.architecture).unwrap_or_else(|_| "null".into()),
-            serde_json::to_string(&adapter.description).unwrap_or_else(|_| "null".into()),
             "\"value\"".to_string(),
         )
     };
@@ -227,7 +224,6 @@ fn push_webgpu(out: &mut String, cfg: Option<&SurfaceCfg>, webgl: Option<&WebglS
         &WEBGPU
             .replace("WEBGPU_VENDOR", &vendor)
             .replace("WEBGPU_ARCHITECTURE", &arch)
-            .replace("WEBGPU_DESCRIPTION", &desc)
             .replace("WEBGPU_MODE", &mode),
     );
 }
@@ -635,10 +631,9 @@ mod tests {
         let p = Persona {
             webgl: Some(WebglSpec {
                 strategy: Some(Strategy::Value),
-                unmasked_vendor: Some("Google Inc. (NVIDIA)".into()),
+                unmasked_vendor: Some("Google Inc. (Apple)".into()),
                 unmasked_renderer: Some(
-                    "ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 Direct3D11 vs_5_0 ps_5_0, D3D11)"
-                        .into(),
+                    "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)".into(),
                 ),
             }),
             ..Persona::default()
@@ -649,12 +644,12 @@ mod tests {
             "webgpu patch emitted by default (Value)"
         );
         assert!(
-            s.contains("\"nvidia\""),
+            s.contains("\"apple\""),
             "coherent vendor derived from renderer"
         );
         assert!(
-            s.contains("ada-lovelace"),
-            "coherent architecture derived from renderer"
+            s.contains("\"metal-3\""),
+            "validated architecture for Apple Metal (real Chrome probe)"
         );
     }
 
@@ -742,7 +737,6 @@ mod tests {
             "HW_VOICES",
             "WEBGPU_VENDOR",
             "WEBGPU_ARCHITECTURE",
-            "WEBGPU_DESCRIPTION",
             "WEBGPU_MODE",
         ] {
             assert!(

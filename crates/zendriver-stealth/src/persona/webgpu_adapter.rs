@@ -1,91 +1,46 @@
-//! Derive a coherent WebGPU `GPUAdapterInfo` from the spoofed WebGL renderer
-//! string. Dataset-mapped, deterministic — NEVER randomized (DataDome and
-//! other WAFs hash the WebGPU fingerprint and compare against a device dataset;
-//! a random adapter reads as an unknown device).
+//! Derive a coherent WebGPU adapter (vendor + architecture) from the spoofed
+//! WebGL renderer string. Dataset-mapped, deterministic — NEVER randomized
+//! (WAFs hash the WebGPU fingerprint; a random/unknown value reads as a bot).
+//!
+//! Validated against native Chrome (Apple M4 Pro, 2026-06): `requestAdapter().info`
+//! = `{ vendor: "apple", architecture: "metal-3", device: "", description: "" }`.
+//! Chrome MASKS `device` + `description` to "" (the patch emits them empty);
+//! `vendor` + `architecture` are exposed. `vendor` is the load-bearing #20
+//! coherence field (must agree with the WebGL renderer). `architecture` is
+//! emitted only where validated against real Chrome (Apple → "metal-3");
+//! unvalidated vendors get "" — emitting a WRONG token is a worse tell than
+//! an empty one. Add NVIDIA/AMD/Intel tokens here as they are confirmed on
+//! real hardware.
 
-/// Minimal `GPUAdapterInfo` triple the patch substitutes into `navigator.gpu`.
+/// vendor + architecture for the spoofed WebGPU adapter. `device` and
+/// `description` are always emitted empty by the patch (Chrome masks them).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GpuAdapterInfo {
     pub vendor: String,
     pub architecture: String,
-    pub description: String,
 }
 
-/// Map a WebGL `UNMASKED_RENDERER` string to a coherent adapter. Falls back to
-/// a stable Intel integrated-GPU adapter for unrecognized renderers.
-// NOTE: `vendor` is the load-bearing coherence field for the #20 fix (it must
-// agree with the WebGL renderer's vendor). The `architecture` tokens
-// (ada-lovelace / ampere / turing / rdna-3 / gen-12lp / common-3) are
-// best-effort, dataset-style values; their exact match to what Chrome's Dawn
-// backend reports is validated by the nightly `webgpu_adapter_coheres_with_webgl_renderer`
-// integration test (Phase 9) and may be refined in a fast-follow. They are
-// never randomized — a random value reads as an unknown device to a WAF.
+/// Map a WebGL `UNMASKED_RENDERER` string to a coherent WebGPU adapter.
+/// Unrecognized renderers fall back to Intel (the common integrated default).
 pub(crate) fn adapter_for_renderer(renderer: &str) -> GpuAdapterInfo {
     let r = renderer.to_ascii_lowercase();
-    // Order matters: check discrete vendors before the Intel fallback.
-    if r.contains("nvidia") || r.contains("geforce") || r.contains("rtx") || r.contains("gtx") {
-        let arch = if r.contains("rtx 40") || r.contains("ada") {
-            "ada-lovelace"
-        } else if r.contains("rtx 30") {
-            "ampere"
-        } else if r.contains("rtx 20") {
-            "turing"
-        } else {
-            "ampere"
-        };
-        return GpuAdapterInfo {
-            vendor: "nvidia".into(),
-            architecture: arch.into(),
-            description: extract_model(renderer, "NVIDIA"),
-        };
-    }
-    if r.contains("amd") || r.contains("radeon") {
-        return GpuAdapterInfo {
-            vendor: "amd".into(),
-            architecture: "rdna-3".into(),
-            description: extract_model(renderer, "AMD"),
-        };
-    }
-    if r.contains("apple") {
-        return GpuAdapterInfo {
-            vendor: "apple".into(),
-            architecture: "common-3".into(),
-            description: extract_model(renderer, "Apple"),
-        };
-    }
-    // Intel + everything unrecognized → coherent Intel integrated default.
+    let (vendor, architecture) = if r.contains("nvidia")
+        || r.contains("geforce")
+        || r.contains("rtx")
+        || r.contains("gtx")
+    {
+        ("nvidia", "")
+    } else if r.contains("amd") || r.contains("radeon") {
+        ("amd", "")
+    } else if r.contains("apple") {
+        ("apple", "metal-3")
+    } else {
+        ("intel", "")
+    };
     GpuAdapterInfo {
-        vendor: "intel".into(),
-        architecture: "gen-12lp".into(),
-        description: if r.contains("intel") {
-            extract_model(renderer, "Intel")
-        } else {
-            "Intel(R) UHD Graphics 630".into()
-        },
+        vendor: vendor.into(),
+        architecture: architecture.into(),
     }
-}
-
-/// Pull a human-readable model substring out of the ANGLE renderer string,
-/// or fall back to a vendor-generic description.
-fn extract_model(renderer: &str, vendor: &str) -> String {
-    // ANGLE strings look like "ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 Direct3D11 ...)".
-    // Take the middle segment after the first comma, trimmed of the D3D suffix.
-    if let Some(inner) = renderer.split('(').nth(1).and_then(|s| s.split(')').next()) {
-        if let Some(mid) = inner.split(',').nth(1) {
-            let model = mid
-                .split(" Direct3D")
-                .next()
-                .unwrap_or(mid)
-                .split(" vs_")
-                .next()
-                .unwrap_or(mid)
-                .trim();
-            if !model.is_empty() {
-                return model.to_string();
-            }
-        }
-    }
-    format!("{vendor} Graphics")
 }
 
 #[cfg(test)]
@@ -93,71 +48,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn nvidia_renderer_maps_to_nvidia_adapter() {
+    fn nvidia_vendor_arch_empty_until_validated() {
         let a = adapter_for_renderer(
             "ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 Direct3D11 vs_5_0 ps_5_0, D3D11)",
         );
         assert_eq!(a.vendor, "nvidia");
-        assert_eq!(a.architecture, "ada-lovelace");
-        assert!(a.description.contains("RTX 4090"));
+        assert_eq!(a.architecture, "");
     }
-
     #[test]
-    fn intel_renderer_maps_to_intel_adapter() {
-        let a = adapter_for_renderer(
-            "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)",
-        );
-        assert_eq!(a.vendor, "intel");
-        assert_eq!(a.architecture, "gen-12lp");
-    }
-
-    #[test]
-    fn unknown_renderer_falls_back_to_coherent_intel() {
-        let a = adapter_for_renderer("Mesa OffScreen");
-        // Never panics, never randomizes: a stable coherent default.
-        assert_eq!(a.vendor, "intel");
-    }
-
-    #[test]
-    fn amd_renderer_maps_to_amd_adapter() {
+    fn amd_vendor_arch_empty_until_validated() {
         let a = adapter_for_renderer(
             "ANGLE (AMD, AMD Radeon RX 7900 XT Direct3D11 vs_5_0 ps_5_0, D3D11)",
         );
         assert_eq!(a.vendor, "amd");
-        assert_eq!(a.architecture, "rdna-3");
-        assert!(a.description.contains("Radeon"));
+        assert_eq!(a.architecture, "");
     }
-
     #[test]
-    fn apple_renderer_maps_to_apple_adapter() {
-        let a =
-            adapter_for_renderer("ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Pro, Unspecified)");
+    fn apple_arch_is_metal3_validated_against_real_chrome() {
+        let a = adapter_for_renderer(
+            "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
+        );
         assert_eq!(a.vendor, "apple");
-        assert_eq!(a.architecture, "common-3");
+        assert_eq!(a.architecture, "metal-3");
     }
-
     #[test]
-    fn nvidia_arch_by_generation() {
-        assert_eq!(
-            adapter_for_renderer("NVIDIA GeForce RTX 3080").architecture,
-            "ampere"
+    fn intel_vendor_arch_empty() {
+        let a = adapter_for_renderer(
+            "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)",
         );
-        assert_eq!(
-            adapter_for_renderer("NVIDIA GeForce RTX 2070").architecture,
-            "turing"
-        );
-        // generic nvidia (no recognized generation) → ampere default
-        assert_eq!(
-            adapter_for_renderer("NVIDIA GeForce GTX 1080").architecture,
-            "ampere"
-        );
+        assert_eq!(a.vendor, "intel");
+        assert_eq!(a.architecture, "");
     }
-
     #[test]
-    fn extract_model_falls_back_when_no_parens() {
-        // A vendor-matching renderer with no ANGLE "(...)" → "{Vendor} Graphics".
-        let a = adapter_for_renderer("nvidia geforce");
-        assert_eq!(a.vendor, "nvidia");
-        assert_eq!(a.description, "NVIDIA Graphics");
+    fn unknown_renderer_falls_back_to_intel() {
+        let a = adapter_for_renderer("Mesa OffScreen");
+        assert_eq!(a.vendor, "intel");
+        assert_eq!(a.architecture, "");
     }
 }
