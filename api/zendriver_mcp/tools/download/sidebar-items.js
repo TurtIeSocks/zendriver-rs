@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["download","set_download_path"],"struct":["DownloadInput","DownloadOutput","SetDownloadPathInput"]};

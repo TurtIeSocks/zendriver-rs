@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["list"],"struct":["FrameListOutput","FrameSummary"]};
+window.SIDEBAR_ITEMS = {"fn":["frame_goto","list"],"struct":["FrameGotoInput","FrameListOutput","FrameSummary"]};

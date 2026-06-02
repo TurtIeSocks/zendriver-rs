@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["MouseAction"],"fn":["mouse"],"struct":["MouseInput"]};

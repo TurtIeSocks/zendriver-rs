@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["SetWindowMode","WindowStateDto"],"fn":["get_window","set_window"],"struct":["SetWindowInput","WindowBoundsDto"]};

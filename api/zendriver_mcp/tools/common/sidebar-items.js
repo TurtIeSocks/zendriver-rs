@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["current_tab"],"struct":["EmptyInput"]};
+window.SIDEBAR_ITEMS = {"enum":["ModifierArg"],"fn":["blob_output","current_tab","lookup_frame","modifiers_to_bits","page_snapshot"],"struct":["BlobOutput","EmptyInput"]};

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["actions","cloudflare","common","cookies","eval","expect","fetcher","find","frames","intercept","lifecycle","navigation","reads","snapshot","stealth","storage","tabs"]};
+window.SIDEBAR_ITEMS = {"mod":["actions","cloudflare","common","cookies","download","eval","expect","fetcher","find","frames","imperva","intercept","lifecycle","mouse","navigation","pdf","reads","scroll","snapshot","stealth","storage","tabs","window"]};

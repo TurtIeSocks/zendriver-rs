@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["ExpectKind"],"fn":["await_expectation","cancel","register"],"struct":["AwaitInput","AwaitOutput","CancelInput","CancelOutput","ExpectMatcher","RegisterInput","RegisterOutput"]};
+window.SIDEBAR_ITEMS = {"enum":["DialogAction","ExpectKind"],"fn":["await_expectation","cancel","register"],"struct":["AwaitInput","AwaitOutput","CancelInput","CancelOutput","ExpectMatcher","RegisterInput","RegisterOutput"]};

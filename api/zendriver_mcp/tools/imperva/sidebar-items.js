@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Outcome"],"fn":["solve_imperva"],"struct":["SolveImpervaInput","SolveImpervaOutput"]};

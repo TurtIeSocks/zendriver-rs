@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["StealthProfileChoice"],"struct":["ExpectationHandle","InterceptRuleHandle","SessionState"],"type":["ExpectationId","RuleId"]};
+window.SIDEBAR_ITEMS = {"enum":["StealthPlatformChoice","StealthProfileChoice"],"struct":["ExpectationHandle","InterceptRuleHandle","SessionState","StealthOverrides"],"type":["ExpectationId","RuleId"]};

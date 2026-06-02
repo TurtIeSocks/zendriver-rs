@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["set_stealth_profile"],"struct":["SetStealthProfileInput","SetStealthProfileOutput"]};
+window.SIDEBAR_ITEMS = {"fn":["set_stealth_profile","set_user_agent"],"struct":["SetStealthProfileInput","SetStealthProfileOutput","SetUserAgentInput"]};

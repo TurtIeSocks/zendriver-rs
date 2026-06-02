@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["ReadFieldsPreset"],"fn":["element_state"],"struct":["ElementState","ElementStateInput"]};
+window.SIDEBAR_ITEMS = {"enum":["ReadFieldsPreset"],"fn":["element_state","get_links","search_resources"],"struct":["ElementState","ElementStateInput","GetLinksInput","GetLinksOutput","ResourceMatch","SearchResourcesInput","SearchResourcesOutput"]};

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["WaitFor"],"fn":["back","forward","goto","reload","wait_for_idle"],"struct":["GotoInput","HistoryInput","IdleInput","IdleOutput","NavOutput"]};
+window.SIDEBAR_ITEMS = {"enum":["ReadyStateArg","WaitFor"],"fn":["back","bypass_insecure_warning","forward","goto","reload","wait_for_idle","wait_for_load"],"struct":["GotoInput","HistoryInput","IdleInput","IdleOutput","NavOutput","ReloadInput","WaitForLoadInput"]};
