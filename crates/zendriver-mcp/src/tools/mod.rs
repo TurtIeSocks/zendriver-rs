@@ -20,6 +20,8 @@ pub mod expect;
 pub mod fetcher;
 pub mod find;
 pub mod frames;
+#[cfg(feature = "imperva")]
+pub mod imperva;
 #[cfg(feature = "interception")]
 pub mod intercept;
 pub mod lifecycle;

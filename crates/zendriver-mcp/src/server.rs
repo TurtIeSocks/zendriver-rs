@@ -35,6 +35,8 @@ use crate::tools::common::EmptyInput;
 use crate::tools::expect;
 #[cfg(feature = "fetcher")]
 use crate::tools::fetcher;
+#[cfg(feature = "imperva")]
+use crate::tools::imperva;
 #[cfg(feature = "interception")]
 use crate::tools::intercept;
 use crate::tools::{
@@ -744,6 +746,29 @@ impl ZendriverServer {
     }
 }
 
+// ---------- imperva (gated) ----------------------------------------------
+//
+// Same split pattern as the cloudflare block — own impl block so the
+// `tool_router` macro can cfg-gate the whole thing.
+
+#[cfg(feature = "imperva")]
+#[tool_router(router = imperva_tool_router, vis = "pub")]
+impl ZendriverServer {
+    /// Drive the Imperva / Incapsula clearance flow on the current tab.
+    #[tool(
+        name = "browser_solve_imperva",
+        description = "Drive the Imperva / Incapsula clearance flow on the current tab. Detects the active surface (modern reese84 bot-management, legacy Incapsula, or CAPTCHA escalation) and polls every `poll_interval_ms` until one of four terminal states is reached, bounded by `timeout_ms` (default 30_000 = 30s): `token_acquired` (reese84 cookie captured — returned in `reese84`), `challenge_gone` (markers cleared without a token, e.g. legacy flow), `already_clear` (no surface present at call time — fast path), or `timeout` (deadline elapsed — not an error, retry or fall back). Set `with_interception: true` for the Fetch-domain fast-path. Errors on structural failures: CAPTCHA with no solver, CDP failure, or in-page JS exception. Requires stealth (on by default)."
+    )]
+    pub async fn browser_solve_imperva(
+        &self,
+        Parameters(input): Parameters<imperva::SolveImpervaInput>,
+    ) -> Result<Json<imperva::SolveImpervaOutput>, ErrorData> {
+        imperva::solve_imperva(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+}
+
 // ---------- fetcher (gated) ----------------------------------------------
 //
 // Same split pattern as the other gated blocks. `browser_install_chrome`
@@ -785,6 +810,8 @@ impl ZendriverServer {
         let router = router + Self::expect_tool_router();
         #[cfg(feature = "cloudflare")]
         let router = router + Self::cloudflare_tool_router();
+        #[cfg(feature = "imperva")]
+        let router = router + Self::imperva_tool_router();
         #[cfg(feature = "fetcher")]
         let router = router + Self::fetcher_tool_router();
         router

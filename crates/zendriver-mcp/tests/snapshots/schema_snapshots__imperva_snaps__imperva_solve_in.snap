@@ -1,0 +1,27 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::imperva::SolveImpervaInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: SolveImpervaInput
+description: "Input for `browser_solve_imperva`."
+type: object
+properties:
+  poll_interval_ms:
+    description: "Override the bypass driver's internal poll cadence, in milliseconds.\nDefaults to the lib's own default. Lowering speeds up detection at the\ncost of more CDP `Runtime.evaluate` round-trips; raising is a safe\nknob for slow / sandboxed environments."
+    type:
+      - integer
+      - "null"
+    format: uint64
+    minimum: 0
+  timeout_ms:
+    description: "Maximum total wait for a terminal outcome, in milliseconds. Default\n30_000 (30s). Maps to [`ImpervaBypass::timeout`].\n\n[`ImpervaBypass::timeout`]: zendriver_imperva::ImpervaBypass::timeout"
+    type: integer
+    format: uint64
+    default: 30000
+    minimum: 0
+  with_interception:
+    description: "Enable the Fetch-domain interception fast-path\n([`ImpervaBypass::with_interception`]) for quicker reese84 capture on\nmodern surfaces. Default `false`.\n\n[`ImpervaBypass::with_interception`]: zendriver_imperva::ImpervaBypass::with_interception"
+    type: boolean
+    default: false
+additionalProperties: false

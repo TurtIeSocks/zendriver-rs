@@ -177,6 +177,17 @@ mod cloudflare_snaps {
     schema_snap!(cloudflare_solve_out, tools::cloudflare::SolveOutput);
 }
 
+// ---------- imperva (feature-gated) ---------------------------------------
+
+#[cfg(feature = "imperva")]
+mod imperva_snaps {
+    use super::*;
+
+    schema_snap!(imperva_solve_in, tools::imperva::SolveImpervaInput);
+    schema_snap!(imperva_outcome, tools::imperva::Outcome);
+    schema_snap!(imperva_solve_out, tools::imperva::SolveImpervaOutput);
+}
+
 // ---------- fetcher (feature-gated) ---------------------------------------
 
 #[cfg(feature = "fetcher")]
