@@ -192,12 +192,22 @@ impl<'a> RequestBuilder<'a> {
             ));
         }
 
+        // `loadNetworkResource` requires a `frameId` for frame (page) targets.
+        // Fetch the main frame ID lazily; failures here are surfaced as a
+        // Request error rather than silently omitting the parameter (which
+        // causes a `-32602` CDP error on Chrome >= 97).
+        let frame_id = self.tab.main_frame().await.map_err(|e| {
+            ZendriverError::Request(format!("get main frame for loadNetworkResource: {e}"))
+        })?;
+        let frame_id = frame_id.id().to_owned();
+
         let res = self
             .tab
             .session()
             .call(
                 "Network.loadNetworkResource",
                 json!({
+                    "frameId": frame_id,
                     "url": self.url,
                     "options": { "disableCache": false, "includeCredentials": true },
                 }),
