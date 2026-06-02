@@ -80,7 +80,9 @@ impl<'tab> DataDomeBypass<'tab> {
         self
     }
 
-    /// Enable the Fetch-domain fast-path (see [`crate::interception`]).
+    /// Enable the Fetch-domain fast-path. Spawns a `Fetch` subscription that
+    /// signals on first 2xx response to `captcha-delivery.com` or any
+    /// `datadome*` URL, waking the poll loop immediately.
     #[must_use]
     pub fn with_interception(mut self) -> Self {
         self.interception_enabled = true;
