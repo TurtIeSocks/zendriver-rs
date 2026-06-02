@@ -848,15 +848,17 @@ impl<'scope> FindBuilder<'scope> {
         let best_match = selector
             .as_ref()
             .is_some_and(|s| effective_best_match(self.best_match, s));
-        let resolver = match (&selector, predicate_mode) {
-            (Some(sel), _) => Resolver::Selector {
+        // `selector` is `Some` iff we are *not* in predicate mode (the
+        // `else` arm above either bound it or returned early), so the
+        // resolver follows directly from whether a selector is present.
+        let resolver = match &selector {
+            Some(sel) => Resolver::Selector {
                 selector: sel,
                 best_match,
             },
-            (None, true) => Resolver::Predicate {
+            None => Resolver::Predicate {
                 predicates: &self.predicates,
             },
-            (None, false) => unreachable!("selector is Some whenever predicate_mode is false"),
         };
 
         let deadline = Instant::now() + self.timeout;
@@ -1233,15 +1235,16 @@ impl<'scope> FindAllBuilder<'scope> {
         let best_match = selector
             .as_ref()
             .is_some_and(|s| effective_best_match(self.best_match, s));
-        let resolver = match (&selector, predicate_mode) {
-            (Some(sel), _) => Resolver::Selector {
+        // See `FindBuilder::one`: `selector` is `Some` iff not in predicate
+        // mode, so the resolver follows directly from its presence.
+        let resolver = match &selector {
+            Some(sel) => Resolver::Selector {
                 selector: sel,
                 best_match,
             },
-            (None, true) => Resolver::Predicate {
+            None => Resolver::Predicate {
                 predicates: &self.predicates,
             },
-            (None, false) => unreachable!("selector is Some whenever predicate_mode is false"),
         };
 
         let deadline = Instant::now() + self.timeout;

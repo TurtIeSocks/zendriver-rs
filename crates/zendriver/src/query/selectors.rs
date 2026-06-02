@@ -328,20 +328,6 @@ pub(crate) async fn resolve_predicate_many(
     extract_array_refs(session, &result["result"]).await
 }
 
-/// Resolve `pred` against `scope` and return the first match (or `None`).
-/// Thin `resolve_predicate_many(...).next()` so the dispatch and JS stay
-/// in one place.
-#[allow(dead_code)] // `.one()` uses resolve_predicate_many directly today; kept for symmetry with the css resolvers.
-pub(crate) async fn resolve_predicate_one(
-    scope: &QueryScope<'_>,
-    pred: &PredicateSet,
-) -> Result<Option<RemoteRef>> {
-    Ok(resolve_predicate_many(scope, pred)
-        .await?
-        .into_iter()
-        .next())
-}
-
 // ---------------------------------------------------------------------
 // XPath
 // ---------------------------------------------------------------------

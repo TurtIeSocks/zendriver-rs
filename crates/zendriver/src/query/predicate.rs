@@ -42,6 +42,14 @@ impl PredicateSet {
 
     /// Structural predicates → a CSS selector. `attr_regex` + text predicates
     /// are post-filters and are NOT emitted here. Empty set → `"*"`.
+    ///
+    /// Attribute *values* are JSON-quoted via [`q`] so a quote/backslash
+    /// can't break the `[name="value"]` literal. Attribute *names* are
+    /// caller-supplied identifiers and are emitted verbatim — a malformed
+    /// name yields a malformed selector, which surfaces as a JS
+    /// `SyntaxError` from `querySelectorAll` (a `JsException`), never an
+    /// escape out of the JS string (the whole selector is JSON-embedded
+    /// before evaluation by the resolver).
     pub(crate) fn to_css_selector(&self) -> String {
         let mut s = self.tag.clone().unwrap_or_default();
         for a in &self.attrs {
