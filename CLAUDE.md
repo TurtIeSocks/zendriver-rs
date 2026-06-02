@@ -39,3 +39,25 @@ cargo insta accept --all
 
 Commit the updated `crates/zendriver-mcp/tests/snapshots/*.snap` — the wire
 shape is reviewed.
+
+## MCP coverage (REQUIRED before finishing a PR)
+
+`zendriver-mcp` must track the `zendriver` surface as closely as practical:
+every user-facing capability should be reachable through an MCP tool. So
+**any PR that adds or changes a public API MUST be validated against
+`zendriver-mcp`** before it is finished — add/extend the corresponding tool,
+or consciously record why the API is out of scope.
+
+For each new or changed public item in a PR (a `BrowserBuilder` option, a
+`Tab`/`Frame`/`Element` method, a new type or feature):
+
+- Ask: is it reachable via a tool under `crates/zendriver-mcp/src/tools/`? If
+  it should be and isn't, add/extend the tool (then run the schema-snapshot
+  step above for the I/O change).
+- If it is **deliberately not exposed**, say so in the PR description with the
+  reason. Legitimate non-goals: APIs that don't fit a request/response tool
+  (e.g. a `Stream`-returning subscription like `tab.monitor()`), internal
+  `pub(crate)` items, or purely-Rust ergonomics with no agent-facing value.
+
+Treat a public API with no MCP tool and no recorded reason as a coverage gap
+to close. (A CI check enforcing this is tracked separately.)
