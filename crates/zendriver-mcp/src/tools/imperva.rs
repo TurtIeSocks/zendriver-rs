@@ -69,9 +69,10 @@ fn default_timeout() -> u64 {
 /// Terminal outcome of an Imperva bypass attempt.
 ///
 /// `TokenAcquired` / `ChallengeGone` / `AlreadyClear` mirror the lib's
-/// [`ImpervaClearanceOutcome`] variants. `Timeout` is the MCP layer's
-/// collapse of [`ImpervaError::Timeout`] into the success channel — agents
-/// branch on `outcome` without try/catch around a timeout.
+/// [`ImpervaClearanceOutcome`] variants. `Timeout` mirrors the lib's
+/// [`ImpervaClearanceOutcome::TimedOut`] — a deadline in a bot-management
+/// flow is a normal outcome, not an error — surfacing it on the success
+/// channel so agents branch on `outcome` without try/catch around a timeout.
 #[derive(Debug, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {

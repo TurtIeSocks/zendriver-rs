@@ -4,7 +4,7 @@ expression: "schema_for! (tools::cloudflare::Outcome)"
 ---
 $schema: "https://json-schema.org/draft/2020-12/schema"
 title: Outcome
-description: "Terminal outcome of a turnstile bypass attempt.\n\n`Solved` and `ChallengeGone` mirror the lib's `ClearanceOutcome`\nvariants. `Timeout` is the MCP layer's collapse of\n`CloudflareError::ClearanceTimeout` into the success channel — agents\ncan branch on `outcome` without try/catch around a timeout."
+description: "Terminal outcome of a turnstile bypass attempt.\n\n`Solved` and `ChallengeGone` mirror the lib's `ClearanceOutcome`\nvariants. `Timeout` mirrors the lib's `ClearanceOutcome::TimedOut` — a\ndeadline in a turnstile flow is a normal outcome, not an error —\nsurfacing it on the success channel so agents can branch on `outcome`\nwithout try/catch around a timeout."
 oneOf:
   - description: "Turnstile produced a token (value of `cf-turnstile-response`). The\ntoken is available in [`SolveOutput::token`]."
     type: string

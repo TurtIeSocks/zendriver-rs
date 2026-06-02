@@ -62,9 +62,10 @@ fn default_timeout() -> u64 {
 /// Terminal outcome of a turnstile bypass attempt.
 ///
 /// `Solved` and `ChallengeGone` mirror the lib's `ClearanceOutcome`
-/// variants. `Timeout` is the MCP layer's collapse of
-/// `CloudflareError::ClearanceTimeout` into the success channel — agents
-/// can branch on `outcome` without try/catch around a timeout.
+/// variants. `Timeout` mirrors the lib's `ClearanceOutcome::TimedOut` — a
+/// deadline in a turnstile flow is a normal outcome, not an error —
+/// surfacing it on the success channel so agents can branch on `outcome`
+/// without try/catch around a timeout.
 #[derive(Debug, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
