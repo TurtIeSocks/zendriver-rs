@@ -7,6 +7,11 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SEMVER.md].
 
 ### Added
 
+- bs4-like combinable predicate finders on `find()`/`find_all()`: `tag`,
+  `attr`, `attr_contains`, `attr_starts_with`, `attr_ends_with`, `has_attr`,
+  `attr_regex`, `containing_text`, `text_equals`, `text_matches` (#55).
+- `select`/`select_all` CSS convenience aliases on `Tab`/`Frame`/`Element`.
+- Verified `include_frames()` finds elements in nested iframes (#239).
 - `tab.monitor()` — persistent network monitor: a `Stream<NetworkEvent>` over
   HTTP exchanges (lazy body), WebSocket frames, and EventSource messages,
   behind the `monitor` feature (#223).

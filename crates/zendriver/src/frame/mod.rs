@@ -480,6 +480,52 @@ impl Frame {
         crate::query::FindAllBuilder::new_for_frame(self)
     }
 
+    /// Find one element by CSS selector. Python-parity convenience for
+    /// `find().css(sel).one()`. For modifiers use the builder directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::ZendriverError::ElementNotFound`] if no element
+    /// matches.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let frame = tab.main_frame().await?;
+    /// let h1 = frame.select("h1").await?;
+    /// # let _ = h1;
+    /// # Ok(()) }
+    /// ```
+    pub async fn select(&self, css: &str) -> crate::error::Result<crate::Element> {
+        self.find().css(css).one().await
+    }
+
+    /// Find all elements by CSS selector. Python-parity convenience for
+    /// `find_all().css(sel).many()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::ZendriverError::ElementNotFound`] if no elements
+    /// match.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let frame = tab.main_frame().await?;
+    /// let links = frame.select_all("a").await?;
+    /// # let _ = links;
+    /// # Ok(()) }
+    /// ```
+    pub async fn select_all(&self, css: &str) -> crate::error::Result<Vec<crate::Element>> {
+        self.find_all().css(css).many().await
+    }
+
     /// Ensure an isolated-world execution context exists for *this frame*,
     /// returning its `executionContextId`. Cached after first call.
     ///

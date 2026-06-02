@@ -2264,6 +2264,51 @@ impl Tab {
         crate::query::FindAllBuilder::new_for_tab(self)
     }
 
+    /// Find one element by CSS selector. Python-parity convenience for
+    /// `find().css(sel).one()`. For modifiers (frames / nth / timeout) use the
+    /// builder directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::ElementNotFound`] if no element matches.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// let h1 = tab.select("h1").await?;
+    /// # let _ = h1;
+    /// # Ok(()) }
+    /// ```
+    pub async fn select(&self, css: &str) -> crate::error::Result<crate::Element> {
+        self.find().css(css).one().await
+    }
+
+    /// Find all elements by CSS selector. Python-parity convenience for
+    /// `find_all().css(sel).many()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::ElementNotFound`] if no elements match.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// let links = tab.select_all("a").await?;
+    /// println!("{} links", links.len());
+    /// # Ok(()) }
+    /// ```
+    pub async fn select_all(&self, css: &str) -> crate::error::Result<Vec<crate::Element>> {
+        self.find_all().css(css).many().await
+    }
+
     /// Collect every linked URL on the page — the `href` of `[href]` elements
     /// (`<a>`, `<link>`, `<area>`, …) and the `src` of `[src]` elements
     /// (`<img>`, `<script>`, `<iframe>`, …).
