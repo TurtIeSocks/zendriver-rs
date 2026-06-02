@@ -49,4 +49,5 @@ pub use paused::PausedRequest;
 pub use rule::Rule;
 pub use types::{
     AbortReason, RequestInfo, RequestOverrides, RequestStage, ResourceType, ResponseInfo,
+    ResponseOverrides,
 };
