@@ -106,6 +106,47 @@ impl Persona {
         }
     }
 
+    /// Force a single surface's render [`Strategy`], creating the surface's
+    /// spec with default values if it was unset.
+    ///
+    /// Used by the public browser builder's `.surface(surface, strategy)` to
+    /// layer per-surface overrides on top of the resolved persona. Each surface
+    /// writes the `strategy` field of its corresponding spec; the [`UaSpec`]
+    /// surface family (identity, not a render strategy) has no strategy field,
+    /// so this is a no-op there.
+    pub fn apply_surface_override(
+        &mut self,
+        surface: surface::Surface,
+        strategy: surface::Strategy,
+    ) {
+        use surface::Surface;
+        match surface {
+            Surface::Canvas => {
+                self.canvas.get_or_insert_with(Default::default).strategy = Some(strategy)
+            }
+            Surface::Audio => {
+                self.audio.get_or_insert_with(Default::default).strategy = Some(strategy)
+            }
+            Surface::ClientRects => {
+                self.client_rects
+                    .get_or_insert_with(Default::default)
+                    .strategy = Some(strategy)
+            }
+            Surface::Webgl => {
+                self.webgl.get_or_insert_with(Default::default).strategy = Some(strategy)
+            }
+            Surface::Fonts => {
+                self.fonts.get_or_insert_with(Default::default).strategy = Some(strategy)
+            }
+            Surface::Webrtc => {
+                self.webrtc.get_or_insert_with(Default::default).strategy = Some(strategy)
+            }
+            Surface::Hardware => {
+                self.hardware.get_or_insert_with(Default::default).strategy = Some(strategy)
+            }
+        }
+    }
+
     /// Effective `navigator.platform` JS string for patch templating.
     /// Falls back to host platform when unset.
     pub fn resolved_platform_js(&self) -> String {
@@ -349,6 +390,27 @@ mod persona_tests {
         assert_eq!(p.platform, Some(Platform::LinuxX86_64));
         assert_eq!(p.device_memory_gb, Some(8));
         assert!(p.webgl.is_none(), "null webgl → no spec");
+    }
+
+    #[test]
+    fn apply_surface_override_sets_strategy_creating_spec() {
+        use crate::{Strategy, Surface};
+        let mut p = Persona::default();
+        // Surface spec absent → created with the override strategy.
+        p.apply_surface_override(Surface::Webrtc, Strategy::Native);
+        assert_eq!(
+            p.webrtc.as_ref().and_then(|w| w.strategy),
+            Some(Strategy::Native)
+        );
+        // Existing spec → only strategy mutated, other fields preserved.
+        p.webgl = Some(WebglSpec {
+            unmasked_renderer: Some("ANGLE (x)".into()),
+            ..Default::default()
+        });
+        p.apply_surface_override(Surface::Webgl, Strategy::Value);
+        let webgl = p.webgl.as_ref().unwrap();
+        assert_eq!(webgl.strategy, Some(Strategy::Value));
+        assert_eq!(webgl.unmasked_renderer.as_deref(), Some("ANGLE (x)"));
     }
 
     #[test]
