@@ -21,12 +21,13 @@ path = "src/main.rs"
 path = "src/lib.rs"
 
 [features]
-default = ["interception", "expect", "cloudflare", "imperva", "fetcher", "monitor"]
+default = ["interception", "expect", "cloudflare", "imperva", "datadome", "fetcher", "monitor"]
 interception  = ["zendriver/interception", "dep:uuid"]
 expect        = ["zendriver/expect", "dep:uuid"]
 monitor       = ["zendriver/monitor", "dep:uuid", "dep:futures"]
 cloudflare    = ["zendriver/cloudflare"]
 imperva       = ["zendriver/imperva"]
+datadome      = ["zendriver/datadome"]
 fetcher       = ["zendriver/fetcher"]
 fingerprints      = ["dep:zendriver-fingerprints"]
 integration-tests = []

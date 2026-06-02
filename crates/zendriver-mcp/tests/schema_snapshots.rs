@@ -277,6 +277,17 @@ mod imperva_snaps {
     schema_snap!(imperva_solve_out, tools::imperva::SolveImpervaOutput);
 }
 
+// ---------- datadome (feature-gated) --------------------------------------
+
+#[cfg(feature = "datadome")]
+mod datadome_snaps {
+    use super::*;
+
+    schema_snap!(datadome_solve_in, tools::datadome::SolveDataDomeInput);
+    schema_snap!(datadome_outcome, tools::datadome::Outcome);
+    schema_snap!(datadome_solve_out, tools::datadome::SolveDataDomeOutput);
+}
+
 // ---------- fetcher (feature-gated) ---------------------------------------
 
 #[cfg(feature = "fetcher")]

@@ -31,6 +31,8 @@ use crate::state::SessionState;
 #[cfg(feature = "cloudflare")]
 use crate::tools::cloudflare;
 use crate::tools::common::EmptyInput;
+#[cfg(feature = "datadome")]
+use crate::tools::datadome;
 #[cfg(feature = "expect")]
 use crate::tools::expect;
 #[cfg(feature = "fetcher")]
@@ -992,6 +994,29 @@ impl ZendriverServer {
     }
 }
 
+// ---------- datadome (gated) ---------------------------------------------
+//
+// Same split pattern as the cloudflare / imperva blocks — own impl block so
+// the `tool_router` macro can cfg-gate the whole thing.
+
+#[cfg(feature = "datadome")]
+#[tool_router(router = datadome_tool_router, vis = "pub")]
+impl ZendriverServer {
+    /// Drive the DataDome clearance flow on the current tab.
+    #[tool(
+        name = "browser_solve_datadome",
+        description = "Detect the active DataDome surface and poll until the datadome clearance cookie lands. Detects the active surface (invisible device-check, captcha-delivery interstitial, or `bv` IP-block) and polls every `poll_interval_ms` until one of five terminal states is reached, bounded by `timeout_ms` (default 30_000 = 30s): `cleared` (datadome cookie captured — returned in `datadome`), `challenge_gone` (markers cleared without a cookie), `already_clear` (no surface present at call time — fast path), `blocked` (`window.dd.t == 'bv'`, IP banned — caller must change IP), or `timeout` (deadline elapsed — not an error, retry or fall back). Set `with_interception: true` for the Fetch-domain fast-path. A captcha surface without a registered solver errors (handle out-of-band). Requires stealth (on by default)."
+    )]
+    pub async fn browser_solve_datadome(
+        &self,
+        Parameters(input): Parameters<datadome::SolveDataDomeInput>,
+    ) -> Result<Json<datadome::SolveDataDomeOutput>, ErrorData> {
+        datadome::solve_datadome(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+}
+
 // ---------- fetcher (gated) ----------------------------------------------
 //
 // Same split pattern as the other gated blocks. `browser_install_chrome`
@@ -1101,6 +1126,8 @@ impl ZendriverServer {
         let router = router + Self::cloudflare_tool_router();
         #[cfg(feature = "imperva")]
         let router = router + Self::imperva_tool_router();
+        #[cfg(feature = "datadome")]
+        let router = router + Self::datadome_tool_router();
         #[cfg(feature = "fetcher")]
         let router = router + Self::fetcher_tool_router();
         #[cfg(feature = "fingerprints")]

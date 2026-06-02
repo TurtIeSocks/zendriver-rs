@@ -13,6 +13,8 @@ pub mod actions;
 pub mod cloudflare;
 pub mod common;
 pub mod cookies;
+#[cfg(feature = "datadome")]
+pub mod datadome;
 pub mod download;
 pub mod eval;
 #[cfg(feature = "expect")]
