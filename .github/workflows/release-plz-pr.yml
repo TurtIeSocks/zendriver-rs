@@ -31,8 +31,33 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - uses: release-plz/action@v0.5.129
+        id: release-plz
         with:
           command: release-pr
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      # Auto-merge the release PR so publishing stays hands-off: the
+      # merge pushes "chore: release ..." to main, which triggers
+      # release-plz-release.yml to publish to crates.io.
+      #
+      # GH_TOKEN is the PAT, not GITHUB_TOKEN — a GITHUB_TOKEN-authored
+      # push would NOT trigger the release workflow (GitHub's anti-
+      # recursion rule). The PAT-authored merge does.
+      #
+      # `gh pr merge --auto` queues the merge behind required status
+      # checks when branch protection defines them. main is currently
+      # unprotected (no required checks), and GitHub refuses to *enable*
+      # auto-merge on an already-mergeable PR — so the `|| gh pr merge`
+      # fallback merges immediately. Add branch protection with required
+      # checks later and the --auto path will gate on green CI with no
+      # further changes here.
+      - name: Auto-merge the release PR
+        if: ${{ steps.release-plz.outputs.prs_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          PR_NUMBER: ${{ fromJSON(steps.release-plz.outputs.pr).number }}
+        run: |
+          gh pr merge --auto --merge "$PR_NUMBER" \
+            || gh pr merge --merge "$PR_NUMBER"
