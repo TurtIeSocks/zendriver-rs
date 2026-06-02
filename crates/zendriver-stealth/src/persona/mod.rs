@@ -3,6 +3,7 @@
 pub mod seed;
 pub mod specs;
 pub mod surface;
+pub(crate) mod webgpu_adapter;
 
 pub use seed::Seed;
 pub use specs::{FontSpec, HardwareSpec, SurfaceCfg, UaSpec, WebglSpec, WebrtcSpec};
