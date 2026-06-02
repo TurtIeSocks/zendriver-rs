@@ -212,6 +212,15 @@ pub async fn close(
         s.rules.clear();
     }
 
+    #[cfg(feature = "monitor")]
+    {
+        // Stop every running monitor before closing. `MonitorState::Drop`
+        // cancels each drain task (and the lib's `NetworkMonitor` correlator);
+        // doing it before `Browser::close` lets the cancels land on a live
+        // session, mirroring the interception-rules teardown above.
+        s.monitors.clear();
+    }
+
     if let Some(b) = s.browser.take() {
         b.close()
             .await

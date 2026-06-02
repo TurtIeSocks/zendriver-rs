@@ -264,6 +264,18 @@ pub struct MonitorState {
     pub task: tokio::task::JoinHandle<()>,
 }
 
+#[cfg(feature = "monitor")]
+impl Drop for MonitorState {
+    /// Stop the drain task on drop (session teardown / `browser_close` /
+    /// map eviction). Dropping the `JoinHandle` alone detaches the task — it
+    /// holds its own `CancellationToken` clone and the live stream — so we
+    /// cancel (breaks the task's `select!`) and abort here.
+    fn drop(&mut self) {
+        self.cancel.cancel();
+        self.task.abort();
+    }
+}
+
 impl SessionState {
     /// Construct an empty session — no browser, no tabs, default profile.
     pub fn new() -> Self {
