@@ -121,6 +121,10 @@ impl From<zendriver::Cookie> for CookieDto {
 
 impl From<CookieDto> for zendriver::Cookie {
     fn from(c: CookieDto) -> Self {
+        // CookieDto is a wire-only mirror that does not (yet) model the CHIPS /
+        // priority extension fields added to `zendriver::Cookie`; leave them at
+        // their `Default` (all `None`). Extending the DTO with those fields is
+        // a separate change.
         Self {
             name: c.name,
             value: c.value,
@@ -131,6 +135,7 @@ impl From<CookieDto> for zendriver::Cookie {
             secure: c.secure,
             same_site: c.same_site.map(zendriver::SameSite::from),
             url: c.url,
+            ..Default::default()
         }
     }
 }

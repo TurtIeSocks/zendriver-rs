@@ -99,6 +99,7 @@ async fn cookies_set_and_all_roundtrip() {
         secure: false,
         same_site: Some(SameSite::Lax),
         url: None,
+        ..Default::default()
     })
     .await
     .unwrap();
@@ -112,6 +113,7 @@ async fn cookies_set_and_all_roundtrip() {
         secure: false,
         same_site: None,
         url: None,
+        ..Default::default()
     })
     .await
     .unwrap();
@@ -144,6 +146,7 @@ async fn cookies_save_and_load_roundtrip() {
         secure: false,
         same_site: Some(SameSite::Lax),
         url: None,
+        ..Default::default()
     })
     .await
     .unwrap();
@@ -157,6 +160,7 @@ async fn cookies_save_and_load_roundtrip() {
         secure: false,
         same_site: None,
         url: None,
+        ..Default::default()
     })
     .await
     .unwrap();

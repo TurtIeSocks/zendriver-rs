@@ -2132,6 +2132,50 @@ impl Browser {
         crate::CookieJar::new(self.inner.conn.clone())
     }
 
+    /// Route downloads into `dir` at runtime, browser-wide, keeping each
+    /// file's server-suggested name.
+    ///
+    /// Dispatches `Browser.setDownloadBehavior { behavior: "allow",
+    /// downloadPath: <dir> }` on the root [`Connection`] (browser scope, no
+    /// `sessionId`), so the policy applies to the current tab and any future
+    /// tabs. `dir` must already exist.
+    ///
+    /// This is the runtime counterpart to
+    /// [`BrowserBuilder::downloads_dir`](crate::BrowserBuilder::downloads_dir)
+    /// (which sets the same behavior at launch). It is distinct from the
+    /// `expect_download` capture flow ([`Tab::expect_download`]), which uses
+    /// `allowAndName` against a private tempdir to await + save a single
+    /// download; `set_download_path` simply lets downloads land in a known
+    /// directory with their natural names.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Transport`] / `Cdp` if the CDP call fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// browser.set_download_path("/tmp/downloads").await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn set_download_path(&self, dir: impl Into<PathBuf>) -> Result<(), ZendriverError> {
+        let dir = dir.into();
+        self.inner
+            .conn
+            .call_raw(
+                "Browser.setDownloadBehavior",
+                json!({
+                    "behavior": "allow",
+                    "downloadPath": dir.to_string_lossy().to_string(),
+                }),
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Create a new isolated [`crate::BrowserContext`] bound to an optional
     /// proxy.
     ///

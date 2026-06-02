@@ -19,6 +19,7 @@
 //! ```
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -1826,6 +1827,54 @@ impl Tab {
     /// ```
     pub fn find_all(&self) -> crate::query::FindAllBuilder<'_> {
         crate::query::FindAllBuilder::new_for_tab(self)
+    }
+
+    /// Route this browser's downloads into `dir` at runtime, keeping each
+    /// file's server-suggested name.
+    ///
+    /// Dispatches `Browser.setDownloadBehavior { behavior: "allow",
+    /// downloadPath: <dir> }` at **browser scope** (no `sessionId`) — the
+    /// connection beneath every tab is the same, and Chrome does not honor
+    /// per-session download behavior reliably across versions, so the policy
+    /// applies browser-wide. `dir` must already exist; Chrome writes files
+    /// there under the names it would have used in the user's downloads
+    /// folder.
+    ///
+    /// This is distinct from [`Tab::expect_download`]
+    /// (gated by the `expect` feature), which configures `allowAndName`
+    /// against a private tempdir to *capture* a single download for
+    /// `await` + `save_to`. Use `set_download_path` when you just want
+    /// downloads to land in a known directory with their natural names;
+    /// use `expect_download` when you want to await and inspect one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Transport`] / `Cdp` if the CDP call fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.set_download_path("/tmp/downloads").await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn set_download_path(&self, dir: impl Into<PathBuf>) -> Result<()> {
+        let dir = dir.into();
+        self.inner
+            .session
+            .connection()
+            .call_raw(
+                "Browser.setDownloadBehavior",
+                json!({
+                    "behavior": "allow",
+                    "downloadPath": dir.to_string_lossy().to_string(),
+                }),
+                None,
+            )
+            .await?;
+        Ok(())
     }
 }
 
@@ -3647,6 +3696,31 @@ mod tests {
             url,
             "http://127.0.0.1:9222/devtools/inspector.html?ws=127.0.0.1:9222/devtools/page/TARGET-XYZ"
         );
+        conn.shutdown();
+    }
+
+    /// [`Tab::set_download_path`] dispatches `Browser.setDownloadBehavior`
+    /// with `behavior: "allow"` (keeps suggested filenames — distinct from
+    /// the `expect_download` coordinator's `allowAndName`) and the chosen
+    /// `downloadPath`, at browser scope.
+    #[tokio::test]
+    async fn tab_set_download_path_dispatches_set_download_behavior_allow() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.set_download_path("/tmp/x").await }
+        });
+
+        let id = mock.expect_cmd("Browser.setDownloadBehavior").await;
+        let params = &mock.last_sent()["params"];
+        assert_eq!(params["behavior"], "allow");
+        assert_eq!(params["downloadPath"], "/tmp/x");
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
         conn.shutdown();
     }
 }
