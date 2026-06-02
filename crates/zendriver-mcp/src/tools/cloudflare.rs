@@ -10,16 +10,15 @@
 //!   `cf-turnstile-response` input picked up a token.
 //! - `Ok(ClearanceOutcome::ChallengeGone)` — the challenge container
 //!   vanished without a token (e.g. clearance cookie shortcut).
-//! - `Err(CloudflareError::ClearanceTimeout)` — the per-call deadline
-//!   elapsed.
+//! - `Ok(ClearanceOutcome::TimedOut { saw_challenge })` — the per-call
+//!   deadline elapsed (whether or not a challenge was ever seen).
 //!
 //! Agents typically want all three lumped into a single discriminated
 //! union of *expected* outcomes — a timeout in turnstile flow is a normal
 //! "didn't finish, try again or give up" signal, not a server error. So
-//! the MCP layer collapses `ClearanceTimeout` from the `Err` arm into a
-//! third [`Outcome::Timeout`] variant on the `Ok` side, and keeps every
-//! other `CloudflareError` (network failure, JS error, no challenge
-//! present at all) as a real MCP error.
+//! the MCP layer collapses `TimedOut` into a third [`Outcome::Timeout`]
+//! variant, and keeps every `CloudflareError` (network failure, JS error)
+//! as a real MCP error.
 //!
 //! [`CloudflareBypass::wait_for_clearance`]: zendriver_cloudflare::CloudflareBypass::wait_for_clearance
 
@@ -32,7 +31,7 @@ use rmcp::ErrorData;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use zendriver::{ClearanceOutcome, CloudflareError, ZendriverError};
+use zendriver::{ClearanceOutcome, ZendriverError};
 
 use crate::errors::{McpServerError, map_error};
 use crate::state::SessionState;
@@ -121,14 +120,16 @@ pub async fn solve_turnstile(
             outcome: Outcome::ChallengeGone,
             token: None,
         }),
-        // ClearanceTimeout collapses into the success channel — see
-        // module docs for the rationale.
-        Err(CloudflareError::ClearanceTimeout) => Ok(SolveOutput {
+        // TimedOut is a lib-side success terminal; collapse it into the
+        // success-channel `Outcome::Timeout` — see module docs. The old
+        // `NoChallenge` error used to fall into the `Err` arm below; it is
+        // now folded into this outcome (with `saw_challenge: false`).
+        Ok(ClearanceOutcome::TimedOut { .. }) => Ok(SolveOutput {
             outcome: Outcome::Timeout,
             token: None,
         }),
-        // Everything else (no challenge, CDP call failed, JS error) is a
-        // real error the agent should surface. Route through the lib's
+        // Everything else (CDP call failed, JS error) is a real error the
+        // agent should surface. Route through the lib's
         // `From<CloudflareError> for ZendriverError` so the existing
         // `map_error` knows how to format it.
         Err(other) => Err(map_error(McpServerError::from(ZendriverError::from(other)))),
