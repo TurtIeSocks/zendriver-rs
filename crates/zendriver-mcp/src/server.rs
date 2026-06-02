@@ -285,7 +285,7 @@ impl ZendriverServer {
     /// Resolve a Selector to one element and return its descriptor.
     #[tool(
         name = "browser_find",
-        description = "Resolve a Selector to a single element on the current tab. Returns `{ found: false, element: null }` when no element matches within the selector's timeout (instead of an error) — agents can branch on existence without try/catch."
+        description = "Resolve a Selector to a single element on the current tab. Selector supports single-selector mode (css/xpath/text/text_exact/text_regex/role) or predicate mode (tag + attrs + text* combinable AND-ed filters). Returns `{ found: false, element: null }` when no element matches within the selector's timeout (instead of an error) — agents can branch on existence without try/catch."
     )]
     pub async fn browser_find(
         &self,
@@ -297,7 +297,7 @@ impl ZendriverServer {
     /// Resolve a Selector to ALL matches (up to `limit`).
     #[tool(
         name = "browser_find_all",
-        description = "Resolve a Selector to ALL matching elements on the current tab (up to `limit`, default 50). `{ elements: [] }` is returned when nothing matches — never an error."
+        description = "Resolve a Selector to ALL matching elements on the current tab (up to `limit`, default 50). Selector supports single-selector mode (css/xpath/text/text_exact/text_regex/role) or predicate mode (tag + attrs + text* combinable AND-ed filters). `{ elements: [] }` is returned when nothing matches — never an error."
     )]
     pub async fn browser_find_all(
         &self,

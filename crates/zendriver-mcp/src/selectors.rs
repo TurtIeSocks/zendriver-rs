@@ -103,22 +103,23 @@ fn default_timeout_ms() -> u64 {
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum SelectorError {
     /// Caller supplied zero selector-kind signals.
-    #[error("Selector requires exactly one of: css, xpath, text, text_exact, text_regex, role, or a predicate group (tag/attrs)")]
+    #[error(
+        "Selector requires exactly one of: css, xpath, text, text_exact, text_regex, role, or a predicate group (tag/attrs)"
+    )]
     NoneOrMultiple,
     /// Caller set `role_name` without setting `role`.
     #[error("`role_name` requires `role` to also be set")]
     OrphanRoleName,
     /// Caller combined predicate fields (`tag`/`attrs`) with an incompatible
     /// single-selector kind (`css`, `xpath`, or `role`).
-    #[error("predicate fields (`tag`/`attrs`) cannot be combined with `css`, `xpath`, or `role`; use one selector style per query")]
+    #[error(
+        "predicate fields (`tag`/`attrs`) cannot be combined with `css`, `xpath`, or `role`; use one selector style per query"
+    )]
     PredicateConflict,
     /// An [`AttrPredicate`] with an operator that requires a value was given
     /// without one.
     #[error("attribute predicate `{name}` with op `{op:?}` requires a `value` field")]
-    AttrValueRequired {
-        name: String,
-        op: AttrOp,
-    },
+    AttrValueRequired { name: String, op: AttrOp },
 }
 
 impl Selector {

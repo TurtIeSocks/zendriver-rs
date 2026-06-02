@@ -7,6 +7,11 @@ title: ElementStateInput
 description: "Input for `browser_element_state`."
 type: object
 properties:
+  attrs:
+    description: Attribute predicates (AND-ed). Predicate mode only.
+    type: array
+    items:
+      $ref: "#/$defs/AttrPredicate"
   css:
     type:
       - string
@@ -30,6 +35,11 @@ properties:
       - string
       - "null"
   role_name:
+    type:
+      - string
+      - "null"
+  tag:
+    description: "HTML tag name filter (e.g. `\"button\"`, `\"a\"`). Predicate mode only."
     type:
       - string
       - "null"
@@ -59,6 +69,46 @@ properties:
       - "null"
 additionalProperties: false
 $defs:
+  AttrOp:
+    description: "Attribute-value comparison operator used in [`AttrPredicate`].\n\nDetermines how the actual element attribute value is compared against\nthe `value` field. When `op` is [`AttrOp::Has`], `value` is ignored."
+    oneOf:
+      - description: "`[name=\"value\"]` — exact match."
+        type: string
+        const: eq
+      - description: "`[name*=\"value\"]` — contains substring."
+        type: string
+        const: contains
+      - description: "`[name^=\"value\"]` — starts with."
+        type: string
+        const: starts_with
+      - description: "`[name$=\"value\"]` — ends with."
+        type: string
+        const: ends_with
+      - description: "`[name]` — attribute is present regardless of value."
+        type: string
+        const: has
+      - description: JS regex test on the attribute value (post-filter).
+        type: string
+        const: regex
+  AttrPredicate:
+    description: "One attribute predicate in a predicate-mode [`Selector`].\n\nCombine multiple predicates via `attrs: [...]`; they are AND-ed.\n`value` is required for every `op` except [`AttrOp::Has`]."
+    type: object
+    properties:
+      name:
+        description: "Attribute name (e.g. `\"data-role\"`, `\"class\"`, `\"href\"`)."
+        type: string
+      op:
+        description: Comparison operator.
+        $ref: "#/$defs/AttrOp"
+      value:
+        description: "Comparison value. Required for all operators except `has`."
+        type:
+          - string
+          - "null"
+    additionalProperties: false
+    required:
+      - name
+      - op
   ReadFieldsPreset:
     description: "Field preset for `browser_element_state`.\n\nEach preset chooses which subset of the (potentially expensive) probes\nthe handler runs. Defaults to [`ReadFieldsPreset::All`] — costs an\nextra eval + attrs + inner_html call but matches the most common\nagent inspection flow."
     oneOf:

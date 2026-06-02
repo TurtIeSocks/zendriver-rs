@@ -35,7 +35,7 @@ use zendriver::query::FindAllBuilder;
 use zendriver::{AriaRole, Element, FindBuilder, Frame, Tab, ZendriverError};
 
 use crate::errors::{McpServerError, map_error};
-use crate::selectors::Selector;
+use crate::selectors::{AttrOp, Selector};
 use crate::state::SessionState;
 use crate::tools::common::current_tab;
 
@@ -131,10 +131,22 @@ async fn lookup_frame(tab: &Tab, frame_id: &str) -> Result<Frame, ErrorData> {
 /// Apply the Selector's one-of selector kind to a single-match
 /// [`FindBuilder`]. Errors when the role string is unknown or the regex
 /// fails to compile.
+///
+/// In predicate mode (`tag` and/or `attrs` present), applies the combinable
+/// predicate methods (`.tag()`, `.attr*()`, `.has_attr()`, `.attr_regex()`,
+/// `.containing_text()`, `.text_equals()`, `.text_matches()`). Predicate mode
+/// is mutually exclusive with `css`/`xpath`/`role` (validated by
+/// [`Selector::validate`]).
 fn apply_selector<'a>(
     builder: FindBuilder<'a>,
     sel: &Selector,
 ) -> Result<FindBuilder<'a>, ErrorData> {
+    // Predicate mode: tag/attrs are present; text* are optional AND-ed
+    // post-filters. Single-selector kinds (css/xpath/role) are absent here
+    // (validate() enforces the mutual exclusion).
+    if sel.tag.is_some() || !sel.attrs.is_empty() {
+        return apply_predicates_single(builder, sel);
+    }
     if let Some(css) = sel.css.as_deref() {
         return Ok(builder.css(css));
     }
@@ -171,6 +183,10 @@ fn apply_selector_all<'a>(
     builder: FindAllBuilder<'a>,
     sel: &Selector,
 ) -> Result<FindAllBuilder<'a>, ErrorData> {
+    // Predicate mode
+    if sel.tag.is_some() || !sel.attrs.is_empty() {
+        return apply_predicates_all(builder, sel);
+    }
     if let Some(css) = sel.css.as_deref() {
         return Ok(builder.css(css));
     }
@@ -198,6 +214,72 @@ fn apply_selector_all<'a>(
         "Selector has no selector kind set (validate() should have caught this)".to_string(),
         None,
     ))
+}
+
+/// Build a predicate-mode [`FindBuilder`] from `tag`, `attrs`, and text fields.
+fn apply_predicates_single<'a>(
+    mut builder: FindBuilder<'a>,
+    sel: &Selector,
+) -> Result<FindBuilder<'a>, ErrorData> {
+    if let Some(tag) = sel.tag.as_deref() {
+        builder = builder.tag(tag);
+    }
+    for ap in &sel.attrs {
+        let name = ap.name.as_str();
+        let value = ap.value.as_deref().unwrap_or(""); // Has has no value
+        builder = match ap.op {
+            AttrOp::Eq => builder.attr(name, value),
+            AttrOp::Contains => builder.attr_contains(name, value),
+            AttrOp::StartsWith => builder.attr_starts_with(name, value),
+            AttrOp::EndsWith => builder.attr_ends_with(name, value),
+            AttrOp::Has => builder.has_attr(name),
+            AttrOp::Regex => builder.attr_regex(name, value),
+        };
+    }
+    // Text* fields as combinable post-filters in predicate mode
+    if let Some(t) = sel.text.as_deref() {
+        builder = builder.containing_text(t);
+    }
+    if let Some(t) = sel.text_exact.as_deref() {
+        builder = builder.text_equals(t);
+    }
+    if let Some(pat) = sel.text_regex.as_deref() {
+        builder = builder.text_matches(pat);
+    }
+    Ok(builder)
+}
+
+/// Build a predicate-mode [`FindAllBuilder`] from `tag`, `attrs`, and text fields.
+fn apply_predicates_all<'a>(
+    mut builder: FindAllBuilder<'a>,
+    sel: &Selector,
+) -> Result<FindAllBuilder<'a>, ErrorData> {
+    if let Some(tag) = sel.tag.as_deref() {
+        builder = builder.tag(tag);
+    }
+    for ap in &sel.attrs {
+        let name = ap.name.as_str();
+        let value = ap.value.as_deref().unwrap_or(""); // Has has no value
+        builder = match ap.op {
+            AttrOp::Eq => builder.attr(name, value),
+            AttrOp::Contains => builder.attr_contains(name, value),
+            AttrOp::StartsWith => builder.attr_starts_with(name, value),
+            AttrOp::EndsWith => builder.attr_ends_with(name, value),
+            AttrOp::Has => builder.has_attr(name),
+            AttrOp::Regex => builder.attr_regex(name, value),
+        };
+    }
+    // Text* fields as combinable post-filters in predicate mode
+    if let Some(t) = sel.text.as_deref() {
+        builder = builder.containing_text(t);
+    }
+    if let Some(t) = sel.text_exact.as_deref() {
+        builder = builder.text_equals(t);
+    }
+    if let Some(pat) = sel.text_regex.as_deref() {
+        builder = builder.text_matches(pat);
+    }
+    Ok(builder)
 }
 
 fn apply_modifiers<'a>(mut builder: FindBuilder<'a>, sel: &Selector) -> FindBuilder<'a> {
