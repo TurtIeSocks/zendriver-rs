@@ -21,13 +21,13 @@ authors = ["zendriver-rs contributors"]
 
 [workspace.dependencies]
 # Internal
-zendriver               = { path = "crates/zendriver", version = "0.2.2", default-features = false }
+zendriver               = { path = "crates/zendriver", version = "0.2.3", default-features = false }
 zendriver-transport     = { path = "crates/zendriver-transport", version = "0.1.3" }
-zendriver-stealth       = { path = "crates/zendriver-stealth", version = "0.1.4" }
+zendriver-stealth       = { path = "crates/zendriver-stealth", version = "0.2.0" }
 zendriver-cloudflare    = { path = "crates/zendriver-cloudflare", version = "0.1.4" }
 zendriver-interception  = { path = "crates/zendriver-interception", version = "0.2.0" }
 zendriver-fetcher       = { path = "crates/zendriver-fetcher", version = "0.1.2" }
-zendriver-mcp           = { path = "crates/zendriver-mcp", version = "0.2.1" }
+zendriver-mcp           = { path = "crates/zendriver-mcp", version = "0.2.2" }
 zendriver-imperva       = { path = "crates/zendriver-imperva", version = "0.1.3" }
 zendriver-fingerprints  = { path = "crates/zendriver-fingerprints", version = "0.1.0" }
 
