@@ -469,6 +469,50 @@ impl Element {
         .await
     }
 
+    /// Replace this element's text content with `value`.
+    ///
+    /// Sets `this.textContent = value` in the main world. Ports nodriver's
+    /// `Element.set_text` (element.py:771), which writes the first text-child
+    /// node's value via `DOM.setNodeValue`; assigning `textContent` is the
+    /// simpler equivalent with the same observable result — the element's
+    /// rendered text is replaced (and any child element nodes are dropped,
+    /// matching `textContent` assignment semantics).
+    ///
+    /// Unlike [`Element::set_value`] this targets the element's *text*, not a
+    /// form control's `value`, and fires no `input` / `change` events (a
+    /// `textContent` write isn't a user edit). For `<input>` / `<textarea>`
+    /// value edits use [`Element::set_value`] / [`Element::type_text`].
+    ///
+    /// No actionability gate — same fast-path rationale as
+    /// [`Element::set_value`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let heading = tab.find().css("h1").one().await?;
+    /// heading.set_text("New title").await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn set_text(&self, value: impl AsRef<str>) -> Result<()> {
+        let value = value.as_ref().to_string();
+        self.with_refresh(|| {
+            let value = value.clone();
+            async move {
+                let _ = self
+                    .call_on_main(
+                        "function(v){ this.textContent = v; }",
+                        json!([{ "value": value }]),
+                    )
+                    .await?;
+                Ok(())
+            }
+        })
+        .await
+    }
+
     /// Clear this element by keystroke: focus, select-all, then press
     /// Backspace until the field empties.
     ///
@@ -862,6 +906,37 @@ mod tests {
         assert_eq!(args.len(), 2);
         assert_eq!(args[0]["objectId"], "R1");
         assert_eq!(args[1]["value"], "");
+        mock.reply(id, json!({ "result": { "type": "undefined" } }))
+            .await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn set_text_assigns_textcontent_with_value() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+        let el = Element::from_jsret(tab, 7, "R1".to_string());
+
+        let fut = tokio::spawn({
+            let e = el.clone();
+            async move { e.set_text("New title").await }
+        });
+
+        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let sent = mock.last_sent();
+        let decl = sent["params"]["functionDeclaration"].as_str().unwrap();
+        // Faithful-simpler port of nodriver's DOM.setNodeValue: assign
+        // textContent so the element's rendered text is replaced.
+        assert!(decl.contains("textContent"));
+        // call_on_main prepends the element {objectId:...}; the user-supplied
+        // value lands at arguments[1].
+        let args = sent["params"]["arguments"].as_array().unwrap();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0]["objectId"], "R1");
+        assert_eq!(args[1]["value"], "New title");
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
 
