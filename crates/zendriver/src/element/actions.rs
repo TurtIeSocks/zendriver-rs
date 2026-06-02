@@ -1,5 +1,6 @@
 //! [`Element`] actions: `click` / `hover` / `focus` / `scroll_into_view` /
-//! `set_value` / `clear` / `upload_files`.
+//! `set_value` / `set_text` / `clear` / `upload_files` / `flash` /
+//! `highlight_overlay`.
 //!
 //! Each action wraps its CDP dispatch sequence in an internal "refresh on
 //! stale" wrapper so a stale handle (post-navigation, post-React-rerender)
@@ -621,6 +622,123 @@ impl Element {
         })
         .await
     }
+
+    /// Flash a transient colored dot at this element's bbox center.
+    ///
+    /// Scrolls the element into view, computes its bbox center, then injects
+    /// a small absolutely-positioned `<div>` there that removes itself after
+    /// `duration`. A debugging aid for eyeballing where pointer actions land
+    /// against a headful Chrome — no input state changes, not for production.
+    ///
+    /// Ports nodriver's `Element.flash` (element.py:913): nodriver resolves
+    /// the node, takes its position, and calls `Tab.flash_point(*center)`
+    /// (its richer self-animating overlay is commented out and its `duration`
+    /// argument unused). This mirrors the same dot-at-center behavior but
+    /// honors `duration` for the self-removal timer rather than hardcoding it,
+    /// matching the sibling [`crate::Tab::flash_point`] dispatch shape.
+    ///
+    /// No-ops gracefully (returns `Ok`) when the element has no box (e.g.
+    /// `display: none`), since there is nothing to point at.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # use std::time::Duration;
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let btn = tab.find().css("button").one().await?;
+    /// btn.flash(Duration::from_millis(500)).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn flash(&self, duration: Duration) -> Result<()> {
+        let ms = duration.as_millis();
+        self.with_refresh(|| async move {
+            self.scroll_into_view().await?;
+            let bbox = match self.bounding_box().await? {
+                Some(b) => b,
+                // No box to point at — nothing to flash.
+                None => return Ok(()),
+            };
+            let cx = bbox.x + bbox.width / 2.0;
+            let cy = bbox.y + bbox.height / 2.0;
+            // Inject the dot in the main world with the element bound (house
+            // pattern); the args carry the viewport-center coords + lifetime.
+            // The dot is `position:fixed` so the coords are viewport-relative,
+            // matching `bounding_box`'s frame and `Tab::flash_point`.
+            let js = "function(cx, cy, ms){ \
+                    const d = document.createElement('div'); \
+                    d.style.cssText = 'position:fixed;left:'+cx+'px;top:'+cy+'px;\
+width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:50%;background:red;\
+z-index:2147483647;pointer-events:none;opacity:0.85;'; \
+                    document.body.appendChild(d); \
+                    setTimeout(() => d.remove(), ms); \
+                }";
+            let _ = self
+                .call_on_main(
+                    js,
+                    json!([{ "value": cx }, { "value": cy }, { "value": ms }]),
+                )
+                .await?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Highlight this element DevTools-inspector style.
+    ///
+    /// Enables the Overlay domain, then dispatches `Overlay.highlightNode`
+    /// with this element's backend node id and a default
+    /// [`HighlightConfig`](https://chromedevtools.github.io/devtools-protocol/tot/Overlay/#type-HighlightConfig)
+    /// (content/padding/border/margin boxes + info tooltip), painting the
+    /// familiar colored box-model overlay over the element.
+    ///
+    /// Ports nodriver's `Element.highlight_overlay` (element.py:1001).
+    /// nodriver toggles the highlight on repeat calls via an internal
+    /// `_is_highlighted` flag; this is the show-only half — the overlay
+    /// persists until a navigation, an `Overlay.hideHighlight`, or another
+    /// highlight replaces it. A debug-visualization helper, not a production
+    /// path.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let el = tab.find().css(".target").one().await?;
+    /// el.highlight_overlay().await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn highlight_overlay(&self) -> Result<()> {
+        self.with_refresh(|| async move {
+            let backend_node_id = self.backend_node_id_cloned().await?;
+            // Overlay.highlightNode is a no-op unless the Overlay domain is
+            // enabled; enable it first (idempotent).
+            let _ = self.inner.tab.call("Overlay.enable", json!({})).await?;
+            let _ = self
+                .inner
+                .tab
+                .call(
+                    "Overlay.highlightNode",
+                    json!({
+                        "backendNodeId": backend_node_id,
+                        "highlightConfig": {
+                            "showInfo": true,
+                            "showExtensionLines": true,
+                            "showStyles": true,
+                            "contentColor": { "r": 111, "g": 168, "b": 220, "a": 0.66 },
+                            "paddingColor": { "r": 147, "g": 196, "b": 125, "a": 0.55 },
+                            "borderColor":  { "r": 255, "g": 229, "b": 153, "a": 0.66 },
+                            "marginColor":  { "r": 246, "g": 178, "b": 107, "a": 0.66 },
+                        },
+                    }),
+                )
+                .await?;
+            Ok(())
+        })
+        .await
+    }
 }
 
 #[cfg(test)]
@@ -1103,6 +1221,101 @@ mod tests {
         assert_eq!(files.len(), 2);
         assert_eq!(files[0], "/tmp/a.txt");
         assert_eq!(files[1], "/tmp/b.pdf");
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn flash_injects_self_removing_overlay_at_bbox_center() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+        let el = Element::from_jsret(tab, 42, "R1".to_string());
+
+        let fut = tokio::spawn({
+            let e = el.clone();
+            async move { e.flash(Duration::from_millis(500)).await }
+        });
+
+        // Step 1: scroll_into_view → Runtime.callFunctionOn.
+        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        assert!(
+            mock.last_sent()["params"]["functionDeclaration"]
+                .as_str()
+                .unwrap()
+                .contains("scrollIntoView")
+        );
+        mock.reply(id, json!({ "result": { "type": "undefined" } }))
+            .await;
+
+        // Step 2: bounding_box → DOM.getBoxModel. Box top-left (10,20), 100x50
+        // ⇒ center (60, 45).
+        let id = mock.expect_cmd("DOM.getBoxModel").await;
+        mock.reply(
+            id,
+            json!({
+                "model": {
+                    "content": [10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0],
+                    "padding": [10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0],
+                    "border":  [10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0],
+                    "margin":  [10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0],
+                    "width":  100,
+                    "height": 50
+                }
+            }),
+        )
+        .await;
+
+        // Step 3: overlay injected via Runtime.callFunctionOn carrying the
+        // dot-building JS (createElement + setTimeout/remove), with the
+        // viewport-center coords + duration passed as arguments.
+        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let sent = mock.last_sent();
+        let decl = sent["params"]["functionDeclaration"].as_str().unwrap();
+        assert!(decl.contains("createElement"), "should build a dot element");
+        assert!(
+            decl.contains("setTimeout") && decl.contains("remove"),
+            "should self-remove"
+        );
+        let args = sent["params"]["arguments"].as_array().unwrap();
+        // call_on_main prepends the element {objectId}; then cx, cy, ms.
+        assert_eq!(args[0]["objectId"], "R1");
+        assert_eq!(args[1]["value"], 60.0); // center x
+        assert_eq!(args[2]["value"], 45.0); // center y
+        assert_eq!(args[3]["value"], 500); // duration ms
+        mock.reply(id, json!({ "result": { "type": "undefined" } }))
+            .await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn highlight_overlay_enables_then_highlights_backend_node() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+        let el = Element::from_jsret(tab, 42, "R1".to_string());
+
+        let fut = tokio::spawn({
+            let e = el.clone();
+            async move { e.highlight_overlay().await }
+        });
+
+        // Step 1: Overlay.enable (highlightNode is a no-op without it).
+        let id = mock.expect_cmd("Overlay.enable").await;
+        mock.reply(id, json!({})).await;
+
+        // Step 2: Overlay.highlightNode { backendNodeId, highlightConfig }.
+        let id = mock.expect_cmd("Overlay.highlightNode").await;
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["backendNodeId"], 42);
+        assert!(
+            sent["params"]["highlightConfig"].is_object(),
+            "should carry a HighlightConfig"
+        );
         mock.reply(id, json!({})).await;
 
         fut.await.unwrap().unwrap();
