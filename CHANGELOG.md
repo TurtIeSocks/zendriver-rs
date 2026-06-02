@@ -7,6 +7,16 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SEMVER.md].
 
 ### Added
 
+- `BrowserBuilder::preference(key, value)` — set Chrome profile preferences
+  (merged into `Default/Preferences` at launch; dotted keys expand to nested
+  objects). Port-owned temp profiles receive a default password-manager /
+  autofill suppression set; user-supplied profiles are left untouched unless
+  explicit preferences are given (#13).
+- Hardened CDP deserialization against Chrome protocol drift: a regression test
+  locks the unknown-field tolerance that shielded rs from the Chrome-146
+  `sameParty` cookie break (nodriver #33/#34), and the Chrome version fallback
+  (used on `chrome --version` probe failure) is bumped with a CI floor guard.
+
 - **Parity with nodriver / zendriver-py (phases P-A…P-D).** A large additive
   surface closing the feature gap with upstream while preserving every rs-only
   strength (3-tier stealth, single-socket flat transport, actionability,

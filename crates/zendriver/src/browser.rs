@@ -784,6 +784,18 @@ impl BrowserBuilder {
     /// explicit preferences are written (the defaults are not, to avoid mutating
     /// a real profile); for a port-created temp profile, defaults + yours are
     /// written.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// let browser = zendriver::Browser::builder()
+    ///     .preference("profile.password_manager_enabled", serde_json::json!(false))
+    ///     .launch()
+    ///     .await?;
+    /// # let _ = browser;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn preference(mut self, key: impl Into<String>, value: serde_json::Value) -> Self {
         self.preferences.push((key.into(), value));
