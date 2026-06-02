@@ -20,6 +20,8 @@ pub mod expect;
 #[cfg(feature = "fetcher")]
 pub mod fetcher;
 pub mod find;
+#[cfg(feature = "fingerprints")]
+pub mod fingerprints;
 pub mod frames;
 #[cfg(feature = "imperva")]
 pub mod imperva;

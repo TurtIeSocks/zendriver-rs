@@ -1,0 +1,32 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::fingerprints::GenerateInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: GenerateInput
+description: "Input for `browser_fingerprint_generate`."
+type: object
+properties:
+  seed:
+    description: Optional seed for reproducibility. Omit for a random persona.
+    type:
+      - integer
+      - "null"
+    format: uint64
+    minimum: 0
+  source:
+    description: "Where the persona comes from. `generative` synthesizes one from the\nembedded Bayesian network (offline); `pool` samples a downloaded\nreal-device set (requires the published pool asset — see issue #25)."
+    $ref: "#/$defs/FpSource"
+additionalProperties: false
+required:
+  - source
+$defs:
+  FpSource:
+    description: Where the persona comes from.
+    oneOf:
+      - description: "Synthesize a coherent persona from the embedded Bayesian network. Works\noffline; no download needed."
+        type: string
+        const: generative
+      - description: "Sample a real-device persona from the published pool dataset. Requires\nthe pool asset to be downloadable — see POOL_URL and issue #25."
+        type: string
+        const: pool

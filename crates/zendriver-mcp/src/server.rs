@@ -35,6 +35,8 @@ use crate::tools::common::EmptyInput;
 use crate::tools::expect;
 #[cfg(feature = "fetcher")]
 use crate::tools::fetcher;
+#[cfg(feature = "fingerprints")]
+use crate::tools::fingerprints;
 #[cfg(feature = "imperva")]
 use crate::tools::imperva;
 #[cfg(feature = "interception")]
@@ -1013,6 +1015,27 @@ impl ZendriverServer {
     }
 }
 
+// ---------- fingerprints (gated) ----------------------------------------
+//
+// Same split pattern as the other gated blocks. Not in `default` — must be
+// opted into explicitly with `--features fingerprints`.
+
+#[cfg(feature = "fingerprints")]
+#[tool_router(router = fingerprints_tool_router, vis = "pub")]
+impl ZendriverServer {
+    /// Generate a fingerprint Persona from a pool or generative source.
+    #[tool(
+        name = "browser_fingerprint_generate",
+        description = "Generate a realistic fingerprint Persona JSON from a real-device `source`. `generative` synthesizes a coherent persona from the embedded Bayesian network and works offline; `pool` samples a downloaded real-device set (requires the published pool asset — see issue #25; returns an error until the dataset is hosted). Optional `seed` (u64) for reproducibility — omit for a random persona. Returns `{ persona }` — pass it to `browser_open`'s `persona` field (inspect / tweak the JSON first if desired)."
+    )]
+    pub async fn browser_fingerprint_generate(
+        &self,
+        Parameters(input): Parameters<fingerprints::GenerateInput>,
+    ) -> Result<Json<fingerprints::GenerateOutput>, ErrorData> {
+        fingerprints::generate(input).await.map(Json)
+    }
+}
+
 // ---------- combined router + ServerHandler -----------------------------
 
 impl ZendriverServer {
@@ -1033,6 +1056,8 @@ impl ZendriverServer {
         let router = router + Self::imperva_tool_router();
         #[cfg(feature = "fetcher")]
         let router = router + Self::fetcher_tool_router();
+        #[cfg(feature = "fingerprints")]
+        let router = router + Self::fingerprints_tool_router();
         router
     }
 }

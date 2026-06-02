@@ -193,6 +193,20 @@ schema_snap!(request_method, tools::request::HttpMethod);
 schema_snap!(request_in, tools::request::RequestInput);
 schema_snap!(request_out, tools::request::RequestOutput);
 
+// ---------- fingerprints (feature-gated) ----------------------------------
+
+#[cfg(feature = "fingerprints")]
+mod fingerprints_snaps {
+    use super::*;
+
+    schema_snap!(fingerprints_source, tools::fingerprints::FpSource);
+    schema_snap!(fingerprints_generate_in, tools::fingerprints::GenerateInput);
+    schema_snap!(
+        fingerprints_generate_out,
+        tools::fingerprints::GenerateOutput
+    );
+}
+
 // ---------- interception (feature-gated) ----------------------------------
 
 #[cfg(feature = "interception")]
