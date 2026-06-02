@@ -1,0 +1,2 @@
+This crate vendors fingerprint data derived from browserforge / fingerprint-suite
+(https://github.com/apify/fingerprint-suite), licensed Apache-2.0.
