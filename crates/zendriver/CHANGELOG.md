@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-02
+
+### Added
+
+- Full nodriver / zendriver-py parity — phases P-A…P-E ([#17](https://github.com/TurtIeSocks/zendriver-rs/pull/17))
+
+
 ### Added
 
 - `Browser::reconnect()` — re-establish a dropped connection to the same still-running Chrome process (re-dials the surviving `/devtools/browser/<id>` endpoint on the existing `Connection`, re-arms `Target.setAutoAttach{flatten:true}` so stealth re-injects, refreshes the tab registry). Scoped v1: existing `Tab`/`Frame`/`Element` handles are **invalidated** — re-acquire via `tabs()` (not `main_tab()`, which still returns the stale handle). Per-feature domain re-arm (`Network.enable`, `Fetch` rules, etc.) and transparent handle-preserving reconnect are deferred.

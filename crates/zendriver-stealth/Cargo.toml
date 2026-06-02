@@ -1,7 +1,7 @@
 [package]
 name = "zendriver-stealth"
 description = "Anti-detection patches and profiles for zendriver"
-version = "0.1.3"
+version = "0.1.4"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
