@@ -29,11 +29,10 @@ use rmcp::ErrorData;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use zendriver::{Frame, Tab, ZendriverError};
 
 use crate::errors::{McpServerError, map_error};
 use crate::state::SessionState;
-use crate::tools::common::current_tab;
+use crate::tools::common::{current_tab, lookup_frame};
 
 /// Input for `browser_evaluate` / `browser_evaluate_main`.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -113,23 +112,6 @@ pub async fn evaluate_main(
             .map_err(|e| map_error(McpServerError::from(e)))?
     };
     Ok(EvalOutput { value })
-}
-
-/// Look up a `Frame` on `tab` by id. Surfaces `FrameNotFound` through the
-/// standard error pipeline (with `browser_frame_list` suggestion).
-async fn lookup_frame(tab: &Tab, frame_id: &str) -> Result<Frame, ErrorData> {
-    let frames = tab
-        .frames()
-        .await
-        .map_err(|e| map_error(McpServerError::from(e)))?;
-    frames
-        .into_iter()
-        .find(|f| f.id() == frame_id)
-        .ok_or_else(|| {
-            map_error(McpServerError::from(ZendriverError::FrameNotFound(
-                frame_id.to_string(),
-            )))
-        })
 }
 
 #[cfg(test)]

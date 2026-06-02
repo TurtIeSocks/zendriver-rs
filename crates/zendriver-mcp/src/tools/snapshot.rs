@@ -50,11 +50,15 @@ use crate::tools::find::resolve;
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct HtmlInput {
-    /// When set, returns `el.innerHTML` for the matched element.
-    /// Mutually exclusive with the tool-level `frame_id` — use the
-    /// selector's own `frame_id` to scope the lookup to a sub-frame.
+    /// When set, returns `el.innerHTML` (or `el.outerHTML` if `outer`) for the
+    /// matched element. Mutually exclusive with the tool-level `frame_id` —
+    /// use the selector's own `frame_id` to scope the lookup to a sub-frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selector: Option<Selector>,
+    /// With `selector`, return `outerHTML` (the element's own tag included)
+    /// instead of `innerHTML`. Ignored without a selector. Default `false`.
+    #[serde(default)]
+    pub outer: bool,
     /// Trim the result: strip `<script>` / `<style>` blocks + collapse
     /// whitespace. Default `true`. Pass `false` for byte-exact output.
     #[serde(default = "default_true")]
@@ -91,9 +95,15 @@ pub async fn html(state: Arc<Mutex<SessionState>>, input: HtmlInput) -> Result<S
 
     let raw = if let Some(sel) = input.selector.as_ref() {
         let el = resolve(&tab, sel).await?;
-        el.inner_html()
-            .await
-            .map_err(|e| map_error(McpServerError::from(e)))?
+        if input.outer {
+            el.outer_html()
+                .await
+                .map_err(|e| map_error(McpServerError::from(e)))?
+        } else {
+            el.inner_html()
+                .await
+                .map_err(|e| map_error(McpServerError::from(e)))?
+        }
     } else if let Some(fid) = input.frame_id.as_deref() {
         let frame = lookup_frame(&tab, fid).await?;
         frame
@@ -311,6 +321,7 @@ mod tests {
             fresh(),
             HtmlInput {
                 selector: None,
+                outer: false,
                 trim: true,
                 frame_id: None,
             },
@@ -331,6 +342,7 @@ mod tests {
             fresh(),
             HtmlInput {
                 selector: Some(css_sel("h1")),
+                outer: false,
                 trim: true,
                 frame_id: Some("frame-X".into()),
             },

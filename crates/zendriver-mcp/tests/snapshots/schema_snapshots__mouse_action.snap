@@ -1,0 +1,17 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::mouse::MouseAction)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: MouseAction
+description: "Which pointer operation `browser_mouse` performs."
+oneOf:
+  - description: "Move the cursor to `(x, y)` along a realistic Bezier path."
+    type: string
+    const: move
+  - description: "Click at `(x, y)`."
+    type: string
+    const: click
+  - description: "Press at `(x, y)`, drag to `(to_x, to_y)` over `steps`, release."
+    type: string
+    const: drag

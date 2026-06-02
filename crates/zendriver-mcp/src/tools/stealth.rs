@@ -12,8 +12,12 @@ use rmcp::ErrorData;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
+use zendriver::UserAgentOverride;
 
-use crate::state::{SessionState, StealthProfileChoice};
+use crate::errors::{McpServerError, map_error};
+use crate::state::{SessionState, StealthOverrides, StealthProfileChoice};
+use crate::tools::actions::AckOutput;
+use crate::tools::common::current_tab;
 
 /// Input for `browser_set_stealth_profile`.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -21,6 +25,11 @@ use crate::state::{SessionState, StealthProfileChoice};
 pub struct SetStealthProfileInput {
     /// New default stealth profile for this session.
     pub profile: StealthProfileChoice,
+    /// Fine-grained fingerprint overrides layered onto `profile` at the next
+    /// `browser_open`. Replaces any previously-set overrides; omit (or pass
+    /// `{}`) to clear them.
+    #[serde(default)]
+    pub overrides: StealthOverrides,
 }
 
 /// Output of `browser_set_stealth_profile`.
@@ -28,6 +37,8 @@ pub struct SetStealthProfileInput {
 pub struct SetStealthProfileOutput {
     /// The profile that is now configured as the session default.
     pub active_profile: StealthProfileChoice,
+    /// The fine-grained overrides now configured for the next open.
+    pub active_overrides: StealthOverrides,
     /// `true` iff a browser is currently open. When `true`, the new
     /// profile only applies after `browser_close` + `browser_open`. When
     /// `false`, the next `browser_open` call will pick it up directly.
@@ -46,10 +57,48 @@ pub async fn set_stealth_profile(
 ) -> Result<SetStealthProfileOutput, ErrorData> {
     let mut s = state.lock().await;
     s.stealth_profile_choice = input.profile;
+    s.stealth_overrides = input.overrides.clone();
     Ok(SetStealthProfileOutput {
         active_profile: input.profile,
+        active_overrides: input.overrides,
         takes_effect_on_next_open: s.browser.is_some(),
     })
+}
+
+/// Input for `browser_set_user_agent`.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetUserAgentInput {
+    /// Full User-Agent string to send via `Emulation.setUserAgentOverride`.
+    pub user_agent: String,
+    /// Optional `Accept-Language` override applied alongside the UA.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accept_language: Option<String>,
+    /// Optional `navigator.platform` override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
+}
+
+/// Override the current tab's User-Agent at runtime.
+///
+/// This is last-write-wins and sends NO `userAgentMetadata` — under a Spoofed
+/// stealth profile it can clobber UA-Client-Hints coherence and *increase*
+/// detectability. Prefer the stealth profile for stealth-sensitive tabs; use
+/// this for non-stealth tabs or a deliberate per-tab UA change.
+pub async fn set_user_agent(
+    state: Arc<Mutex<SessionState>>,
+    input: SetUserAgentInput,
+) -> Result<AckOutput, ErrorData> {
+    let s = state.lock().await;
+    let tab = current_tab(&s).await?;
+    tab.set_user_agent_with(UserAgentOverride {
+        user_agent: input.user_agent,
+        accept_language: input.accept_language,
+        platform: input.platform,
+    })
+    .await
+    .map_err(|e| map_error(McpServerError::from(e)))?;
+    Ok(AckOutput { ok: true })
 }
 
 #[cfg(test)]
@@ -67,6 +116,7 @@ mod tests {
             state.clone(),
             SetStealthProfileInput {
                 profile: StealthProfileChoice::SpoofLinux,
+                overrides: StealthOverrides::default(),
             },
         )
         .await
@@ -88,6 +138,7 @@ mod tests {
             state.clone(),
             SetStealthProfileInput {
                 profile: StealthProfileChoice::SpoofMacos,
+                overrides: StealthOverrides::default(),
             },
         )
         .await
@@ -96,6 +147,7 @@ mod tests {
             state.clone(),
             SetStealthProfileInput {
                 profile: StealthProfileChoice::SpoofWindows,
+                overrides: StealthOverrides::default(),
             },
         )
         .await
@@ -114,6 +166,7 @@ mod tests {
             state,
             SetStealthProfileInput {
                 profile: StealthProfileChoice::Auto,
+                overrides: StealthOverrides::default(),
             },
         )
         .await

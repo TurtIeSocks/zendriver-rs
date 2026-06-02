@@ -1,0 +1,78 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::window::SetWindowInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: SetWindowInput
+description: "Input for `browser_set_window`."
+type: object
+properties:
+  height:
+    description: "Window height in DIP (used by `size` and optionally `bounds`)."
+    type:
+      - integer
+      - "null"
+    format: int64
+  left:
+    description: "Window left edge in DIP (used by `bounds`)."
+    type:
+      - integer
+      - "null"
+    format: int64
+  mode:
+    description: Which operation to perform.
+    $ref: "#/$defs/SetWindowMode"
+  state:
+    description: "Window state to set (used by `bounds`)."
+    anyOf:
+      - $ref: "#/$defs/WindowStateDto"
+      - type: "null"
+  top:
+    description: "Window top edge in DIP (used by `bounds`)."
+    type:
+      - integer
+      - "null"
+    format: int64
+  width:
+    description: "Window width in DIP (used by `size` and optionally `bounds`)."
+    type:
+      - integer
+      - "null"
+    format: int64
+additionalProperties: false
+required:
+  - mode
+$defs:
+  SetWindowMode:
+    description: "Which window operation `browser_set_window` performs."
+    oneOf:
+      - description: "Set explicit bounds (`left`/`top`/`width`/`height`/`state`, any subset)."
+        type: string
+        const: bounds
+      - description: "Resize to `width` × `height` (both required)."
+        type: string
+        const: size
+      - description: Maximize the window.
+        type: string
+        const: maximize
+      - description: Minimize the window.
+        type: string
+        const: minimize
+      - description: Enter fullscreen.
+        type: string
+        const: fullscreen
+  WindowStateDto:
+    description: "Wire mirror of [`zendriver::WindowState`]."
+    oneOf:
+      - description: Normal (windowed) — the only state that may carry explicit geometry.
+        type: string
+        const: normal
+      - description: Minimized to the OS taskbar / dock.
+        type: string
+        const: minimized
+      - description: Maximized to fill the screen work area.
+        type: string
+        const: maximized
+      - description: Fullscreen (chrome / OS decorations hidden).
+        type: string
+        const: fullscreen

@@ -8,12 +8,13 @@ use std::sync::Arc;
 
 use rmcp::ErrorData;
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::errors::{McpServerError, map_error};
 use crate::state::SessionState;
-use crate::tools::common::{EmptyInput, current_tab};
+use crate::tools::actions::AckOutput;
+use crate::tools::common::{EmptyInput, current_tab, lookup_frame};
 
 /// Per-frame projection returned by `browser_frame_list`.
 ///
@@ -74,6 +75,41 @@ pub async fn list(
         });
     }
     Ok(FrameListOutput { frames: out })
+}
+
+// ---------- browser_frame_goto -------------------------------------------
+
+/// Input for `browser_frame_goto`.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FrameGotoInput {
+    /// Target frame id (from `browser_frame_list`).
+    pub frame_id: String,
+    /// URL to navigate the frame to.
+    pub url: String,
+}
+
+/// Navigate a specific frame to a URL and wait for its load.
+///
+/// `Frame::goto` only drives same-document navigation on the main frame of an
+/// out-of-process iframe; for in-process child frames it surfaces the lib's
+/// error through the standard pipeline.
+pub async fn frame_goto(
+    state: Arc<Mutex<SessionState>>,
+    input: FrameGotoInput,
+) -> Result<AckOutput, ErrorData> {
+    let s = state.lock().await;
+    let tab = current_tab(&s).await?;
+    let frame = lookup_frame(&tab, &input.frame_id).await?;
+    frame
+        .goto(&input.url)
+        .await
+        .map_err(|e| map_error(McpServerError::from(e)))?;
+    frame
+        .wait_for_load()
+        .await
+        .map_err(|e| map_error(McpServerError::from(e)))?;
+    Ok(AckOutput { ok: true })
 }
 
 #[cfg(test)]

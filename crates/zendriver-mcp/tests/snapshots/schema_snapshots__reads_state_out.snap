@@ -19,6 +19,11 @@ properties:
     anyOf:
       - $ref: "#/$defs/BoundingBox"
       - type: "null"
+  bounding_box_page:
+    description: "Page-absolute bounding box (`x`/`y` include scroll offset). Populated\nby `All` and `Geometry`."
+    anyOf:
+      - $ref: "#/$defs/BoundingBox"
+      - type: "null"
   enabled:
     description: "`true` when the element is not disabled. Populated by `All` and\n`VisibleEnabled`."
     type:
@@ -34,6 +39,11 @@ properties:
       - "null"
   inner_html:
     description: "Serialized `innerHTML`. Populated by `All` and `TextAttrs`."
+    type:
+      - string
+      - "null"
+  outer_html:
+    description: "Serialized `outerHTML` (element + its own tag). Populated by `All`\nand `TextAttrs`."
     type:
       - string
       - "null"

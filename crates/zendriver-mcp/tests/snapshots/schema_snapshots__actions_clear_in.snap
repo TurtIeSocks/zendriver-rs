@@ -15,6 +15,10 @@ properties:
     type:
       - string
       - "null"
+  mode:
+    description: "Clearing strategy. Default `value`."
+    $ref: "#/$defs/ClearMode"
+    default: value
   nth:
     type:
       - integer
@@ -58,3 +62,13 @@ properties:
       - string
       - "null"
 additionalProperties: false
+$defs:
+  ClearMode:
+    description: "How `browser_clear` empties an element."
+    oneOf:
+      - description: "Reset `.value` to empty + fire `input` (fast). Default."
+        type: string
+        const: value
+      - description: "Focus + select-all + Backspace (emits real key events some inputs\nrequire). Slower but more faithful to user behavior."
+        type: string
+        const: backspace

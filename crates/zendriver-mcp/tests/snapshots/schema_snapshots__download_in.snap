@@ -1,0 +1,20 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::download::DownloadInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: DownloadInput
+description: "Input for `browser_download`."
+type: object
+properties:
+  filename:
+    description: "Saved file name within the tab's download directory. When omitted, the\nname is derived from the URL's last path segment."
+    type:
+      - string
+      - "null"
+  url:
+    description: "URL to fetch + save. Fetched from the page's own network context."
+    type: string
+additionalProperties: false
+required:
+  - url

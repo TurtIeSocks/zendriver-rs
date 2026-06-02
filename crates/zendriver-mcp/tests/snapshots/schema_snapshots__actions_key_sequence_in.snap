@@ -1,0 +1,104 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::actions::KeySequenceInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: KeySequenceInput
+description: "Input for `browser_key_sequence`."
+type: object
+properties:
+  css:
+    type:
+      - string
+      - "null"
+  frame_id:
+    type:
+      - string
+      - "null"
+  nth:
+    type:
+      - integer
+      - "null"
+    format: uint
+    minimum: 0
+  return_snapshot:
+    description: "When `true`, include the trimmed page HTML in the response."
+    type: boolean
+    default: false
+  role:
+    type:
+      - string
+      - "null"
+  role_name:
+    type:
+      - string
+      - "null"
+  sequence:
+    description: "Ordered steps to dispatch: a mix of typed text and (chorded) key\npresses. Example: `[{ \"key\": \"a\", \"modifiers\": [\"ctrl\"] }, { \"text\":\n\"replacement\" }]` selects-all then types over it."
+    type: array
+    items:
+      $ref: "#/$defs/KeyStep"
+  text:
+    type:
+      - string
+      - "null"
+  text_exact:
+    type:
+      - string
+      - "null"
+  text_regex:
+    type:
+      - string
+      - "null"
+  timeout_ms:
+    type: integer
+    format: uint64
+    default: 5000
+    minimum: 0
+  visible_only:
+    type: boolean
+    default: true
+  xpath:
+    type:
+      - string
+      - "null"
+additionalProperties: false
+required:
+  - sequence
+$defs:
+  KeyStep:
+    description: "One step in a [`KeySequenceInput`]: either literal text or a key press\n(optionally a modifier chord). Exactly one of `text` / `key` must be set."
+    type: object
+    properties:
+      key:
+        description: "Key to press — a special-key name or single character (see\n`browser_press`). Mutually exclusive with `text`."
+        type:
+          - string
+          - "null"
+      modifiers:
+        description: "Modifiers held while pressing `key` (ignored for `text`)."
+        type: array
+        default: []
+        items:
+          $ref: "#/$defs/ModifierArg"
+      text:
+        description: "Literal text to type (grapheme-by-grapheme). Mutually exclusive with\n`key`."
+        type:
+          - string
+          - "null"
+    additionalProperties: false
+  ModifierArg:
+    description: "MCP-layer keyboard-modifier flag, mapped onto [`zendriver::KeyModifiers`].\n\nShared by coordinate-mouse clicks (`browser_mouse`) and keyboard chords\n(`browser_press` / `browser_key_sequence`)."
+    oneOf:
+      - description: "`Alt` (Option on macOS)."
+        type: string
+        const: alt
+      - description: "`Control`."
+        type: string
+        const: ctrl
+      - description: "`Meta` (Command on macOS, Windows key on Windows)."
+        type: string
+        const: meta
+      - description: "`Shift`."
+        type: string
+        const: shift

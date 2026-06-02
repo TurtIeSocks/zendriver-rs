@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Evaluation suite for the coverage-expansion tools (49 → 65).
+
+  Each question is answerable entirely through zendriver-mcp tools against a
+  real, stealth-by-default headless Chrome. Targets are `data:` URLs (or the
+  stable example.com) so answers are deterministic and stable over time. Run
+  the server, then drive these with an MCP-capable model; answers are exact
+  string matches.
+
+  Tools exercised: browser_get_links, browser_element_state (outer_html),
+  browser_evaluate frame_id, browser_key_sequence, browser_set_value (value +
+  text modes), browser_pdf, browser_save_mhtml, browser_wait_for_load,
+  browser_scroll, browser_set_window / browser_get_window.
+-->
+<evaluation>
+  <qa_pair>
+    <question>Open a headless browser and navigate to the URL `data:text/html,&lt;a href="https://example.com/a"&gt;A&lt;/a&gt;&lt;a href="https://example.com/b"&gt;B&lt;/a&gt;&lt;a href="https://example.com/c"&gt;C&lt;/a&gt;`. How many anchor URLs does browser_get_links report for the page?</question>
+    <answer>3</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Navigate to `data:text/html,&lt;p id="t"&gt;Hi&lt;/p&gt;`. Inspect the element matching the CSS selector `#t` with the full field preset and report its outer_html value exactly.</question>
+    <answer>&lt;p id="t"&gt;Hi&lt;/p&gt;</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Navigate to `data:text/html,&lt;iframe name="f" srcdoc="&lt;b&gt;inner-42&lt;/b&gt;"&gt;&lt;/iframe&gt;`. List the frames, then evaluate the JavaScript expression `document.body.textContent` inside the child frame (not the main frame). What string is returned?</question>
+    <answer>inner-42</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Navigate to `data:text/html,&lt;input id="i" value="old"&gt;`. Using a key sequence on `#i`, hold Ctrl and press `a` to select all, then type the text `new`. Then evaluate `document.getElementById('i').value`. What is the value?</question>
+    <answer>new</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Navigate to `data:text/html,&lt;div id="d"&gt;x&lt;/div&gt;`. Use browser_set_value with mode `text` to set `#d` to `filled`, then evaluate `document.getElementById('d').textContent`. What is the result?</question>
+    <answer>filled</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Navigate to `data:text/html,&lt;input id="i"&gt;`. Use browser_set_value (default mode) to set `#i` to `hello`, then evaluate `document.getElementById('i').value`. What is the value?</question>
+    <answer>hello</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Navigate to https://example.com and export the page to PDF with browser_pdf (no save_path, so the bytes come back base64-encoded). Decode the bytes and report the first four characters (the file-format signature).</question>
+    <answer>%PDF</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Navigate to `data:text/html,&lt;title&gt;hi&lt;/title&gt;&lt;p&gt;body&lt;/p&gt;` and capture an MHTML archive with browser_save_mhtml (no save_path). Decode the base64 bytes; what are the first five characters of the MHTML archive?</question>
+    <answer>From:</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Navigate to `data:text/html,&lt;div id="r"&gt;ready&lt;/div&gt;` and call browser_wait_for_load with ready_state `complete`. Afterward, evaluate `document.readyState`. What value does it return?</question>
+    <answer>complete</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Open a headless browser, set the window with browser_set_window using mode `size`, width 1024 and height 768. Then read it back with browser_get_window. What width does it report?</question>
+    <answer>1024</answer>
+  </qa_pair>
+</evaluation>

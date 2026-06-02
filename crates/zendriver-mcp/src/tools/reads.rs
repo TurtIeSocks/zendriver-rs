@@ -89,6 +89,14 @@ pub struct ElementState {
     /// Serialized `innerHTML`. Populated by `All` and `TextAttrs`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inner_html: Option<String>,
+    /// Serialized `outerHTML` (element + its own tag). Populated by `All`
+    /// and `TextAttrs`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outer_html: Option<String>,
+    /// Page-absolute bounding box (`x`/`y` include scroll offset). Populated
+    /// by `All` and `Geometry`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bounding_box_page: Option<BoundingBox>,
 }
 
 /// Probe an element's state per the requested field preset.
@@ -153,6 +161,16 @@ pub async fn element_state(
         out.bounding_box = bbox;
         // `in_viewport` reserved for v1 — no zendriver primitive yet.
         out.in_viewport = None;
+        // Page-absolute box: origin shifted by the scroll offset.
+        out.bounding_box_page = el.bounding_box_page().await.ok().flatten().map(|pb| {
+            let (x, y) = pb.abs_origin();
+            BoundingBox {
+                x,
+                y,
+                width: pb.viewport.width,
+                height: pb.viewport.height,
+            }
+        });
     }
     if want_text_attrs {
         let text = el
@@ -167,11 +185,124 @@ pub async fn element_state(
             .inner_html()
             .await
             .map_err(|e| map_error(McpServerError::from(e)))?;
+        let outer_html = el
+            .outer_html()
+            .await
+            .map_err(|e| map_error(McpServerError::from(e)))?;
         out.text = Some(text);
         out.attrs = Some(attrs_map.into_iter().collect());
         out.inner_html = Some(inner_html);
+        out.outer_html = Some(outer_html);
     }
     Ok(out)
+}
+
+// ---------- browser_get_links --------------------------------------------
+
+/// Input for `browser_get_links`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetLinksInput {
+    /// Resolve relative `href`s to absolute URLs. Default `false`.
+    #[serde(default)]
+    pub absolute: bool,
+    /// Also collect `src`/`href` of linked-resource elements (img, script,
+    /// link, …) into `sources`. Default `false`.
+    #[serde(default)]
+    pub include_sources: bool,
+}
+
+/// Output of `browser_get_links`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct GetLinksOutput {
+    /// Anchor (`<a href>`) URLs on the page.
+    pub urls: Vec<String>,
+    /// Linked-resource source URLs, when `include_sources` was set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sources: Option<Vec<String>>,
+}
+
+/// Harvest anchor URLs (and optionally linked-resource sources) from the page.
+pub async fn get_links(
+    state: Arc<Mutex<SessionState>>,
+    input: GetLinksInput,
+) -> Result<GetLinksOutput, ErrorData> {
+    let s = state.lock().await;
+    let tab = current_tab(&s).await?;
+    let urls = tab
+        .get_all_urls(input.absolute)
+        .await
+        .map_err(|e| map_error(McpServerError::from(e)))?;
+    let sources = if input.include_sources {
+        let els = tab
+            .get_all_linked_sources()
+            .await
+            .map_err(|e| map_error(McpServerError::from(e)))?;
+        let mut out = Vec::with_capacity(els.len());
+        for el in &els {
+            // Linked sources are img/script/link/etc — prefer `src`, fall
+            // back to `href`. Best-effort: skip elements with neither.
+            let src = el.attr("src").await.ok().flatten();
+            let href = match src {
+                Some(s) => Some(s),
+                None => el.attr("href").await.ok().flatten(),
+            };
+            if let Some(u) = href {
+                out.push(u);
+            }
+        }
+        Some(out)
+    } else {
+        None
+    };
+    Ok(GetLinksOutput { urls, sources })
+}
+
+// ---------- browser_search_resources -------------------------------------
+
+/// Input for `browser_search_resources`.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SearchResourcesInput {
+    /// Substring to search for across every frame's loaded resource URLs.
+    pub query: String,
+}
+
+/// One matched resource from `browser_search_resources`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ResourceMatch {
+    /// Request URL of the matched resource.
+    pub url: String,
+    /// CDP `frameId` of the frame that owns the resource.
+    pub frame_id: String,
+}
+
+/// Output of `browser_search_resources`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct SearchResourcesOutput {
+    /// All resources whose URL contains `query`.
+    pub matches: Vec<ResourceMatch>,
+}
+
+/// Search every frame's loaded resources for a URL substring.
+pub async fn search_resources(
+    state: Arc<Mutex<SessionState>>,
+    input: SearchResourcesInput,
+) -> Result<SearchResourcesOutput, ErrorData> {
+    let s = state.lock().await;
+    let tab = current_tab(&s).await?;
+    let hits = tab
+        .search_frame_resources(&input.query)
+        .await
+        .map_err(|e| map_error(McpServerError::from(e)))?;
+    let matches = hits
+        .into_iter()
+        .map(|m| ResourceMatch {
+            url: m.url,
+            frame_id: m.frame_id,
+        })
+        .collect();
+    Ok(SearchResourcesOutput { matches })
 }
 
 /// Mirror of the same predicate in [`crate::tools::find`] — kept private

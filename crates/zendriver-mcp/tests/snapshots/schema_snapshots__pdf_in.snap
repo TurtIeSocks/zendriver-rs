@@ -1,0 +1,77 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::pdf::PdfInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: PdfInput
+description: "Input for `browser_pdf`. Every field is optional; an unset field leaves the\ncorresponding [`zendriver::PdfBuilder`] default in place."
+type: object
+properties:
+  landscape:
+    description: Landscape orientation (default portrait).
+    type:
+      - boolean
+      - "null"
+  margin_bottom:
+    description: Bottom margin in inches.
+    type:
+      - number
+      - "null"
+    format: double
+  margin_left:
+    description: Left margin in inches.
+    type:
+      - number
+      - "null"
+    format: double
+  margin_right:
+    description: Right margin in inches.
+    type:
+      - number
+      - "null"
+    format: double
+  margin_top:
+    description: Top margin in inches.
+    type:
+      - number
+      - "null"
+    format: double
+  page_ranges:
+    description: "Page ranges to print, e.g. `\"1-3, 5\"`. Empty → all pages."
+    type:
+      - string
+      - "null"
+  paper_height:
+    description: Paper height in inches.
+    type:
+      - number
+      - "null"
+    format: double
+  paper_width:
+    description: Paper width in inches.
+    type:
+      - number
+      - "null"
+    format: double
+  prefer_css_page_size:
+    description: "Prefer any CSS `@page` size over `paper_width`/`paper_height`."
+    type:
+      - boolean
+      - "null"
+  print_background:
+    description: Render background graphics/colors.
+    type:
+      - boolean
+      - "null"
+  save_path:
+    description: Write the PDF to this path on the MCP host instead of inlining base64.
+    type:
+      - string
+      - "null"
+  scale:
+    description: "Render scale (`1.0` = 100%)."
+    type:
+      - number
+      - "null"
+    format: double
+additionalProperties: false

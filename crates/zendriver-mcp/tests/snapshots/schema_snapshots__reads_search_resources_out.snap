@@ -1,0 +1,30 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::reads::SearchResourcesOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: SearchResourcesOutput
+description: "Output of `browser_search_resources`."
+type: object
+properties:
+  matches:
+    description: "All resources whose URL contains `query`."
+    type: array
+    items:
+      $ref: "#/$defs/ResourceMatch"
+required:
+  - matches
+$defs:
+  ResourceMatch:
+    description: "One matched resource from `browser_search_resources`."
+    type: object
+    properties:
+      frame_id:
+        description: "CDP `frameId` of the frame that owns the resource."
+        type: string
+      url:
+        description: Request URL of the matched resource.
+        type: string
+    required:
+      - url
+      - frame_id

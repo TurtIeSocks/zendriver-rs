@@ -1,0 +1,19 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::frames::FrameGotoInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: FrameGotoInput
+description: "Input for `browser_frame_goto`."
+type: object
+properties:
+  frame_id:
+    description: "Target frame id (from `browser_frame_list`)."
+    type: string
+  url:
+    description: URL to navigate the frame to.
+    type: string
+additionalProperties: false
+required:
+  - frame_id
+  - url

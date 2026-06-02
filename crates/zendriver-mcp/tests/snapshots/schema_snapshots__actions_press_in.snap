@@ -18,6 +18,12 @@ properties:
   key:
     description: "Named special key (e.g. \"Enter\", \"Tab\", \"ArrowUp\") OR a single\ncharacter (e.g. \"a\"). Special-key names are case-insensitive."
     type: string
+  modifiers:
+    description: "Modifier keys to hold while pressing `key` (a chord, e.g.\n`[\"ctrl\"]` + `key: \"a\"` for select-all). Default none."
+    type: array
+    default: []
+    items:
+      $ref: "#/$defs/ModifierArg"
   nth:
     type:
       - integer
@@ -63,3 +69,19 @@ properties:
 additionalProperties: false
 required:
   - key
+$defs:
+  ModifierArg:
+    description: "MCP-layer keyboard-modifier flag, mapped onto [`zendriver::KeyModifiers`].\n\nShared by coordinate-mouse clicks (`browser_mouse`) and keyboard chords\n(`browser_press` / `browser_key_sequence`)."
+    oneOf:
+      - description: "`Alt` (Option on macOS)."
+        type: string
+        const: alt
+      - description: "`Control`."
+        type: string
+        const: ctrl
+      - description: "`Meta` (Command on macOS, Windows key on Windows)."
+        type: string
+        const: meta
+      - description: "`Shift`."
+        type: string
+        const: shift

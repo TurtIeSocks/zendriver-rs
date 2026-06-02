@@ -12,6 +12,11 @@ properties:
     anyOf:
       - $ref: "#/$defs/TabSummary"
       - type: "null"
+  inspector_url:
+    description: "Chrome DevTools inspector URL for the focused tab, when one is open."
+    type:
+      - string
+      - "null"
   open:
     description: "`true` iff a Browser is currently launched in this session."
     type: boolean

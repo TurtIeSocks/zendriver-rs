@@ -1,0 +1,15 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::reads::SearchResourcesInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: SearchResourcesInput
+description: "Input for `browser_search_resources`."
+type: object
+properties:
+  query:
+    description: "Substring to search for across every frame's loaded resource URLs."
+    type: string
+additionalProperties: false
+required:
+  - query

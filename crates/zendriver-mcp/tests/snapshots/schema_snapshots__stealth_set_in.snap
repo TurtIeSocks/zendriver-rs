@@ -7,6 +7,10 @@ title: SetStealthProfileInput
 description: "Input for `browser_set_stealth_profile`."
 type: object
 properties:
+  overrides:
+    description: "Fine-grained fingerprint overrides layered onto `profile` at the next\n`browser_open`. Replaces any previously-set overrides; omit (or pass\n`{}`) to clear them."
+    $ref: "#/$defs/StealthOverrides"
+    default: {}
   profile:
     description: New default stealth profile for this session.
     $ref: "#/$defs/StealthProfileChoice"
@@ -14,6 +18,69 @@ additionalProperties: false
 required:
   - profile
 $defs:
+  StealthOverrides:
+    description: "Fine-grained stealth fingerprint overrides layered onto the chosen\n[`StealthProfileChoice`] at the next `browser_open`.\n\nEvery field is optional — an unset field leaves the base profile's value\nin place. Most meaningful paired with a `spoof_*` profile; applying these\nto `native` overrides the auto-detected real fingerprint and can *reduce*\nstealth if the values disagree with the host."
+    type: object
+    properties:
+      bypass_csp:
+        description: Toggle Content-Security-Policy bypass.
+        type:
+          - boolean
+          - "null"
+      chrome_version:
+        description: Spoofed Chrome major version.
+        type:
+          - integer
+          - "null"
+        format: uint32
+        minimum: 0
+      cpu_count:
+        description: "Spoofed `navigator.hardwareConcurrency`."
+        type:
+          - integer
+          - "null"
+        format: uint32
+        minimum: 0
+      locale:
+        description: "Spoofed locale (e.g. `\"en-US\"`)."
+        type:
+          - string
+          - "null"
+      memory_gb:
+        description: "Spoofed `navigator.deviceMemory` in GiB."
+        type:
+          - integer
+          - "null"
+        format: uint32
+        minimum: 0
+      platform:
+        description: "Spoofed `navigator.platform` / UA platform token."
+        anyOf:
+          - $ref: "#/$defs/StealthPlatformChoice"
+          - type: "null"
+      timezone:
+        description: "Spoofed timezone (IANA name, e.g. `\"America/New_York\"`)."
+        type:
+          - string
+          - "null"
+      user_agent:
+        description: Full User-Agent string override.
+        type:
+          - string
+          - "null"
+    additionalProperties: false
+  StealthPlatformChoice:
+    description: "Platform to spoof via a fine-grained stealth override.\n\nWire mirror of `zendriver::stealth::Platform`; kept here (platform-agnostic)\nso the override schema stays stable independent of host detection."
+    oneOf:
+      - description: Windows.
+        type: string
+        const: win32
+      - description: macOS (Intel).
+        type: string
+        const: mac_intel
+      - description: Linux x86_64.
+        type: string
+        const: linux_x86_64
   StealthProfileChoice:
     description: "Stealth profile choice carried over the MCP wire.\n\nConcrete `StealthProfile` resolution happens inside the lifecycle\nhandler (it depends on platform detection that only matters at launch\ntime); the wire-level enum stays stable and platform-agnostic."
     oneOf:

@@ -356,6 +356,11 @@ pub async fn activate(
     tab.activate()
         .await
         .map_err(|e| map_error(McpServerError::from(e)))?;
+    // Also raise the page within its window (`Page.bringToFront`) so the
+    // activated tab is actually frontmost, not just the CDP-active target.
+    tab.bring_to_front()
+        .await
+        .map_err(|e| map_error(McpServerError::from(e)))?;
     s.current_tab_id = Some(input.tab_id.clone());
     Ok(TabActivateOutput { id: input.tab_id })
 }

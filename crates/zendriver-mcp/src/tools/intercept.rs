@@ -41,7 +41,7 @@ use rmcp::ErrorData;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use zendriver::{RequestOverrides, ZendriverError};
+use zendriver::{RequestOverrides, ResponseInfo, ResponseOverrides, ZendriverError};
 
 use crate::errors::{McpServerError, map_error};
 use crate::state::{InterceptRuleHandle, RuleId, SessionState};
@@ -90,6 +90,19 @@ pub enum InterceptAction {
         /// `continueRequest.headers` is a full replacement, so the closure
         /// rebuilds the header list from the intercepted request and
         /// overlays these entries (case-insensitive on names).
+        #[serde(default)]
+        headers: BTreeMap<String, String>,
+    },
+    /// Continue the *response* with an overridden status and/or headers
+    /// (pauses at the response stage). Other fields are left at Chrome's
+    /// originals. The body is not rewritten — use `respond` to synthesize a
+    /// whole response instead.
+    ModifyResponse {
+        /// Override the HTTP status code. Omit to keep Chrome's original.
+        #[serde(default)]
+        status: Option<u16>,
+        /// Headers to merge over the response's originals (full-replacement
+        /// semantics, same as `modify_request`; case-insensitive names).
         #[serde(default)]
         headers: BTreeMap<String, String>,
     },
@@ -184,6 +197,28 @@ pub async fn add_rule(
                 .start();
             (h, "modify_request")
         }
+        InterceptAction::ModifyResponse { status, headers } => {
+            // Same `Arc`-capture pattern as `modify_request`; the closure runs
+            // on the actor task per matching response.
+            let overlay = Arc::new(headers);
+            let h = tab
+                .intercept()
+                .modify_response(input.pattern.clone(), move |resp: &ResponseInfo| {
+                    let headers = if overlay.is_empty() {
+                        None
+                    } else {
+                        Some(merge_header_list(&resp.headers, &overlay))
+                    };
+                    ResponseOverrides {
+                        status,
+                        headers,
+                        ..ResponseOverrides::default()
+                    }
+                })
+                .map_err(zendriver_err)?
+                .start();
+            (h, "modify_response")
+        }
     };
 
     let id: RuleId = uuid::Uuid::new_v4().to_string();
@@ -209,11 +244,25 @@ fn merge_headers(
     original: &[(String, String)],
     overlay: &BTreeMap<String, String>,
 ) -> RequestOverrides {
+    RequestOverrides {
+        headers: Some(merge_header_list(original, overlay)),
+        ..RequestOverrides::default()
+    }
+}
+
+/// Rebuild a full header list from `original`, dropping entries the `overlay`
+/// replaces (case-insensitive) and appending the overlay entries. Shared by
+/// `modify_request` (→ [`RequestOverrides`]) and `modify_response`
+/// (→ [`ResponseOverrides`]) because CDP's continue-* header fields are both
+/// full replacements with no merge mode.
+fn merge_header_list(
+    original: &[(String, String)],
+    overlay: &BTreeMap<String, String>,
+) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::with_capacity(original.len() + overlay.len());
     let overlay_keys_lower: std::collections::HashSet<String> =
         overlay.keys().map(|k| k.to_ascii_lowercase()).collect();
     for (k, v) in original {
-        // Drop any original header that the overlay replaces (case-insens).
         if !overlay_keys_lower.contains(&k.to_ascii_lowercase()) {
             out.push((k.clone(), v.clone()));
         }
@@ -221,10 +270,7 @@ fn merge_headers(
     for (k, v) in overlay {
         out.push((k.clone(), v.clone()));
     }
-    RequestOverrides {
-        headers: Some(out),
-        ..RequestOverrides::default()
-    }
+    out
 }
 
 /// Wrap a `zendriver_interception::InterceptionError` (re-exported as

@@ -1,0 +1,20 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::imperva::Outcome)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: Outcome
+description: "Terminal outcome of an Imperva bypass attempt.\n\n`TokenAcquired` / `ChallengeGone` / `AlreadyClear` mirror the lib's\n[`ImpervaClearanceOutcome`] variants. `Timeout` is the MCP layer's\ncollapse of [`ImpervaError::Timeout`] into the success channel — agents\nbranch on `outcome` without try/catch around a timeout."
+oneOf:
+  - description: "reese84 token acquired (value in [`SolveImpervaOutput::reese84`])."
+    type: string
+    const: token_acquired
+  - description: "Body markers cleared without a reese84 token (e.g. legacy Incapsula\nflow). `reese84` will be `None`."
+    type: string
+    const: challenge_gone
+  - description: "No Imperva surface was present at call time (fast path, no waiting).\n`reese84` will be `None`."
+    type: string
+    const: already_clear
+  - description: "`timeout_ms` elapsed without reaching clearance. Not a hard error —\nagents can retry or give up. `reese84` will be `None`."
+    type: string
+    const: timeout

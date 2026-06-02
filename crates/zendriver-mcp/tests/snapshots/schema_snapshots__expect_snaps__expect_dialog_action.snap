@@ -1,0 +1,14 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::expect::DialogAction)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: DialogAction
+description: "How to drive a matched JavaScript dialog (`kind: dialog` only).\n\nApplied by the spawned task the instant the dialog opens — so the page's\nblocking `alert()` / `confirm()` / `prompt()` call returns promptly and\nthe matched event carries the chosen action. Omitting `dialog_action`\nfalls back to Chrome's default handling (the dialog is accepted when the\nmatched handle is dropped at task end)."
+oneOf:
+  - description: "Accept the dialog. For a `prompt`, submit `dialog_prompt_text` (or the\ndialog's default value when that is unset)."
+    type: string
+    const: accept
+  - description: Dismiss / cancel the dialog.
+    type: string
+    const: dismiss

@@ -35,11 +35,13 @@ use crate::tools::common::EmptyInput;
 use crate::tools::expect;
 #[cfg(feature = "fetcher")]
 use crate::tools::fetcher;
+#[cfg(feature = "imperva")]
+use crate::tools::imperva;
 #[cfg(feature = "interception")]
 use crate::tools::intercept;
 use crate::tools::{
-    actions, cookies, eval, find, frames, lifecycle, navigation, reads, snapshot, stealth, storage,
-    tabs,
+    actions, cookies, download, eval, find, frames, lifecycle, mouse, navigation, pdf, reads,
+    scroll, snapshot, stealth, storage, tabs, window,
 };
 
 /// rmcp handler carrying the per-session [`SessionState`].
@@ -144,10 +146,13 @@ impl ZendriverServer {
     }
 
     /// Reload the current tab.
-    #[tool(name = "browser_reload", description = "Reload the current tab.")]
+    #[tool(
+        name = "browser_reload",
+        description = "Reload the current tab. Set `ignore_cache: true` for a hard reload that bypasses the HTTP cache. `return_snapshot: true` includes the trimmed page HTML."
+    )]
     pub async fn browser_reload(
         &self,
-        Parameters(input): Parameters<navigation::HistoryInput>,
+        Parameters(input): Parameters<navigation::ReloadInput>,
     ) -> Result<Json<navigation::NavOutput>, ErrorData> {
         navigation::reload(self.state.clone(), input)
             .await
@@ -250,13 +255,27 @@ impl ZendriverServer {
     /// Configure the session's default stealth profile.
     #[tool(
         name = "browser_set_stealth_profile",
-        description = "Configure the session's default stealth profile. NOTE: takes effect on the NEXT `browser_open` call; does NOT re-fingerprint an already-open browser. Call `browser_close` + `browser_open` to apply live."
+        description = "Configure the session's default stealth profile + optional fine-grained fingerprint `overrides` (`platform` / `locale` / `timezone` / `memory_gb` / `cpu_count` / `chrome_version` / `user_agent` / `bypass_csp`). Overrides are layered onto the profile and most meaningful with a `spoof_*` profile. NOTE: takes effect on the NEXT `browser_open`; does NOT re-fingerprint an already-open browser. `overrides` replaces any previously-set overrides (omit to clear)."
     )]
     pub async fn browser_set_stealth_profile(
         &self,
         Parameters(input): Parameters<stealth::SetStealthProfileInput>,
     ) -> Result<Json<stealth::SetStealthProfileOutput>, ErrorData> {
         stealth::set_stealth_profile(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Override the current tab's User-Agent at runtime.
+    #[tool(
+        name = "browser_set_user_agent",
+        description = "Override the current tab's User-Agent at runtime (`Emulation.setUserAgentOverride`), with optional `accept_language` and `platform`. Last-write-wins and sends NO userAgentMetadata — under a Spoofed stealth profile this can clobber UA-Client-Hints coherence and INCREASE detectability. Prefer the stealth profile for stealth-sensitive tabs; use this for non-stealth tabs or a deliberate per-tab change."
+    )]
+    pub async fn browser_set_user_agent(
+        &self,
+        Parameters(input): Parameters<stealth::SetUserAgentInput>,
+    ) -> Result<Json<actions::AckOutput>, ErrorData> {
+        stealth::set_user_agent(self.state.clone(), input)
             .await
             .map(Json)
     }
@@ -292,13 +311,53 @@ impl ZendriverServer {
     /// Resolve a Selector and report selected state fields.
     #[tool(
         name = "browser_element_state",
-        description = "Inspect a single element's state. `include` picks which fields to populate (default `all`). `in_viewport` is reserved for v1 and always returns null. Missing-element returns `{ exists: false }` rather than an error."
+        description = "Inspect a single element's state. `include` picks which fields to populate (default `all`): `visible`/`enabled`, `bounding_box` (viewport) + `bounding_box_page` (page-absolute), `text`/`attrs`/`inner_html`/`outer_html`. `in_viewport` is reserved for v1 and always returns null. Missing-element returns `{ exists: false }` rather than an error."
     )]
     pub async fn browser_element_state(
         &self,
         Parameters(input): Parameters<reads::ElementStateInput>,
     ) -> Result<Json<reads::ElementState>, ErrorData> {
         reads::element_state(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Harvest anchor URLs (and optionally resource sources) from the page.
+    #[tool(
+        name = "browser_get_links",
+        description = "Collect all anchor (`<a href>`) URLs on the current page. `absolute: true` resolves relative hrefs against the page URL. `include_sources: true` also returns `src`/`href` of linked-resource elements (img, script, link, …) in `sources`. Useful for crawling / link extraction without writing JS."
+    )]
+    pub async fn browser_get_links(
+        &self,
+        Parameters(input): Parameters<reads::GetLinksInput>,
+    ) -> Result<Json<reads::GetLinksOutput>, ErrorData> {
+        reads::get_links(self.state.clone(), input).await.map(Json)
+    }
+
+    /// Search every frame's loaded resources for a URL substring.
+    #[tool(
+        name = "browser_search_resources",
+        description = "Search across every frame's loaded resource URLs (`Page.getResourceTree`) for a substring `query`. Returns `{ matches: [{ url, frame_id }] }`. Use to locate a script/XHR/asset by URL fragment, including inside iframes."
+    )]
+    pub async fn browser_search_resources(
+        &self,
+        Parameters(input): Parameters<reads::SearchResourcesInput>,
+    ) -> Result<Json<reads::SearchResourcesOutput>, ErrorData> {
+        reads::search_resources(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Click through Chrome's TLS interstitial on the current tab.
+    #[tool(
+        name = "browser_bypass_insecure_warning",
+        description = "Dismiss Chrome's \"Your connection is not private\" TLS interstitial on the current tab (types the `thisisunsafe` bypass). Use after navigating to a site with a self-signed / invalid certificate when you intend to proceed anyway."
+    )]
+    pub async fn browser_bypass_insecure_warning(
+        &self,
+        Parameters(input): Parameters<EmptyInput>,
+    ) -> Result<Json<actions::AckOutput>, ErrorData> {
+        navigation::bypass_insecure_warning(self.state.clone(), input)
             .await
             .map(Json)
     }
@@ -346,7 +405,7 @@ impl ZendriverServer {
     /// Focus an element + dispatch a single keystroke.
     #[tool(
         name = "browser_press",
-        description = "Focus an element + dispatch a single keystroke. `key` accepts a special-key name (Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, Space, Home, End, PageUp, PageDown, F1..F12, etc., case-insensitive) OR a single character (typed as `Key::Char`)."
+        description = "Focus an element + dispatch a single keystroke. `key` accepts a special-key name (Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, Space, Home, End, PageUp, PageDown, F1..F12, etc., case-insensitive) OR a single character (typed as `Key::Char`). `modifiers` (e.g. `[\"ctrl\"]`) holds modifier keys for a chord. For multi-step shortcuts use `browser_key_sequence`."
     )]
     pub async fn browser_press(
         &self,
@@ -358,7 +417,7 @@ impl ZendriverServer {
     /// Set an element's `value` directly + fire `input`/`change` events.
     #[tool(
         name = "browser_set_value",
-        description = "Set an element's `value` directly + fire bubbled `input` and `change` events. Faster than `browser_type` when keystroke realism doesn't matter, but still routes through the event handlers React-style controlled inputs listen on."
+        description = "Set an element's `value` directly + fire bubbled `input` and `change` events. Faster than `browser_type` when keystroke realism doesn't matter, but still routes through the event handlers React-style controlled inputs listen on. Set `mode: text` to write `textContent` instead of `.value` (for non-form elements)."
     )]
     pub async fn browser_set_value(
         &self,
@@ -372,7 +431,7 @@ impl ZendriverServer {
     /// Clear an element's `value` and fire a bubbled `input` event.
     #[tool(
         name = "browser_clear",
-        description = "Clear an element's `value` by assigning `''` and firing a bubbled `input` event. Omits `change` event + focus + Backspace sequence — for contenteditable / non-`<input>` clearing semantics, use `browser_type` with a leading select-all + Delete."
+        description = "Clear an element's `value` by assigning `''` and firing a bubbled `input` event (default `mode: value`). Set `mode: backspace` to instead focus + select-all + Backspace — emitting the real key events some inputs require."
     )]
     pub async fn browser_clear(
         &self,
@@ -424,7 +483,7 @@ impl ZendriverServer {
     /// Return the current page's HTML (trimmed by default).
     #[tool(
         name = "browser_html",
-        description = "Return the current page's HTML as a text content block. With `selector` set, returns that element's `innerHTML`. With `frame_id` set, returns that frame's `document.documentElement.outerHTML`. `selector` and `frame_id` are mutually exclusive — use the selector's own `frame_id` field to scope element lookup to a sub-frame. `trim: true` (default) strips `<script>` / `<style>` blocks and collapses whitespace."
+        description = "Return the current page's HTML as a text content block. With `selector` set, returns that element's `innerHTML` (or `outerHTML` when `outer: true`). With `frame_id` set, returns that frame's `document.documentElement.outerHTML`. `selector` and `frame_id` are mutually exclusive — use the selector's own `frame_id` field to scope element lookup to a sub-frame. `trim: true` (default) strips `<script>` / `<style>` blocks and collapses whitespace."
     )]
     pub async fn browser_html(
         &self,
@@ -602,6 +661,154 @@ impl ZendriverServer {
             .await
             .map(Json)
     }
+
+    // ---------- scroll / window / pdf / mouse (Tier 1 coverage) ----------
+
+    /// Scroll the page by a signed pixel distance.
+    #[tool(
+        name = "browser_scroll",
+        description = "Scroll the page by a signed pixel distance via `Input.synthesizeScrollGesture`. Intuitive axes: positive `dy` scrolls **down**, positive `dx` scrolls **right** (the tool negates internally for CDP). Optional `speed` (px/sec). Returns the resulting `{ scroll_x, scroll_y }` (and the trimmed HTML when `return_snapshot: true`). Use `browser_scroll_into_view` instead when you want to bring a specific element into view."
+    )]
+    pub async fn browser_scroll(
+        &self,
+        Parameters(input): Parameters<scroll::PageScrollInput>,
+    ) -> Result<Json<scroll::PageScrollOutput>, ErrorData> {
+        scroll::scroll(self.state.clone(), input).await.map(Json)
+    }
+
+    /// Read the current OS window bounds + state.
+    #[tool(
+        name = "browser_get_window",
+        description = "Read the current OS window bounds + state (`Browser.getWindowForTarget`). Returns `{ left?, top?, width?, height?, state }` in device-independent pixels; geometry fields are omitted for a minimized window. `state` is one of `normal` / `minimized` / `maximized` / `fullscreen`."
+    )]
+    pub async fn browser_get_window(
+        &self,
+        Parameters(_): Parameters<EmptyInput>,
+    ) -> Result<Json<window::WindowBoundsDto>, ErrorData> {
+        window::get_window(self.state.clone()).await.map(Json)
+    }
+
+    /// Resize / reposition / change the state of the OS window.
+    #[tool(
+        name = "browser_set_window",
+        description = "Resize, reposition, or change the state of the OS window hosting the current tab. `mode`: `size` (resize to `width`×`height`, both required), `bounds` (set any subset of `left`/`top`/`width`/`height`/`state`), `maximize`, `minimize`, or `fullscreen`. Returns the resulting bounds. Affects viewport size for screenshots + responsive layouts."
+    )]
+    pub async fn browser_set_window(
+        &self,
+        Parameters(input): Parameters<window::SetWindowInput>,
+    ) -> Result<Json<window::WindowBoundsDto>, ErrorData> {
+        window::set_window(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Export the current page to PDF.
+    #[tool(
+        name = "browser_pdf",
+        description = "Export the current page to PDF (`Page.printToPDF`). All options optional: `landscape`, `print_background`, `scale`, `paper_width`/`paper_height` (inches), `margin_*` (inches), `page_ranges` (e.g. `\"1-3, 5\"`), `prefer_css_page_size`. When `save_path` is set the bytes are written to disk on the MCP host and `{ saved_path, byte_len }` is returned; otherwise the bytes are base64-inlined in `{ byte_len, base64 }` (blobs over 5 MiB require `save_path`)."
+    )]
+    pub async fn browser_pdf(
+        &self,
+        Parameters(input): Parameters<pdf::PdfInput>,
+    ) -> Result<Json<crate::tools::common::BlobOutput>, ErrorData> {
+        pdf::pdf(self.state.clone(), input).await.map(Json)
+    }
+
+    /// Capture an MHTML archive of the current page.
+    #[tool(
+        name = "browser_save_mhtml",
+        description = "Capture a single-file MHTML archive of the current page (`Page.captureSnapshot`) — HTML plus inlined subresources. When `save_path` is set the bytes are written to disk on the MCP host; otherwise base64-inlined (same `BlobOutput` shape as `browser_pdf`)."
+    )]
+    pub async fn browser_save_mhtml(
+        &self,
+        Parameters(input): Parameters<pdf::SaveMhtmlInput>,
+    ) -> Result<Json<crate::tools::common::BlobOutput>, ErrorData> {
+        pdf::save_mhtml(self.state.clone(), input).await.map(Json)
+    }
+
+    /// Dispatch a coordinate-anchored mouse action.
+    #[tool(
+        name = "browser_mouse",
+        description = "Dispatch a coordinate-anchored pointer action for canvas / drag-and-drop / map / game interactions not reachable via element-targeted tools. `action`: `move` (Bezier path to `x,y`), `click` (at `x,y`, with optional `button` / `click_count` / `modifiers`), or `drag` (press at `x,y`, drag to `to_x,to_y` over `steps`, release). Coordinates are viewport CSS pixels. Returns `{ ok }` (and trimmed HTML when `return_snapshot: true`)."
+    )]
+    pub async fn browser_mouse(
+        &self,
+        Parameters(input): Parameters<mouse::MouseInput>,
+    ) -> Result<Json<actions::ActionOutput>, ErrorData> {
+        mouse::mouse(self.state.clone(), input).await.map(Json)
+    }
+
+    // ---------- keyboard chords / downloads / load waits (Tier 2) --------
+
+    /// Dispatch a mixed text / key-chord sequence into an element.
+    #[tool(
+        name = "browser_key_sequence",
+        description = "Focus an element and dispatch an ordered sequence of typed text and (chorded) key presses — the way to send shortcuts like Ctrl+A, Cmd+C, or Tab-between-fields in one call. Each step sets `text` (literal text) OR `key` (a special-key name or single char) with optional `modifiers` (`alt`/`ctrl`/`meta`/`shift`). Example: `[{\"key\":\"a\",\"modifiers\":[\"ctrl\"]},{\"text\":\"new value\"}]`."
+    )]
+    pub async fn browser_key_sequence(
+        &self,
+        Parameters(input): Parameters<actions::KeySequenceInput>,
+    ) -> Result<Json<actions::ActionOutput>, ErrorData> {
+        actions::key_sequence(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Download a URL through the page's own network context.
+    #[tool(
+        name = "browser_download",
+        description = "Download `url` by fetching it from the page's own network context (cookies / referer / same-origin credentials) and saving it via Chrome's download behavior. Optional `filename` sets the saved name (else derived from the URL). Fire-and-forget: returns once the fetch is dispatched, NOT when the file lands — for await/save-to-path use `browser_expect_register { kind: download, save_to }`."
+    )]
+    pub async fn browser_download(
+        &self,
+        Parameters(input): Parameters<download::DownloadInput>,
+    ) -> Result<Json<download::DownloadOutput>, ErrorData> {
+        download::download(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Set the directory downloads are saved into.
+    #[tool(
+        name = "browser_set_download_path",
+        description = "Set the directory (on the MCP host) Chrome saves downloads into for the current tab (`Browser.setDownloadBehavior`). Created if missing. Applies to subsequent `browser_download` calls and any in-page-triggered downloads."
+    )]
+    pub async fn browser_set_download_path(
+        &self,
+        Parameters(input): Parameters<download::SetDownloadPathInput>,
+    ) -> Result<Json<actions::AckOutput>, ErrorData> {
+        download::set_download_path(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Wait for a document-load milestone on the tab or a frame.
+    #[tool(
+        name = "browser_wait_for_load",
+        description = "Wait for a load milestone. With no args, waits for the tab's `load` event. `ready_state` (`interactive` / `complete`) waits for that `document.readyState`. `frame_id` waits for a specific frame's load instead (ignoring `ready_state`). Distinct from `browser_wait_for_idle`, which waits for network quiet."
+    )]
+    pub async fn browser_wait_for_load(
+        &self,
+        Parameters(input): Parameters<navigation::WaitForLoadInput>,
+    ) -> Result<Json<navigation::NavOutput>, ErrorData> {
+        navigation::wait_for_load(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Navigate a specific frame to a URL.
+    #[tool(
+        name = "browser_frame_goto",
+        description = "Navigate the frame identified by `frame_id` (from `browser_frame_list`) to `url`, then wait for its load. Works on the main frame of an out-of-process iframe; in-process child frames surface the lib's navigation error. For top-level navigation use `browser_goto`."
+    )]
+    pub async fn browser_frame_goto(
+        &self,
+        Parameters(input): Parameters<frames::FrameGotoInput>,
+    ) -> Result<Json<actions::AckOutput>, ErrorData> {
+        frames::frame_goto(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
 }
 
 // ---------- interception (gated) ----------------------------------------
@@ -684,7 +891,7 @@ impl ZendriverServer {
     /// Register a one-shot expectation against the current tab.
     #[tool(
         name = "browser_expect_register",
-        description = "Register a one-shot expectation against the current tab. `kind` selects `request` / `response` / `dialog` / `download`. `matcher.url_substr` / `matcher.url_regex` filter request and response by URL (regex wins if both set; default matches every URL). `dialog` and `download` ignore matcher fields entirely. `pre_await_timeout_ms` (default 60_000 = 60s) is the inner timeout applied to the lib's `.timeout(d)` so the user has time to trigger the action between `_register` and `_await`. Returns `{ expectation_id }` — pass to `browser_expect_await` or `browser_expect_cancel`."
+        description = "Register a one-shot expectation against the current tab. `kind` selects `request` / `response` / `dialog` / `download`. `matcher.url_substr` / `matcher.url_regex` filter request and response by URL (regex wins if both set; default matches every URL). `dialog` and `download` ignore matcher fields entirely. `pre_await_timeout_ms` (default 60_000 = 60s) is the inner timeout applied to the lib's `.timeout(d)` so the user has time to trigger the action between `_register` and `_await`. Drive params (decided here because the matched handle is consumed by the spawned task): `dialog_action` (`accept`/`dismiss`, plus `dialog_prompt_text` for prompts) drives a matched dialog so the page's blocking call returns; `fetch_body: true` inlines the response body as `body_base64`; `save_to: <path>` copies a completed download to the MCP host. Returns `{ expectation_id }` — pass to `browser_expect_await` or `browser_expect_cancel`."
     )]
     pub async fn browser_expect_register(
         &self,
@@ -696,7 +903,7 @@ impl ZendriverServer {
     /// Wait for a previously-registered expectation to resolve.
     #[tool(
         name = "browser_expect_await",
-        description = "Wait for a previously-registered expectation to resolve. `timeout_ms` (default 30_000 = 30s) is the outer wait on the spawned task's matched-event channel. Returns `{ expectation_id, event }` where `event` is a JSON object whose shape depends on the expectation's `kind`: request/response carry `url` / `headers` / `method` or `status`; dialog carries `dialog_type` / `message` / `default_prompt`; download carries `suggested_filename` / `guid` / `download_dir`. Response bodies and download bytes are NOT fetched in v0 — agents that need them can poll via `browser_evaluate` or a future kind-specific tool."
+        description = "Wait for a previously-registered expectation to resolve. `timeout_ms` (default 30_000 = 30s) is the outer wait on the spawned task's matched-event channel. Returns `{ expectation_id, event }` where `event` is a JSON object whose shape depends on the expectation's `kind`: request/response carry `url` / `headers` / `method` or `status`; dialog carries `dialog_type` / `message` / `default_prompt` / `driven`; download carries `suggested_filename` / `guid` / `download_dir` / `saved_path`. When the expectation was registered with `fetch_body: true`, response events also carry `body_base64` + `body_len`. Dialog drive and download save are requested at register time (see `browser_expect_register`)."
     )]
     pub async fn browser_expect_await(
         &self,
@@ -744,6 +951,29 @@ impl ZendriverServer {
     }
 }
 
+// ---------- imperva (gated) ----------------------------------------------
+//
+// Same split pattern as the cloudflare block — own impl block so the
+// `tool_router` macro can cfg-gate the whole thing.
+
+#[cfg(feature = "imperva")]
+#[tool_router(router = imperva_tool_router, vis = "pub")]
+impl ZendriverServer {
+    /// Drive the Imperva / Incapsula clearance flow on the current tab.
+    #[tool(
+        name = "browser_solve_imperva",
+        description = "Drive the Imperva / Incapsula clearance flow on the current tab. Detects the active surface (modern reese84 bot-management, legacy Incapsula, or CAPTCHA escalation) and polls every `poll_interval_ms` until one of four terminal states is reached, bounded by `timeout_ms` (default 30_000 = 30s): `token_acquired` (reese84 cookie captured — returned in `reese84`), `challenge_gone` (markers cleared without a token, e.g. legacy flow), `already_clear` (no surface present at call time — fast path), or `timeout` (deadline elapsed — not an error, retry or fall back). Set `with_interception: true` for the Fetch-domain fast-path. Errors on structural failures: CAPTCHA with no solver, CDP failure, or in-page JS exception. Requires stealth (on by default)."
+    )]
+    pub async fn browser_solve_imperva(
+        &self,
+        Parameters(input): Parameters<imperva::SolveImpervaInput>,
+    ) -> Result<Json<imperva::SolveImpervaOutput>, ErrorData> {
+        imperva::solve_imperva(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+}
+
 // ---------- fetcher (gated) ----------------------------------------------
 //
 // Same split pattern as the other gated blocks. `browser_install_chrome`
@@ -785,6 +1015,8 @@ impl ZendriverServer {
         let router = router + Self::expect_tool_router();
         #[cfg(feature = "cloudflare")]
         let router = router + Self::cloudflare_tool_router();
+        #[cfg(feature = "imperva")]
+        let router = router + Self::imperva_tool_router();
         #[cfg(feature = "fetcher")]
         let router = router + Self::fetcher_tool_router();
         router

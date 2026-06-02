@@ -1,0 +1,18 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::reads::GetLinksInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: GetLinksInput
+description: "Input for `browser_get_links`."
+type: object
+properties:
+  absolute:
+    description: "Resolve relative `href`s to absolute URLs. Default `false`."
+    type: boolean
+    default: false
+  include_sources:
+    description: "Also collect `src`/`href` of linked-resource elements (img, script,\nlink, …) into `sources`. Default `false`."
+    type: boolean
+    default: false
+additionalProperties: false

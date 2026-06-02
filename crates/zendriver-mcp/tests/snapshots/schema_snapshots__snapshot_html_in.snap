@@ -12,8 +12,12 @@ properties:
     type:
       - string
       - "null"
+  outer:
+    description: "With `selector`, return `outerHTML` (the element's own tag included)\ninstead of `innerHTML`. Ignored without a selector. Default `false`."
+    type: boolean
+    default: false
   selector:
-    description: "When set, returns `el.innerHTML` for the matched element.\nMutually exclusive with the tool-level `frame_id` — use the\nselector's own `frame_id` to scope the lookup to a sub-frame."
+    description: "When set, returns `el.innerHTML` (or `el.outerHTML` if `outer`) for the\nmatched element. Mutually exclusive with the tool-level `frame_id` —\nuse the selector's own `frame_id` to scope the lookup to a sub-frame."
     anyOf:
       - $ref: "#/$defs/Selector"
       - type: "null"

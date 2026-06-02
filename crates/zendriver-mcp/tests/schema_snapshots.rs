@@ -26,7 +26,31 @@ macro_rules! schema_snap {
 // ---------- shared ---------------------------------------------------------
 
 schema_snap!(common_empty_input, tools::common::EmptyInput);
+schema_snap!(common_modifier_arg, tools::common::ModifierArg);
+schema_snap!(common_blob_output, tools::common::BlobOutput);
 schema_snap!(selectors_selector, selectors::Selector);
+
+// ---------- scroll ---------------------------------------------------------
+
+schema_snap!(scroll_page_in, tools::scroll::PageScrollInput);
+schema_snap!(scroll_page_out, tools::scroll::PageScrollOutput);
+
+// ---------- window ---------------------------------------------------------
+
+schema_snap!(window_state_dto, tools::window::WindowStateDto);
+schema_snap!(window_bounds_dto, tools::window::WindowBoundsDto);
+schema_snap!(window_set_mode, tools::window::SetWindowMode);
+schema_snap!(window_set_in, tools::window::SetWindowInput);
+
+// ---------- pdf ------------------------------------------------------------
+
+schema_snap!(pdf_in, tools::pdf::PdfInput);
+schema_snap!(pdf_save_mhtml_in, tools::pdf::SaveMhtmlInput);
+
+// ---------- mouse ----------------------------------------------------------
+
+schema_snap!(mouse_action, tools::mouse::MouseAction);
+schema_snap!(mouse_in, tools::mouse::MouseInput);
 
 // ---------- lifecycle ------------------------------------------------------
 
@@ -42,6 +66,12 @@ schema_snap!(navigation_nav_out, tools::navigation::NavOutput);
 schema_snap!(navigation_wait_for, tools::navigation::WaitFor);
 schema_snap!(navigation_goto_in, tools::navigation::GotoInput);
 schema_snap!(navigation_history_in, tools::navigation::HistoryInput);
+schema_snap!(navigation_reload_in, tools::navigation::ReloadInput);
+schema_snap!(navigation_ready_state_arg, tools::navigation::ReadyStateArg);
+schema_snap!(
+    navigation_wait_for_load_in,
+    tools::navigation::WaitForLoadInput
+);
 schema_snap!(navigation_idle_in, tools::navigation::IdleInput);
 schema_snap!(navigation_idle_out, tools::navigation::IdleOutput);
 
@@ -60,11 +90,13 @@ schema_snap!(tabs_activate_out, tools::tabs::TabActivateOutput);
 
 schema_snap!(frames_frame_summary, tools::frames::FrameSummary);
 schema_snap!(frames_list_out, tools::frames::FrameListOutput);
+schema_snap!(frames_frame_goto_in, tools::frames::FrameGotoInput);
 
 // ---------- stealth --------------------------------------------------------
 
 schema_snap!(stealth_set_in, tools::stealth::SetStealthProfileInput);
 schema_snap!(stealth_set_out, tools::stealth::SetStealthProfileOutput);
+schema_snap!(stealth_set_user_agent_in, tools::stealth::SetUserAgentInput);
 
 // ---------- find -----------------------------------------------------------
 
@@ -80,6 +112,17 @@ schema_snap!(find_all_out, tools::find::FindAllOutput);
 schema_snap!(reads_fields_preset, tools::reads::ReadFieldsPreset);
 schema_snap!(reads_state_in, tools::reads::ElementStateInput);
 schema_snap!(reads_state_out, tools::reads::ElementState);
+schema_snap!(reads_get_links_in, tools::reads::GetLinksInput);
+schema_snap!(reads_get_links_out, tools::reads::GetLinksOutput);
+schema_snap!(
+    reads_search_resources_in,
+    tools::reads::SearchResourcesInput
+);
+schema_snap!(
+    reads_search_resources_out,
+    tools::reads::SearchResourcesOutput
+);
+schema_snap!(reads_resource_match, tools::reads::ResourceMatch);
 
 // ---------- actions --------------------------------------------------------
 
@@ -91,10 +134,20 @@ schema_snap!(actions_hover_in, tools::actions::HoverInput);
 schema_snap!(actions_type_in, tools::actions::TypeInput);
 schema_snap!(actions_press_in, tools::actions::PressInput);
 schema_snap!(actions_set_value_in, tools::actions::SetValueInput);
+schema_snap!(actions_set_value_mode, tools::actions::SetValueMode);
 schema_snap!(actions_clear_in, tools::actions::ClearInput);
+schema_snap!(actions_clear_mode, tools::actions::ClearMode);
 schema_snap!(actions_focus_in, tools::actions::FocusInput);
 schema_snap!(actions_scroll_in, tools::actions::ScrollInput);
 schema_snap!(actions_upload_in, tools::actions::UploadInput);
+schema_snap!(actions_key_step, tools::actions::KeyStep);
+schema_snap!(actions_key_sequence_in, tools::actions::KeySequenceInput);
+
+// ---------- download -------------------------------------------------------
+
+schema_snap!(download_in, tools::download::DownloadInput);
+schema_snap!(download_out, tools::download::DownloadOutput);
+schema_snap!(download_set_path_in, tools::download::SetDownloadPathInput);
 
 // ---------- snapshot -------------------------------------------------------
 
@@ -157,6 +210,7 @@ mod expect_snaps {
     use super::*;
 
     schema_snap!(expect_kind, tools::expect::ExpectKind);
+    schema_snap!(expect_dialog_action, tools::expect::DialogAction);
     schema_snap!(expect_matcher, tools::expect::ExpectMatcher);
     schema_snap!(expect_register_in, tools::expect::RegisterInput);
     schema_snap!(expect_register_out, tools::expect::RegisterOutput);
@@ -175,6 +229,17 @@ mod cloudflare_snaps {
     schema_snap!(cloudflare_solve_in, tools::cloudflare::SolveInput);
     schema_snap!(cloudflare_outcome, tools::cloudflare::Outcome);
     schema_snap!(cloudflare_solve_out, tools::cloudflare::SolveOutput);
+}
+
+// ---------- imperva (feature-gated) ---------------------------------------
+
+#[cfg(feature = "imperva")]
+mod imperva_snaps {
+    use super::*;
+
+    schema_snap!(imperva_solve_in, tools::imperva::SolveImpervaInput);
+    schema_snap!(imperva_outcome, tools::imperva::Outcome);
+    schema_snap!(imperva_solve_out, tools::imperva::SolveImpervaOutput);
 }
 
 // ---------- fetcher (feature-gated) ---------------------------------------

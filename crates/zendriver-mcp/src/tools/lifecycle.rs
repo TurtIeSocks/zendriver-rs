@@ -16,7 +16,7 @@ use zendriver::Browser;
 use zendriver::stealth::{Platform, StealthProfile};
 
 use crate::errors::{McpServerError, map_error};
-use crate::state::{SessionState, StealthProfileChoice};
+use crate::state::{SessionState, StealthOverrides, StealthPlatformChoice, StealthProfileChoice};
 use crate::tools::common::EmptyInput;
 
 // ---------- browser_open --------------------------------------------------
@@ -65,7 +65,7 @@ pub async fn open(
         return Err(map_error(McpServerError::BrowserAlreadyOpen));
     }
     let profile = input.stealth_profile.unwrap_or(s.stealth_profile_choice);
-    let stealth = stealth_profile_for(profile);
+    let stealth = apply_overrides(stealth_profile_for(profile), &s.stealth_overrides);
     let browser = Browser::builder()
         .headless(input.headless)
         .stealth(stealth)
@@ -98,6 +98,48 @@ fn stealth_profile_for(choice: StealthProfileChoice) -> StealthProfile {
         }
         StealthProfileChoice::SpoofWindows => StealthProfile::spoofed().platform(Platform::Win32),
     }
+}
+
+impl From<StealthPlatformChoice> for Platform {
+    fn from(p: StealthPlatformChoice) -> Self {
+        match p {
+            StealthPlatformChoice::Win32 => Platform::Win32,
+            StealthPlatformChoice::MacIntel => Platform::MacIntel,
+            StealthPlatformChoice::LinuxX86_64 => Platform::LinuxX86_64,
+        }
+    }
+}
+
+/// Layer fine-grained [`StealthOverrides`] onto a base [`StealthProfile`].
+///
+/// Each set field overrides the base profile via the corresponding builder
+/// method; unset fields leave the base value untouched.
+fn apply_overrides(mut profile: StealthProfile, overrides: &StealthOverrides) -> StealthProfile {
+    if let Some(platform) = overrides.platform {
+        profile = profile.platform(platform.into());
+    }
+    if let Some(ref locale) = overrides.locale {
+        profile = profile.locale(locale);
+    }
+    if let Some(ref timezone) = overrides.timezone {
+        profile = profile.timezone(timezone);
+    }
+    if let Some(memory_gb) = overrides.memory_gb {
+        profile = profile.memory_gb(memory_gb);
+    }
+    if let Some(cpu_count) = overrides.cpu_count {
+        profile = profile.cpu_count(cpu_count);
+    }
+    if let Some(chrome_version) = overrides.chrome_version {
+        profile = profile.chrome_version(chrome_version);
+    }
+    if let Some(ref user_agent) = overrides.user_agent {
+        profile = profile.user_agent(user_agent);
+    }
+    if let Some(bypass_csp) = overrides.bypass_csp {
+        profile = profile.bypass_csp(bypass_csp);
+    }
+    profile
 }
 
 // ---------- browser_close -------------------------------------------------
@@ -181,6 +223,9 @@ pub struct StatusOutput {
     pub tab_count: usize,
     /// `id` / `url` / `title` of the currently-focused tab, or `null`.
     pub current_tab: Option<TabSummary>,
+    /// Chrome DevTools inspector URL for the focused tab, when one is open.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inspector_url: Option<String>,
     /// Configured stealth profile choice for this session.
     pub profile: StealthProfileChoice,
 }
@@ -197,10 +242,12 @@ pub async fn status(
             open: false,
             tab_count: 0,
             current_tab: None,
+            inspector_url: None,
             profile: s.stealth_profile_choice,
         });
     };
     let tabs = b.tabs().await;
+    let mut inspector_url = None;
     let current_tab = match &s.current_tab_id {
         Some(id) => {
             let mut found = None;
@@ -208,6 +255,9 @@ pub async fn status(
                 if t.target_id() == id {
                     let url = t.url().await.map(|u| u.to_string()).unwrap_or_default();
                     let title = t.title().await.unwrap_or_default();
+                    // `inspector_url` is sync + best-effort; a failure just
+                    // leaves the field absent.
+                    inspector_url = t.inspector_url().ok();
                     found = Some(TabSummary {
                         id: t.target_id().to_string(),
                         url,
@@ -224,6 +274,7 @@ pub async fn status(
         open: true,
         tab_count: tabs.len(),
         current_tab,
+        inspector_url,
         profile: s.stealth_profile_choice,
     })
 }

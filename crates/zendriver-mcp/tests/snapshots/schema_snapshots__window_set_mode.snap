@@ -1,0 +1,23 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::window::SetWindowMode)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: SetWindowMode
+description: "Which window operation `browser_set_window` performs."
+oneOf:
+  - description: "Set explicit bounds (`left`/`top`/`width`/`height`/`state`, any subset)."
+    type: string
+    const: bounds
+  - description: "Resize to `width` × `height` (both required)."
+    type: string
+    const: size
+  - description: Maximize the window.
+    type: string
+    const: maximize
+  - description: Minimize the window.
+    type: string
+    const: minimize
+  - description: Enter fullscreen.
+    type: string
+    const: fullscreen

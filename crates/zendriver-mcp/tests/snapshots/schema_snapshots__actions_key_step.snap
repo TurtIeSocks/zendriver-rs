@@ -1,0 +1,42 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::actions::KeyStep)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: KeyStep
+description: "One step in a [`KeySequenceInput`]: either literal text or a key press\n(optionally a modifier chord). Exactly one of `text` / `key` must be set."
+type: object
+properties:
+  key:
+    description: "Key to press — a special-key name or single character (see\n`browser_press`). Mutually exclusive with `text`."
+    type:
+      - string
+      - "null"
+  modifiers:
+    description: "Modifiers held while pressing `key` (ignored for `text`)."
+    type: array
+    default: []
+    items:
+      $ref: "#/$defs/ModifierArg"
+  text:
+    description: "Literal text to type (grapheme-by-grapheme). Mutually exclusive with\n`key`."
+    type:
+      - string
+      - "null"
+additionalProperties: false
+$defs:
+  ModifierArg:
+    description: "MCP-layer keyboard-modifier flag, mapped onto [`zendriver::KeyModifiers`].\n\nShared by coordinate-mouse clicks (`browser_mouse`) and keyboard chords\n(`browser_press` / `browser_key_sequence`)."
+    oneOf:
+      - description: "`Alt` (Option on macOS)."
+        type: string
+        const: alt
+      - description: "`Control`."
+        type: string
+        const: ctrl
+      - description: "`Meta` (Command on macOS, Windows key on Windows)."
+        type: string
+        const: meta
+      - description: "`Shift`."
+        type: string
+        const: shift
