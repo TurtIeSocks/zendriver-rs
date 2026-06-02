@@ -18,6 +18,7 @@ use zendriver::{ReadyState, ReloadOptions};
 use crate::errors::{McpServerError, map_error};
 use crate::snapshot::html_trim;
 use crate::state::SessionState;
+use crate::tools::actions::AckOutput;
 use crate::tools::common::{EmptyInput, current_tab, lookup_frame};
 
 // ---------- shared types --------------------------------------------------
@@ -254,6 +255,20 @@ pub async fn wait_for_load(
             .map_err(|e| map_error(McpServerError::from(e)))?;
     }
     nav_output(&tab, false).await
+}
+
+/// Click through Chrome's "Your connection is not private" interstitial on
+/// the current tab (the `thisisunsafe` bypass).
+pub async fn bypass_insecure_warning(
+    state: Arc<Mutex<SessionState>>,
+    _: EmptyInput,
+) -> Result<AckOutput, ErrorData> {
+    let s = state.lock().await;
+    let tab = current_tab(&s).await?;
+    tab.bypass_insecure_connection_warning()
+        .await
+        .map_err(|e| map_error(McpServerError::from(e)))?;
+    Ok(AckOutput { ok: true })
 }
 
 // ---------- browser_wait_for_idle -----------------------------------------

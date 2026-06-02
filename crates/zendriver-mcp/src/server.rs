@@ -311,13 +311,53 @@ impl ZendriverServer {
     /// Resolve a Selector and report selected state fields.
     #[tool(
         name = "browser_element_state",
-        description = "Inspect a single element's state. `include` picks which fields to populate (default `all`). `in_viewport` is reserved for v1 and always returns null. Missing-element returns `{ exists: false }` rather than an error."
+        description = "Inspect a single element's state. `include` picks which fields to populate (default `all`): `visible`/`enabled`, `bounding_box` (viewport) + `bounding_box_page` (page-absolute), `text`/`attrs`/`inner_html`/`outer_html`. `in_viewport` is reserved for v1 and always returns null. Missing-element returns `{ exists: false }` rather than an error."
     )]
     pub async fn browser_element_state(
         &self,
         Parameters(input): Parameters<reads::ElementStateInput>,
     ) -> Result<Json<reads::ElementState>, ErrorData> {
         reads::element_state(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Harvest anchor URLs (and optionally resource sources) from the page.
+    #[tool(
+        name = "browser_get_links",
+        description = "Collect all anchor (`<a href>`) URLs on the current page. `absolute: true` resolves relative hrefs against the page URL. `include_sources: true` also returns `src`/`href` of linked-resource elements (img, script, link, …) in `sources`. Useful for crawling / link extraction without writing JS."
+    )]
+    pub async fn browser_get_links(
+        &self,
+        Parameters(input): Parameters<reads::GetLinksInput>,
+    ) -> Result<Json<reads::GetLinksOutput>, ErrorData> {
+        reads::get_links(self.state.clone(), input).await.map(Json)
+    }
+
+    /// Search every frame's loaded resources for a URL substring.
+    #[tool(
+        name = "browser_search_resources",
+        description = "Search across every frame's loaded resource URLs (`Page.getResourceTree`) for a substring `query`. Returns `{ matches: [{ url, frame_id }] }`. Use to locate a script/XHR/asset by URL fragment, including inside iframes."
+    )]
+    pub async fn browser_search_resources(
+        &self,
+        Parameters(input): Parameters<reads::SearchResourcesInput>,
+    ) -> Result<Json<reads::SearchResourcesOutput>, ErrorData> {
+        reads::search_resources(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Click through Chrome's TLS interstitial on the current tab.
+    #[tool(
+        name = "browser_bypass_insecure_warning",
+        description = "Dismiss Chrome's \"Your connection is not private\" TLS interstitial on the current tab (types the `thisisunsafe` bypass). Use after navigating to a site with a self-signed / invalid certificate when you intend to proceed anyway."
+    )]
+    pub async fn browser_bypass_insecure_warning(
+        &self,
+        Parameters(input): Parameters<EmptyInput>,
+    ) -> Result<Json<actions::AckOutput>, ErrorData> {
+        navigation::bypass_insecure_warning(self.state.clone(), input)
             .await
             .map(Json)
     }
@@ -365,7 +405,7 @@ impl ZendriverServer {
     /// Focus an element + dispatch a single keystroke.
     #[tool(
         name = "browser_press",
-        description = "Focus an element + dispatch a single keystroke. `key` accepts a special-key name (Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, Space, Home, End, PageUp, PageDown, F1..F12, etc., case-insensitive) OR a single character (typed as `Key::Char`)."
+        description = "Focus an element + dispatch a single keystroke. `key` accepts a special-key name (Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, Space, Home, End, PageUp, PageDown, F1..F12, etc., case-insensitive) OR a single character (typed as `Key::Char`). `modifiers` (e.g. `[\"ctrl\"]`) holds modifier keys for a chord. For multi-step shortcuts use `browser_key_sequence`."
     )]
     pub async fn browser_press(
         &self,
@@ -377,7 +417,7 @@ impl ZendriverServer {
     /// Set an element's `value` directly + fire `input`/`change` events.
     #[tool(
         name = "browser_set_value",
-        description = "Set an element's `value` directly + fire bubbled `input` and `change` events. Faster than `browser_type` when keystroke realism doesn't matter, but still routes through the event handlers React-style controlled inputs listen on."
+        description = "Set an element's `value` directly + fire bubbled `input` and `change` events. Faster than `browser_type` when keystroke realism doesn't matter, but still routes through the event handlers React-style controlled inputs listen on. Set `mode: text` to write `textContent` instead of `.value` (for non-form elements)."
     )]
     pub async fn browser_set_value(
         &self,
@@ -391,7 +431,7 @@ impl ZendriverServer {
     /// Clear an element's `value` and fire a bubbled `input` event.
     #[tool(
         name = "browser_clear",
-        description = "Clear an element's `value` by assigning `''` and firing a bubbled `input` event. Omits `change` event + focus + Backspace sequence — for contenteditable / non-`<input>` clearing semantics, use `browser_type` with a leading select-all + Delete."
+        description = "Clear an element's `value` by assigning `''` and firing a bubbled `input` event (default `mode: value`). Set `mode: backspace` to instead focus + select-all + Backspace — emitting the real key events some inputs require."
     )]
     pub async fn browser_clear(
         &self,
@@ -443,7 +483,7 @@ impl ZendriverServer {
     /// Return the current page's HTML (trimmed by default).
     #[tool(
         name = "browser_html",
-        description = "Return the current page's HTML as a text content block. With `selector` set, returns that element's `innerHTML`. With `frame_id` set, returns that frame's `document.documentElement.outerHTML`. `selector` and `frame_id` are mutually exclusive — use the selector's own `frame_id` field to scope element lookup to a sub-frame. `trim: true` (default) strips `<script>` / `<style>` blocks and collapses whitespace."
+        description = "Return the current page's HTML as a text content block. With `selector` set, returns that element's `innerHTML` (or `outerHTML` when `outer: true`). With `frame_id` set, returns that frame's `document.documentElement.outerHTML`. `selector` and `frame_id` are mutually exclusive — use the selector's own `frame_id` field to scope element lookup to a sub-frame. `trim: true` (default) strips `<script>` / `<style>` blocks and collapses whitespace."
     )]
     pub async fn browser_html(
         &self,

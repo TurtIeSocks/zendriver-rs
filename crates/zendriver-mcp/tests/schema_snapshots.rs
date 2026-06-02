@@ -109,6 +109,11 @@ schema_snap!(find_all_out, tools::find::FindAllOutput);
 schema_snap!(reads_fields_preset, tools::reads::ReadFieldsPreset);
 schema_snap!(reads_state_in, tools::reads::ElementStateInput);
 schema_snap!(reads_state_out, tools::reads::ElementState);
+schema_snap!(reads_get_links_in, tools::reads::GetLinksInput);
+schema_snap!(reads_get_links_out, tools::reads::GetLinksOutput);
+schema_snap!(reads_search_resources_in, tools::reads::SearchResourcesInput);
+schema_snap!(reads_search_resources_out, tools::reads::SearchResourcesOutput);
+schema_snap!(reads_resource_match, tools::reads::ResourceMatch);
 
 // ---------- actions --------------------------------------------------------
 
@@ -120,7 +125,9 @@ schema_snap!(actions_hover_in, tools::actions::HoverInput);
 schema_snap!(actions_type_in, tools::actions::TypeInput);
 schema_snap!(actions_press_in, tools::actions::PressInput);
 schema_snap!(actions_set_value_in, tools::actions::SetValueInput);
+schema_snap!(actions_set_value_mode, tools::actions::SetValueMode);
 schema_snap!(actions_clear_in, tools::actions::ClearInput);
+schema_snap!(actions_clear_mode, tools::actions::ClearMode);
 schema_snap!(actions_focus_in, tools::actions::FocusInput);
 schema_snap!(actions_scroll_in, tools::actions::ScrollInput);
 schema_snap!(actions_upload_in, tools::actions::UploadInput);

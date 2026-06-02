@@ -223,6 +223,9 @@ pub struct StatusOutput {
     pub tab_count: usize,
     /// `id` / `url` / `title` of the currently-focused tab, or `null`.
     pub current_tab: Option<TabSummary>,
+    /// Chrome DevTools inspector URL for the focused tab, when one is open.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inspector_url: Option<String>,
     /// Configured stealth profile choice for this session.
     pub profile: StealthProfileChoice,
 }
@@ -239,10 +242,12 @@ pub async fn status(
             open: false,
             tab_count: 0,
             current_tab: None,
+            inspector_url: None,
             profile: s.stealth_profile_choice,
         });
     };
     let tabs = b.tabs().await;
+    let mut inspector_url = None;
     let current_tab = match &s.current_tab_id {
         Some(id) => {
             let mut found = None;
@@ -250,6 +255,9 @@ pub async fn status(
                 if t.target_id() == id {
                     let url = t.url().await.map(|u| u.to_string()).unwrap_or_default();
                     let title = t.title().await.unwrap_or_default();
+                    // `inspector_url` is sync + best-effort; a failure just
+                    // leaves the field absent.
+                    inspector_url = t.inspector_url().ok();
                     found = Some(TabSummary {
                         id: t.target_id().to_string(),
                         url,
@@ -266,6 +274,7 @@ pub async fn status(
         open: true,
         tab_count: tabs.len(),
         current_tab,
+        inspector_url,
         profile: s.stealth_profile_choice,
     })
 }

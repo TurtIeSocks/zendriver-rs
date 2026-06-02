@@ -15,6 +15,10 @@ properties:
     type:
       - string
       - "null"
+  mode:
+    description: "Whether `value` targets the `.value` property (form fields) or\n`textContent` (other elements). Default `value`."
+    $ref: "#/$defs/SetValueMode"
+    default: value
   nth:
     type:
       - integer
@@ -51,7 +55,7 @@ properties:
     default: 5000
     minimum: 0
   value:
-    description: "New value for the element's `.value` property."
+    description: New value / text for the element.
     type: string
   visible_only:
     type: boolean
@@ -63,3 +67,13 @@ properties:
 additionalProperties: false
 required:
   - value
+$defs:
+  SetValueMode:
+    description: "Which property `browser_set_value` writes."
+    oneOf:
+      - description: "Set the element's `.value` property + fire `input`/`change` (form\nfields). Default."
+        type: string
+        const: value
+      - description: "Set the element's `textContent` (non-form elements like `<div>`)."
+        type: string
+        const: text

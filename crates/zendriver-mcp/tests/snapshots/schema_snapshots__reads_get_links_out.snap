@@ -1,0 +1,23 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::reads::GetLinksOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: GetLinksOutput
+description: "Output of `browser_get_links`."
+type: object
+properties:
+  sources:
+    description: "Linked-resource source URLs, when `include_sources` was set."
+    type:
+      - array
+      - "null"
+    items:
+      type: string
+  urls:
+    description: "Anchor (`<a href>`) URLs on the page."
+    type: array
+    items:
+      type: string
+required:
+  - urls

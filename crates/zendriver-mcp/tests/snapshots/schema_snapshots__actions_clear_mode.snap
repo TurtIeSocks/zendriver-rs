@@ -1,0 +1,14 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::actions::ClearMode)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: ClearMode
+description: "How `browser_clear` empties an element."
+oneOf:
+  - description: "Reset `.value` to empty + fire `input` (fast). Default."
+    type: string
+    const: value
+  - description: "Focus + select-all + Backspace (emits real key events some inputs\nrequire). Slower but more faithful to user behavior."
+    type: string
+    const: backspace

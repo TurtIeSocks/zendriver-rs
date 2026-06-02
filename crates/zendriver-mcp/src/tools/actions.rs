@@ -425,25 +425,41 @@ pub async fn key_sequence(
 
 // ---------- browser_set_value --------------------------------------------
 
+/// Which property `browser_set_value` writes.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SetValueMode {
+    /// Set the element's `.value` property + fire `input`/`change` (form
+    /// fields). Default.
+    #[default]
+    Value,
+    /// Set the element's `textContent` (non-form elements like `<div>`).
+    Text,
+}
+
 /// Input for `browser_set_value`.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SetValueInput {
     #[serde(flatten)]
     pub selector: Selector,
-    /// New value for the element's `.value` property.
+    /// New value / text for the element.
     pub value: String,
+    /// Whether `value` targets the `.value` property (form fields) or
+    /// `textContent` (other elements). Default `value`.
+    #[serde(default)]
+    pub mode: SetValueMode,
     /// When `true`, include the trimmed page HTML in the response.
     #[serde(default)]
     pub return_snapshot: bool,
 }
 
-/// Set an element's `value` directly + fire bubbled `input` + `change`
-/// events.
+/// Set an element's `value` (or `textContent`) directly.
 ///
-/// Faster than [`type_text`] when the caller doesn't care about
-/// keystroke-by-keystroke realism — bypasses keydown/keyup but still
-/// fires the events React-style controlled inputs listen on.
+/// `mode: value` (default) sets `.value` + fires bubbled `input`/`change`
+/// events (React-style controlled inputs). `mode: text` sets `textContent`
+/// for non-form elements. Faster than [`type_text`] when keystroke realism
+/// doesn't matter.
 pub async fn set_value(
     state: Arc<Mutex<SessionState>>,
     input: SetValueInput,
@@ -451,13 +467,27 @@ pub async fn set_value(
     let s = state.lock().await;
     let tab = current_tab(&s).await?;
     let el = resolve(&tab, &input.selector).await?;
-    el.set_value(&input.value)
-        .await
-        .map_err(|e| map_error(McpServerError::from(e)))?;
+    match input.mode {
+        SetValueMode::Value => el.set_value(&input.value).await,
+        SetValueMode::Text => el.set_text(&input.value).await,
+    }
+    .map_err(|e| map_error(McpServerError::from(e)))?;
     ok_with_snapshot(&tab, input.return_snapshot).await
 }
 
 // ---------- browser_clear ------------------------------------------------
+
+/// How `browser_clear` empties an element.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClearMode {
+    /// Reset `.value` to empty + fire `input` (fast). Default.
+    #[default]
+    Value,
+    /// Focus + select-all + Backspace (emits real key events some inputs
+    /// require). Slower but more faithful to user behavior.
+    Backspace,
+}
 
 /// Input for `browser_clear`.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -465,12 +495,15 @@ pub async fn set_value(
 pub struct ClearInput {
     #[serde(flatten)]
     pub selector: Selector,
+    /// Clearing strategy. Default `value`.
+    #[serde(default)]
+    pub mode: ClearMode,
     /// When `true`, include the trimmed page HTML in the response.
     #[serde(default)]
     pub return_snapshot: bool,
 }
 
-/// Clear an element's `value` and fire a bubbled `input` event.
+/// Clear an element's value (directly, or by deleting keystroke-by-keystroke).
 pub async fn clear(
     state: Arc<Mutex<SessionState>>,
     input: ClearInput,
@@ -478,9 +511,11 @@ pub async fn clear(
     let s = state.lock().await;
     let tab = current_tab(&s).await?;
     let el = resolve(&tab, &input.selector).await?;
-    el.clear()
-        .await
-        .map_err(|e| map_error(McpServerError::from(e)))?;
+    match input.mode {
+        ClearMode::Value => el.clear().await,
+        ClearMode::Backspace => el.clear_by_deleting().await,
+    }
+    .map_err(|e| map_error(McpServerError::from(e)))?;
     ok_with_snapshot(&tab, input.return_snapshot).await
 }
 
@@ -675,6 +710,7 @@ mod tests {
             SetValueInput {
                 selector: css("input"),
                 value: "rust async".into(),
+                mode: SetValueMode::Value,
                 return_snapshot: false,
             },
         )
@@ -689,6 +725,7 @@ mod tests {
             fresh(),
             ClearInput {
                 selector: css("input"),
+                mode: ClearMode::Value,
                 return_snapshot: false,
             },
         )
