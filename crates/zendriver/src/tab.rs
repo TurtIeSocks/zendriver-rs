@@ -38,6 +38,11 @@ use crate::screenshot::ScreenshotBuilder;
 
 const DEFAULT_LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Poll cadence for [`Tab::wait_for_ready_state`]'s `document.readyState`
+/// loop. Small enough to feel responsive, large enough not to spin the CDP
+/// channel.
+const READY_STATE_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
 /// Fixed `(x, y)` viewport anchor for [`Tab::scroll_with`] gestures. A
 /// constant in-viewport point keeps page scrolls deterministic and
 /// single-dispatch (no `Page.getLayoutMetrics` round-trip to derive a
@@ -159,6 +164,64 @@ pub struct UserAgentOverride {
     /// `navigator.platform` override
     /// (`Emulation.setUserAgentOverride.platform`). Omitted when `None`.
     pub platform: Option<String>,
+}
+
+/// Document load milestone for [`Tab::wait_for_ready_state`].
+///
+/// Maps to the three values of the DOM `document.readyState` property and
+/// orders them by progress: `Loading` < `Interactive` < `Complete`. Passing a
+/// target to `wait_for_ready_state` polls until the document has reached *at
+/// least* that milestone — e.g. waiting for `Interactive` also returns once
+/// the page is fully `Complete`.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn ex() -> zendriver::Result<()> {
+/// use zendriver::ReadyState;
+/// # let browser = zendriver::Browser::builder().launch().await?;
+/// # let tab = browser.main_tab();
+/// tab.goto("https://example.com").await?;
+/// tab.wait_for_ready_state(ReadyState::Complete).await?;
+/// # Ok(()) }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ReadyState {
+    /// `document.readyState === "loading"` — the document is still parsing.
+    #[serde(rename = "loading")]
+    Loading,
+    /// `document.readyState === "interactive"` — parsed, but sub-resources
+    /// (images, stylesheets, frames) may still be loading.
+    #[serde(rename = "interactive")]
+    Interactive,
+    /// `document.readyState === "complete"` — the document and all
+    /// sub-resources have finished loading (the `load` event has fired).
+    #[serde(rename = "complete")]
+    Complete,
+}
+
+impl ReadyState {
+    /// Monotonic progress rank: `Loading` = 0 < `Interactive` = 1 <
+    /// `Complete` = 2. Used by [`Tab::wait_for_ready_state`] to decide whether
+    /// the observed state has reached the requested milestone.
+    fn rank(self) -> u8 {
+        match self {
+            ReadyState::Loading => 0,
+            ReadyState::Interactive => 1,
+            ReadyState::Complete => 2,
+        }
+    }
+
+    /// Parse a raw `document.readyState` string into a [`ReadyState`].
+    /// Returns `None` for any value other than the three documented states.
+    fn from_dom_str(s: &str) -> Option<Self> {
+        match s {
+            "loading" => Some(ReadyState::Loading),
+            "interactive" => Some(ReadyState::Interactive),
+            "complete" => Some(ReadyState::Complete),
+            _ => None,
+        }
+    }
 }
 
 ///
@@ -771,6 +834,52 @@ impl Tab {
             .map_err(|_| ZendriverError::Timeout(DEFAULT_LOAD_TIMEOUT))?
             .ok_or_else(|| ZendriverError::Navigation("page event stream closed".into()))?;
         Ok(())
+    }
+
+    /// Block until the document reaches at least the `until` load milestone.
+    ///
+    /// Polls `document.readyState` (via a main-world `Runtime.evaluate`) every
+    /// [`READY_STATE_POLL_INTERVAL`] and returns as soon as the observed state
+    /// ranks at or above `until` (see [`ReadyState`] for the
+    /// `Loading < Interactive < Complete` ordering). Bounded by a 30s outer
+    /// timeout, matching [`Tab::wait_for_load`].
+    ///
+    /// This is the finer-grained sibling of [`Tab::wait_for_load`]: use it when
+    /// you want to proceed at `Interactive` (DOM parsed, scripts runnable)
+    /// without waiting for every image / stylesheet that `Complete` implies.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Timeout`] if the requested state is not
+    /// reached within 30s; propagates [`ZendriverError::JsException`] if the
+    /// `document.readyState` read raises.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// use zendriver::ReadyState;
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// // Proceed as soon as the DOM is parsed, don't wait for sub-resources.
+    /// tab.wait_for_ready_state(ReadyState::Interactive).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn wait_for_ready_state(&self, until: ReadyState) -> Result<()> {
+        let deadline = tokio::time::Instant::now() + DEFAULT_LOAD_TIMEOUT;
+        loop {
+            let state: String = self.evaluate_main("document.readyState").await?;
+            if let Some(observed) = ReadyState::from_dom_str(&state) {
+                if observed.rank() >= until.rank() {
+                    return Ok(());
+                }
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(ZendriverError::Timeout(DEFAULT_LOAD_TIMEOUT));
+            }
+            tokio::time::sleep(READY_STATE_POLL_INTERVAL).await;
+        }
     }
 
     /// Evaluate a JavaScript expression in an isolated world.
@@ -3975,6 +4084,67 @@ mod tests {
 
         let els = fut.await.unwrap().unwrap();
         assert_eq!(els.len(), 1, "should return the one linked-source element");
+        conn.shutdown();
+    }
+
+    // --- E3: wait_for_ready_state --------------------------------------
+
+    #[tokio::test]
+    async fn wait_for_ready_state_polls_until_target_reached() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.wait_for_ready_state(ReadyState::Complete).await }
+        });
+
+        // Poll 1: still "loading" (rank 0 < Complete) → must keep polling.
+        let id1 = mock.expect_cmd("Runtime.evaluate").await;
+        assert_eq!(
+            mock.last_sent()["params"]["expression"],
+            "document.readyState"
+        );
+        mock.reply(
+            id1,
+            json!({ "result": { "type": "string", "value": "loading" } }),
+        )
+        .await;
+
+        // Poll 2: now "complete" → resolves Ok.
+        let id2 = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id2,
+            json!({ "result": { "type": "string", "value": "complete" } }),
+        )
+        .await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn wait_for_ready_state_returns_when_observed_state_exceeds_target() {
+        // Asking for Interactive must also resolve when the page is already
+        // fully Complete (Complete ⊇ Interactive ordering).
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.wait_for_ready_state(ReadyState::Interactive).await }
+        });
+
+        let id = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id,
+            json!({ "result": { "type": "string", "value": "complete" } }),
+        )
+        .await;
+
+        fut.await.unwrap().unwrap();
         conn.shutdown();
     }
 }
