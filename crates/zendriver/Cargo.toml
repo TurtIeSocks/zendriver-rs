@@ -23,7 +23,7 @@ workspace = true
 [features]
 default = []
 # Enables real-Chrome integration tests (requires Chrome installed on $PATH).
-integration-tests = ["dep:wiremock", "dep:serial_test", "interception", "expect", "cloudflare", "imperva", "monitor"]
+integration-tests = ["dep:wiremock", "dep:serial_test", "interception", "expect", "cloudflare", "imperva", "datadome", "monitor"]
 # Nightly stealth tests against external sites (sannysoft, areyouheadless).
 # Separate from integration-tests because external sites flake.
 stealth-tests = ["integration-tests"]
@@ -42,6 +42,10 @@ cloudflare = ["interception", "dep:zendriver-cloudflare"]
 imperva = ["interception", "dep:zendriver-imperva"]
 # Network-touching Imperva nightly tests (real protected sites).
 imperva-tests = ["imperva", "integration-tests"]
+# DataDome anti-bot bypass; pulls in interception.
+datadome = ["interception", "dep:zendriver-datadome"]
+# Network-touching DataDome nightly tests (real protected sites).
+datadome-tests = ["datadome", "integration-tests"]
 # Chrome for Testing binary downloader.
 fetcher = ["dep:zendriver-fetcher"]
 # Network-touching fetcher tests (CfT manifest, real downloads).
@@ -55,6 +59,7 @@ zendriver-stealth.workspace   = true
 zendriver-interception        = { workspace = true, optional = true }
 zendriver-cloudflare          = { workspace = true, optional = true }
 zendriver-imperva             = { workspace = true, optional = true }
+zendriver-datadome            = { workspace = true, optional = true }
 zendriver-fetcher             = { workspace = true, optional = true }
 async-trait.workspace         = true
 chromiumoxide_cdp.workspace   = true
@@ -87,6 +92,10 @@ tokio-test.workspace          = true
 insta.workspace               = true
 tracing-subscriber.workspace  = true
 zendriver-transport = { workspace = true, features = ["testing"] }
+
+[[test]]
+name = "datadome_v0"
+required-features = ["datadome"]
 
 [[example]]
 name = "hello"
