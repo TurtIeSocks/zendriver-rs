@@ -40,11 +40,8 @@ async fn main() -> zendriver::Result<()> {
             value: "v1".into(),
             domain: "example.test".into(),
             path: "/".into(),
-            expires: None,
-            http_only: false,
-            secure: false,
             same_site: Some(SameSite::Lax),
-            url: None,
+            ..Default::default()
         })
         .await?;
 
@@ -53,11 +50,8 @@ async fn main() -> zendriver::Result<()> {
             value: "v2".into(),
             domain: "example.test".into(),
             path: "/api".into(),
-            expires: None,
             http_only: true,
-            secure: false,
-            same_site: None,
-            url: None,
+            ..Default::default()
         })
         .await?;
 

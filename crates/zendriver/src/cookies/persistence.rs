@@ -81,6 +81,82 @@ impl CookieJar {
         let cookies: Vec<crate::cookies::Cookie> = serde_json::from_slice(&bytes)?;
         self.set_many(cookies).await
     }
+
+    /// Snapshot only the cookies matching `filter` to a JSON file at `path`.
+    ///
+    /// Like [`Self::save_to_file`], but applies the `filter` predicate to
+    /// the result of [`CookieJar::all`] before writing — handy for
+    /// persisting just one site's cookies out of a shared store. The
+    /// predicate receives each [`crate::cookies::Cookie`] by reference and
+    /// returns `true` to keep it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::ZendriverError::Io`] if the path is unwritable;
+    /// [`crate::ZendriverError::Transport`] / `Cdp` on CDP failures.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// browser
+    ///     .cookies()
+    ///     .save_to_file_matching("example.json", |c| c.domain.contains("example.com"))
+    ///     .await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn save_to_file_matching(
+        &self,
+        path: impl AsRef<Path>,
+        filter: impl Fn(&crate::cookies::Cookie) -> bool,
+    ) -> Result<()> {
+        let cookies: Vec<crate::cookies::Cookie> = self
+            .all()
+            .await?
+            .into_iter()
+            .filter(|c| filter(c))
+            .collect();
+        let bytes = serde_json::to_vec_pretty(&cookies)?;
+        fs::write(path, bytes).await?;
+        Ok(())
+    }
+
+    /// Hydrate only the cookies matching `filter` from a JSON file at `path`.
+    ///
+    /// Like [`Self::load_from_file`], but applies the `filter` predicate to
+    /// the parsed `Vec<Cookie>` before the `Storage.setCookies` bulk-set —
+    /// so a file holding many sites' cookies can be loaded selectively.
+    /// Existing cookies are NOT cleared first; call [`CookieJar::clear`]
+    /// beforehand for a fresh slate.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::ZendriverError::Io`] if the file is unreadable;
+    /// [`crate::ZendriverError::Serde`] if the JSON is malformed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// browser
+    ///     .cookies()
+    ///     .load_from_file_matching("cookies.json", |c| c.domain.contains("example.com"))
+    ///     .await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn load_from_file_matching(
+        &self,
+        path: impl AsRef<Path>,
+        filter: impl Fn(&crate::cookies::Cookie) -> bool,
+    ) -> Result<()> {
+        let bytes = fs::read(path).await?;
+        let cookies: Vec<crate::cookies::Cookie> = serde_json::from_slice(&bytes)?;
+        let cookies: Vec<crate::cookies::Cookie> =
+            cookies.into_iter().filter(|c| filter(c)).collect();
+        self.set_many(cookies).await
+    }
 }
 
 #[cfg(test)]
@@ -209,6 +285,93 @@ mod tests {
         );
 
         reply.await.unwrap();
+        conn.shutdown();
+    }
+
+    /// `save_to_file_matching` filters the result of `all()` before writing —
+    /// a jar reporting two cookies plus a predicate that keeps one yields a
+    /// single-entry on-disk file.
+    #[tokio::test]
+    async fn save_to_file_matching_writes_only_matching() {
+        let (mut mock, conn) = MockConnection::pair();
+        let jar = CookieJar::new(conn.clone());
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+
+        let save = tokio::spawn({
+            let j = jar.clone();
+            let p = path.clone();
+            // Keep only the keep.test cookie.
+            async move {
+                j.save_to_file_matching(p, |c| c.domain.contains("keep.test"))
+                    .await
+            }
+        });
+
+        let id = mock.expect_cmd("Storage.getCookies").await;
+        mock.reply(
+            id,
+            json!({
+                "cookies": [
+                    { "name": "a", "value": "1", "domain": ".keep.test", "path": "/",
+                      "httpOnly": false, "secure": false },
+                    { "name": "b", "value": "2", "domain": ".drop.test", "path": "/",
+                      "httpOnly": false, "secure": false },
+                ]
+            }),
+        )
+        .await;
+        save.await.unwrap().unwrap();
+
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&on_disk).unwrap();
+        let arr = parsed.as_array().unwrap();
+        assert_eq!(arr.len(), 1, "only the matching cookie should be written");
+        assert_eq!(arr[0]["name"], "a");
+        assert_eq!(arr[0]["domain"], ".keep.test");
+
+        conn.shutdown();
+    }
+
+    /// `load_from_file_matching` filters the parsed `Vec<Cookie>` before the
+    /// `Storage.setCookies` bulk-set — a two-entry file plus a predicate that
+    /// keeps one results in a single-cookie wire payload.
+    #[tokio::test]
+    async fn load_from_file_matching_filters_before_set() {
+        let (mut mock, conn) = MockConnection::pair();
+        let jar = CookieJar::new(conn.clone());
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+
+        // Author a two-cookie file (public snake_case shape).
+        std::fs::write(
+            &path,
+            json!([
+                { "name": "a", "value": "1", "domain": ".keep.test", "path": "/" },
+                { "name": "b", "value": "2", "domain": ".drop.test", "path": "/" },
+            ])
+            .to_string(),
+        )
+        .unwrap();
+
+        let load = tokio::spawn({
+            let j = jar.clone();
+            let p = path.clone();
+            async move {
+                j.load_from_file_matching(p, |c| c.domain.contains("keep.test"))
+                    .await
+            }
+        });
+
+        let id = mock.expect_cmd("Storage.setCookies").await;
+        let cookies = mock.last_sent()["params"]["cookies"].as_array().unwrap();
+        assert_eq!(cookies.len(), 1, "only the matching cookie should be set");
+        assert_eq!(cookies[0]["name"], "a");
+        assert_eq!(cookies[0]["domain"], ".keep.test");
+
+        mock.reply(id, json!({})).await;
+        load.await.unwrap().unwrap();
+
         conn.shutdown();
     }
 }

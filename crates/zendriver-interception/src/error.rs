@@ -27,6 +27,9 @@ pub enum InterceptionError {
 
     #[error("invalid response from CDP: {0}")]
     InvalidResponse(String),
+
+    #[error("wrong interception stage: this action is only valid at the Response stage")]
+    WrongStage,
 }
 
 impl From<zendriver_transport::CallError> for InterceptionError {

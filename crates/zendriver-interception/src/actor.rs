@@ -46,7 +46,7 @@ use zendriver_transport::SessionHandle;
 use crate::builder::RequestPattern;
 use crate::error::InterceptionError;
 use crate::rule::Rule;
-use crate::types::{RequestInfo, RequestOverrides, ResourceType, ResponseInfo};
+use crate::types::{RequestInfo, RequestOverrides, ResourceType, ResponseInfo, ResponseOverrides};
 
 /// RAII guard returned by `InterceptBuilder::start` (Task 7).
 ///
@@ -334,6 +334,24 @@ async fn handle_paused(
             let overrides = modify(&info);
             continue_with_overrides(session, &ev.request_id, overrides).await
         }
+        Some(Rule::ModifyResponse { modify, .. }) => match build_response_info(&ev) {
+            Some(info) => {
+                let overrides = modify(&info);
+                continue_response_with_overrides(session, &ev.request_id, overrides).await
+            }
+            None => {
+                // Matched at the Request stage: Chrome has no response yet, so
+                // `Fetch.continueResponse` would be rejected. Let the request
+                // through unchanged so the pause is still released — the
+                // closure runs later if a Response-stage pattern re-pauses it.
+                tracing::debug!(
+                    request_id = %ev.request_id,
+                    url = %url,
+                    "interception: ModifyResponse matched at Request stage; no response yet, passing through"
+                );
+                continue_passthrough(session, &ev.request_id).await
+            }
+        },
         None => continue_passthrough(session, &ev.request_id).await,
     }
 }
@@ -556,6 +574,37 @@ async fn fulfill_request(
                 "body": BASE64.encode(body),
             }),
         )
+        .await?;
+    Ok(())
+}
+
+/// Dispatch `Fetch.continueResponse` with the closure-produced overrides for a
+/// [`Rule::ModifyResponse`](crate::rule::Rule::ModifyResponse) match. Mirrors
+/// [`PausedRequest::continue_response`](crate::PausedRequest::continue_response):
+/// `None` fields are omitted so Chrome keeps its originals, and
+/// `responseHeaders` is *replacement* per CDP. The caller guarantees the
+/// `Response` stage (we only reach here after `build_response_info` succeeded).
+async fn continue_response_with_overrides(
+    session: &SessionHandle,
+    request_id: &str,
+    overrides: ResponseOverrides,
+) -> Result<(), InterceptionError> {
+    let mut params = Map::new();
+    params.insert("requestId".into(), Value::String(request_id.into()));
+    if let Some(status) = overrides.status {
+        params.insert("responseCode".into(), Value::from(status));
+    }
+    if let Some(phrase) = overrides.phrase {
+        params.insert("responsePhrase".into(), Value::String(phrase));
+    }
+    if let Some(headers) = overrides.headers {
+        params.insert(
+            "responseHeaders".into(),
+            Value::Array(headers_to_cdp(&headers)),
+        );
+    }
+    session
+        .call("Fetch.continueResponse", Value::Object(params))
         .await?;
     Ok(())
 }

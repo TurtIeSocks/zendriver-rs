@@ -39,12 +39,41 @@ use crate::error::{BrowserError, ZendriverError};
 use crate::input::InputController;
 use crate::tab::Tab;
 
+/// Which Chromium-family browser channel to discover at launch.
+///
+/// Passed via [`BrowserBuilder::channel`]; consumed by
+/// [`find_chrome_executable_for_channel`] to pick the per-OS candidate path
+/// table. [`BrowserBuilder::executable`] still overrides channel discovery
+/// entirely.
+///
+/// # Examples
+///
+/// ```no_run
+/// use zendriver::Channel;
+/// let builder = zendriver::Browser::builder().channel(Channel::Brave);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Channel {
+    /// Google Chrome (stable). Same discovery as [`Channel::Auto`] minus the
+    /// Chromium fallbacks.
+    Chrome,
+    /// Open-source Chromium build.
+    Chromium,
+    /// Brave Browser.
+    Brave,
+    /// Microsoft Edge.
+    Edge,
+    /// First Chromium-family browser found — the historical default (Chrome,
+    /// then Chromium). Use a specific channel to force Brave / Edge.
+    #[default]
+    Auto,
+}
+
 /// Look for a Chromium-family binary on PATH and in conventional locations.
 ///
-/// Returns the first path that exists. Checks PATH for the canonical
-/// binaries (`google-chrome`, `chromium`, `chrome`) then platform-specific
-/// install locations (macOS `/Applications`, Linux `/usr/bin`, Windows
-/// `Program Files`).
+/// Returns the first path that exists, scanning the [`Channel::Auto`]
+/// candidate table (Chrome, then Chromium). For a specific browser channel
+/// (Brave / Edge / …) use [`find_chrome_executable_for_channel`].
 ///
 /// # Errors
 ///
@@ -60,7 +89,21 @@ use crate::tab::Tab;
 /// }
 /// ```
 pub fn find_chrome_executable() -> Result<PathBuf, BrowserError> {
-    let candidates = candidate_paths();
+    find_chrome_executable_for_channel(Channel::Auto)
+}
+
+/// Look for the binary of a specific [`Channel`] on PATH and in conventional
+/// per-OS install locations.
+///
+/// Returns the first candidate that exists. [`Channel::Auto`] reproduces the
+/// historical first-found behavior (Chrome, then Chromium).
+///
+/// # Errors
+///
+/// Returns [`BrowserError::ExecutableNotFound`] with the searched candidate
+/// list when none of the channel's paths exist.
+pub fn find_chrome_executable_for_channel(channel: Channel) -> Result<PathBuf, BrowserError> {
+    let candidates = candidate_paths_for_channel(channel);
     for c in &candidates {
         if c.exists() {
             return Ok(c.clone());
@@ -71,47 +114,114 @@ pub fn find_chrome_executable() -> Result<PathBuf, BrowserError> {
     })
 }
 
-fn candidate_paths() -> Vec<PathBuf> {
+/// Build the ordered candidate-path list for `channel`.
+///
+/// PATH lookups come first (so a PATH-resolved binary wins over a fixed
+/// install dir), followed by the per-OS conventional install locations for
+/// the requested channel. Factored out (and `pub(crate)`) so unit tests can
+/// assert the table without requiring the browser installed.
+pub(crate) fn candidate_paths_for_channel(channel: Channel) -> Vec<PathBuf> {
     let mut v = Vec::new();
 
-    // PATH lookups.
-    for name in [
-        "google-chrome",
-        "google-chrome-stable",
-        "chromium",
-        "chromium-browser",
-        "chrome",
-    ] {
+    // PATH lookups — names vary by channel.
+    let path_names: &[&str] = match channel {
+        Channel::Chrome => &["google-chrome", "google-chrome-stable", "chrome"],
+        Channel::Chromium => &["chromium", "chromium-browser"],
+        Channel::Brave => &["brave-browser", "brave"],
+        Channel::Edge => &["microsoft-edge", "microsoft-edge-stable"],
+        Channel::Auto => &[
+            "google-chrome",
+            "google-chrome-stable",
+            "chromium",
+            "chromium-browser",
+            "chrome",
+        ],
+    };
+    for name in path_names {
         if let Some(p) = which_on_path(name) {
             v.push(p);
         }
     }
 
-    // Platform-specific known locations.
+    // Platform-specific known locations, per channel.
     #[cfg(target_os = "macos")]
     {
-        v.push(PathBuf::from(
-            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        ));
-        v.push(PathBuf::from(
-            "/Applications/Chromium.app/Contents/MacOS/Chromium",
-        ));
+        let chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+        let chromium = "/Applications/Chromium.app/Contents/MacOS/Chromium";
+        let brave = "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser";
+        let edge = "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge";
+        match channel {
+            Channel::Chrome => v.push(PathBuf::from(chrome)),
+            Channel::Chromium => v.push(PathBuf::from(chromium)),
+            Channel::Brave => v.push(PathBuf::from(brave)),
+            Channel::Edge => v.push(PathBuf::from(edge)),
+            Channel::Auto => {
+                v.push(PathBuf::from(chrome));
+                v.push(PathBuf::from(chromium));
+            }
+        }
     }
     #[cfg(target_os = "linux")]
     {
-        v.push(PathBuf::from("/usr/bin/google-chrome"));
-        v.push(PathBuf::from("/usr/bin/chromium"));
-        v.push(PathBuf::from("/usr/bin/chromium-browser"));
-        v.push(PathBuf::from("/snap/bin/chromium"));
+        match channel {
+            Channel::Chrome => {
+                v.push(PathBuf::from("/usr/bin/google-chrome"));
+                v.push(PathBuf::from("/usr/bin/google-chrome-stable"));
+            }
+            Channel::Chromium => {
+                v.push(PathBuf::from("/usr/bin/chromium"));
+                v.push(PathBuf::from("/usr/bin/chromium-browser"));
+                v.push(PathBuf::from("/snap/bin/chromium"));
+            }
+            Channel::Brave => {
+                v.push(PathBuf::from("/usr/bin/brave-browser"));
+                v.push(PathBuf::from("/usr/bin/brave"));
+                v.push(PathBuf::from("/opt/brave.com/brave/brave-browser"));
+            }
+            Channel::Edge => {
+                v.push(PathBuf::from("/usr/bin/microsoft-edge"));
+                v.push(PathBuf::from("/usr/bin/microsoft-edge-stable"));
+                v.push(PathBuf::from("/opt/microsoft/msedge/microsoft-edge"));
+            }
+            Channel::Auto => {
+                v.push(PathBuf::from("/usr/bin/google-chrome"));
+                v.push(PathBuf::from("/usr/bin/chromium"));
+                v.push(PathBuf::from("/usr/bin/chromium-browser"));
+                v.push(PathBuf::from("/snap/bin/chromium"));
+            }
+        }
     }
     #[cfg(target_os = "windows")]
     {
-        v.push(PathBuf::from(
+        let chrome = [
             r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-        ));
-        v.push(PathBuf::from(
             r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-        ));
+        ];
+        let brave = [
+            r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
+            r"C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe",
+        ];
+        let edge = [
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        ];
+        match channel {
+            Channel::Chrome | Channel::Chromium | Channel::Auto => {
+                for p in chrome {
+                    v.push(PathBuf::from(p));
+                }
+            }
+            Channel::Brave => {
+                for p in brave {
+                    v.push(PathBuf::from(p));
+                }
+            }
+            Channel::Edge => {
+                for p in edge {
+                    v.push(PathBuf::from(p));
+                }
+            }
+        }
     }
 
     v
@@ -133,6 +243,29 @@ fn which_on_path(name: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Extract the `host:port` authority from a `ws://HOST:PORT/...` (or `wss://`)
+/// DevTools endpoint URL.
+///
+/// Returns `None` for inputs that don't carry a recognizable
+/// `scheme://authority` shape. Used to compose [`Tab::inspector_url`] from the
+/// endpoint the browser connected to.
+pub(crate) fn debug_host_port_from_ws(ws_url: &str) -> Option<String> {
+    // Strip the scheme, then take everything up to the first `/` (the path).
+    let after_scheme = ws_url
+        .strip_prefix("ws://")
+        .or_else(|| ws_url.strip_prefix("wss://"))?;
+    let authority = after_scheme
+        .split('/')
+        .next()
+        .unwrap_or(after_scheme)
+        .trim();
+    if authority.is_empty() {
+        None
+    } else {
+        Some(authority.to_string())
+    }
 }
 
 /// Parse a `DevTools listening on ws://...` line from Chrome's stderr.
@@ -172,6 +305,30 @@ pub struct BrowserBuilder {
     pub(crate) executable: Option<PathBuf>,
     pub(crate) user_data_dir: Option<PathBuf>,
     pub(crate) downloads_dir: Option<PathBuf>,
+    /// `--lang=<v>` UI locale override. See [`BrowserBuilder::lang`].
+    pub(crate) lang: Option<String>,
+    /// Static `--user-agent=<v>` launch override. See
+    /// [`BrowserBuilder::user_agent`].
+    pub(crate) user_agent: Option<String>,
+    /// Sandbox toggle. `None`/`Some(true)` = sandbox on (no flag);
+    /// `Some(false)` = emit `--no-sandbox`. See [`BrowserBuilder::sandbox`].
+    pub(crate) sandbox: Option<bool>,
+    /// Which browser [`Channel`] to discover when no explicit `executable` is
+    /// set. Defaults to [`Channel::Auto`].
+    pub(crate) channel: Channel,
+    /// Unpacked-extension directory (or `.crx`) paths to side-load. See
+    /// [`BrowserBuilder::add_extension`]. `.crx` entries are unzipped to a
+    /// tempdir at launch; directory entries pass through unchanged.
+    pub(crate) extensions: Vec<PathBuf>,
+    /// Expert-mode toggle. When `true`, `build_flags` emits
+    /// `--disable-web-security` + `--disable-site-isolation-trials`. See
+    /// [`BrowserBuilder::expert`].
+    pub(crate) expert: bool,
+    /// When `true`, a [`ShadowRootObserver`] is added to the observer chain so
+    /// every new target gets an `Element.prototype.attachShadow` override that
+    /// forces `{mode: "open"}`. See
+    /// [`BrowserBuilder::force_open_shadow_roots`]. **Detectable.**
+    pub(crate) force_open_shadow_roots: bool,
     pub(crate) extra_args: Vec<String>,
     pub(crate) stealth: Option<StealthProfile>,
     pub(crate) extra_observers: Vec<Arc<dyn TargetObserver>>,
@@ -193,6 +350,13 @@ impl std::fmt::Debug for BrowserBuilder {
             .field("executable", &self.executable)
             .field("user_data_dir", &self.user_data_dir)
             .field("downloads_dir", &self.downloads_dir)
+            .field("lang", &self.lang)
+            .field("user_agent", &self.user_agent)
+            .field("sandbox", &self.sandbox)
+            .field("channel", &self.channel)
+            .field("extensions", &self.extensions)
+            .field("expert", &self.expert)
+            .field("force_open_shadow_roots", &self.force_open_shadow_roots)
             .field("extra_args", &self.extra_args)
             .field("stealth", &self.stealth)
             .field(
@@ -341,6 +505,201 @@ impl BrowserBuilder {
         self
     }
 
+    /// Set Chrome's UI locale via `--lang=<v>` (e.g. `"en-US"`, `"de-DE"`).
+    ///
+    /// Influences the browser-chrome language and the default
+    /// `Accept-Language` header. For full stealth-coherent locale spoofing,
+    /// prefer configuring it through the [`StealthProfile`] instead.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let builder = zendriver::Browser::builder().lang("en-US");
+    /// ```
+    #[must_use]
+    pub fn lang(mut self, lang: impl Into<String>) -> Self {
+        self.lang = Some(lang.into());
+        self
+    }
+
+    /// Set a static `--user-agent=<v>` for the launched Chrome process.
+    ///
+    /// This is the **launch-time** User-Agent override. Two other UA paths
+    /// exist and are usually a better fit:
+    /// - [`Tab::set_user_agent`] — a runtime per-tab override (also sets
+    ///   `Accept-Language` + UA-CH client hints) applied after launch.
+    /// - the stealth-profile UA — a fingerprint-coherent UA (with matching
+    ///   UA-CH metadata) set via the [`StealthProfile`]; preferred when
+    ///   stealth is on, since a bare `--user-agent` flag leaves the
+    ///   JS-visible UA-CH hints inconsistent with the header.
+    ///
+    /// Use this flag only when you need the UA fixed at process start for
+    /// every tab and don't need UA-CH coherence.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let builder = zendriver::Browser::builder()
+    ///     .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36");
+    /// ```
+    #[must_use]
+    pub fn user_agent(mut self, ua: impl Into<String>) -> Self {
+        self.user_agent = Some(ua.into());
+        self
+    }
+
+    /// Toggle Chrome's setuid/namespace sandbox (default: **on**).
+    ///
+    /// Passing `false` appends `--no-sandbox`. Leaving it unset (or `true`)
+    /// keeps the sandbox enabled and emits no flag.
+    ///
+    /// Independent of the CI auto-disable: when the `CI` env var is set,
+    /// `launch` still auto-adds `--no-sandbox` + `--disable-dev-shm-usage`
+    /// (the GitHub-Actions / Docker containers run as root, where the
+    /// user-namespace sandbox refuses to start). Calling `sandbox(false)`
+    /// just opts in explicitly outside CI.
+    ///
+    /// Disabling the sandbox weakens Chrome's process isolation — only do so
+    /// in trusted, throwaway environments (containers, ephemeral VMs).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let builder = zendriver::Browser::builder().sandbox(false);
+    /// ```
+    #[must_use]
+    pub fn sandbox(mut self, on: bool) -> Self {
+        self.sandbox = Some(on);
+        self
+    }
+
+    /// Pick which browser [`Channel`] to discover at launch (default:
+    /// [`Channel::Auto`]).
+    ///
+    /// Selects the per-OS candidate-path table used to locate the browser
+    /// binary — e.g. [`Channel::Brave`] / [`Channel::Edge`] resolve their
+    /// real install locations. [`BrowserBuilder::executable`] still overrides
+    /// channel discovery entirely; when an explicit executable is set the
+    /// channel is ignored.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use zendriver::Channel;
+    /// let builder = zendriver::Browser::builder().channel(Channel::Brave);
+    /// ```
+    #[must_use]
+    pub fn channel(mut self, channel: Channel) -> Self {
+        self.channel = channel;
+        self
+    }
+
+    /// Side-load a single unpacked extension directory (or a `.crx` file).
+    ///
+    /// Extensions accumulate; call this once per extension or use
+    /// [`BrowserBuilder::extensions`] for a batch. At launch the resolved
+    /// directories are passed via `--load-extension=<dir1,dir2,…>`, paired with
+    /// `--disable-extensions-except=<dir1,dir2,…>` and
+    /// `--enable-unsafe-extension-debugging`. zendriver also forces the
+    /// `DisableLoadExtensionCommandLineSwitch` feature off regardless of the
+    /// active [`StealthProfile`] — Chrome 136+ otherwise ignores
+    /// `--load-extension` entirely (see the type-level note on this builder).
+    ///
+    /// A `.crx` path is unzipped into a temporary directory that lives for the
+    /// [`Browser`]'s lifetime; directory paths are used as-is. Mixing the two
+    /// is fine.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let builder = zendriver::Browser::builder()
+    ///     .add_extension("/path/to/unpacked-ext")
+    ///     .add_extension("/path/to/packed.crx");
+    /// ```
+    #[must_use]
+    pub fn add_extension(mut self, path: impl Into<PathBuf>) -> Self {
+        self.extensions.push(path.into());
+        self
+    }
+
+    /// Side-load several extensions at once.
+    ///
+    /// Equivalent to calling [`BrowserBuilder::add_extension`] for each entry;
+    /// see it for the flag set and `.crx` handling.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use std::path::PathBuf;
+    /// let builder = zendriver::Browser::builder().extensions([
+    ///     PathBuf::from("/ext/one"),
+    ///     PathBuf::from("/ext/two"),
+    /// ]);
+    /// ```
+    #[must_use]
+    pub fn extensions(mut self, paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        self.extensions.extend(paths);
+        self
+    }
+
+    /// Relax Chrome's web-security + site-isolation guards (default: **off**).
+    ///
+    /// When `on`, `build_flags` appends `--disable-web-security` (drops the
+    /// same-origin policy for cross-origin `fetch` / DOM access) and
+    /// `--disable-site-isolation-trials` (so cross-origin frames stay
+    /// in-process and are reachable from the parent). Mirrors nodriver's
+    /// `start(expert=True)` / zendriver-py's expert launch.
+    ///
+    /// This is **flags only** — it does not touch the JS environment. For the
+    /// closed-shadow-root walk that nodriver's expert mode also enables, opt in
+    /// separately via [`BrowserBuilder::force_open_shadow_roots`].
+    ///
+    /// Disabling web security weakens the browser's origin isolation; use only
+    /// in trusted, throwaway automation contexts.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let builder = zendriver::Browser::builder().expert(true);
+    /// ```
+    #[must_use]
+    pub fn expert(mut self, on: bool) -> Self {
+        self.expert = on;
+        self
+    }
+
+    /// Force every `Element.prototype.attachShadow` call to open mode so closed
+    /// shadow roots become walkable (default: **off**).
+    ///
+    /// When `on`, a small built-in [`TargetObserver`] injects a
+    /// `Page.addScriptToEvaluateOnNewDocument` patch into every new target that
+    /// rewrites the `attachShadow` init dict to `{ mode: "open" }` (other init
+    /// keys are preserved). The patched element's `shadowRoot` is then
+    /// reachable from automation even when the page requested a closed root.
+    /// This runs independently of the [`StealthProfile`] — it works with
+    /// stealth off and does **not** become part of the spoofed fingerprint
+    /// bundle.
+    ///
+    /// # Detectability
+    ///
+    /// **This patch is detectable.** A page can notice that `attachShadow`
+    /// always yields an open root (e.g. by calling it with `{ mode: "closed" }`
+    /// and observing a non-null `.shadowRoot`), so anti-bot scripts can use it
+    /// as a signal. Enable it only when you genuinely need to traverse closed
+    /// shadow roots (some challenge widgets), and prefer leaving it off for
+    /// stealth-sensitive workloads.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let builder = zendriver::Browser::builder().force_open_shadow_roots(true);
+    /// ```
+    #[must_use]
+    pub fn force_open_shadow_roots(mut self, on: bool) -> Self {
+        self.force_open_shadow_roots = on;
+        self
+    }
+
     /// Append a single command-line flag to the Chrome launch argv.
     ///
     /// Flags accumulate; later calls do NOT replace earlier ones.
@@ -429,12 +788,66 @@ impl BrowserBuilder {
         // See cdpdriver/zendriver#13.
         v.push("--password-store=basic".to_string());
         v.push("--disable-save-password-bubble".to_string());
-        v.push(
-            "--disable-features=PasswordManagerOnboarding,AutofillServerCommunication".to_string(),
-        );
+        // Base disable-features set. When extensions are requested we MUST also
+        // turn off `DisableLoadExtensionCommandLineSwitch`, or Chrome 136+
+        // silently ignores `--load-extension`. The stealth profiles carry that
+        // feature in their own `--disable-features=IsolateOrigins,…` line, but
+        // an Off profile would otherwise miss it, so merge it into the base
+        // line here — Chrome unions every `--disable-features` occurrence, so
+        // the redundancy under a stealth profile is harmless.
+        if self.extensions.is_empty() {
+            v.push(
+                "--disable-features=PasswordManagerOnboarding,AutofillServerCommunication"
+                    .to_string(),
+            );
+        } else {
+            v.push(
+                "--disable-features=PasswordManagerOnboarding,AutofillServerCommunication,DisableLoadExtensionCommandLineSwitch"
+                    .to_string(),
+            );
+        }
         if self.headless.unwrap_or(true) {
             v.push("--headless=new".to_string());
             v.push("--disable-gpu".to_string());
+        }
+        // Expert mode: relax web-security + site isolation. Emitted only when
+        // `expert(true)` so the default flag set / snapshots are unchanged.
+        if self.expert {
+            v.push("--disable-web-security".to_string());
+            v.push("--disable-site-isolation-trials".to_string());
+        }
+        // Extension side-loading flags. `self.extensions` holds already-resolved
+        // directories at this point (`launch` unzips any `.crx` into tempdirs
+        // and rewrites the list before calling `build_flags`). Skipped entirely
+        // when no extensions are configured so the default argv is untouched.
+        if !self.extensions.is_empty() {
+            let joined = self
+                .extensions
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            v.push(format!("--load-extension={joined}"));
+            v.push(format!("--disable-extensions-except={joined}"));
+            v.push("--enable-unsafe-extension-debugging".to_string());
+        }
+        // C4 dedicated flags. Emitted only when explicitly configured so the
+        // default-builder flag set (and its snapshots) is unchanged. Placed
+        // before user `extra_args` so caller-supplied flags still come last.
+        if let Some(lang) = self.lang.as_ref() {
+            v.push(format!("--lang={lang}"));
+        }
+        if let Some(ua) = self.user_agent.as_ref() {
+            v.push(format!("--user-agent={ua}"));
+        }
+        // Sandbox off → --no-sandbox. Default (None / Some(true)) emits
+        // nothing; the CI auto-disable is handled separately in `launch`.
+        // NOTE: root-uid (euid 0) auto-disable is intentionally NOT done here
+        // — that needs a `geteuid` syscall (no std API) and we decline to add
+        // a `rustix` / `unsafe libc` dependency for it. Callers running as
+        // root should opt in explicitly with `.sandbox(false)`.
+        if self.sandbox == Some(false) {
+            v.push("--no-sandbox".to_string());
         }
         v.extend(self.extra_args.iter().cloned());
         v
@@ -461,6 +874,18 @@ pub(crate) struct BrowserInner {
     pub(crate) main_tab: Tab,
     pub(crate) child: tokio::sync::Mutex<Option<Child>>,
     pub(crate) _user_data: Option<TempDir>,
+    /// Tempdirs holding `.crx` extensions unzipped at launch. Held here so the
+    /// extracted unpacked directories outlive the Chrome process that was
+    /// pointed at them via `--load-extension`; dropped with the [`Browser`].
+    /// Empty when no `.crx` extensions were configured.
+    pub(crate) _extension_dirs: Vec<TempDir>,
+    /// Whether this handle owns the underlying Chrome process. `true` for a
+    /// browser produced by [`BrowserBuilder::launch`] (we spawned Chrome, so
+    /// `close()` / `Drop` terminate it); `false` for one produced by
+    /// [`BrowserBuilder::connect`] (we attached to an already-running debug
+    /// session and must leave the process alone — `close()` only shuts down
+    /// the transport, and no `Child` is held so `kill_on_drop` never fires).
+    pub(crate) owns_process: bool,
     /// Cached `InputProfile` from the active `StealthProfile` (or
     /// `InputProfile::native` when stealth is off). `Browser::new_tab` and
     /// the [`TabRegistrar`] observer read this to build a fresh per-Tab
@@ -480,6 +905,19 @@ pub(crate) struct BrowserInner {
     /// the [`Tab`] handle for a freshly-created page target and by
     /// `Browser::tabs` / `Browser::tab_count` for snapshot reads.
     pub(crate) tabs: tokio::sync::RwLock<HashMap<String, Tab>>,
+    /// `host:port` of the remote-debugging endpoint Chrome was launched with,
+    /// parsed from the `DevTools listening on ws://HOST:PORT/...` stderr line
+    /// at launch. `None` for test-constructed browsers that never launched a
+    /// real Chrome. Consumed by [`Tab::inspector_url`] (reached via the Tab's
+    /// `Weak<BrowserInner>`) to compose the DevTools front-end URL.
+    pub(crate) debug_host_port: Option<String>,
+    /// Full `ws://HOST:PORT/devtools/browser/<id>` endpoint Chrome was
+    /// launched with (or attached to). This browser-level endpoint survives as
+    /// long as the Chrome process lives — even across a dropped socket — so
+    /// [`Browser::reconnect`] re-dials it to re-establish the transport.
+    /// `None` for test-constructed browsers that never dialed a real Chrome
+    /// (reconnect is then unavailable and returns an error).
+    pub(crate) ws_url: Option<String>,
     /// Fires every time the [`TabRegistrar`] observer mutates [`Self::tabs`]
     /// (insert on attach, remove on detach). [`Browser::new_tab_at`] waits
     /// on this in lieu of the previous 50ms polling loop — it arms the
@@ -552,8 +990,12 @@ pub(crate) fn test_only_inner_from_conn(conn: Connection) -> Arc<BrowserInner> {
             main_tab,
             child: tokio::sync::Mutex::new(None),
             _user_data: None,
+            _extension_dirs: Vec::new(),
+            owns_process: false,
             stealth_input_profile: input_profile,
             tabs: tokio::sync::RwLock::new(map),
+            debug_host_port: None,
+            ws_url: None,
             tabs_changed: tokio::sync::Notify::new(),
             #[cfg(feature = "interception")]
             proxy_auth_handle: std::sync::OnceLock::new(),
@@ -707,6 +1149,406 @@ impl TargetObserver for TabRegistrar {
 
 const WS_ENDPOINT_TIMEOUT: Duration = Duration::from_secs(15);
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+/// How long [`resolve_ws_from_http`] waits for the `/json/version` round-trip.
+const JSON_VERSION_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Inputs to [`finish_connect`] — the post-connect handshake shared by
+/// [`BrowserBuilder::launch`] (spawn) and [`BrowserBuilder::connect`]
+/// (attach). Bundled into a struct to keep the function signature readable
+/// (clippy `too_many_arguments`) and to make the spawn-vs-attach differences
+/// explicit at the call site.
+pub(crate) struct FinishConnect {
+    /// The freshly-established transport (already wired with the observer
+    /// chain via `connect_with_observers`).
+    pub(crate) conn: Connection,
+    /// The tab registrar from the observer chain; its weak `BrowserInner`
+    /// ref is wired here once the cyclic `Arc` resolves.
+    pub(crate) registrar: Arc<TabRegistrar>,
+    /// Per-tab input profile cached on `BrowserInner` for new-tab construction.
+    pub(crate) input_profile: zendriver_stealth::InputProfile,
+    /// Owned Chrome child process — `Some` for `launch`, `None` for `connect`.
+    pub(crate) child: Option<Child>,
+    /// Owned `user_data_dir` tempdir — `Some` only when `launch` allocated one.
+    pub(crate) owned_tmp: Option<TempDir>,
+    /// Tempdirs for any `.crx` extensions `launch` unzipped. Empty for
+    /// `connect` (no process launched) and when no `.crx` was configured.
+    pub(crate) extension_dirs: Vec<TempDir>,
+    /// `host:port` of the debug endpoint, for [`Tab::inspector_url`].
+    pub(crate) debug_host_port: Option<String>,
+    /// Full `ws://…/devtools/browser/<id>` endpoint, retained on
+    /// [`BrowserInner`] so [`Browser::reconnect`] can re-dial it.
+    pub(crate) ws_url: Option<String>,
+    /// Whether the resulting handle owns (and must terminate) the process.
+    pub(crate) owns_process: bool,
+}
+
+/// Run the post-connect CDP handshake and assemble [`BrowserInner`].
+///
+/// Shared by [`BrowserBuilder::launch`] and [`BrowserBuilder::connect`]: both
+/// arrive here with a live [`Connection`] (observer chain already attached)
+/// and need the same sequence — enable browser-scoped auto-attach, discover +
+/// attach the main page target, build the self-referential `Arc<BrowserInner>`,
+/// then backfill the registrar's weak ref and the main-tab registry entry.
+///
+/// The only spawn-vs-attach differences are carried in [`FinishConnect`]: the
+/// owned `Child` / `TempDir` (present only for `launch`) and the
+/// `owns_process` flag.
+pub(crate) async fn finish_connect(
+    args: FinishConnect,
+) -> Result<Arc<BrowserInner>, ZendriverError> {
+    let FinishConnect {
+        conn,
+        registrar,
+        input_profile,
+        child,
+        owned_tmp,
+        extension_dirs,
+        debug_host_port,
+        ws_url,
+        owns_process,
+    } = args;
+
+    // Enable auto-attach with debugger-pause BEFORE attaching to the initial
+    // target. Sent at browser scope (no session_id) so it covers both the
+    // initial target and any subsequently-opened pages/iframes.
+    conn.call_raw(
+        "Target.setAutoAttach",
+        json!({
+            "autoAttach": true,
+            "waitForDebuggerOnStart": true,
+            "flatten": true,
+        }),
+        None,
+    )
+    .await?;
+
+    // Discover the initial target via Target.getTargets (prefer a page).
+    let list = conn.call_raw("Target.getTargets", json!({}), None).await?;
+    let target_id = list["targetInfos"]
+        .as_array()
+        .and_then(|arr| {
+            arr.iter()
+                .find(|t| t["type"] == "page")
+                .or_else(|| arr.first())
+        })
+        .and_then(|t| t["targetId"].as_str())
+        .ok_or_else(|| ZendriverError::Navigation("no initial target found".into()))?
+        .to_string();
+
+    // Attach to the initial target. This triggers `Target.attachedToTarget`
+    // which the actor routes through observers (`on_target_attached`) and
+    // then releases via `Runtime.runIfWaitingForDebugger`.
+    //
+    // The `TabRegistrar` observer (in the chain) will try to insert into
+    // `BrowserInner.tabs` for the main tab too. That insertion is a no-op
+    // because the weak ref isn't wired yet (`OnceLock` empty → observer warns
+    // + skips). We re-insert the main tab manually below so the registry is
+    // consistent post-connect.
+    let attach = conn
+        .call_raw(
+            "Target.attachToTarget",
+            json!({ "targetId": target_id, "flatten": true }),
+            None,
+        )
+        .await?;
+    let session_id = attach["sessionId"]
+        .as_str()
+        .ok_or_else(|| ZendriverError::Navigation("attach returned no sessionId".into()))?
+        .to_string();
+
+    // Wrap session in Tab; build BrowserInner via the canonical
+    // `Arc::new_cyclic` self-referential pattern.
+    let session_id_for_registry = session_id.clone();
+    let target_id_for_main_tab = target_id.clone();
+    let inner = Arc::new_cyclic(|weak: &std::sync::Weak<BrowserInner>| {
+        let session = SessionHandle::new(conn.clone(), session_id);
+        let main_tab_input = InputController::new(input_profile.clone());
+        let main_tab = Tab::new(
+            session,
+            weak.clone(),
+            main_tab_input,
+            target_id_for_main_tab,
+        );
+        BrowserInner {
+            conn,
+            main_tab,
+            child: tokio::sync::Mutex::new(child),
+            _user_data: owned_tmp,
+            _extension_dirs: extension_dirs,
+            owns_process,
+            stealth_input_profile: input_profile,
+            tabs: tokio::sync::RwLock::new(HashMap::new()),
+            debug_host_port,
+            ws_url,
+            tabs_changed: tokio::sync::Notify::new(),
+            #[cfg(feature = "interception")]
+            proxy_auth_handle: std::sync::OnceLock::new(),
+        }
+    });
+
+    // Wire the registrar's weak ref + manually insert the main tab (it was
+    // attached before the weak ref existed, so the observer bailed early).
+    registrar.set_browser(Arc::downgrade(&inner));
+    inner
+        .tabs
+        .write()
+        .await
+        .insert(session_id_for_registry, inner.main_tab.clone());
+
+    Ok(inner)
+}
+
+/// Resolve a `webSocketDebuggerUrl` from a DevTools HTTP base by issuing a
+/// minimal `GET {endpoint}/json/version` over a raw [`tokio::net::TcpStream`].
+///
+/// Hand-rolled (HTTP/1.0, read-until-close, split headers from body, parse the
+/// JSON body) so the always-on dependency set does not grow an HTTP client —
+/// `connect`'s `ws://` path needs no HTTP at all, and the `fetcher`-gated
+/// `reqwest` must not leak into the default build. Mirrors nodriver /
+/// zendriver-py, which read the same `webSocketDebuggerUrl` field.
+///
+/// # Errors
+///
+/// Returns [`BrowserError::DevtoolsParse`] when the endpoint is malformed, the
+/// TCP round-trip fails / times out, the response has no body, or the JSON
+/// lacks a string `webSocketDebuggerUrl`.
+pub(crate) async fn resolve_ws_from_http(endpoint: &str) -> Result<String, ZendriverError> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    // Parse `scheme://host[:port]` → (host, port). Strip any trailing path.
+    let after_scheme = endpoint
+        .strip_prefix("http://")
+        .or_else(|| endpoint.strip_prefix("https://"))
+        .ok_or(BrowserError::DevtoolsParse)?;
+    let authority = after_scheme
+        .split('/')
+        .next()
+        .unwrap_or(after_scheme)
+        .trim();
+    if authority.is_empty() {
+        return Err(BrowserError::DevtoolsParse.into());
+    }
+    // host:port split — default to 80 when no explicit port (DevTools is
+    // typically explicit, e.g. 9222, but be lenient).
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((h, p)) => (
+            h,
+            p.parse::<u16>().map_err(|_| BrowserError::DevtoolsParse)?,
+        ),
+        None => (authority, 80u16),
+    };
+
+    let body = timeout(JSON_VERSION_TIMEOUT, async {
+        let mut stream = TcpStream::connect((host, port))
+            .await
+            .map_err(BrowserError::SpawnFailed)?;
+        // HTTP/1.0 + Connection: close → server closes the socket after the
+        // response, so a read-to-end cleanly delimits the message.
+        let req = format!(
+            "GET /json/version HTTP/1.0\r\nHost: {authority}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+        );
+        stream
+            .write_all(req.as_bytes())
+            .await
+            .map_err(BrowserError::SpawnFailed)?;
+        stream.flush().await.map_err(BrowserError::SpawnFailed)?;
+        let mut buf = Vec::new();
+        stream
+            .read_to_end(&mut buf)
+            .await
+            .map_err(BrowserError::SpawnFailed)?;
+        Ok::<Vec<u8>, ZendriverError>(buf)
+    })
+    .await
+    .map_err(|_| BrowserError::WsTimeout)??;
+
+    parse_ws_from_json_version(&body)
+}
+
+/// Split an HTTP/1.x response into its body and parse the
+/// `webSocketDebuggerUrl` field from the JSON.
+///
+/// Factored out of [`resolve_ws_from_http`] so the parse — the part most worth
+/// asserting — is unit-testable without a socket. Splits on the first
+/// `\r\n\r\n` (header/body boundary); if absent, treats the whole buffer as the
+/// JSON body (lenient toward bodies returned without standard headers in
+/// tests).
+pub(crate) fn parse_ws_from_json_version(raw: &[u8]) -> Result<String, ZendriverError> {
+    let text = String::from_utf8_lossy(raw);
+    // Header/body split on the blank line; fall back to the whole buffer.
+    let body = text
+        .split_once("\r\n\r\n")
+        .map(|(_, b)| b)
+        .unwrap_or(&text)
+        .trim();
+    if body.is_empty() {
+        return Err(BrowserError::DevtoolsParse.into());
+    }
+    let parsed: serde_json::Value =
+        serde_json::from_str(body).map_err(|_| BrowserError::DevtoolsParse)?;
+    parsed["webSocketDebuggerUrl"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| BrowserError::DevtoolsParse.into())
+}
+
+/// Resolve every entry in `extensions` to an unpacked-extension *directory*,
+/// in place, returning the tempdirs that back any unzipped `.crx` archives.
+///
+/// `--load-extension` only accepts directories, so a `.crx` file is unzipped
+/// into a fresh [`TempDir`] and the slot is rewritten to that directory.
+/// Entries that are already directories pass through unchanged. The returned
+/// tempdirs MUST be kept alive for as long as Chrome runs (they are parked on
+/// [`BrowserInner`]); dropping one deletes the extracted extension out from
+/// under the running browser.
+///
+/// A `.crx` is a ZIP with a short binary header (magic `Cr24` + version +
+/// signature lengths) prepended; we locate the embedded ZIP by scanning for
+/// the local-file-header magic (`PK\x03\x04`) and unzip from there, so both
+/// CRX2 and CRX3 layouts work without parsing the header fields.
+///
+/// # Errors
+///
+/// Returns [`BrowserError::ExtensionLoad`] when a configured path does not
+/// exist, when a `.crx` cannot be read / contains no ZIP payload / fails to
+/// unzip, or when an entry is neither a directory nor a `.crx` file.
+async fn resolve_extension_dirs(
+    extensions: &mut [PathBuf],
+) -> Result<Vec<TempDir>, ZendriverError> {
+    let mut tempdirs = Vec::new();
+    for slot in extensions.iter_mut() {
+        if slot.is_dir() {
+            continue;
+        }
+        let is_crx = slot
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("crx"));
+        if !is_crx {
+            return Err(BrowserError::ExtensionLoad {
+                path: slot.clone(),
+                reason: if slot.exists() {
+                    "extension path is neither a directory nor a .crx file".into()
+                } else {
+                    "extension path does not exist".into()
+                },
+            }
+            .into());
+        }
+        let (dir, td) = unzip_crx(slot).await?;
+        *slot = dir;
+        tempdirs.push(td);
+    }
+    Ok(tempdirs)
+}
+
+/// Unzip a single `.crx` at `crx_path` into a fresh [`TempDir`], returning the
+/// extracted directory path alongside the owning tempdir handle.
+///
+/// The blocking ZIP walk runs on [`tokio::task::spawn_blocking`]. Path safety
+/// mirrors the fetcher's extractor: entries with absolute / parent-traversal
+/// paths and (on Unix) symlink entries are rejected so a hostile `.crx` can't
+/// escape the tempdir.
+async fn unzip_crx(crx_path: &Path) -> Result<(PathBuf, TempDir), ZendriverError> {
+    let crx_path = crx_path.to_path_buf();
+    let td = tempfile::Builder::new()
+        .prefix("zendriver-ext-")
+        .tempdir()
+        .map_err(BrowserError::SpawnFailed)?;
+    let dest = td.path().to_path_buf();
+    let dest_for_blocking = dest.clone();
+    let crx_for_blocking = crx_path.clone();
+
+    tokio::task::spawn_blocking(move || unzip_crx_blocking(&crx_for_blocking, &dest_for_blocking))
+        .await
+        .map_err(|e| BrowserError::ExtensionLoad {
+            path: crx_path.clone(),
+            reason: format!("unzip task join error: {e}"),
+        })??;
+
+    Ok((dest, td))
+}
+
+/// Synchronous `.crx` → directory unzip body (runs on a blocking thread).
+fn unzip_crx_blocking(crx_path: &Path, dest_dir: &Path) -> Result<(), ZendriverError> {
+    use std::io::Cursor;
+
+    let bytes = std::fs::read(crx_path).map_err(|e| BrowserError::ExtensionLoad {
+        path: crx_path.to_path_buf(),
+        reason: format!("read failed: {e}"),
+    })?;
+    // A `.crx` prepends a binary header before the ZIP. Find the first ZIP
+    // local-file-header signature (`PK\x03\x04`) and treat everything from
+    // there as the archive. A bare `.zip` (no CRX header) also works since the
+    // signature is at offset 0.
+    let zip_start = bytes
+        .windows(4)
+        .position(|w| w == [0x50, 0x4B, 0x03, 0x04])
+        .ok_or_else(|| BrowserError::ExtensionLoad {
+            path: crx_path.to_path_buf(),
+            reason: "no ZIP payload found in .crx".into(),
+        })?;
+    let mut archive = zip::ZipArchive::new(Cursor::new(&bytes[zip_start..])).map_err(|e| {
+        BrowserError::ExtensionLoad {
+            path: crx_path.to_path_buf(),
+            reason: format!("not a valid ZIP: {e}"),
+        }
+    })?;
+
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| BrowserError::ExtensionLoad {
+                path: crx_path.to_path_buf(),
+                reason: format!("zip entry {i}: {e}"),
+            })?;
+        // Reject unsafe paths (absolute / parent-traversal).
+        let Some(rel_path) = entry.enclosed_name() else {
+            return Err(BrowserError::ExtensionLoad {
+                path: crx_path.to_path_buf(),
+                reason: format!("zip entry has unsafe path: {}", entry.name()),
+            }
+            .into());
+        };
+        // Refuse symlink entries — the primary zip-slip follow-on vector.
+        #[cfg(unix)]
+        if let Some(mode) = entry.unix_mode() {
+            const S_IFMT: u32 = 0o170_000;
+            const S_IFLNK: u32 = 0o120_000;
+            if mode & S_IFMT == S_IFLNK {
+                return Err(BrowserError::ExtensionLoad {
+                    path: crx_path.to_path_buf(),
+                    reason: format!("zip entry {rel_path:?} is a symlink; refusing"),
+                }
+                .into());
+            }
+        }
+        let out_path = dest_dir.join(&rel_path);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&out_path).map_err(|e| BrowserError::ExtensionLoad {
+                path: crx_path.to_path_buf(),
+                reason: format!("mkdir {out_path:?}: {e}"),
+            })?;
+            continue;
+        }
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| BrowserError::ExtensionLoad {
+                path: crx_path.to_path_buf(),
+                reason: format!("mkdir {parent:?}: {e}"),
+            })?;
+        }
+        let mut out =
+            std::fs::File::create(&out_path).map_err(|e| BrowserError::ExtensionLoad {
+                path: crx_path.to_path_buf(),
+                reason: format!("create {out_path:?}: {e}"),
+            })?;
+        std::io::copy(&mut entry, &mut out).map_err(|e| BrowserError::ExtensionLoad {
+            path: crx_path.to_path_buf(),
+            reason: format!("write {out_path:?}: {e}"),
+        })?;
+    }
+    Ok(())
+}
 
 impl BrowserBuilder {
     /// Spawn Chrome and attach. Returns once the main tab is bound.
@@ -735,19 +1577,27 @@ impl BrowserBuilder {
     /// # browser.close().await?;
     /// # Ok(()) }
     /// ```
-    pub async fn launch(self) -> Result<Browser, ZendriverError> {
+    pub async fn launch(mut self) -> Result<Browser, ZendriverError> {
         // 1. Resolve Chrome executable.
         // Precedence: explicit `.executable(...)` > `CHROME_BIN` env var >
-        // platform discovery. The env-var hop lets CI (and local devs
-        // pointing at Canary / a downloaded Chrome-for-Testing build)
-        // override the discovery path without code changes.
+        // per-channel platform discovery. The env-var hop lets CI (and local
+        // devs pointing at Canary / a downloaded Chrome-for-Testing build)
+        // override the discovery path without code changes. The configured
+        // `channel` (default `Auto`) only steers the final discovery step.
         let exe = match self.executable.clone() {
             Some(p) => p,
             None => match std::env::var("CHROME_BIN").ok().filter(|s| !s.is_empty()) {
                 Some(p) => PathBuf::from(p),
-                None => find_chrome_executable()?,
+                None => find_chrome_executable_for_channel(self.channel)?,
             },
         };
+
+        // 1b. Resolve extensions: unzip any `.crx` into a tempdir and rewrite
+        // `self.extensions` to the resolved unpacked-directory paths so
+        // `build_flags` emits `--load-extension=<dir,…>`. Directory entries
+        // pass through untouched. The returned tempdirs are handed to
+        // `BrowserInner` below so the extracted dirs outlive Chrome.
+        let extension_dirs = resolve_extension_dirs(&mut self.extensions).await?;
 
         // 2. Resolve the per-tab InputProfile from the active StealthProfile
         // (or zero-overhead `native` when stealth is off). Cached on
@@ -770,23 +1620,31 @@ impl BrowserBuilder {
 
         // 4. Resolve fingerprint + build observer chain + profile flags.
         // Observer order: stealth (patches each new target) → tab registrar
-        // (records the resulting Tab handle) → user-supplied observers.
-        let (observers, extra_flags): (Vec<Arc<dyn TargetObserver>>, Vec<String>) =
+        // (records the resulting Tab handle) → user-supplied observers →
+        // force-open-shadow-roots (independent of the stealth bundle).
+        let (mut observers, extra_flags): (Vec<Arc<dyn TargetObserver>>, Vec<String>) =
             if let Some(ref profile) = self.stealth {
                 let fp = profile.resolve_fingerprint(&exe)?;
                 let stealth_obs: Arc<dyn TargetObserver> =
                     Arc::new(StealthObserver::new(profile.clone(), fp));
-                let mut obs_vec = Vec::with_capacity(2 + self.extra_observers.len());
+                let mut obs_vec = Vec::with_capacity(3 + self.extra_observers.len());
                 obs_vec.push(stealth_obs);
                 obs_vec.push(registrar.clone() as Arc<dyn TargetObserver>);
                 obs_vec.extend(self.extra_observers.iter().cloned());
                 (obs_vec, profile.build_flags())
             } else {
-                let mut obs_vec = Vec::with_capacity(1 + self.extra_observers.len());
+                let mut obs_vec = Vec::with_capacity(2 + self.extra_observers.len());
                 obs_vec.push(registrar.clone() as Arc<dyn TargetObserver>);
                 obs_vec.extend(self.extra_observers.iter().cloned());
                 (obs_vec, Vec::new())
             };
+        // Append the force-open-shadow-roots observer last so its injected
+        // attachShadow override runs independently of (and after) the stealth
+        // bundle. Only added when the caller opted in — keeps the default
+        // observer chain untouched.
+        if self.force_open_shadow_roots {
+            observers.push(Arc::new(crate::expert::ShadowRootObserver) as Arc<dyn TargetObserver>);
+        }
 
         // 5. Allocate user_data_dir (or use a TempDir we keep alive until shutdown).
         let (user_data_path, owned_tmp) = match self.user_data_dir.clone() {
@@ -848,99 +1706,23 @@ impl BrowserBuilder {
         debug!(ws_url = %ws_url, "connecting to chrome");
         let conn = zendriver_transport::connect_with_observers(&ws_url, observers).await?;
 
-        // 8. Enable auto-attach with debugger-pause BEFORE attaching to the
-        // initial target. Sent at browser scope (no session_id) so it covers
-        // both the initial target and any subsequently-opened pages/iframes.
-        conn.call_raw(
-            "Target.setAutoAttach",
-            json!({
-                "autoAttach": true,
-                "waitForDebuggerOnStart": true,
-                "flatten": true,
-            }),
-            None,
-        )
+        // 8–12. Shared post-connect handshake (auto-attach, main-tab
+        // discovery + attach, BrowserInner construction, registrar wiring).
+        // Identical for spawn (`launch`) and attach (`connect`); the only
+        // differences are the owned `Child` / `TempDir` we hand it and the
+        // `owns_process` flag (true here — we spawned Chrome).
+        let inner = finish_connect(FinishConnect {
+            conn,
+            registrar,
+            input_profile,
+            child: Some(child),
+            owned_tmp,
+            extension_dirs,
+            debug_host_port: debug_host_port_from_ws(&ws_url),
+            ws_url: Some(ws_url),
+            owns_process: true,
+        })
         .await?;
-
-        // 9. Discover initial target via Target.getTargets.
-        let list = conn.call_raw("Target.getTargets", json!({}), None).await?;
-        let target_id = list["targetInfos"]
-            .as_array()
-            .and_then(|arr| {
-                arr.iter()
-                    .find(|t| t["type"] == "page")
-                    .or_else(|| arr.first())
-            })
-            .and_then(|t| t["targetId"].as_str())
-            .ok_or_else(|| ZendriverError::Navigation("no initial target found".into()))?
-            .to_string();
-
-        // 10. Attach to the initial target. This triggers `Target.attachedToTarget`
-        // which the actor routes through observers (`on_target_attached`) and
-        // then releases via `Runtime.runIfWaitingForDebugger`.
-        //
-        // The `TabRegistrar` observer (in the chain) will try to insert into
-        // `BrowserInner.tabs` for the main tab too. That insertion is a
-        // no-op because the weak ref isn't wired yet (`OnceLock` empty →
-        // observer warns + skips). We re-insert the main tab manually in
-        // step 12 so the registry is consistent post-launch.
-        let attach = conn
-            .call_raw(
-                "Target.attachToTarget",
-                json!({ "targetId": target_id, "flatten": true }),
-                None,
-            )
-            .await?;
-        let session_id = attach["sessionId"]
-            .as_str()
-            .ok_or_else(|| ZendriverError::Navigation("attach returned no sessionId".into()))?
-            .to_string();
-
-        // 11. Wrap session in Tab; build BrowserInner.
-        //
-        // `Arc::new_cyclic` is the canonical pattern for building
-        // self-referential Arc graphs: the inner closure receives a
-        // `Weak<BrowserInner>` it can hand to the Tab. The Tab uses that
-        // weak ref for later access to Browser-wide resources (CookieJar,
-        // tabs registry); the per-Tab `InputController` is constructed
-        // inline here from the cached `input_profile`.
-        let session_id_for_registry = session_id.clone();
-        let target_id_for_main_tab = target_id.clone();
-        let inner = Arc::new_cyclic(|weak: &std::sync::Weak<BrowserInner>| {
-            let session = SessionHandle::new(conn.clone(), session_id);
-            let main_tab_input = InputController::new(input_profile.clone());
-            let main_tab = Tab::new(
-                session,
-                weak.clone(),
-                main_tab_input,
-                target_id_for_main_tab,
-            );
-            BrowserInner {
-                conn,
-                main_tab,
-                child: tokio::sync::Mutex::new(Some(child)),
-                _user_data: owned_tmp,
-                stealth_input_profile: input_profile,
-                tabs: tokio::sync::RwLock::new(HashMap::new()),
-                tabs_changed: tokio::sync::Notify::new(),
-                #[cfg(feature = "interception")]
-                proxy_auth_handle: std::sync::OnceLock::new(),
-            }
-        });
-
-        // 12. Wire the registrar's weak ref + manually insert the main tab.
-        //
-        // The main tab was attached BEFORE the registrar had a usable weak
-        // ref (the `Arc::new_cyclic` block above only just resolved), so
-        // the registrar's `on_target_attached` ran with `OnceLock` empty
-        // and bailed early. Backfill the registry here so callers see the
-        // expected 1-entry state immediately after `launch`.
-        registrar.set_browser(Arc::downgrade(&inner));
-        inner
-            .tabs
-            .write()
-            .await
-            .insert(session_id_for_registry, inner.main_tab.clone());
 
         // 13. If a custom downloads_dir was set, configure browser-scoped
         // download behavior so all tabs (current + future) save into it.
@@ -977,6 +1759,120 @@ impl BrowserBuilder {
 
         Ok(Browser { inner })
     }
+
+    /// Attach to an already-running Chrome debug session instead of spawning
+    /// a new process.
+    ///
+    /// `endpoint` is detected by scheme:
+    /// - `ws://…` / `wss://…` — used directly as the DevTools browser
+    ///   WebSocket URL (the `webSocketDebuggerUrl` Chrome prints to stderr as
+    ///   `DevTools listening on …`).
+    /// - `http://host:port` / `https://host:port` — a DevTools HTTP base;
+    ///   `connect` performs `GET {endpoint}/json/version` and reads
+    ///   `webSocketDebuggerUrl` from the JSON body (matching nodriver /
+    ///   zendriver-py).
+    ///
+    /// The connected [`Browser`] does **not** own the Chrome process: its
+    /// [`Browser::close`] shuts down only the transport, and dropping it does
+    /// **not** terminate Chrome. Use this to drive a long-lived browser you
+    /// started elsewhere.
+    ///
+    /// `.stealth(profile)` and `.observer(..)` still apply, but only to
+    /// targets attached **after** this call — the stealth observer is wired
+    /// into the same browser-wide `Target.setAutoAttach { flatten: true }`
+    /// that fires on newly-attached targets. Tabs already open when you
+    /// connect predate the observer chain and are **not** patched.
+    ///
+    /// The spawn-only builder fields — [`BrowserBuilder::executable`],
+    /// [`BrowserBuilder::user_data_dir`], [`BrowserBuilder::downloads_dir`],
+    /// and any launch flags ([`BrowserBuilder::arg`] / headless / sandbox /
+    /// channel / lang / user-agent) — are **ignored** on the connect path,
+    /// since no process is launched.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Browser`] when an `http(s)://` endpoint
+    /// cannot be resolved to a `webSocketDebuggerUrl`, and
+    /// [`ZendriverError::Transport`] when the WebSocket attach fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// // Chrome already started with `--remote-debugging-port=9222`.
+    /// let browser = zendriver::Browser::builder()
+    ///     .connect("http://127.0.0.1:9222").await?;
+    /// let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// // Does NOT kill the Chrome we attached to:
+    /// browser.close().await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn connect(self, endpoint: impl Into<String>) -> Result<Browser, ZendriverError> {
+        let endpoint = endpoint.into();
+
+        // Resolve the browser WebSocket URL from the endpoint scheme.
+        let ws_url = if endpoint.starts_with("ws://") || endpoint.starts_with("wss://") {
+            endpoint
+        } else if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+            resolve_ws_from_http(&endpoint).await?
+        } else {
+            return Err(BrowserError::DevtoolsParse.into());
+        };
+
+        // Resolve the per-tab InputProfile + build the observer chain exactly
+        // like `launch` does (stealth observer → tab registrar → user
+        // observers). The spawn-only branches (`executable`, flags, TempDir)
+        // are intentionally skipped — `connect` never launches a process.
+        let input_profile = self
+            .stealth
+            .as_ref()
+            .map_or_else(zendriver_stealth::InputProfile::native, |sp| {
+                sp.input_profile()
+            });
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let mut observers: Vec<Arc<dyn TargetObserver>> = if let Some(ref profile) = self.stealth {
+            // No executable to resolve a fingerprint from on the connect path;
+            // fall back to the profile's default fingerprint.
+            let fp = profile.resolve_fingerprint(Path::new(""))?;
+            let stealth_obs: Arc<dyn TargetObserver> =
+                Arc::new(StealthObserver::new(profile.clone(), fp));
+            let mut obs_vec = Vec::with_capacity(3 + self.extra_observers.len());
+            obs_vec.push(stealth_obs);
+            obs_vec.push(registrar.clone() as Arc<dyn TargetObserver>);
+            obs_vec.extend(self.extra_observers.iter().cloned());
+            obs_vec
+        } else {
+            let mut obs_vec = Vec::with_capacity(2 + self.extra_observers.len());
+            obs_vec.push(registrar.clone() as Arc<dyn TargetObserver>);
+            obs_vec.extend(self.extra_observers.iter().cloned());
+            obs_vec
+        };
+        // Same opt-in force-open-shadow-roots observer as the launch path.
+        if self.force_open_shadow_roots {
+            observers.push(Arc::new(crate::expert::ShadowRootObserver) as Arc<dyn TargetObserver>);
+        }
+
+        debug!(ws_url = %ws_url, "attaching to running chrome");
+        let conn = zendriver_transport::connect_with_observers(&ws_url, observers).await?;
+
+        // Same post-connect handshake as `launch`, but with no owned process:
+        // no `Child`, no `TempDir`, `owns_process = false`.
+        let inner = finish_connect(FinishConnect {
+            conn,
+            registrar,
+            input_profile,
+            child: None,
+            owned_tmp: None,
+            extension_dirs: Vec::new(),
+            debug_host_port: debug_host_port_from_ws(&ws_url),
+            ws_url: Some(ws_url),
+            owns_process: false,
+        })
+        .await?;
+
+        Ok(Browser { inner })
+    }
 }
 
 #[cfg(feature = "fetcher")]
@@ -1007,6 +1903,160 @@ impl BrowserBuilder {
     }
 }
 
+/// A browser permission that can be granted or denied via
+/// [`Browser::grant_permissions`].
+///
+/// Mirrors the CDP [`Browser.PermissionType`][1] enum. Each variant maps to a
+/// camelCase wire string via [`PermissionType::as_cdp`]; the full set is
+/// available as [`PermissionType::ALL`] (used by
+/// [`Browser::grant_all_permissions`]).
+///
+/// [1]: https://chromedevtools.github.io/devtools-protocol/tot/Browser/#type-PermissionType
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum PermissionType {
+    /// `accessibilityEvents` — accessibility event delivery.
+    AccessibilityEvents,
+    /// `audioCapture` — microphone access (alias of [`Self::Microphone`] on
+    /// the wire).
+    AudioCapture,
+    /// `backgroundSync` — Background Sync API.
+    BackgroundSync,
+    /// `backgroundFetch` — Background Fetch API.
+    BackgroundFetch,
+    /// Camera access. Ergonomic alias of [`Self::VideoCapture`]; both map to
+    /// the `videoCapture` wire string.
+    Camera,
+    /// `clipboardReadWrite` — unsanitized clipboard read + write.
+    ClipboardReadWrite,
+    /// `clipboardSanitizedWrite` — sanitized clipboard write.
+    ClipboardSanitizedWrite,
+    /// `displayCapture` — screen / window capture.
+    DisplayCapture,
+    /// `durableStorage` — persistent storage grant.
+    DurableStorage,
+    /// `geolocation` — location access.
+    Geolocation,
+    /// `idleDetection` — Idle Detection API.
+    IdleDetection,
+    /// `localFonts` — local font enumeration.
+    LocalFonts,
+    /// `midi` — Web MIDI access (no SysEx).
+    Midi,
+    /// `midiSysex` — Web MIDI access including SysEx messages.
+    MidiSysex,
+    /// Microphone access. Ergonomic alias of [`Self::AudioCapture`]; both map
+    /// to the `audioCapture` wire string.
+    Microphone,
+    /// `nfc` — Web NFC access.
+    Nfc,
+    /// `notifications` — desktop notifications.
+    Notifications,
+    /// `paymentHandler` — Payment Handler API.
+    PaymentHandler,
+    /// `periodicBackgroundSync` — Periodic Background Sync API.
+    PeriodicBackgroundSync,
+    /// `protectedMediaIdentifier` — protected media (EME) identifier.
+    ProtectedMediaIdentifier,
+    /// `sensors` — generic sensor access (accelerometer, gyroscope, …).
+    Sensors,
+    /// `storageAccess` — Storage Access API.
+    StorageAccess,
+    /// `topLevelStorageAccess` — top-level Storage Access API.
+    TopLevelStorageAccess,
+    /// `videoCapture` — camera access (alias of [`Self::Camera`] on the wire).
+    VideoCapture,
+    /// `videoCapturePanTiltZoom` — camera pan/tilt/zoom control.
+    VideoCapturePanTiltZoom,
+    /// `wakeLockScreen` — screen wake lock.
+    WakeLockScreen,
+    /// `wakeLockSystem` — system wake lock.
+    WakeLockSystem,
+    /// `windowManagement` — multi-screen window placement.
+    WindowManagement,
+}
+
+impl PermissionType {
+    /// Every [`PermissionType`] variant — the list
+    /// [`Browser::grant_all_permissions`] grants.
+    ///
+    /// Mirrors nodriver's `grant_all_permissions`: the complete CDP permission
+    /// set. `Camera` / `Microphone` are intentionally omitted because they are
+    /// wire-string aliases of [`Self::VideoCapture`] / [`Self::AudioCapture`]
+    /// (CDP would reject the duplicate strings).
+    pub const ALL: &'static [PermissionType] = &[
+        PermissionType::AccessibilityEvents,
+        PermissionType::AudioCapture,
+        PermissionType::BackgroundSync,
+        PermissionType::BackgroundFetch,
+        PermissionType::ClipboardReadWrite,
+        PermissionType::ClipboardSanitizedWrite,
+        PermissionType::DisplayCapture,
+        PermissionType::DurableStorage,
+        PermissionType::Geolocation,
+        PermissionType::IdleDetection,
+        PermissionType::LocalFonts,
+        PermissionType::Midi,
+        PermissionType::MidiSysex,
+        PermissionType::Nfc,
+        PermissionType::Notifications,
+        PermissionType::PaymentHandler,
+        PermissionType::PeriodicBackgroundSync,
+        PermissionType::ProtectedMediaIdentifier,
+        PermissionType::Sensors,
+        PermissionType::StorageAccess,
+        PermissionType::TopLevelStorageAccess,
+        PermissionType::VideoCapture,
+        PermissionType::VideoCapturePanTiltZoom,
+        PermissionType::WakeLockScreen,
+        PermissionType::WakeLockSystem,
+        PermissionType::WindowManagement,
+    ];
+
+    /// The camelCase CDP wire string for this permission (e.g. `"geolocation"`,
+    /// `"videoCapture"`).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use zendriver::PermissionType;
+    /// assert_eq!(PermissionType::ClipboardReadWrite.as_cdp(), "clipboardReadWrite");
+    /// ```
+    #[must_use]
+    pub fn as_cdp(&self) -> &'static str {
+        match self {
+            PermissionType::AccessibilityEvents => "accessibilityEvents",
+            // `Camera` / `Microphone` map to the same wire strings, so both
+            // alias spellings collapse here.
+            PermissionType::AudioCapture | PermissionType::Microphone => "audioCapture",
+            PermissionType::BackgroundSync => "backgroundSync",
+            PermissionType::BackgroundFetch => "backgroundFetch",
+            PermissionType::ClipboardReadWrite => "clipboardReadWrite",
+            PermissionType::ClipboardSanitizedWrite => "clipboardSanitizedWrite",
+            PermissionType::DisplayCapture => "displayCapture",
+            PermissionType::DurableStorage => "durableStorage",
+            PermissionType::Geolocation => "geolocation",
+            PermissionType::IdleDetection => "idleDetection",
+            PermissionType::LocalFonts => "localFonts",
+            PermissionType::Midi => "midi",
+            PermissionType::MidiSysex => "midiSysex",
+            PermissionType::Nfc => "nfc",
+            PermissionType::Notifications => "notifications",
+            PermissionType::PaymentHandler => "paymentHandler",
+            PermissionType::PeriodicBackgroundSync => "periodicBackgroundSync",
+            PermissionType::ProtectedMediaIdentifier => "protectedMediaIdentifier",
+            PermissionType::Sensors => "sensors",
+            PermissionType::StorageAccess => "storageAccess",
+            PermissionType::TopLevelStorageAccess => "topLevelStorageAccess",
+            PermissionType::VideoCapture | PermissionType::Camera => "videoCapture",
+            PermissionType::VideoCapturePanTiltZoom => "videoCapturePanTiltZoom",
+            PermissionType::WakeLockScreen => "wakeLockScreen",
+            PermissionType::WakeLockSystem => "wakeLockSystem",
+            PermissionType::WindowManagement => "windowManagement",
+        }
+    }
+}
+
 impl Browser {
     /// Construct a fresh [`BrowserBuilder`] (with stealth on by default).
     ///
@@ -1023,6 +2073,29 @@ impl Browser {
     #[must_use]
     pub fn builder() -> BrowserBuilder {
         BrowserBuilder::new()
+    }
+
+    /// Attach to an already-running Chrome debug session instead of spawning.
+    ///
+    /// Shortcut for [`Browser::builder().connect(endpoint)`][BrowserBuilder::connect]
+    /// — see that method for endpoint formats (`ws://…` / `http://host:port`),
+    /// the non-owning lifecycle (`close` / drop never kill the attached
+    /// process), and which builder fields are ignored on the connect path.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`BrowserBuilder::connect`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// let browser = zendriver::Browser::connect("http://127.0.0.1:9222").await?;
+    /// # browser.close().await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn connect(endpoint: impl Into<String>) -> Result<Browser, ZendriverError> {
+        BrowserBuilder::new().connect(endpoint).await
     }
 
     /// Handle for the tab that exists when Chrome launches.
@@ -1075,6 +2148,50 @@ impl Browser {
     #[must_use]
     pub fn cookies(&self) -> crate::CookieJar {
         crate::CookieJar::new(self.inner.conn.clone())
+    }
+
+    /// Route downloads into `dir` at runtime, browser-wide, keeping each
+    /// file's server-suggested name.
+    ///
+    /// Dispatches `Browser.setDownloadBehavior { behavior: "allow",
+    /// downloadPath: <dir> }` on the root [`Connection`] (browser scope, no
+    /// `sessionId`), so the policy applies to the current tab and any future
+    /// tabs. `dir` must already exist.
+    ///
+    /// This is the runtime counterpart to
+    /// [`BrowserBuilder::downloads_dir`](crate::BrowserBuilder::downloads_dir)
+    /// (which sets the same behavior at launch). It is distinct from the
+    /// `expect_download` capture flow ([`Tab::expect_download`]), which uses
+    /// `allowAndName` against a private tempdir to await + save a single
+    /// download; `set_download_path` simply lets downloads land in a known
+    /// directory with their natural names.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Transport`] / `Cdp` if the CDP call fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// browser.set_download_path("/tmp/downloads").await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn set_download_path(&self, dir: impl Into<PathBuf>) -> Result<(), ZendriverError> {
+        let dir = dir.into();
+        self.inner
+            .conn
+            .call_raw(
+                "Browser.setDownloadBehavior",
+                json!({
+                    "behavior": "allow",
+                    "downloadPath": dir.to_string_lossy().to_string(),
+                }),
+                None,
+            )
+            .await?;
+        Ok(())
     }
 
     /// Create a new isolated [`crate::BrowserContext`] bound to an optional
@@ -1209,11 +2326,66 @@ impl Browser {
     /// # Ok(()) }
     /// ```
     pub async fn new_tab_at(&self, url: impl Into<String>) -> Result<Tab, ZendriverError> {
-        let url = url.into();
+        self.create_target(url.into(), false).await
+    }
+
+    /// Open a new top-level OS window navigated to `about:blank`.
+    ///
+    /// Like [`Browser::new_tab`] but passes `newWindow: true` to
+    /// `Target.createTarget`, so Chrome opens a separate browser window rather
+    /// than a tab in the existing one. The returned [`Tab`] is registered via
+    /// the same observer path as `new_tab`. Mirrors nodriver's
+    /// `get(new_window=True)`.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Browser::new_tab`]: [`ZendriverError::TabNotFound`] if the
+    /// registrar fails to register the new window's tab within the wait
+    /// window.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// let browser = zendriver::Browser::builder().launch().await?;
+    /// let win = browser.new_window().await?;
+    /// win.goto("https://example.com").await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn new_window(&self) -> Result<Tab, ZendriverError> {
+        self.create_target("about:blank".to_string(), true).await
+    }
+
+    /// Open a new top-level OS window navigated to `url`.
+    ///
+    /// [`Browser::new_window`] with a custom initial URL. Issue
+    /// `.wait_for_load()` on the returned [`Tab`] to block on the navigation.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// let win = browser.new_window_at("https://example.com").await?;
+    /// win.wait_for_load().await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn new_window_at(&self, url: impl Into<String>) -> Result<Tab, ZendriverError> {
+        self.create_target(url.into(), true).await
+    }
+
+    /// Shared `Target.createTarget` → registrar-wait path behind
+    /// [`Browser::new_tab_at`] (`new_window = false`) and
+    /// [`Browser::new_window_at`] (`new_window = true`).
+    async fn create_target(&self, url: String, new_window: bool) -> Result<Tab, ZendriverError> {
+        let mut params = json!({ "url": url });
+        if new_window {
+            params["newWindow"] = serde_json::Value::Bool(true);
+        }
         let res = self
             .inner
             .conn
-            .call_raw("Target.createTarget", json!({ "url": url }), None)
+            .call_raw("Target.createTarget", params, None)
             .await?;
         let target_id = res
             .get("targetId")
@@ -1293,11 +2465,116 @@ impl Browser {
         self.inner.tabs.read().await.len()
     }
 
+    /// Re-establish a dropped connection to the **same** still-running Chrome
+    /// process (scoped reconnect — see the invalidation caveat below).
+    ///
+    /// When a CDP call returns [`ZendriverError::Disconnected`] the WebSocket
+    /// died but the Chrome process is typically still alive — its browser-level
+    /// `/devtools/browser/<id>` endpoint survives. `reconnect` re-dials that
+    /// endpoint on the existing [`Connection`] (so raw event subscribers stay
+    /// attached to the same broadcast bus), re-applies the WebSocket size
+    /// config, re-arms `Target.setAutoAttach { flatten: true }` — which
+    /// re-fires the observer chain so the stealth patches re-inject on every
+    /// target — and refreshes the tab registry.
+    ///
+    /// # Handle invalidation — IMPORTANT
+    ///
+    /// Re-attaching to Chrome's targets yields **new `sessionId`s**. Every
+    /// [`Tab`], `Frame`, and `Element` handle obtained before the reconnect
+    /// caches a now-stale session id and **must not be reused** — calls on
+    /// them will fail. After `reconnect` returns, **re-acquire** handles:
+    ///
+    /// - live page handles via [`Browser::tabs`] (the registry is rebuilt from
+    ///   the re-attached targets);
+    /// - **not** via [`Browser::main_tab`], which still returns the
+    ///   pre-reconnect handle (its cached session id is stale). Swapping the
+    ///   cached main-tab handle in place is part of the deferred
+    ///   transparent-reconnect work; for now treat `main_tab()` as invalid
+    ///   after a reconnect and use `tabs()`.
+    ///
+    /// # What is NOT restored (deferred)
+    ///
+    /// This is the scoped v1. It does **not** replay per-feature domain arming
+    /// (`Network.enable`, active `Fetch` interception rules, `DOMStorage.enable`,
+    /// download behavior, …) that individual features turned on before the
+    /// drop — re-arm those yourself after reconnecting. Transparent
+    /// handle-preserving reconnect (session-id remap so existing `Tab`s keep
+    /// working) is tracked as follow-up work.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Disconnected`] if this browser was constructed
+    /// without a known ws endpoint (e.g. a test harness) so there is nothing to
+    /// re-dial, and [`ZendriverError::Transport`] / [`ZendriverError::Cdp`] if
+    /// the re-dial or the post-reconnect handshake fails. On a failed re-dial
+    /// the existing (dead) connection is left untouched.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # async fn do_work(_t: &zendriver::Tab) -> zendriver::Result<()> { Ok(()) }
+    /// // A long-running scraper that survives a dropped socket:
+    /// let tab = browser.main_tab();
+    /// if let Err(zendriver::ZendriverError::Disconnected) = do_work(&tab).await {
+    ///     browser.reconnect().await?; // re-dial the same Chrome process
+    ///     // Old handles are stale now — re-acquire from the rebuilt registry:
+    ///     let tab = browser.tabs().await.into_iter().next().unwrap();
+    ///     do_work(&tab).await?;
+    /// }
+    /// # Ok(()) }
+    /// ```
+    pub async fn reconnect(&self) -> Result<(), ZendriverError> {
+        let ws_url = self
+            .inner
+            .ws_url
+            .clone()
+            .ok_or(ZendriverError::Disconnected)?;
+
+        // Re-dial onto the SAME Connection (same event bus, same observer
+        // chain). Dials first; only swaps the live socket on success, so a
+        // failed reconnect doesn't tear down a connection that might recover.
+        self.inner.conn.redial(&ws_url).await?;
+
+        // Drop the stale tab registry — every entry's session id is invalid
+        // now. The re-armed auto-attach below re-populates it from the
+        // re-attached targets via the `TabRegistrar` observer.
+        self.inner.tabs.write().await.clear();
+
+        // Re-arm browser-scoped auto-attach. Chrome re-fires
+        // `Target.attachedToTarget` for every existing target, which runs the
+        // observer chain again — stealth re-injects on each target, and the
+        // registrar re-inserts a fresh `Tab` (with a fresh session id) for each
+        // page. `flatten: true` re-applies the single-socket flat session model.
+        self.inner
+            .conn
+            .call_raw(
+                "Target.setAutoAttach",
+                json!({
+                    "autoAttach": true,
+                    "waitForDebuggerOnStart": true,
+                    "flatten": true,
+                }),
+                None,
+            )
+            .await?;
+
+        // Wake any `new_tab_at` waiters now that the registry has been reset
+        // and is being repopulated by the observer chain.
+        self.inner.tabs_changed.notify_waiters();
+        Ok(())
+    }
+
     /// Graceful shutdown of the Chrome subprocess.
     ///
     /// Cancels the transport, sends SIGTERM to Chrome, waits up to 5s, then
     /// SIGKILLs on timeout. Cleans up the `user_data_dir` tempdir if one was
     /// allocated at launch time.
+    ///
+    /// For a browser produced by [`BrowserBuilder::connect`] (we did not spawn
+    /// Chrome) this shuts down only the transport and leaves the attached
+    /// process running.
     ///
     /// # Examples
     ///
@@ -1310,6 +2587,11 @@ impl Browser {
     /// ```
     pub async fn close(self) -> Result<(), ZendriverError> {
         self.inner.conn.shutdown();
+        // Attached (non-owning) sessions must never terminate the process we
+        // connected to — only the transport is torn down above. Spawn-only.
+        if !self.inner.owns_process {
+            return Ok(());
+        }
         let mut child_guard = self.inner.child.lock().await;
         if let Some(mut child) = child_guard.take() {
             // Try graceful exit first. On Unix, tokio's `start_kill` is
@@ -1339,6 +2621,117 @@ impl Browser {
         }
         Ok(())
     }
+
+    /// Grant `perms` to `origin` (or browser-wide when `origin` is `None`).
+    ///
+    /// Wraps the CDP [`Browser.grantPermissions`][1] command, sent at browser
+    /// scope (no `sessionId`). Each [`PermissionType`] is mapped to its
+    /// camelCase wire string. When `origin` is `Some`, the grant is scoped to
+    /// that origin (e.g. `"https://example.com"`); when `None`, the `origin`
+    /// key is omitted so the grant applies browser-wide.
+    ///
+    /// Granting a permission pre-authorizes it without the usual user prompt —
+    /// useful for unattended automation that would otherwise stall on a
+    /// permission dialog (geolocation, clipboard, notifications, …).
+    ///
+    /// [1]: https://chromedevtools.github.io/devtools-protocol/tot/Browser/#method-grantPermissions
+    ///
+    /// # Errors
+    ///
+    /// Bubbles up any transport-level error from the underlying `call_raw`
+    /// (e.g. the connection was shut down).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use zendriver::PermissionType;
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// browser
+    ///     .grant_permissions(
+    ///         &[PermissionType::Geolocation, PermissionType::Notifications],
+    ///         Some("https://example.com"),
+    ///     )
+    ///     .await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn grant_permissions(
+        &self,
+        perms: &[PermissionType],
+        origin: Option<&str>,
+    ) -> Result<(), ZendriverError> {
+        let mut params = serde_json::Map::new();
+        let permissions: Vec<serde_json::Value> = perms
+            .iter()
+            .map(|p| serde_json::Value::String(p.as_cdp().to_string()))
+            .collect();
+        params.insert("permissions".into(), serde_json::Value::Array(permissions));
+        // Omit `origin` entirely when None — a browser-wide grant. Some CDP
+        // versions reject an explicit null here.
+        if let Some(o) = origin {
+            params.insert("origin".into(), serde_json::Value::String(o.to_string()));
+        }
+        self.inner
+            .conn
+            .call_raw(
+                "Browser.grantPermissions",
+                serde_json::Value::Object(params),
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Grant every [`PermissionType`] browser-wide.
+    ///
+    /// Convenience wrapper over [`Browser::grant_permissions`] called with
+    /// [`PermissionType::ALL`] and no origin — mirrors nodriver /
+    /// zendriver-py's `grant_all_permissions`. Pre-authorizes the full CDP
+    /// permission set so automated runs never stall on a permission prompt.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Browser::grant_permissions`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// browser.grant_all_permissions().await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn grant_all_permissions(&self) -> Result<(), ZendriverError> {
+        self.grant_permissions(PermissionType::ALL, None).await
+    }
+
+    /// Reset all previously-granted permissions to their default prompt state.
+    ///
+    /// Wraps the CDP [`Browser.resetPermissions`][1] command, sent at browser
+    /// scope (no `sessionId`). Clears every override installed via
+    /// [`Browser::grant_permissions`] / [`Browser::grant_all_permissions`].
+    ///
+    /// [1]: https://chromedevtools.github.io/devtools-protocol/tot/Browser/#method-resetPermissions
+    ///
+    /// # Errors
+    ///
+    /// Bubbles up any transport-level error from the underlying `call_raw`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// browser.reset_permissions().await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn reset_permissions(&self) -> Result<(), ZendriverError> {
+        self.inner
+            .conn
+            .call_raw("Browser.resetPermissions", json!({}), None)
+            .await?;
+        Ok(())
+    }
 }
 
 /// Hard-shutdown fallback. `Drop` cannot be async, so it cannot perform the
@@ -1355,6 +2748,10 @@ impl Browser {
 /// In short: dropping the [`Browser`] is the panic-safety / scope-exit path.
 /// For a graceful shutdown that flushes Chrome state cleanly, call
 /// [`Browser::close`] explicitly before the [`Browser`] goes out of scope.
+///
+/// For a browser produced by [`BrowserBuilder::connect`] (`owns_process ==
+/// false`) there is no owned `Child`, so step 2 is a no-op: dropping detaches
+/// the transport but never signals the attached Chrome process.
 impl Drop for BrowserInner {
     fn drop(&mut self) {
         self.conn.shutdown();
@@ -1362,6 +2759,13 @@ impl Drop for BrowserInner {
         // we rely on `kill_on_drop(true)` set on the spawned Command, which
         // causes tokio to SIGKILL the child when the Child is dropped.
         // The TempDir for user_data_dir is dropped here too.
+        //
+        // Attached (`connect`) browsers hold no `Child` — `owns_process` is
+        // false and the field is `None` — so nothing is killed here.
+        debug_assert!(
+            self.owns_process || self.child.try_lock().map(|g| g.is_none()).unwrap_or(true),
+            "a non-owning Browser must not hold a Child handle",
+        );
     }
 }
 
@@ -1372,7 +2776,7 @@ mod tests {
 
     #[test]
     fn candidate_paths_is_nonempty() {
-        let v = candidate_paths();
+        let v = candidate_paths_for_channel(Channel::Auto);
         assert!(!v.is_empty());
     }
 
@@ -1408,6 +2812,26 @@ mod tests {
             parse_devtools_line(line).as_deref(),
             Some("ws://localhost:1/devtools/browser/x")
         );
+    }
+
+    #[test]
+    fn debug_host_port_from_ws_extracts_authority() {
+        assert_eq!(
+            debug_host_port_from_ws("ws://127.0.0.1:9222/devtools/browser/abc").as_deref(),
+            Some("127.0.0.1:9222")
+        );
+        assert_eq!(
+            debug_host_port_from_ws("wss://example.test:1/x").as_deref(),
+            Some("example.test:1")
+        );
+        // No path component still yields the authority.
+        assert_eq!(
+            debug_host_port_from_ws("ws://localhost:5555").as_deref(),
+            Some("localhost:5555")
+        );
+        // Non-ws schemes / garbage → None.
+        assert_eq!(debug_host_port_from_ws("http://x:1/y"), None);
+        assert_eq!(debug_host_port_from_ws("nonsense"), None);
     }
 
     #[test]
@@ -1455,11 +2879,248 @@ mod tests {
         assert!(proxy < lang);
     }
 
+    // ----- C4: lang / user_agent / sandbox / channel ---------------------
+
+    #[test]
+    fn lang_flag_present() {
+        let b = BrowserBuilder::new().lang("en-US");
+        let flags = b.build_flags(Path::new("/tmp/x"));
+        assert!(flags.contains(&"--lang=en-US".to_string()));
+    }
+
+    #[test]
+    fn user_agent_flag_present() {
+        let b = BrowserBuilder::new().user_agent("MyAgent/1.0");
+        let flags = b.build_flags(Path::new("/tmp/x"));
+        assert!(flags.contains(&"--user-agent=MyAgent/1.0".to_string()));
+    }
+
+    #[test]
+    fn sandbox_false_adds_no_sandbox() {
+        let b = BrowserBuilder::new().sandbox(false);
+        let flags = b.build_flags(Path::new("/tmp/x"));
+        assert!(flags.contains(&"--no-sandbox".to_string()));
+    }
+
+    #[test]
+    fn sandbox_default_on_omits_no_sandbox() {
+        // Default builder (sandbox on) must NOT emit --no-sandbox from
+        // build_flags. The CI auto-add lives in `launch`, not build_flags,
+        // so this is unaffected by the CI env var.
+        let b = BrowserBuilder::new();
+        let flags = b.build_flags(Path::new("/tmp/x"));
+        assert!(!flags.contains(&"--no-sandbox".to_string()));
+    }
+
+    // ----- C2: expert mode -----------------------------------------------
+
+    #[test]
+    fn expert_adds_web_security_and_site_isolation_flags() {
+        let b = BrowserBuilder::new().expert(true);
+        let flags = b.build_flags(Path::new("/tmp/x"));
+        assert!(
+            flags.contains(&"--disable-web-security".to_string()),
+            "expected --disable-web-security in {flags:?}"
+        );
+        assert!(
+            flags.contains(&"--disable-site-isolation-trials".to_string()),
+            "expected --disable-site-isolation-trials in {flags:?}"
+        );
+    }
+
+    #[test]
+    fn expert_off_omits_expert_flags() {
+        let flags = BrowserBuilder::new().build_flags(Path::new("/tmp/x"));
+        assert!(!flags.contains(&"--disable-web-security".to_string()));
+        assert!(!flags.contains(&"--disable-site-isolation-trials".to_string()));
+    }
+
+    // ----- C3: extensions ------------------------------------------------
+
+    #[test]
+    fn extensions_add_load_and_disable_except_flags() {
+        let b = BrowserBuilder::new().add_extension("a").add_extension("b");
+        let flags = b.build_flags(Path::new("/tmp/x"));
+        assert!(
+            flags.contains(&"--load-extension=a,b".to_string()),
+            "expected --load-extension=a,b in {flags:?}"
+        );
+        assert!(
+            flags.contains(&"--disable-extensions-except=a,b".to_string()),
+            "expected --disable-extensions-except=a,b in {flags:?}"
+        );
+        assert!(
+            flags.contains(&"--enable-unsafe-extension-debugging".to_string()),
+            "expected --enable-unsafe-extension-debugging in {flags:?}"
+        );
+    }
+
+    #[test]
+    fn extensions_force_disable_load_extension_feature_even_off_profile() {
+        // Stealth Off + extensions: build_flags is stealth-agnostic, so the
+        // DisableLoadExtensionCommandLineSwitch feature must ride in the base
+        // --disable-features line whenever extensions are present (otherwise
+        // an Off-profile launch silently fails to load them on Chrome 136+).
+        let b = BrowserBuilder::new()
+            .stealth(StealthProfile::off())
+            .add_extension("ext");
+        let flags = b.build_flags(Path::new("/tmp/x"));
+        assert!(
+            flags.iter().any(|f| f.starts_with("--disable-features=")
+                && f.contains("DisableLoadExtensionCommandLineSwitch")),
+            "expected DisableLoadExtensionCommandLineSwitch in a --disable-features line: {flags:?}"
+        );
+    }
+
+    #[test]
+    fn no_extensions_omits_extension_flags() {
+        // Default builder must not emit any extension flags (keeps the default
+        // argv + snapshots unchanged).
+        let flags = BrowserBuilder::new().build_flags(Path::new("/tmp/x"));
+        assert!(!flags.iter().any(|f| f.starts_with("--load-extension")));
+        assert!(
+            !flags
+                .iter()
+                .any(|f| f.starts_with("--disable-extensions-except"))
+        );
+        assert!(!flags.contains(&"--enable-unsafe-extension-debugging".to_string()));
+        assert!(
+            !flags
+                .iter()
+                .any(|f| f.contains("DisableLoadExtensionCommandLineSwitch")),
+            "default build must not carry the extension feature toggle: {flags:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_extension_dirs_passes_through_directories() {
+        // A directory entry is used as-is (no tempdir allocated).
+        let dir = tempfile::tempdir().unwrap();
+        let mut exts = vec![dir.path().to_path_buf()];
+        let tempdirs = resolve_extension_dirs(&mut exts).await.unwrap();
+        assert!(
+            tempdirs.is_empty(),
+            "directories should not allocate tempdirs"
+        );
+        assert_eq!(exts, vec![dir.path().to_path_buf()]);
+    }
+
+    #[tokio::test]
+    async fn resolve_extension_dirs_unzips_crx_to_tempdir() {
+        // Build a minimal CRX (CRX3-ish: `Cr24` magic + a fake header, then a
+        // ZIP carrying manifest.json) and assert it unzips to a real dir.
+        use std::io::Write;
+        let mut zip_buf = Vec::new();
+        {
+            let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_buf));
+            w.start_file("manifest.json", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            w.write_all(br#"{"name":"t","version":"1","manifest_version":3}"#)
+                .unwrap();
+            w.finish().unwrap();
+        }
+        // Prepend a token CRX header before the ZIP payload.
+        let mut crx = Vec::new();
+        crx.extend_from_slice(b"Cr24");
+        crx.extend_from_slice(&3u32.to_le_bytes()); // version
+        crx.extend_from_slice(&0u32.to_le_bytes()); // header length (ignored)
+        crx.extend_from_slice(&zip_buf);
+
+        let crx_file = tempfile::Builder::new().suffix(".crx").tempfile().unwrap();
+        std::fs::write(crx_file.path(), &crx).unwrap();
+
+        let mut exts = vec![crx_file.path().to_path_buf()];
+        let tempdirs = resolve_extension_dirs(&mut exts).await.unwrap();
+        assert_eq!(tempdirs.len(), 1, "crx should allocate one tempdir");
+        // The slot was rewritten to the extracted directory…
+        assert!(exts[0].is_dir(), "crx slot should resolve to a directory");
+        assert_ne!(exts[0], crx_file.path());
+        // …and the manifest landed inside it.
+        assert!(exts[0].join("manifest.json").is_file());
+    }
+
+    #[tokio::test]
+    async fn resolve_extension_dirs_errors_on_missing_path() {
+        let mut exts = vec![PathBuf::from("/nonexistent/zzz-does-not-exist")];
+        let err = resolve_extension_dirs(&mut exts).await.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ZendriverError::Browser(BrowserError::ExtensionLoad { .. })
+            ),
+            "expected ExtensionLoad, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn channel_brave_resolves_brave_path() {
+        // Probe the candidate-path table directly so the test does not
+        // require Brave to be installed. Every Brave candidate path must
+        // mention "brave" somewhere (per-OS install dirs / binary names),
+        // compared case-insensitively (Linux uses lowercase `brave-browser`,
+        // macOS/Windows use `Brave Browser` / `Brave-Browser`).
+        let paths = candidate_paths_for_channel(Channel::Brave);
+        assert!(!paths.is_empty(), "Brave channel must yield candidates");
+        assert!(
+            paths
+                .iter()
+                .all(|p| p.to_string_lossy().to_lowercase().contains("brave")),
+            "every Brave candidate path should reference Brave: {paths:?}"
+        );
+    }
+
+    #[test]
+    fn channel_edge_resolves_edge_path() {
+        let paths = candidate_paths_for_channel(Channel::Edge);
+        assert!(!paths.is_empty(), "Edge channel must yield candidates");
+        assert!(
+            paths
+                .iter()
+                .all(|p| p.to_string_lossy().to_lowercase().contains("edge")),
+            "every Edge candidate path should reference Edge: {paths:?}"
+        );
+    }
+
+    #[test]
+    fn channel_auto_includes_chrome_family_candidates() {
+        // Auto preserves the historical first-found behavior: it offers both
+        // the Chrome and Chromium fallbacks (so neither a Chrome-only nor a
+        // Chromium-only box regresses). `find_chrome_executable()` delegates
+        // straight to this table.
+        let paths = candidate_paths_for_channel(Channel::Auto);
+        assert!(!paths.is_empty(), "Auto must yield candidates");
+        let joined = paths
+            .iter()
+            .map(|p| p.to_string_lossy().to_lowercase())
+            .collect::<Vec<_>>()
+            .join("|");
+        assert!(
+            joined.contains("chrom"),
+            "Auto candidates should reference a Chrome/Chromium binary: {paths:?}"
+        );
+    }
+
     #[test]
     fn default_launch_flags_snapshot() {
         let b = BrowserBuilder::new();
         let flags = b.build_flags(std::path::Path::new("/tmp/test-user-data"));
         insta::assert_yaml_snapshot!("default_launch_flags", flags);
+    }
+
+    #[tokio::test]
+    async fn reconnect_without_ws_url_errors_disconnected() {
+        use zendriver_transport::testing::MockConnection;
+        // `test_only_browser_from_conn` builds a browser with `ws_url: None`
+        // (no real Chrome was dialed), so there's nothing to re-dial — the
+        // reconnect attempt must surface `Disconnected` rather than panic or
+        // hang.
+        let (_mock, conn) = MockConnection::pair();
+        let browser = test_only_browser_from_conn(conn);
+        let res = browser.reconnect().await;
+        assert!(
+            matches!(res, Err(ZendriverError::Disconnected)),
+            "reconnect with no ws_url must error Disconnected, got {res:?}"
+        );
     }
 
     #[test]
@@ -1500,8 +3161,12 @@ mod tests {
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
                 _user_data: None,
+                _extension_dirs: Vec::new(),
+                owns_process: false,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
+                debug_host_port: None,
+                ws_url: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
@@ -1585,8 +3250,12 @@ mod tests {
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
                 _user_data: None,
+                _extension_dirs: Vec::new(),
+                owns_process: false,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
+                debug_host_port: None,
+                ws_url: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
@@ -1663,6 +3332,97 @@ mod tests {
         conn.shutdown();
     }
 
+    /// [`Browser::new_window_at`] must pass `newWindow: true` to
+    /// `Target.createTarget` (vs `new_tab_at`, which omits the flag), while
+    /// reusing the same registrar-wait registration path.
+    #[tokio::test]
+    async fn new_window_at_passes_new_window_true() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+
+        let inner = Arc::new_cyclic(|weak: &Weak<BrowserInner>| {
+            let main_session = SessionHandle::new(conn.clone(), "S1");
+            let main_input = InputController::new(input_profile.clone());
+            let main_tab = Tab::new(main_session, weak.clone(), main_input, "T1".to_string());
+            let mut map = HashMap::new();
+            map.insert("S1".to_string(), main_tab.clone());
+            BrowserInner {
+                conn: conn.clone(),
+                main_tab,
+                child: tokio::sync::Mutex::new(None),
+                _user_data: None,
+                _extension_dirs: Vec::new(),
+                owns_process: false,
+                stealth_input_profile: input_profile.clone(),
+                tabs: tokio::sync::RwLock::new(map),
+                debug_host_port: None,
+                ws_url: None,
+                tabs_changed: tokio::sync::Notify::new(),
+                #[cfg(feature = "interception")]
+                proxy_auth_handle: std::sync::OnceLock::new(),
+            }
+        });
+        registrar.set_browser(Arc::downgrade(&inner));
+        let browser = Browser {
+            inner: inner.clone(),
+        };
+
+        let fut = tokio::spawn({
+            let b = browser.clone();
+            async move { b.new_window_at("https://example.com").await }
+        });
+
+        let create_id = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            mock.expect_cmd("Target.createTarget"),
+        )
+        .await
+        .expect("Target.createTarget not sent within 2s");
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["url"], "https://example.com");
+        assert_eq!(
+            sent["params"]["newWindow"], true,
+            "new_window_at must set newWindow:true"
+        );
+        mock.reply(create_id, json!({ "targetId": "TW" })).await;
+
+        mock.emit_event(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": "SW",
+                "targetInfo": {
+                    "targetId": "TW",
+                    "type": "page",
+                    "url": "https://example.com",
+                    "attached": true,
+                },
+                "waitingForDebugger": true,
+            }),
+        )
+        .await;
+
+        let release_id = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            mock.expect_cmd("Runtime.runIfWaitingForDebugger"),
+        )
+        .await
+        .expect("debugger-release did not fire within 2s");
+        mock.reply(release_id, json!({})).await;
+
+        let win = tokio::time::timeout(std::time::Duration::from_secs(2), fut)
+            .await
+            .expect("new_window_at future did not resolve within 2s")
+            .expect("spawned task panicked")
+            .expect("new_window_at returned Err");
+        assert_eq!(win.target_id(), "TW");
+
+        conn.shutdown();
+    }
+
     /// Mock-drive a `Target.detachedFromTarget` event with the second tab's
     /// `sessionId` and assert the [`TabRegistrar::on_target_detached`]
     /// handler removes it from the browser-wide tabs registry. Counterpart
@@ -1693,8 +3453,12 @@ mod tests {
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
                 _user_data: None,
+                _extension_dirs: Vec::new(),
+                owns_process: false,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
+                debug_host_port: None,
+                ws_url: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
@@ -1754,8 +3518,12 @@ mod tests {
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
                 _user_data: None,
+                _extension_dirs: Vec::new(),
+                owns_process: false,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
+                debug_host_port: None,
+                ws_url: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
@@ -1775,6 +3543,7 @@ mod tests {
                 secure: false,
                 same_site: None,
                 url: None,
+                ..Default::default()
             })
             .await
         });
@@ -1816,8 +3585,12 @@ mod tests {
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
                 _user_data: None,
+                _extension_dirs: Vec::new(),
+                owns_process: false,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
+                debug_host_port: None,
+                ws_url: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
@@ -1869,8 +3642,12 @@ mod tests {
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
                 _user_data: None,
+                _extension_dirs: Vec::new(),
+                owns_process: false,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
+                debug_host_port: None,
+                ws_url: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
@@ -1999,8 +3776,12 @@ mod tests {
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
                 _user_data: None,
+                _extension_dirs: Vec::new(),
+                owns_process: false,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
+                debug_host_port: None,
+                ws_url: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
@@ -2145,5 +3926,301 @@ mod tests {
         assert_eq!(ctx.id(), "ctx-plain");
 
         conn.shutdown();
+    }
+
+    // ----- Browser::grant_permissions / reset_permissions (C5) -----------
+
+    /// [`Browser::grant_permissions`] maps each [`PermissionType`] to its
+    /// CDP camelCase string and dispatches `Browser.grantPermissions` at
+    /// browser scope (no `sessionId`) carrying both the `permissions` array
+    /// and the supplied `origin`.
+    #[tokio::test]
+    async fn grant_permissions_dispatches_with_mapped_strings_and_origin() {
+        use zendriver_transport::testing::MockConnection;
+
+        let (mut mock, conn) = MockConnection::pair();
+        let browser = test_only_browser_from_conn(conn.clone());
+
+        let fut = tokio::spawn({
+            let b = browser.clone();
+            async move {
+                b.grant_permissions(
+                    &[
+                        PermissionType::Geolocation,
+                        PermissionType::VideoCapture,
+                        PermissionType::ClipboardReadWrite,
+                    ],
+                    Some("https://example.com"),
+                )
+                .await
+            }
+        });
+
+        let id = mock.expect_cmd("Browser.grantPermissions").await;
+        let sent = mock.last_sent();
+        let perms = sent["params"]["permissions"]
+            .as_array()
+            .expect("permissions must be an array");
+        assert_eq!(
+            perms,
+            &vec![
+                json!("geolocation"),
+                json!("videoCapture"),
+                json!("clipboardReadWrite"),
+            ]
+        );
+        assert_eq!(sent["params"]["origin"], "https://example.com");
+        // Browser-scope command — no session_id.
+        assert!(sent.get("sessionId").is_none());
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    /// When `origin` is `None`, the `origin` key is omitted entirely from the
+    /// params (granted browser-wide), not sent as `null`.
+    #[tokio::test]
+    async fn grant_permissions_omits_origin_when_none() {
+        use zendriver_transport::testing::MockConnection;
+
+        let (mut mock, conn) = MockConnection::pair();
+        let browser = test_only_browser_from_conn(conn.clone());
+
+        let fut = tokio::spawn({
+            let b = browser.clone();
+            async move {
+                b.grant_permissions(&[PermissionType::Notifications], None)
+                    .await
+            }
+        });
+
+        let id = mock.expect_cmd("Browser.grantPermissions").await;
+        let sent = mock.last_sent();
+        assert_eq!(
+            sent["params"]["permissions"].as_array().unwrap(),
+            &vec![json!("notifications")]
+        );
+        let origin_field = sent["params"].get("origin");
+        assert!(
+            origin_field.is_none() || origin_field.unwrap().is_null(),
+            "origin must be omitted when None"
+        );
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    /// [`Browser::reset_permissions`] dispatches `Browser.resetPermissions`
+    /// at browser scope.
+    #[tokio::test]
+    async fn reset_permissions_dispatches() {
+        use zendriver_transport::testing::MockConnection;
+
+        let (mut mock, conn) = MockConnection::pair();
+        let browser = test_only_browser_from_conn(conn.clone());
+
+        let fut = tokio::spawn({
+            let b = browser.clone();
+            async move { b.reset_permissions().await }
+        });
+
+        let id = mock.expect_cmd("Browser.resetPermissions").await;
+        // Browser-scope command — no session_id.
+        assert!(mock.last_sent().get("sessionId").is_none());
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    /// `grant_all_permissions` sends the full [`PermissionType::ALL`] list as
+    /// mapped CDP strings, with no origin (browser-wide).
+    #[tokio::test]
+    async fn grant_all_permissions_sends_full_list() {
+        use zendriver_transport::testing::MockConnection;
+
+        let (mut mock, conn) = MockConnection::pair();
+        let browser = test_only_browser_from_conn(conn.clone());
+
+        let fut = tokio::spawn({
+            let b = browser.clone();
+            async move { b.grant_all_permissions().await }
+        });
+
+        let id = mock.expect_cmd("Browser.grantPermissions").await;
+        let sent = mock.last_sent();
+        let perms = sent["params"]["permissions"]
+            .as_array()
+            .expect("permissions must be an array");
+        assert_eq!(perms.len(), PermissionType::ALL.len());
+        // Spot-check a couple of the mapped strings are present.
+        assert!(perms.contains(&json!("geolocation")));
+        assert!(perms.contains(&json!("midiSysex")));
+        let origin_field = sent["params"].get("origin");
+        assert!(origin_field.is_none() || origin_field.unwrap().is_null());
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[test]
+    fn permission_type_as_cdp_round_trips_known_strings() {
+        assert_eq!(PermissionType::Geolocation.as_cdp(), "geolocation");
+        assert_eq!(PermissionType::VideoCapture.as_cdp(), "videoCapture");
+        assert_eq!(PermissionType::AudioCapture.as_cdp(), "audioCapture");
+        assert_eq!(
+            PermissionType::ClipboardReadWrite.as_cdp(),
+            "clipboardReadWrite"
+        );
+        assert_eq!(PermissionType::MidiSysex.as_cdp(), "midiSysex");
+    }
+
+    // ----- BrowserBuilder::connect (C1) ----------------------------------
+
+    /// Unit-test the `/json/version` body parse used by the `http(s)://`
+    /// connect path: a `webSocketDebuggerUrl` string is extracted, with and
+    /// without a leading HTTP/1.x header block.
+    #[test]
+    fn resolve_ws_from_http_parses_web_socket_debugger_url() {
+        let ws = "ws://127.0.0.1:9222/devtools/browser/abc";
+
+        // Bare JSON body (header/body split absent → whole buffer is JSON).
+        let body = format!("{{\"webSocketDebuggerUrl\":\"{ws}\"}}");
+        assert_eq!(parse_ws_from_json_version(body.as_bytes()).unwrap(), ws);
+
+        // Full HTTP/1.1 response — header block must be stripped first.
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{{\"Browser\":\"Chrome/120.0.0.0\",\"webSocketDebuggerUrl\":\"{ws}\"}}"
+        );
+        assert_eq!(parse_ws_from_json_version(resp.as_bytes()).unwrap(), ws);
+
+        // Missing field → DevtoolsParse.
+        let bad = b"HTTP/1.1 200 OK\r\n\r\n{\"Browser\":\"Chrome/120\"}";
+        assert!(matches!(
+            parse_ws_from_json_version(bad),
+            Err(ZendriverError::Browser(BrowserError::DevtoolsParse))
+        ));
+    }
+
+    /// The `connect` post-connect handshake (`finish_connect`) drives the same
+    /// CDP sequence as launch over a [`MockConnection`] — proving the `ws://`
+    /// connect path attaches via the already-established transport rather than
+    /// spawning a process — and produces a `BrowserInner` that does NOT own a
+    /// process: `owns_process` is false and no `Child` handle is held.
+    #[tokio::test]
+    async fn connect_ws_endpoint_does_not_spawn() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+
+        // Run the exact post-connect handshake `connect` invokes: no child,
+        // no tempdir, owns_process = false.
+        let fut = tokio::spawn(async move {
+            finish_connect(FinishConnect {
+                conn,
+                registrar,
+                input_profile,
+                child: None,
+                owned_tmp: None,
+                extension_dirs: Vec::new(),
+                debug_host_port: debug_host_port_from_ws(
+                    "ws://127.0.0.1:9222/devtools/browser/abc",
+                ),
+                ws_url: Some("ws://127.0.0.1:9222/devtools/browser/abc".to_string()),
+                owns_process: false,
+            })
+            .await
+        });
+
+        // 1. Browser-scoped auto-attach.
+        let id = mock.expect_cmd("Target.setAutoAttach").await;
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["flatten"], true);
+        assert!(
+            sent.get("sessionId").is_none(),
+            "auto-attach is browser-scope"
+        );
+        mock.reply(id, json!({})).await;
+
+        // 2. Initial-target discovery.
+        let id = mock.expect_cmd("Target.getTargets").await;
+        mock.reply(
+            id,
+            json!({ "targetInfos": [{ "targetId": "T1", "type": "page", "url": "about:blank" }] }),
+        )
+        .await;
+
+        // 3. Attach to the discovered target.
+        let id = mock.expect_cmd("Target.attachToTarget").await;
+        assert_eq!(mock.last_sent()["params"]["targetId"], "T1");
+        mock.reply(id, json!({ "sessionId": "S1" })).await;
+
+        let inner = fut.await.unwrap().unwrap();
+
+        // Ownership: attached, not spawned.
+        assert!(!inner.owns_process, "connect path must not own the process");
+        assert!(
+            inner.child.lock().await.is_none(),
+            "connect path holds no Child handle",
+        );
+        // Main tab registered under the attach sessionId.
+        assert_eq!(inner.tabs.read().await.len(), 1);
+        assert!(inner.tabs.read().await.contains_key("S1"));
+
+        inner.conn.shutdown();
+    }
+
+    /// A connected (non-owning) [`Browser`] has `owns_process == false`, and
+    /// [`Browser::close`] tears down only the transport: it returns `Ok`
+    /// without attempting process termination (there is no `Child` to kill,
+    /// and the `owns_process` guard short-circuits before the kill path).
+    #[tokio::test]
+    async fn connect_sets_owns_process_false_and_skips_kill() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+
+        let fut = tokio::spawn(async move {
+            finish_connect(FinishConnect {
+                conn,
+                registrar,
+                input_profile,
+                child: None,
+                owned_tmp: None,
+                extension_dirs: Vec::new(),
+                debug_host_port: None,
+                ws_url: None,
+                owns_process: false,
+            })
+            .await
+        });
+
+        let id = mock.expect_cmd("Target.setAutoAttach").await;
+        mock.reply(id, json!({})).await;
+        let id = mock.expect_cmd("Target.getTargets").await;
+        mock.reply(
+            id,
+            json!({ "targetInfos": [{ "targetId": "T1", "type": "page", "url": "about:blank" }] }),
+        )
+        .await;
+        let id = mock.expect_cmd("Target.attachToTarget").await;
+        mock.reply(id, json!({ "sessionId": "S1" })).await;
+
+        let inner = fut.await.unwrap().unwrap();
+        assert!(!inner.owns_process);
+
+        let browser = Browser { inner };
+        // close() on a non-owning browser: shuts the transport, skips the
+        // kill path entirely. No panic, no hang, returns Ok.
+        browser.close().await.unwrap();
     }
 }

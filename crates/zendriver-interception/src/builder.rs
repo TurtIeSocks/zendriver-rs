@@ -2,9 +2,9 @@
 //!
 //! Two-phase API:
 //! - **Configure**: chain [`block`], [`redirect`], [`respond`],
-//!   [`modify_request`] for declarative rules, plus [`pattern`] /
-//!   [`at_request`] / [`at_response`] / [`resource`] to control which CDP
-//!   `Fetch.RequestPattern` entries are sent on `Fetch.enable`.
+//!   [`modify_request`], [`modify_response`] for declarative rules, plus
+//!   [`pattern`] / [`at_request`] / [`at_response`] / [`resource`] to control
+//!   which CDP `Fetch.RequestPattern` entries are sent on `Fetch.enable`.
 //! - **Activate**: [`start`](InterceptBuilder::start) spawns the actor task
 //!   (T6) with the registered rules + patterns, returning an
 //!   [`InterceptHandle`] for RAII teardown. Alternatively,
@@ -21,6 +21,7 @@
 //! [`redirect`]: InterceptBuilder::redirect
 //! [`respond`]: InterceptBuilder::respond
 //! [`modify_request`]: InterceptBuilder::modify_request
+//! [`modify_response`]: InterceptBuilder::modify_response
 //! [`pattern`]: InterceptBuilder::pattern
 //! [`at_request`]: InterceptBuilder::at_request
 //! [`at_response`]: InterceptBuilder::at_response
@@ -42,7 +43,9 @@ use crate::actor::{
 use crate::error::InterceptionError;
 use crate::paused::PausedRequest;
 use crate::rule::Rule;
-use crate::types::{RequestInfo, RequestOverrides, RequestStage, ResourceType};
+use crate::types::{
+    RequestInfo, RequestOverrides, RequestStage, ResourceType, ResponseInfo, ResponseOverrides,
+};
 use crate::url_pattern::UrlPattern;
 
 /// A pending `Fetch.RequestPattern` entry to send on `Fetch.enable`.
@@ -239,6 +242,32 @@ impl<'tab> InterceptBuilder<'tab> {
         F: Fn(&RequestInfo) -> RequestOverrides + Send + Sync + 'static,
     {
         self.rules.push(Rule::Modify {
+            pattern: UrlPattern::new(pattern)?,
+            modify: Arc::new(modify),
+        });
+        Ok(self)
+    }
+
+    /// Register a [`Rule::ModifyResponse`] driven by a user closure.
+    ///
+    /// The closure rewrites an upstream response's status/headers (keeping
+    /// Chrome's body) and only fires at the `Response` stage — pair this with
+    /// [`at_response`](Self::at_response) so Chrome actually pauses there.
+    /// Header overrides are *replacement*, not merge (CDP semantics): return
+    /// every header you want forwarded.
+    ///
+    /// Like [`modify_request`](Self::modify_request), the closure runs on the
+    /// actor task per matching response, so it must be `Send + Sync` and
+    /// `'static`. Wrap shared state in `Arc` if needed.
+    pub fn modify_response<F>(
+        mut self,
+        pattern: impl Into<String>,
+        modify: F,
+    ) -> Result<Self, InterceptionError>
+    where
+        F: Fn(&ResponseInfo) -> ResponseOverrides + Send + Sync + 'static,
+    {
+        self.rules.push(Rule::ModifyResponse {
             pattern: UrlPattern::new(pattern)?,
             modify: Arc::new(modify),
         });

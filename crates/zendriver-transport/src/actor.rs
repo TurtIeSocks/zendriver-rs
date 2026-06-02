@@ -72,6 +72,13 @@ pub(crate) async fn run_actor<S>(
     let mut pending: HashMap<u64, oneshot::Sender<Result<Value, CdpRpcError>>> = HashMap::new();
     let mut next_id: u64 = 1;
 
+    // Sentinel stamped onto drained pendings when the loop exits. Defaults to
+    // the clean-shutdown code; the unexpected-ws-death branches below flip it
+    // to `DISCONNECTED_CODE` so callers awaiting a CDP call during a dropped
+    // connection can distinguish "Chrome died / socket dropped" from a
+    // caller-requested `shutdown()`.
+    let mut drain_code = crate::connection::SHUTDOWN_DRAIN_CODE;
+
     loop {
         tokio::select! {
             biased;
@@ -102,6 +109,10 @@ pub(crate) async fn run_actor<S>(
                                 message: format!("ws send failed: {e}"),
                                 data: None,
                             }));
+                            // A failed write means the socket died — treat the
+                            // remaining pendings as an unexpected disconnect,
+                            // consistent with the read-side death branches.
+                            drain_code = crate::connection::DISCONNECTED_CODE;
                             break;
                         }
                         pending.insert(id, cmd.reply);
@@ -119,10 +130,14 @@ pub(crate) async fn run_actor<S>(
                 match frame {
                     None => {
                         debug!("ws stream ended");
+                        // Stream vanished without a caller-requested shutdown:
+                        // an unexpected disconnect, not a clean close.
+                        drain_code = crate::connection::DISCONNECTED_CODE;
                         break;
                     }
                     Some(Err(e)) => {
                         error!("ws read failed: {e}");
+                        drain_code = crate::connection::DISCONNECTED_CODE;
                         break;
                     }
                     Some(Ok(Message::Text(text))) => {
@@ -233,7 +248,11 @@ pub(crate) async fn run_actor<S>(
                         }
                     }
                     Some(Ok(Message::Close(_))) => {
-                        debug!("ws close frame; shutting down");
+                        debug!("ws close frame; disconnecting");
+                        // Chrome closed the socket on us — treat as an
+                        // unexpected disconnect so in-flight callers see
+                        // `Disconnected` rather than the clean-shutdown code.
+                        drain_code = crate::connection::DISCONNECTED_CODE;
                         break;
                     }
                     Some(Ok(_)) => { /* ignore binary, ping, pong, frame */ }
@@ -242,18 +261,24 @@ pub(crate) async fn run_actor<S>(
         }
     }
 
-    // Drain pending into shutdown errors so callers don't hang. The code
-    // is a reserved sentinel matched by `Connection::call_raw` so the
-    // drained pendings surface as `TransportError::Shutdown` rather than
-    // a generic `Rpc` error.
+    // Drain pending into transport errors so callers don't hang. `drain_code`
+    // is a reserved sentinel matched by `Connection::call_raw`: it surfaces
+    // drained pendings as `TransportError::Shutdown` (clean shutdown) or
+    // `TransportError::Disconnected` (unexpected ws death) rather than a
+    // generic `Rpc` error.
+    let message = if drain_code == crate::connection::DISCONNECTED_CODE {
+        "connection lost"
+    } else {
+        "connection shut down"
+    };
     for (_id, reply) in pending.drain() {
         let _ = reply.send(Err(CdpRpcError {
-            code: crate::connection::SHUTDOWN_DRAIN_CODE,
-            message: "connection shut down".into(),
+            code: drain_code,
+            message: message.into(),
             data: None,
         }));
     }
-    debug!("actor exit");
+    debug!(drain_code, "actor exit");
 }
 
 /// Run all `observers` serially against the just-attached session. Returns
@@ -627,6 +652,89 @@ mod tests {
         assert_eq!(err.code, -32001);
         assert!(err.message.contains("shut down"));
 
+        actor_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unexpected_ws_close_frame_drains_pending_with_disconnected_code() {
+        let (ws, test_tx, mut test_rx) = duplex_pair();
+        let (cmd_tx, cmd_rx) = mpsc::channel::<OutboundCmd>(8);
+        let (event_tx, _event_rx) = broadcast::channel::<RawEvent>(EVENT_BUS_CAPACITY);
+        let shutdown = CancellationToken::new();
+        let actor_handle = tokio::spawn(run_actor(
+            ws,
+            cmd_rx,
+            event_tx,
+            shutdown.clone(),
+            Vec::new(),
+            Weak::new(),
+        ));
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        cmd_tx
+            .send(OutboundCmd {
+                method: "Page.navigate".into(),
+                params: json!({ "url": "https://x.test" }),
+                session_id: None,
+                reply: reply_tx,
+            })
+            .await
+            .unwrap();
+        // Drain the outbound so the pending entry is registered.
+        let _ = test_rx.recv().await.unwrap();
+
+        // Chrome sends an unsolicited Close frame — the connection dropped, this
+        // is NOT a caller-requested shutdown.
+        test_tx.send(Ok(Message::Close(None))).await.unwrap();
+
+        let res = reply_rx.await.unwrap();
+        let err = res.unwrap_err();
+        assert_eq!(
+            err.code,
+            crate::connection::DISCONNECTED_CODE,
+            "an unexpected close must use the disconnected sentinel, not the shutdown one"
+        );
+        assert_ne!(err.code, crate::connection::SHUTDOWN_DRAIN_CODE);
+
+        shutdown.cancel();
+        actor_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ws_stream_end_drains_pending_with_disconnected_code() {
+        let (ws, test_tx, mut test_rx) = duplex_pair();
+        let (cmd_tx, cmd_rx) = mpsc::channel::<OutboundCmd>(8);
+        let (event_tx, _event_rx) = broadcast::channel::<RawEvent>(EVENT_BUS_CAPACITY);
+        let shutdown = CancellationToken::new();
+        let actor_handle = tokio::spawn(run_actor(
+            ws,
+            cmd_rx,
+            event_tx,
+            shutdown.clone(),
+            Vec::new(),
+            Weak::new(),
+        ));
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        cmd_tx
+            .send(OutboundCmd {
+                method: "Page.navigate".into(),
+                params: json!({ "url": "https://x.test" }),
+                session_id: None,
+                reply: reply_tx,
+            })
+            .await
+            .unwrap();
+        let _ = test_rx.recv().await.unwrap();
+
+        // Drop the server side so the stream returns `None` (socket vanished).
+        drop(test_tx);
+
+        let res = reply_rx.await.unwrap();
+        let err = res.unwrap_err();
+        assert_eq!(err.code, crate::connection::DISCONNECTED_CODE);
+
+        shutdown.cancel();
         actor_handle.await.unwrap();
     }
 

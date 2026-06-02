@@ -13,6 +13,8 @@
 //! node has no box (e.g. `display: none`) — Chrome surfaces this as a
 //! `-32000 "Could not compute box model"` Cdp error rather than a stale-node
 //! signal, so we map that specific error to `None` instead of bubbling.
+//! `bounding_box_page` layers `window.scrollX` / `scrollY` on top of that
+//! box to yield document-relative ([`PageBox`]) coordinates.
 
 use std::collections::HashMap;
 
@@ -20,8 +22,8 @@ use serde_json::{Value, json};
 
 use crate::element::Element;
 use crate::error::{Result, ZendriverError};
-use crate::query::BoundingBox;
 use crate::query::actionability;
+use crate::query::{BoundingBox, PageBox};
 
 impl Element {
     /// Return the value of attribute `name`, or `None` when absent.
@@ -237,6 +239,57 @@ impl Element {
         .await
     }
 
+    /// Return the page-absolute bounding box, or `None` when absent.
+    ///
+    /// Combines the viewport-relative [`Element::bounding_box`] with the
+    /// page scroll offset (`window.scrollX` / `scrollY`), so the resulting
+    /// [`PageBox`] can yield document-relative coordinates that stay stable
+    /// as the page scrolls — via [`PageBox::abs_origin`] (top-left) and
+    /// [`PageBox::abs_center`] (center).
+    ///
+    /// Ports nodriver's `Position.abs_x` / `abs_y` (element.py:504), the
+    /// element center offset by the scroll position. `None` has the same
+    /// meaning as in [`Element::bounding_box`] — the node has no box.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let btn = tab.find().css("button").one().await?;
+    /// if let Some(page) = btn.bounding_box_page().await? {
+    ///     let (ax, ay) = page.abs_center();
+    ///     println!("button center is at page ({ax}, {ay})");
+    /// }
+    /// # Ok(()) }
+    /// ```
+    pub async fn bounding_box_page(&self) -> Result<Option<PageBox>> {
+        self.with_refresh(|| async move {
+            let Some(viewport) = self.bounding_box().await? else {
+                return Ok(None);
+            };
+            // One round-trip for both scroll offsets. `pageXOffset` /
+            // `pageYOffset` are the spec-stable aliases of `scrollX` /
+            // `scrollY`.
+            let res = self
+                .call_on_main(
+                    "function(){ return { x: window.scrollX, y: window.scrollY }; }",
+                    json!([]),
+                )
+                .await?;
+            let scroll = res.get("value").cloned().unwrap_or(Value::Null);
+            let scroll_x = scroll.get("x").and_then(Value::as_f64).unwrap_or(0.0);
+            let scroll_y = scroll.get("y").and_then(Value::as_f64).unwrap_or(0.0);
+            Ok(Some(PageBox {
+                viewport,
+                scroll_x,
+                scroll_y,
+            }))
+        })
+        .await
+    }
+
     /// Returns `true` iff the element is rendered + visible.
     ///
     /// Attached to the document, has a positive bounding box, and is not
@@ -400,6 +453,67 @@ mod tests {
         assert!((bbox.y - 20.0).abs() < 1e-9);
         assert!((bbox.width - 100.0).abs() < 1e-9);
         assert!((bbox.height - 50.0).abs() < 1e-9);
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn bounding_box_page_adds_scroll_offsets_to_viewport_box() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+        let el = Element::from_jsret(tab, 42, "R1".to_string());
+
+        let fut = tokio::spawn({
+            let e = el.clone();
+            async move { e.bounding_box_page().await }
+        });
+
+        // Step 1: bounding_box → DOM.getBoxModel. Box top-left (10,20), 100x50.
+        let id = mock.expect_cmd("DOM.getBoxModel").await;
+        assert_eq!(mock.last_sent()["params"]["backendNodeId"], 42);
+        mock.reply(
+            id,
+            json!({
+                "model": {
+                    "content": [10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0],
+                    "padding": [10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0],
+                    "border":  [10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0],
+                    "margin":  [10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0],
+                    "width":  100,
+                    "height": 50
+                }
+            }),
+        )
+        .await;
+
+        // Step 2: scroll offsets via Runtime.callFunctionOn (window.scrollX/Y).
+        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        assert!(
+            mock.last_sent()["params"]["functionDeclaration"]
+                .as_str()
+                .unwrap()
+                .contains("scrollX")
+        );
+        mock.reply(
+            id,
+            json!({ "result": { "value": { "x": 1000.0, "y": 500.0 }, "type": "object" } }),
+        )
+        .await;
+
+        let page = fut.await.unwrap().unwrap().expect("should be Some");
+        // Viewport box is unchanged.
+        assert!((page.viewport.x - 10.0).abs() < 1e-9);
+        assert!((page.viewport.y - 20.0).abs() < 1e-9);
+        assert!((page.scroll_x - 1000.0).abs() < 1e-9);
+        assert!((page.scroll_y - 500.0).abs() < 1e-9);
+        // Page-absolute origin = viewport origin + scroll.
+        let (ax, ay) = page.abs_origin();
+        assert!((ax - 1010.0).abs() < 1e-9);
+        assert!((ay - 520.0).abs() < 1e-9);
+        // Page-absolute center = origin + half-size + scroll (nodriver abs_x/y).
+        let (cx, cy) = page.abs_center();
+        assert!((cx - 1060.0).abs() < 1e-9); // 10 + 50 + 1000
+        assert!((cy - 545.0).abs() < 1e-9); // 20 + 25 + 500
         conn.shutdown();
     }
 }

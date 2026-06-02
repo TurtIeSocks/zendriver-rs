@@ -1,16 +1,18 @@
 //! [`PausedRequest`] — the per-event handle handed to stream consumers.
 //!
 //! Each `Fetch.requestPaused` event surfaces a `PausedRequest`. Code must
-//! dispatch exactly one of [`continue_`], [`abort`], [`respond`], or
-//! [`modify_and_continue`] to release the paused request — Chrome holds the
-//! request open until one of these arrives. [`body`] is a read-only side-call
-//! usable at the `Response` stage to inspect the upstream body before deciding
-//! what to do; it does not release the pause.
+//! dispatch exactly one of [`continue_`], [`abort`], [`respond`],
+//! [`modify_and_continue`], or [`continue_response`] to release the paused
+//! request — Chrome holds the request open until one of these arrives.
+//! [`body`] is a read-only side-call usable at the `Response` stage to inspect
+//! the upstream body before deciding what to do; it does not release the
+//! pause.
 //!
 //! [`continue_`]: PausedRequest::continue_
 //! [`abort`]: PausedRequest::abort
 //! [`respond`]: PausedRequest::respond
 //! [`modify_and_continue`]: PausedRequest::modify_and_continue
+//! [`continue_response`]: PausedRequest::continue_response
 //! [`body`]: PausedRequest::body
 //!
 //! Internally `PausedRequest` carries a [`SessionHandle`] (not a full `Tab`)
@@ -30,10 +32,12 @@ use crate::types::{AbortReason, RequestInfo, RequestOverrides, ResponseInfo};
 ///
 /// `PausedRequest` is consumed by exactly one of the action methods
 /// ([`continue_`](Self::continue_), [`abort`](Self::abort),
-/// [`respond`](Self::respond), [`modify_and_continue`](Self::modify_and_continue))
-/// to release the pause. [`body`](Self::body) is a read-only side-channel
-/// (`&self`) usable at the `Response` stage to inspect the upstream body
-/// before deciding which terminal action to take.
+/// [`respond`](Self::respond),
+/// [`modify_and_continue`](Self::modify_and_continue),
+/// [`continue_response`](Self::continue_response)) to release the pause.
+/// [`body`](Self::body) is a read-only side-channel (`&self`) usable at the
+/// `Response` stage to inspect the upstream body before deciding which
+/// terminal action to take.
 ///
 /// If a `PausedRequest` is dropped without one of the terminal actions
 /// firing (e.g. the consuming task panicked or a `select!` arm cancelled
@@ -54,7 +58,8 @@ pub struct PausedRequest {
     pub response: Option<ResponseInfo>,
     session: SessionHandle,
     /// Flipped to `true` by every terminal action (`continue_`, `abort`,
-    /// `respond`, `modify_and_continue`) before the CDP call is dispatched.
+    /// `respond`, `modify_and_continue`, `continue_response`) before the CDP
+    /// call is dispatched.
     /// [`Drop`] inspects this to decide whether to fire a fallback
     /// `Fetch.continueRequest` — set means "already released, don't
     /// double-fire"; clear means "owner forgot us, release Chrome".
@@ -205,6 +210,74 @@ impl PausedRequest {
         Ok(())
     }
 
+    /// Forward the upstream response, optionally rewriting its status and/or
+    /// headers, while keeping Chrome's original body.
+    ///
+    /// Only valid at the `Response` stage — Chrome only accepts
+    /// `Fetch.continueResponse` once the upstream response headers have
+    /// arrived. Called on a `Request`-stage `PausedRequest` (where
+    /// [`response`](Self::response) is `None`), it returns
+    /// [`InterceptionError::WrongStage`] without dispatching anything; use
+    /// [`respond`](Self::respond) to serve a synthetic response at the
+    /// `Request` stage instead.
+    ///
+    /// Dispatches `Fetch.continueResponse { requestId, responseCode?,
+    /// responsePhrase?, responseHeaders? }`, omitting any argument left `None`
+    /// so Chrome keeps its original value. Per CDP, `responseHeaders` is the
+    /// name/value array form and is *replacement*, not merge — pass every
+    /// header you want forwarded.
+    ///
+    /// ```no_run
+    /// # use futures::StreamExt;
+    /// # async fn ex(tab: &zendriver_transport::SessionHandle)
+    /// #   -> Result<(), zendriver_interception::InterceptionError> {
+    /// use zendriver_interception::InterceptBuilder;
+    ///
+    /// let mut stream = Box::pin(
+    ///     InterceptBuilder::new(tab).pattern("*").at_response().subscribe(),
+    /// );
+    /// if let Some(req) = stream.next().await {
+    ///     // Rewrite to 204 No Content, keep the upstream body.
+    ///     req.continue_response(Some(204), None, None).await?;
+    /// }
+    /// # Ok(()) }
+    /// ```
+    pub async fn continue_response(
+        mut self,
+        status: Option<u16>,
+        phrase: Option<String>,
+        headers: Option<Vec<(String, String)>>,
+    ) -> Result<(), InterceptionError> {
+        // Mark released before the stage check: Chrome rejects
+        // continueResponse at the Request stage, but the pause is still ours
+        // to release. Suppressing the Drop fallback here would strand it, so
+        // we leave `released` clear on the WrongStage path and let Drop fire
+        // a best-effort continueRequest — matching the "always release Chrome"
+        // contract the other terminals uphold via the happy path.
+        if self.response.is_none() {
+            return Err(InterceptionError::WrongStage);
+        }
+        self.released = true;
+        let mut params = Map::new();
+        params.insert("requestId".into(), Value::String(self.request_id.clone()));
+        if let Some(status) = status {
+            params.insert("responseCode".into(), Value::from(status));
+        }
+        if let Some(phrase) = phrase {
+            params.insert("responsePhrase".into(), Value::String(phrase));
+        }
+        if let Some(headers) = headers {
+            params.insert(
+                "responseHeaders".into(),
+                Value::Array(crate::actor::headers_to_cdp(&headers)),
+            );
+        }
+        self.session
+            .call("Fetch.continueResponse", Value::Object(params))
+            .await?;
+        Ok(())
+    }
+
     /// Fetch the upstream response body. Only useful at the `Response`
     /// stage — at the `Request` stage Chrome has no body to return.
     ///
@@ -284,6 +357,14 @@ mod tests {
             headers: Vec::new(),
             post_data: None,
             resource_type: ResourceType::XHR,
+        }
+    }
+
+    fn make_response_info() -> ResponseInfo {
+        ResponseInfo {
+            status: 200,
+            status_text: "OK".into(),
+            headers: Vec::new(),
         }
     }
 
@@ -385,6 +466,103 @@ mod tests {
         mock.reply(id, serde_json::json!({})).await;
 
         fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn continue_response_dispatches_fetch_continue_response() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let req = PausedRequest::new(
+            "REQ-CR",
+            make_request_info(),
+            Some(make_response_info()),
+            sess,
+        );
+
+        let fut = tokio::spawn(async move {
+            req.continue_response(Some(204), None, Some(vec![("x".into(), "y".into())]))
+                .await
+        });
+
+        let id = mock.expect_cmd("Fetch.continueResponse").await;
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["requestId"], "REQ-CR");
+        assert_eq!(sent["params"]["responseCode"], 204);
+        // `phrase: None` must be omitted entirely, not sent as null.
+        assert!(
+            sent["params"]
+                .as_object()
+                .unwrap()
+                .get("responsePhrase")
+                .is_none()
+        );
+        let headers = sent["params"]["responseHeaders"].as_array().unwrap();
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0]["name"], "x");
+        assert_eq!(headers[0]["value"], "y");
+        mock.reply(id, serde_json::json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn continue_response_wrong_stage_errs() {
+        // Called on a Request-stage PausedRequest (response: None), Chrome
+        // would reject continueResponse — we short-circuit with WrongStage
+        // and dispatch nothing.
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let req = PausedRequest::new("REQ-WS", make_request_info(), None, sess);
+
+        let err = req
+            .continue_response(Some(200), None, None)
+            .await
+            .expect_err("continue_response at Request stage must error");
+        assert!(matches!(err, InterceptionError::WrongStage));
+
+        // No Fetch.continueResponse was sent. (A Drop fallback
+        // continueRequest *may* land — that's the freeze-safety net, not a
+        // continueResponse dispatch.) Give the runtime a tick for any spawned
+        // Drop task to enqueue, then drain whatever queued.
+        tokio::task::yield_now().await;
+        while let Some((method, _id)) = mock.try_recv_cmd() {
+            assert_ne!(
+                method, "Fetch.continueResponse",
+                "WrongStage path must not dispatch Fetch.continueResponse"
+            );
+        }
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn continue_response_no_double_fire_on_drop() {
+        // After continue_response() consumes self and returns, Drop runs on
+        // the moved value. `released = true` set by continue_response() must
+        // suppress the Drop fallback continueRequest — otherwise the happy
+        // path would send two CDP round-trips.
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let req = PausedRequest::new(
+            "REQ-CR-ONCE",
+            make_request_info(),
+            Some(make_response_info()),
+            sess,
+        );
+
+        let fut = tokio::spawn(async move { req.continue_response(Some(200), None, None).await });
+
+        let id = mock.expect_cmd("Fetch.continueResponse").await;
+        assert_eq!(mock.last_sent()["params"]["requestId"], "REQ-CR-ONCE");
+        mock.reply(id, serde_json::json!({})).await;
+        fut.await.unwrap().unwrap();
+
+        tokio::task::yield_now().await;
+        assert!(
+            mock.try_recv_cmd().is_none(),
+            "Drop fired a fallback continueRequest after continue_response already released"
+        );
         conn.shutdown();
     }
 }

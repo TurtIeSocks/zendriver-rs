@@ -1,5 +1,6 @@
 //! [`Element`] actions: `click` / `hover` / `focus` / `scroll_into_view` /
-//! `set_value` / `clear` / `upload_files`.
+//! `set_value` / `set_text` / `clear` / `upload_files` / `mouse_drag` /
+//! `flash` / `highlight_overlay`.
 //!
 //! Each action wraps its CDP dispatch sequence in an internal "refresh on
 //! stale" wrapper so a stale handle (post-navigation, post-React-rerender)
@@ -36,7 +37,7 @@ use serde_json::json;
 
 use crate::element::Element;
 use crate::error::{Result, ZendriverError};
-use crate::input::keyboard::KeyModifiers;
+use crate::input::keyboard::{Key, KeyModifiers, SpecialKey};
 use crate::input::mouse::{self, MouseButton};
 use crate::query::actionability::{self, ActionabilityCheck};
 
@@ -44,6 +45,39 @@ use crate::query::actionability::{self, ActionabilityCheck};
 /// the value the spec calls out for P3; per-call override land in P4 when
 /// the per-action options structs grow.
 const DEFAULT_ACTIONABILITY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// JS body that assigns `arguments[1].value` through the *native* prototype
+/// value-setter and fires bubbled `input` + `change` events.
+///
+/// React installs a per-instance `_valueTracker` whose own `value` setter
+/// shadows the prototype's. A direct `this.value = v` goes through that
+/// tracker, which updates its cached value and the DOM together — so the
+/// `input` event it then sees reports "no change" and React skips `onChange`,
+/// reverting the field on the next render. Calling the *prototype's*
+/// `value` setter (resolved via `Object.getOwnPropertyDescriptor`) bypasses
+/// the tracker, leaving its cached value stale so React fires `onChange`
+/// correctly. Falls back to a plain assignment when the descriptor has no
+/// setter (non-input elements). Resolves the `<textarea>` prototype for
+/// textareas and the `<input>` prototype otherwise.
+const NATIVE_VALUE_SETTER_JS: &str = "function(el, v){ \
+        const proto = this instanceof HTMLTextAreaElement \
+            ? HTMLTextAreaElement.prototype \
+            : HTMLInputElement.prototype; \
+        const d = Object.getOwnPropertyDescriptor(proto, 'value'); \
+        if (d && d.set) { d.set.call(this, v); } else { this.value = v; } \
+        this.dispatchEvent(new Event('input', {bubbles: true})); \
+        this.dispatchEvent(new Event('change', {bubbles: true})); \
+    }";
+
+/// Extra Backspace presses [`Element::clear_by_deleting`] issues beyond the
+/// reported value length — covers off-by-one reporting and IME composition
+/// tails so a near-empty field still ends up fully cleared.
+const CLEAR_BY_DELETING_SLACK: usize = 2;
+
+/// Hard ceiling on Backspace presses in [`Element::clear_by_deleting`].
+/// Bounds the keystroke loop so a pathological / lying `value.length` can't
+/// spin it unboundedly.
+const CLEAR_BY_DELETING_MAX: usize = 4096;
 
 /// Per-call knobs for [`Element::click_with`].
 ///
@@ -366,13 +400,15 @@ impl Element {
         .await
     }
 
-    /// Set this element's `value` directly + fire `input` and `change`
-    /// events.
+    /// Set this element's `value` + fire bubbled `input` and `change` events.
     ///
-    /// Bypasses keydown/keyup (use [`Element::type_text`] for a real
-    /// keystroke sequence) but dispatches the bubbled `input` + `change`
-    /// events so React-style controlled inputs see the update through their
-    /// onChange handlers.
+    /// Assigns through the element's *native* prototype value-setter rather
+    /// than a direct `this.value =` so React's per-instance `_valueTracker`
+    /// can't silently revert the change on the next render. See
+    /// [`NATIVE_VALUE_SETTER_JS`] for the full rationale. Bypasses
+    /// keydown/keyup (use [`Element::type_text`] for a real keystroke
+    /// sequence) but the bubbled `input` + `change` events let React-style
+    /// controlled inputs see the update through their onChange handlers.
     ///
     /// No actionability gate — `set_value` is the fast-path for tests +
     /// automation flows that don't care about visibility/enabledness. If
@@ -394,14 +430,7 @@ impl Element {
             let value = value.clone();
             async move {
                 let _ = self
-                    .call_on_main(
-                        "function(el, v){ \
-                            this.value = v; \
-                            this.dispatchEvent(new Event('input', {bubbles: true})); \
-                            this.dispatchEvent(new Event('change', {bubbles: true})); \
-                        }",
-                        json!([{ "value": value }]),
-                    )
+                    .call_on_main(NATIVE_VALUE_SETTER_JS, json!([{ "value": value }]))
                     .await?;
                 Ok(())
             }
@@ -409,12 +438,15 @@ impl Element {
         .await
     }
 
-    /// Clear this element's `value` by assigning `''` and firing a bubbled
-    /// `input` event.
+    /// Clear this element's `value` by setting it to the empty string + firing
+    /// bubbled `input` and `change` events.
     ///
-    /// Omits the `change` event + focus + Backspace sequence — for
-    /// contenteditable / non-`<input>` clearing semantics, use
-    /// [`Element::type_text`].
+    /// Routes through the same native prototype value-setter as
+    /// [`Element::set_value`] (see [`NATIVE_VALUE_SETTER_JS`]) so React
+    /// controlled inputs don't revert the clear on the next render. For inputs
+    /// that ignore a programmatic value-set entirely (custom keystroke
+    /// handling), use [`Element::clear_by_deleting`]; for contenteditable /
+    /// non-`<input>` clearing, use [`Element::type_text`].
     ///
     /// No actionability gate — same rationale as [`Element::set_value`].
     ///
@@ -431,14 +463,113 @@ impl Element {
     pub async fn clear(&self) -> Result<()> {
         self.with_refresh(|| async move {
             let _ = self
-                .call_on_main(
-                    "function(){ \
-                        this.value = ''; \
-                        this.dispatchEvent(new Event('input', {bubbles: true})); \
-                    }",
-                    json!([]),
-                )
+                .call_on_main(NATIVE_VALUE_SETTER_JS, json!([{ "value": "" }]))
                 .await?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Replace this element's text content with `value`.
+    ///
+    /// Sets `this.textContent = value` in the main world. Ports nodriver's
+    /// `Element.set_text` (element.py:771), which writes the first text-child
+    /// node's value via `DOM.setNodeValue`; assigning `textContent` is the
+    /// simpler equivalent with the same observable result — the element's
+    /// rendered text is replaced (and any child element nodes are dropped,
+    /// matching `textContent` assignment semantics).
+    ///
+    /// Unlike [`Element::set_value`] this targets the element's *text*, not a
+    /// form control's `value`, and fires no `input` / `change` events (a
+    /// `textContent` write isn't a user edit). For `<input>` / `<textarea>`
+    /// value edits use [`Element::set_value`] / [`Element::type_text`].
+    ///
+    /// No actionability gate — same fast-path rationale as
+    /// [`Element::set_value`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let heading = tab.find().css("h1").one().await?;
+    /// heading.set_text("New title").await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn set_text(&self, value: impl AsRef<str>) -> Result<()> {
+        let value = value.as_ref().to_string();
+        self.with_refresh(|| {
+            let value = value.clone();
+            async move {
+                let _ = self
+                    .call_on_main(
+                        "function(v){ this.textContent = v; }",
+                        json!([{ "value": value }]),
+                    )
+                    .await?;
+                Ok(())
+            }
+        })
+        .await
+    }
+
+    /// Clear this element by keystroke: focus, select-all, then press
+    /// Backspace until the field empties.
+    ///
+    /// A real-keystroke fallback for inputs that ignore a programmatic
+    /// value-set (e.g. fields with custom `onKeyDown` handling that
+    /// [`Element::clear`] can't drive). Sequence:
+    ///
+    /// 1. [`Element::focus`] the element.
+    /// 2. Select-all chord — `Cmd+A` on macOS, `Ctrl+A` elsewhere — so the
+    ///    whole value is selected before deletion.
+    /// 3. Read the current `value.length`, then press
+    ///    [`SpecialKey::Backspace`] that many times plus a small slack
+    ///    ([`CLEAR_BY_DELETING_SLACK`]), bounded by [`CLEAR_BY_DELETING_MAX`].
+    ///
+    /// Deletes backward (Backspace) only — never forward-Delete — because
+    /// `VK_DELETE` at caret position 0 is treated as a backward delete on some
+    /// VM environments, which would no-op and spin forever.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let input = tab.find().css("input.react-controlled").one().await?;
+    /// input.clear_by_deleting().await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn clear_by_deleting(&self) -> Result<()> {
+        self.with_refresh(|| async move {
+            self.focus().await?;
+            // Select-all so the field's whole value is highlighted; Backspace
+            // then clears the selection in one stroke before falling back to
+            // per-character deletion for any stragglers.
+            let select_all = if cfg!(target_os = "macos") {
+                KeyModifiers::META
+            } else {
+                KeyModifiers::CTRL
+            };
+            self.press_with(Key::Char('a'), select_all).await?;
+
+            let len: usize = {
+                let res = self
+                    .call_on_main("function(){ return (this.value || '').length; }", json!([]))
+                    .await?;
+                res.get("value")
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|n| usize::try_from(n).ok())
+                    .unwrap_or(0)
+            };
+            let presses = len
+                .saturating_add(CLEAR_BY_DELETING_SLACK)
+                .min(CLEAR_BY_DELETING_MAX);
+            for _ in 0..presses {
+                self.press(Key::Special(SpecialKey::Backspace)).await?;
+            }
             Ok(())
         })
         .await
@@ -488,6 +619,171 @@ impl Element {
                     .await?;
                 Ok(())
             }
+        })
+        .await
+    }
+
+    /// Flash a transient colored dot at this element's bbox center.
+    ///
+    /// Scrolls the element into view, computes its bbox center, then injects
+    /// a small absolutely-positioned `<div>` there that removes itself after
+    /// `duration`. A debugging aid for eyeballing where pointer actions land
+    /// against a headful Chrome — no input state changes, not for production.
+    ///
+    /// Ports nodriver's `Element.flash` (element.py:913): nodriver resolves
+    /// the node, takes its position, and calls `Tab.flash_point(*center)`
+    /// (its richer self-animating overlay is commented out and its `duration`
+    /// argument unused). This mirrors the same dot-at-center behavior but
+    /// honors `duration` for the self-removal timer rather than hardcoding it,
+    /// matching the sibling [`crate::Tab::flash_point`] dispatch shape.
+    ///
+    /// No-ops gracefully (returns `Ok`) when the element has no box (e.g.
+    /// `display: none`), since there is nothing to point at.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # use std::time::Duration;
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let btn = tab.find().css("button").one().await?;
+    /// btn.flash(Duration::from_millis(500)).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn flash(&self, duration: Duration) -> Result<()> {
+        let ms = duration.as_millis();
+        self.with_refresh(|| async move {
+            self.scroll_into_view().await?;
+            let bbox = match self.bounding_box().await? {
+                Some(b) => b,
+                // No box to point at — nothing to flash.
+                None => return Ok(()),
+            };
+            let cx = bbox.x + bbox.width / 2.0;
+            let cy = bbox.y + bbox.height / 2.0;
+            // Inject the dot in the main world with the element bound (house
+            // pattern); the args carry the viewport-center coords + lifetime.
+            // The dot is `position:fixed` so the coords are viewport-relative,
+            // matching `bounding_box`'s frame and `Tab::flash_point`.
+            let js = "function(cx, cy, ms){ \
+                    const d = document.createElement('div'); \
+                    d.style.cssText = 'position:fixed;left:'+cx+'px;top:'+cy+'px;\
+width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:50%;background:red;\
+z-index:2147483647;pointer-events:none;opacity:0.85;'; \
+                    document.body.appendChild(d); \
+                    setTimeout(() => d.remove(), ms); \
+                }";
+            let _ = self
+                .call_on_main(
+                    js,
+                    json!([{ "value": cx }, { "value": cy }, { "value": ms }]),
+                )
+                .await?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Highlight this element DevTools-inspector style.
+    ///
+    /// Enables the Overlay domain, then dispatches `Overlay.highlightNode`
+    /// with this element's backend node id and a default
+    /// [`HighlightConfig`](https://chromedevtools.github.io/devtools-protocol/tot/Overlay/#type-HighlightConfig)
+    /// (content/padding/border/margin boxes + info tooltip), painting the
+    /// familiar colored box-model overlay over the element.
+    ///
+    /// Ports nodriver's `Element.highlight_overlay` (element.py:1001).
+    /// nodriver toggles the highlight on repeat calls via an internal
+    /// `_is_highlighted` flag; this is the show-only half — the overlay
+    /// persists until a navigation, an `Overlay.hideHighlight`, or another
+    /// highlight replaces it. A debug-visualization helper, not a production
+    /// path.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let el = tab.find().css(".target").one().await?;
+    /// el.highlight_overlay().await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn highlight_overlay(&self) -> Result<()> {
+        self.with_refresh(|| async move {
+            let backend_node_id = self.backend_node_id_cloned().await?;
+            // Overlay.highlightNode is a no-op unless the Overlay domain is
+            // enabled; enable it first (idempotent).
+            let _ = self.inner.tab.call("Overlay.enable", json!({})).await?;
+            let _ = self
+                .inner
+                .tab
+                .call(
+                    "Overlay.highlightNode",
+                    json!({
+                        "backendNodeId": backend_node_id,
+                        "highlightConfig": {
+                            "showInfo": true,
+                            "showExtensionLines": true,
+                            "showStyles": true,
+                            "contentColor": { "r": 111, "g": 168, "b": 220, "a": 0.66 },
+                            "paddingColor": { "r": 147, "g": 196, "b": 125, "a": 0.55 },
+                            "borderColor":  { "r": 255, "g": 229, "b": 153, "a": 0.66 },
+                            "marginColor":  { "r": 246, "g": 178, "b": 107, "a": 0.66 },
+                        },
+                    }),
+                )
+                .await?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Drag this element's bbox center to the viewport point `to`, holding
+    /// the left button, over `steps` interpolated hops.
+    ///
+    /// Scrolls the element into view, computes its bbox center, then drives
+    /// the drag via [`crate::Tab::mouse_drag`] (press at the center → linearly
+    /// interpolated `mouseMoved` frames → release at `to`). A larger `steps`
+    /// makes the drag look smoother / more human (nodriver suggests 50–100 for
+    /// "very smooth"); `0` or `1` collapses to a single hop straight to `to`.
+    ///
+    /// Ports nodriver's `Element.mouse_drag` (element.py:596): nodriver takes
+    /// the element's center, resolves the destination (another element's
+    /// center or a coordinate, optionally relative), and forwards to
+    /// `Tab.mouse_drag`. This is the coordinate-destination form; the source
+    /// is always this element's center.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Navigation`] when the element has no bounding
+    /// box (nothing to drag from); propagates transport / CDP errors from the
+    /// underlying dispatches.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// // Drag a slider handle to (320, 300) over 40 smooth steps.
+    /// let handle = tab.find().css(".slider-handle").one().await?;
+    /// handle.mouse_drag((320.0, 300.0), 40).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn mouse_drag(&self, to: (f64, f64), steps: usize) -> Result<()> {
+        self.with_refresh(|| async move {
+            self.scroll_into_view().await?;
+            let bbox = self
+                .bounding_box()
+                .await?
+                .ok_or_else(|| ZendriverError::Navigation("element has no bounding box".into()))?;
+            let cx = bbox.x + bbox.width / 2.0;
+            let cy = bbox.y + bbox.height / 2.0;
+            // Reuse the Tab's drag primitive (don't duplicate the
+            // press/move/release dispatch sequence).
+            self.inner.tab.mouse_drag((cx, cy), to, steps).await
         })
         .await
     }
@@ -710,7 +1006,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_value_dispatches_call_function_on_with_value_argument() {
+    async fn set_value_uses_native_prototype_setter() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
         let tab = Tab::new_for_test(sess);
@@ -724,8 +1020,15 @@ mod tests {
         let id = mock.expect_cmd("Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
         let decl = sent["params"]["functionDeclaration"].as_str().unwrap();
-        // JS body fires both input + change events for React-style listeners.
-        assert!(decl.contains("this.value = v"));
+        // Assign through the native prototype value-setter so React's
+        // instance-level `_valueTracker` doesn't revert the change on the
+        // next render (a direct `this.value = v` would).
+        assert!(decl.contains("getOwnPropertyDescriptor"));
+        assert!(decl.contains(".set.call"));
+        // Resolves the right prototype for <textarea> vs <input>.
+        assert!(decl.contains("HTMLTextAreaElement"));
+        assert!(decl.contains("HTMLInputElement"));
+        // Fires both input + change events for React-style listeners.
         assert!(decl.contains("'input'"));
         assert!(decl.contains("'change'"));
         // call_on_main prepends the element {objectId:...}; the user-supplied
@@ -738,6 +1041,209 @@ mod tests {
             .await;
 
         fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn clear_uses_native_setter_with_empty() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+        let el = Element::from_jsret(tab, 7, "R1".to_string());
+
+        let fut = tokio::spawn({
+            let e = el.clone();
+            async move { e.clear().await }
+        });
+
+        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let sent = mock.last_sent();
+        let decl = sent["params"]["functionDeclaration"].as_str().unwrap();
+        // `clear` routes through the same native-setter JS as `set_value`,
+        // assigning an empty string.
+        assert!(decl.contains("getOwnPropertyDescriptor"));
+        assert!(decl.contains(".set.call"));
+        assert!(decl.contains("HTMLTextAreaElement"));
+        assert!(decl.contains("HTMLInputElement"));
+        assert!(decl.contains("'input'"));
+        assert!(decl.contains("'change'"));
+        // The cleared value is the empty string, passed at arguments[1].
+        let args = sent["params"]["arguments"].as_array().unwrap();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0]["objectId"], "R1");
+        assert_eq!(args[1]["value"], "");
+        mock.reply(id, json!({ "result": { "type": "undefined" } }))
+            .await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn set_text_assigns_textcontent_with_value() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+        let el = Element::from_jsret(tab, 7, "R1".to_string());
+
+        let fut = tokio::spawn({
+            let e = el.clone();
+            async move { e.set_text("New title").await }
+        });
+
+        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let sent = mock.last_sent();
+        let decl = sent["params"]["functionDeclaration"].as_str().unwrap();
+        // Faithful-simpler port of nodriver's DOM.setNodeValue: assign
+        // textContent so the element's rendered text is replaced.
+        assert!(decl.contains("textContent"));
+        // call_on_main prepends the element {objectId:...}; the user-supplied
+        // value lands at arguments[1].
+        let args = sent["params"]["arguments"].as_array().unwrap();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0]["objectId"], "R1");
+        assert_eq!(args[1]["value"], "New title");
+        mock.reply(id, json!({ "result": { "type": "undefined" } }))
+            .await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn clear_by_deleting_focuses_then_selects_then_backspaces() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+        let el = Element::from_jsret(tab, 7, "R1".to_string());
+
+        let fut = tokio::spawn({
+            let e = el.clone();
+            async move { e.clear_by_deleting().await }
+        });
+
+        // Step 1: explicit focus() — actionability gate (visible → enabled)
+        // then this.focus().
+        for _ in 0..2 {
+            let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+            mock.reply(
+                id,
+                json!({ "result": { "value": true, "type": "boolean" } }),
+            )
+            .await;
+        }
+        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let sent = mock.last_sent();
+        assert!(
+            sent["params"]["functionDeclaration"]
+                .as_str()
+                .unwrap()
+                .contains("this.focus()")
+        );
+        mock.reply(id, json!({ "result": { "type": "undefined" } }))
+            .await;
+
+        // Step 2: select-all chord via press_with(Key::Char('a'), Ctrl|Meta).
+        // press_with focuses first (gate visible → enabled, then this.focus()),
+        // then emits the chord. Since A2 (full keyboard parity) press_with
+        // dispatches the modifier as REAL wrapper key events, so the chord is
+        // four dispatches: modifier keyDown → 'a' keyDown → 'a' keyUp →
+        // modifier keyUp. Ctrl on Windows/Linux, Meta on macOS.
+        for _ in 0..2 {
+            let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+            mock.reply(
+                id,
+                json!({ "result": { "value": true, "type": "boolean" } }),
+            )
+            .await;
+        }
+        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        mock.reply(id, json!({ "result": { "type": "undefined" } }))
+            .await;
+        let ctrl = i64::from(KeyModifiers::CTRL.cdp_bits());
+        let meta = i64::from(KeyModifiers::META.cdp_bits());
+        // 1: modifier keyDown (Meta or Control).
+        let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["type"], "keyDown");
+        let mod_key = sent["params"]["key"].as_str().unwrap();
+        assert!(
+            mod_key == "Meta" || mod_key == "Control",
+            "select-all chord must wrap with a Meta/Control keyDown, got {mod_key}"
+        );
+        mock.reply(id, json!({})).await;
+        // 2: 'a' keyDown with the modifier bit set.
+        let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["type"], "keyDown");
+        assert_eq!(sent["params"]["key"], "a");
+        let mods = sent["params"]["modifiers"].as_i64().unwrap();
+        assert!(
+            mods == ctrl || mods == meta,
+            "select-all 'a' must hold Ctrl or Meta, got {mods}"
+        );
+        mock.reply(id, json!({})).await;
+        // 3: 'a' keyUp.
+        let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+        assert_eq!(mock.last_sent()["params"]["type"], "keyUp");
+        mock.reply(id, json!({})).await;
+        // 4: modifier keyUp.
+        let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+        assert_eq!(mock.last_sent()["params"]["type"], "keyUp");
+        mock.reply(id, json!({})).await;
+
+        // Step 3: read current value length via call_on_main. Reply length 0
+        // so only the fixed slack-count of Backspaces follows — keeps the
+        // remaining frame sequence deterministic regardless of the value the
+        // page reports.
+        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let sent = mock.last_sent();
+        assert!(
+            sent["params"]["functionDeclaration"]
+                .as_str()
+                .unwrap()
+                .contains(".value")
+        );
+        mock.reply(id, json!({ "result": { "value": 0, "type": "number" } }))
+            .await;
+
+        // Step 4: with reported length 0 the impl still presses Backspace a
+        // small fixed slack number of times so a near-empty field still gets
+        // a couple of deletes. Each press(Backspace) re-focuses (gate:
+        // visible → enabled, then this.focus()) then dispatches
+        // rawKeyDown + keyUp for the Backspace virtual key. The whole
+        // sequence is deterministic; drive every frame explicitly.
+        let mut saw_backspace = false;
+        for _ in 0..CLEAR_BY_DELETING_SLACK {
+            // press(Backspace) focus: 2 gate calls + this.focus().
+            for _ in 0..2 {
+                let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+                mock.reply(
+                    id,
+                    json!({ "result": { "value": true, "type": "boolean" } }),
+                )
+                .await;
+            }
+            let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+            mock.reply(id, json!({ "result": { "type": "undefined" } }))
+                .await;
+            // rawKeyDown for Backspace (never forward Delete).
+            let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+            let sent = mock.last_sent();
+            assert_eq!(sent["params"]["type"], "rawKeyDown");
+            assert_eq!(sent["params"]["key"], "Backspace");
+            assert_ne!(sent["params"]["key"], "Delete", "must never forward-Delete");
+            saw_backspace = true;
+            mock.reply(id, json!({})).await;
+            // keyUp.
+            let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+            assert_eq!(mock.last_sent()["params"]["type"], "keyUp");
+            mock.reply(id, json!({})).await;
+        }
+
+        let res = fut.await.unwrap();
+        res.unwrap();
+        assert!(saw_backspace, "expected at least one Backspace keyDown");
         conn.shutdown();
     }
 
@@ -769,6 +1275,183 @@ mod tests {
         mock.reply(id, json!({})).await;
 
         fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn flash_injects_self_removing_overlay_at_bbox_center() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+        let el = Element::from_jsret(tab, 42, "R1".to_string());
+
+        let fut = tokio::spawn({
+            let e = el.clone();
+            async move { e.flash(Duration::from_millis(500)).await }
+        });
+
+        // Step 1: scroll_into_view → Runtime.callFunctionOn.
+        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        assert!(
+            mock.last_sent()["params"]["functionDeclaration"]
+                .as_str()
+                .unwrap()
+                .contains("scrollIntoView")
+        );
+        mock.reply(id, json!({ "result": { "type": "undefined" } }))
+            .await;
+
+        // Step 2: bounding_box → DOM.getBoxModel. Box top-left (10,20), 100x50
+        // ⇒ center (60, 45).
+        let id = mock.expect_cmd("DOM.getBoxModel").await;
+        mock.reply(
+            id,
+            json!({
+                "model": {
+                    "content": [10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0],
+                    "padding": [10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0],
+                    "border":  [10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0],
+                    "margin":  [10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0],
+                    "width":  100,
+                    "height": 50
+                }
+            }),
+        )
+        .await;
+
+        // Step 3: overlay injected via Runtime.callFunctionOn carrying the
+        // dot-building JS (createElement + setTimeout/remove), with the
+        // viewport-center coords + duration passed as arguments.
+        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let sent = mock.last_sent();
+        let decl = sent["params"]["functionDeclaration"].as_str().unwrap();
+        assert!(decl.contains("createElement"), "should build a dot element");
+        assert!(
+            decl.contains("setTimeout") && decl.contains("remove"),
+            "should self-remove"
+        );
+        let args = sent["params"]["arguments"].as_array().unwrap();
+        // call_on_main prepends the element {objectId}; then cx, cy, ms.
+        assert_eq!(args[0]["objectId"], "R1");
+        assert_eq!(args[1]["value"], 60.0); // center x
+        assert_eq!(args[2]["value"], 45.0); // center y
+        assert_eq!(args[3]["value"], 500); // duration ms
+        mock.reply(id, json!({ "result": { "type": "undefined" } }))
+            .await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn highlight_overlay_enables_then_highlights_backend_node() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+        let el = Element::from_jsret(tab, 42, "R1".to_string());
+
+        let fut = tokio::spawn({
+            let e = el.clone();
+            async move { e.highlight_overlay().await }
+        });
+
+        // Step 1: Overlay.enable (highlightNode is a no-op without it).
+        let id = mock.expect_cmd("Overlay.enable").await;
+        mock.reply(id, json!({})).await;
+
+        // Step 2: Overlay.highlightNode { backendNodeId, highlightConfig }.
+        let id = mock.expect_cmd("Overlay.highlightNode").await;
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["backendNodeId"], 42);
+        assert!(
+            sent["params"]["highlightConfig"].is_object(),
+            "should carry a HighlightConfig"
+        );
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn mouse_drag_resolves_bbox_then_drives_drag_from_center() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+        let el = Element::from_jsret(tab, 42, "R1".to_string());
+
+        let fut = tokio::spawn({
+            let e = el.clone();
+            async move { e.mouse_drag((300.0, 200.0), 4).await }
+        });
+
+        // Step 1: scroll_into_view → Runtime.callFunctionOn.
+        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        assert!(
+            mock.last_sent()["params"]["functionDeclaration"]
+                .as_str()
+                .unwrap()
+                .contains("scrollIntoView")
+        );
+        mock.reply(id, json!({ "result": { "type": "undefined" } }))
+            .await;
+
+        // Step 2: bounding_box → DOM.getBoxModel. Box top-left (10,20), 100x50
+        // ⇒ center (60, 45) = the drag source.
+        let id = mock.expect_cmd("DOM.getBoxModel").await;
+        mock.reply(
+            id,
+            json!({
+                "model": {
+                    "content": [10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0],
+                    "padding": [10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0],
+                    "border":  [10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0],
+                    "margin":  [10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0],
+                    "width":  100,
+                    "height": 50
+                }
+            }),
+        )
+        .await;
+
+        // Step 3: Tab::mouse_drag dispatch sequence — mousePressed(left) at the
+        // center (60,45), ≥1 mouseMoved, then mouseReleased(left) at the
+        // destination (300,200). Drain all and assert ordering + endpoints.
+        let mut kinds: Vec<String> = Vec::new();
+        loop {
+            let next = tokio::time::timeout(
+                Duration::from_millis(500),
+                mock.expect_cmd("Input.dispatchMouseEvent"),
+            )
+            .await;
+            match next {
+                Ok(id) => {
+                    let sent = mock.last_sent();
+                    let kind = sent["params"]["type"].as_str().unwrap_or("").to_string();
+                    if kind == "mousePressed" {
+                        assert_eq!(sent["params"]["button"], "left");
+                        assert_eq!(sent["params"]["x"], 60.0, "press at bbox center x");
+                        assert_eq!(sent["params"]["y"], 45.0, "press at bbox center y");
+                    }
+                    if kind == "mouseReleased" {
+                        assert_eq!(sent["params"]["button"], "left");
+                        assert_eq!(sent["params"]["x"], 300.0, "release at destination x");
+                        assert_eq!(sent["params"]["y"], 200.0, "release at destination y");
+                    }
+                    kinds.push(kind);
+                    mock.reply(id, json!({})).await;
+                }
+                Err(_) => break,
+            }
+        }
+
+        fut.await.unwrap().unwrap();
+        assert_eq!(kinds.first().map(String::as_str), Some("mousePressed"));
+        assert_eq!(kinds.last().map(String::as_str), Some("mouseReleased"));
+        assert!(
+            kinds.iter().any(|k| k == "mouseMoved"),
+            "expected at least one mouseMoved between press and release"
+        );
         conn.shutdown();
     }
 }

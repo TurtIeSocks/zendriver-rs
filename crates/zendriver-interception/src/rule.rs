@@ -1,19 +1,20 @@
 //! Declarative interception rules.
 //!
-//! Each rule pairs a [`UrlPattern`] with one of four actions ([`Block`],
-//! [`Redirect`], [`Respond`], [`Modify`]). The actor in T6 walks the rule list
-//! in registration order on each `Fetch.requestPaused` event; the first rule
-//! whose pattern matches the request URL wins.
+//! Each rule pairs a [`UrlPattern`] with one of five actions ([`Block`],
+//! [`Redirect`], [`Respond`], [`Modify`], [`ModifyResponse`]). The actor in T6
+//! walks the rule list in registration order on each `Fetch.requestPaused`
+//! event; the first rule whose pattern matches the request URL wins.
 //!
 //! [`Block`]: Rule::Block
 //! [`Redirect`]: Rule::Redirect
 //! [`Respond`]: Rule::Respond
 //! [`Modify`]: Rule::Modify
+//! [`ModifyResponse`]: Rule::ModifyResponse
 
 use std::fmt;
 use std::sync::Arc;
 
-use crate::types::{RequestInfo, RequestOverrides};
+use crate::types::{RequestInfo, RequestOverrides, ResponseInfo, ResponseOverrides};
 use crate::url_pattern::UrlPattern;
 
 /// A single interception rule.
@@ -65,6 +66,22 @@ pub enum Rule {
         /// or `Send`-by-value.
         modify: Arc<dyn Fn(&RequestInfo) -> RequestOverrides + Send + Sync>,
     },
+    /// Rewrite an upstream response's status/headers per a user closure, then
+    /// continue with `Fetch.continueResponse` (keeping Chrome's body). Only
+    /// fires at the `Response` stage — the closure receives the live
+    /// [`ResponseInfo`] and returns the [`ResponseOverrides`] to apply. A rule
+    /// of this kind that matches at the `Request` stage is a no-op (there is
+    /// no response yet).
+    ModifyResponse {
+        /// URL pattern matched against the incoming request URL.
+        pattern: UrlPattern,
+        /// Closure invoked per matching response to produce overrides.
+        ///
+        /// Wrapped in [`Arc`] for the same cheap-share reason as [`Modify`].
+        ///
+        /// [`Modify`]: Rule::Modify
+        modify: Arc<dyn Fn(&ResponseInfo) -> ResponseOverrides + Send + Sync>,
+    },
 }
 
 impl Rule {
@@ -77,15 +94,16 @@ impl Rule {
         match self {
             Self::Block { pattern }
             | Self::Respond { pattern, .. }
-            | Self::Modify { pattern, .. } => pattern.matches(url),
+            | Self::Modify { pattern, .. }
+            | Self::ModifyResponse { pattern, .. } => pattern.matches(url),
             Self::Redirect { from, .. } => from.matches(url),
         }
     }
 }
 
-// Hand-written `Debug` because the `Modify` variant holds `Arc<dyn Fn ...>`,
-// which is not `Debug`. We print the closure as a placeholder so the rest of
-// the rule (the pattern) stays inspectable.
+// Hand-written `Debug` because the `Modify` / `ModifyResponse` variants hold
+// `Arc<dyn Fn ...>`, which is not `Debug`. We print the closure as a
+// placeholder so the rest of the rule (the pattern) stays inspectable.
 impl fmt::Debug for Rule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -109,6 +127,11 @@ impl fmt::Debug for Rule {
                 .finish(),
             Self::Modify { pattern, .. } => f
                 .debug_struct("Modify")
+                .field("pattern", pattern)
+                .field("modify", &"<closure>")
+                .finish(),
+            Self::ModifyResponse { pattern, .. } => f
+                .debug_struct("ModifyResponse")
                 .field("pattern", pattern)
                 .field("modify", &"<closure>")
                 .finish(),
@@ -138,5 +161,25 @@ mod tests {
         };
         assert!(rule.matches("https://example.com/old/page.html"));
         assert!(!rule.matches("https://example.com/new/page.html"));
+    }
+
+    #[test]
+    fn rule_modify_response_matches_and_debug() {
+        let rule = Rule::ModifyResponse {
+            pattern: UrlPattern::new("*/api/*").unwrap(),
+            modify: Arc::new(|_resp: &ResponseInfo| ResponseOverrides {
+                status: Some(418),
+                ..ResponseOverrides::default()
+            }),
+        };
+        assert!(rule.matches("https://example.com/api/users"));
+        assert!(!rule.matches("https://example.com/static/app.js"));
+
+        // Debug renders the pattern + a closure placeholder (the Arc<dyn Fn>
+        // isn't Debug).
+        let dbg = format!("{rule:?}");
+        assert!(dbg.contains("ModifyResponse"), "got: {dbg}");
+        assert!(dbg.contains("*/api/*"), "got: {dbg}");
+        assert!(dbg.contains("<closure>"), "got: {dbg}");
     }
 }

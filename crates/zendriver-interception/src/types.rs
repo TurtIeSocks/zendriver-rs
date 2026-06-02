@@ -176,6 +176,28 @@ pub struct ResponseInfo {
     pub headers: Vec<(String, String)>,
 }
 
+/// Per-field overrides for `Fetch.continueResponse`.
+///
+/// Applied to an upstream response paused at the `Response` stage to rewrite
+/// its status line and/or headers while keeping Chrome's original body
+/// (contrast with [`PausedRequest::respond`](crate::PausedRequest::respond),
+/// which serves a fully synthetic body). All fields are optional — `None`
+/// leaves Chrome's original value unchanged. Use [`Default`] to start empty.
+///
+/// Header semantics are CDP-faithful *replacement*, not merge: when `headers`
+/// is `Some`, the supplied set becomes the entire response header block, so
+/// include every header you want forwarded. `None` keeps Chrome's headers.
+#[derive(Debug, Clone, Default)]
+pub struct ResponseOverrides {
+    /// Replace the HTTP status code (`responseCode`). `None` keeps Chrome's.
+    pub status: Option<u16>,
+    /// Replace the HTTP status line text (`responsePhrase`, e.g. `"OK"`).
+    pub phrase: Option<String>,
+    /// Replace the full response header set (CDP semantics: *replacement*,
+    /// not merge). Order is preserved on the wire.
+    pub headers: Option<Vec<(String, String)>>,
+}
+
 /// Per-field overrides for `Fetch.continueRequest`.
 ///
 /// All fields are optional — `None` means "leave Chrome's original value

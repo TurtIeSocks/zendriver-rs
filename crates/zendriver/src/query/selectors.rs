@@ -134,12 +134,26 @@ impl SelectorKind {
     /// the whole document.
     #[allow(dead_code)] // First lib caller is FindBuilder.one after T12 swap.
     pub(crate) async fn resolve_one(&self, scope: &QueryScope<'_>) -> Result<Option<RemoteRef>> {
+        self.resolve_one_inner(scope, false).await
+    }
+
+    /// `resolve_one` with the cross-cutting `best_match` flag.
+    /// `best_match` only affects text selectors (`Text` / `TextRegex`),
+    /// where the JS collector re-sorts candidates by closest text length
+    /// before `[0]` is taken; it is a no-op for css/xpath/role.
+    pub(crate) async fn resolve_one_inner(
+        &self,
+        scope: &QueryScope<'_>,
+        best_match: bool,
+    ) -> Result<Option<RemoteRef>> {
         match self {
             SelectorKind::Css(sel) => resolve_css_one(scope, sel).await,
             SelectorKind::Xpath(expr) => resolve_xpath_one(scope, expr).await,
-            SelectorKind::Text { needle, exact } => resolve_text_one(scope, needle, *exact).await,
+            SelectorKind::Text { needle, exact } => {
+                resolve_text_one(scope, needle, *exact, best_match).await
+            }
             SelectorKind::TextRegex { pattern, flags } => {
-                resolve_text_regex_one(scope, pattern, flags).await
+                resolve_text_regex_one(scope, pattern, flags, best_match).await
             }
             SelectorKind::Role(role, name) => resolve_role_one(scope, *role, name.as_deref()).await,
         }
@@ -149,12 +163,26 @@ impl SelectorKind {
     /// document order. Empty `Vec` for no matches (not an error).
     #[allow(dead_code)] // First caller lands in T12 (FindBuilder.many).
     pub(crate) async fn resolve_many(&self, scope: &QueryScope<'_>) -> Result<Vec<RemoteRef>> {
+        self.resolve_many_inner(scope, false).await
+    }
+
+    /// `resolve_many` with the cross-cutting `best_match` flag (see
+    /// [`Self::resolve_one_inner`]). When set on a text selector the
+    /// returned Vec is ordered closest-length first, so `.one()` taking
+    /// `[0]` lands on the nearest match.
+    pub(crate) async fn resolve_many_inner(
+        &self,
+        scope: &QueryScope<'_>,
+        best_match: bool,
+    ) -> Result<Vec<RemoteRef>> {
         match self {
             SelectorKind::Css(sel) => resolve_css_many(scope, sel).await,
             SelectorKind::Xpath(expr) => resolve_xpath_many(scope, expr).await,
-            SelectorKind::Text { needle, exact } => resolve_text_many(scope, needle, *exact).await,
+            SelectorKind::Text { needle, exact } => {
+                resolve_text_many(scope, needle, *exact, best_match).await
+            }
             SelectorKind::TextRegex { pattern, flags } => {
-                resolve_text_regex_many(scope, pattern, flags).await
+                resolve_text_regex_many(scope, pattern, flags, best_match).await
             }
             SelectorKind::Role(role, name) => {
                 resolve_role_many(scope, *role, name.as_deref()).await
@@ -334,7 +362,24 @@ async fn resolve_xpath_many(scope: &QueryScope<'_>, expr: &str) -> Result<Vec<Re
 // resilient to hidden elements (which have `innerText === ""` but
 // non-empty `textContent`).
 
-fn build_text_substring_js_tab(needle: &str) -> String {
+/// JS fragment that re-sorts an array of elements ascending by
+/// `abs(len(elementText) - needleLen)` — the nodriver "closest-length"
+/// heuristic. Appended to the collector output only when `best_match`
+/// is set so `.one()` (which takes `[0]`) lands on the nearest match.
+/// `arr` is the in-scope identifier holding the candidate array.
+fn best_match_sort_js(arr: &str, needle_len: usize) -> String {
+    format!(
+        "{arr}.sort(function(a,b){{\
+            var la=(a.innerText||a.textContent||'').length;\
+            var lb=(b.innerText||b.textContent||'').length;\
+            return Math.abs(la-{n})-Math.abs(lb-{n});\
+        }})",
+        arr = arr,
+        n = needle_len,
+    )
+}
+
+fn build_text_substring_js_tab(needle: &str, best_match: bool) -> String {
     // Narrowest-match filter: every element whose own text contains the
     // needle, MINUS any element that also has a descendant whose text
     // contains the needle. Without the narrowing step, the naive filter
@@ -342,6 +387,16 @@ fn build_text_substring_js_tab(needle: &str) -> String {
     // order — `.one()` then picks `<html>` and the caller's
     // `el.attr("id")` returns None even though the test's `<button id=…>`
     // matched the needle.
+    //
+    // When `best_match` is set, the narrowed array is re-sorted ascending
+    // by `abs(len(text) - len(needle))` so `.one()` (which takes `[0]`)
+    // returns the closest-length candidate rather than the first in
+    // document order.
+    let sort = if best_match {
+        format!(";{}", best_match_sort_js("r", needle.chars().count()))
+    } else {
+        String::new()
+    };
     format!(
         "(function(){{\
             var n={n};\
@@ -350,45 +405,66 @@ fn build_text_substring_js_tab(needle: &str) -> String {
                 var t=el.innerText||el.textContent||'';\
                 return t.toLowerCase().includes(lc);\
             }});\
-            return matches.filter(function(el){{\
+            var r=matches.filter(function(el){{\
                 return !Array.from(el.querySelectorAll('*')).some(function(c){{\
                     var t=c.innerText||c.textContent||'';\
                     return t.toLowerCase().includes(lc);\
                 }});\
-            }});\
+            }}){sort};\
+            return r;\
         }})()",
         n = json!(needle),
+        sort = sort,
     )
 }
 
-fn build_text_substring_fn_body() -> &'static str {
+fn build_text_substring_fn_body(needle: &str, best_match: bool) -> String {
     // Element scope: `this` is the scope element. Used via
     // `Runtime.callFunctionOn` with the needle as the sole argument.
-    // Same narrowing semantics as the tab/frame path above.
-    "function(n){\
-        var lc=n.toLowerCase();\
-        var matches=Array.from(this.querySelectorAll('*')).filter(function(el){\
-            var t=el.innerText||el.textContent||'';\
-            return t.toLowerCase().includes(lc);\
-        });\
-        return matches.filter(function(el){\
-            return !Array.from(el.querySelectorAll('*')).some(function(c){\
-                var t=c.innerText||c.textContent||'';\
+    // Same narrowing (+ optional best_match sort) semantics as the
+    // tab/frame path above.
+    let sort = if best_match {
+        format!(";{}", best_match_sort_js("r", needle.chars().count()))
+    } else {
+        String::new()
+    };
+    format!(
+        "function(n){{\
+            var lc=n.toLowerCase();\
+            var matches=Array.from(this.querySelectorAll('*')).filter(function(el){{\
+                var t=el.innerText||el.textContent||'';\
                 return t.toLowerCase().includes(lc);\
-            });\
-        });\
-    }"
+            }});\
+            var r=matches.filter(function(el){{\
+                return !Array.from(el.querySelectorAll('*')).some(function(c){{\
+                    var t=c.innerText||c.textContent||'';\
+                    return t.toLowerCase().includes(lc);\
+                }});\
+            }}){sort};\
+            return r;\
+        }}",
+        sort = sort,
+    )
 }
 
-fn build_text_exact_xpath_js_tab(needle: &str, snapshot: bool) -> String {
+fn build_text_exact_xpath_js_tab(needle: &str, snapshot: bool, best_match: bool) -> String {
     // Construct the XPath in JS so the needle literal is escaped by
     // JSON.stringify -> single-quoted XPath string. snapshot=true
     // returns an Array of all matches; snapshot=false returns the
-    // first match or null.
+    // first match or null. When `best_match` is set on the snapshot
+    // path, the array is re-sorted by closest text length (see
+    // `best_match_sort_js`). `best_match` is ignored for the single-node
+    // (`snapshot=false`) form since there is no array to sort.
+    let sort = if snapshot && best_match {
+        format!(";{}", best_match_sort_js("a", needle.chars().count()))
+    } else {
+        String::new()
+    };
     if snapshot {
         format!(
-            "(function(){{var n={n};var xp=\"//*[normalize-space(.)=\"+JSON.stringify(n).replace(/\"/g,\"'\")+\"]\";var r=document.evaluate(xp,document,null,XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,null);var a=[];for(var i=0;i<r.snapshotLength;i++)a.push(r.snapshotItem(i));return a;}})()",
+            "(function(){{var n={n};var xp=\"//*[normalize-space(.)=\"+JSON.stringify(n).replace(/\"/g,\"'\")+\"]\";var r=document.evaluate(xp,document,null,XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,null);var a=[];for(var i=0;i<r.snapshotLength;i++)a.push(r.snapshotItem(i));{sort};return a;}})()",
             n = json!(needle),
+            sort = sort,
         )
     } else {
         format!(
@@ -398,12 +474,20 @@ fn build_text_exact_xpath_js_tab(needle: &str, snapshot: bool) -> String {
     }
 }
 
-fn build_text_exact_xpath_fn_body(snapshot: bool) -> &'static str {
+fn build_text_exact_xpath_fn_body(needle: &str, snapshot: bool, best_match: bool) -> String {
     // Element scope: `this` is the context node. Needle passed as arg.
-    if snapshot {
-        "function(n){var xp=\"//*[normalize-space(.)=\"+JSON.stringify(n).replace(/\"/g,\"'\")+\"]\";var r=document.evaluate(xp,this,null,XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,null);var a=[];for(var i=0;i<r.snapshotLength;i++)a.push(r.snapshotItem(i));return a;}"
+    let sort = if snapshot && best_match {
+        format!(";{}", best_match_sort_js("a", needle.chars().count()))
     } else {
-        "function(n){var xp=\"//*[normalize-space(.)=\"+JSON.stringify(n).replace(/\"/g,\"'\")+\"]\";return document.evaluate(xp,this,null,XPathResult.FIRST_ORDERED_NODE_TYPE,null).singleNodeValue;}"
+        String::new()
+    };
+    if snapshot {
+        format!(
+            "function(n){{var xp=\"//*[normalize-space(.)=\"+JSON.stringify(n).replace(/\"/g,\"'\")+\"]\";var r=document.evaluate(xp,this,null,XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,null);var a=[];for(var i=0;i<r.snapshotLength;i++)a.push(r.snapshotItem(i));{sort};return a;}}",
+            sort = sort,
+        )
+    } else {
+        "function(n){var xp=\"//*[normalize-space(.)=\"+JSON.stringify(n).replace(/\"/g,\"'\")+\"]\";return document.evaluate(xp,this,null,XPathResult.FIRST_ORDERED_NODE_TYPE,null).singleNodeValue;}".to_string()
     }
 }
 
@@ -412,17 +496,54 @@ async fn resolve_text_one(
     scope: &QueryScope<'_>,
     needle: &str,
     exact: bool,
+    best_match: bool,
 ) -> Result<Option<RemoteRef>> {
     let session = scope.session();
     if exact {
-        // XPath path returns a single node or null.
+        // XPath path. For best_match we need the full snapshot array
+        // (sorted by closest length) and take `[0]`; otherwise the cheap
+        // single-node form suffices.
+        if best_match {
+            let result = match scope {
+                QueryScope::Tab(_) | QueryScope::Frame(_) => {
+                    session
+                        .call(
+                            "Runtime.evaluate",
+                            json!({
+                                "expression": format!("({})[0] || null", build_text_exact_xpath_js_tab(needle, true, true)),
+                                "returnByValue": false,
+                            }),
+                        )
+                        .await?
+                }
+                QueryScope::Element(el) => {
+                    let object_id = el.remote_object_id_cloned().await?;
+                    session
+                        .call(
+                            "Runtime.callFunctionOn",
+                            json!({
+                                "objectId": object_id,
+                                "functionDeclaration": format!(
+                                    "function(n){{return ({})[0] || null;}}",
+                                    format!("({}).call(this,n)", build_text_exact_xpath_fn_body(needle, true, true)),
+                                ),
+                                "arguments": [{ "value": needle }],
+                                "returnByValue": false,
+                            }),
+                        )
+                        .await?
+                }
+            };
+            return extract_node_ref(session, &result["result"]).await;
+        }
+        // Single-node form (no best_match): returns a single node or null.
         let result = match scope {
             QueryScope::Tab(_) | QueryScope::Frame(_) => {
                 session
                     .call(
                         "Runtime.evaluate",
                         json!({
-                            "expression": build_text_exact_xpath_js_tab(needle, false),
+                            "expression": build_text_exact_xpath_js_tab(needle, false, false),
                             "returnByValue": false,
                         }),
                     )
@@ -435,7 +556,7 @@ async fn resolve_text_one(
                         "Runtime.callFunctionOn",
                         json!({
                             "objectId": object_id,
-                            "functionDeclaration": build_text_exact_xpath_fn_body(false),
+                            "functionDeclaration": build_text_exact_xpath_fn_body(needle, false, false),
                             "arguments": [{ "value": needle }],
                             "returnByValue": false,
                         }),
@@ -445,14 +566,15 @@ async fn resolve_text_one(
         };
         extract_node_ref(session, &result["result"]).await
     } else {
-        // Substring path returns an Array; pick first match.
+        // Substring path returns an Array (best_match re-sorts it); pick
+        // first match.
         let result = match scope {
             QueryScope::Tab(_) | QueryScope::Frame(_) => {
                 session
                     .call(
                         "Runtime.evaluate",
                         json!({
-                            "expression": format!("({})[0] || null", build_text_substring_js_tab(needle)),
+                            "expression": format!("({})[0] || null", build_text_substring_js_tab(needle, best_match)),
                             "returnByValue": false,
                         }),
                     )
@@ -466,10 +588,10 @@ async fn resolve_text_one(
                         json!({
                             "objectId": object_id,
                             "functionDeclaration": format!(
-                                "function(n){{return ({})[0] || null;}}",
-                                // Build the substring filter body inline so
+                                "function(n){{return ({}.call(this,n))[0] || null;}}",
+                                // Reuse the narrowing + best_match body so
                                 // `this` resolves to the scope element.
-                                "Array.from(this.querySelectorAll('*')).filter(function(el){var t=el.innerText||el.textContent||'';return t.toLowerCase().includes(n.toLowerCase());})"
+                                build_text_substring_fn_body(needle, best_match)
                             ),
                             "arguments": [{ "value": needle }],
                             "returnByValue": false,
@@ -487,6 +609,7 @@ async fn resolve_text_many(
     scope: &QueryScope<'_>,
     needle: &str,
     exact: bool,
+    best_match: bool,
 ) -> Result<Vec<RemoteRef>> {
     let session = scope.session();
     let result = if exact {
@@ -496,7 +619,7 @@ async fn resolve_text_many(
                     .call(
                         "Runtime.evaluate",
                         json!({
-                            "expression": build_text_exact_xpath_js_tab(needle, true),
+                            "expression": build_text_exact_xpath_js_tab(needle, true, best_match),
                             "returnByValue": false,
                         }),
                     )
@@ -509,7 +632,7 @@ async fn resolve_text_many(
                         "Runtime.callFunctionOn",
                         json!({
                             "objectId": object_id,
-                            "functionDeclaration": build_text_exact_xpath_fn_body(true),
+                            "functionDeclaration": build_text_exact_xpath_fn_body(needle, true, best_match),
                             "arguments": [{ "value": needle }],
                             "returnByValue": false,
                         }),
@@ -524,7 +647,7 @@ async fn resolve_text_many(
                     .call(
                         "Runtime.evaluate",
                         json!({
-                            "expression": build_text_substring_js_tab(needle),
+                            "expression": build_text_substring_js_tab(needle, best_match),
                             "returnByValue": false,
                         }),
                     )
@@ -537,7 +660,7 @@ async fn resolve_text_many(
                         "Runtime.callFunctionOn",
                         json!({
                             "objectId": object_id,
-                            "functionDeclaration": build_text_substring_fn_body(),
+                            "functionDeclaration": build_text_substring_fn_body(needle, best_match),
                             "arguments": [{ "value": needle }],
                             "returnByValue": false,
                         }),
@@ -565,18 +688,37 @@ async fn resolve_text_many(
 // We construct the RegExp *once outside* the filter callback so the
 // pattern is only compiled per query rather than per element.
 
-fn build_text_regex_js_tab(pattern: &str, flags: &str) -> String {
+fn build_text_regex_js_tab(pattern: &str, flags: &str, best_match: bool) -> String {
+    // `best_match` has no literal needle for a regex; we use the pattern
+    // length as the closest-length proxy (the only well-defined analog
+    // for the regex case). Matches are re-sorted ascending by
+    // `abs(len(text) - len(pattern))` when set.
+    let sort = if best_match {
+        format!(";{}", best_match_sort_js("m", pattern.chars().count()))
+    } else {
+        String::new()
+    };
     format!(
-        "(function(){{var r=new RegExp({p}, {f});return Array.from(document.querySelectorAll('*')).filter(function(el){{var t=el.innerText||el.textContent||'';return r.test(t);}});}})()",
+        "(function(){{var r=new RegExp({p}, {f});var m=Array.from(document.querySelectorAll('*')).filter(function(el){{var t=el.innerText||el.textContent||'';return r.test(t);}}){sort};return m;}})()",
         p = json!(pattern),
         f = json!(flags),
+        sort = sort,
     )
 }
 
-fn build_text_regex_fn_body() -> &'static str {
+fn build_text_regex_fn_body(pattern: &str, best_match: bool) -> String {
     // Element scope: `this` is the scope element. Pattern + flags
-    // passed as arguments.
-    "function(p,f){var r=new RegExp(p,f);return Array.from(this.querySelectorAll('*')).filter(function(el){var t=el.innerText||el.textContent||'';return r.test(t);});}"
+    // passed as arguments. See `build_text_regex_js_tab` for the
+    // best_match proxy rationale.
+    let sort = if best_match {
+        format!(";{}", best_match_sort_js("m", pattern.chars().count()))
+    } else {
+        String::new()
+    };
+    format!(
+        "function(p,f){{var r=new RegExp(p,f);var m=Array.from(this.querySelectorAll('*')).filter(function(el){{var t=el.innerText||el.textContent||'';return r.test(t);}}){sort};return m;}}",
+        sort = sort,
+    )
 }
 
 #[allow(dead_code)] // Reached via SelectorKind::resolve_one, gated until T12.
@@ -584,6 +726,7 @@ async fn resolve_text_regex_one(
     scope: &QueryScope<'_>,
     pattern: &str,
     flags: &str,
+    best_match: bool,
 ) -> Result<Option<RemoteRef>> {
     let session = scope.session();
     let result = match scope {
@@ -592,7 +735,7 @@ async fn resolve_text_regex_one(
                 .call(
                     "Runtime.evaluate",
                     json!({
-                        "expression": format!("({})[0] || null", build_text_regex_js_tab(pattern, flags)),
+                        "expression": format!("({})[0] || null", build_text_regex_js_tab(pattern, flags, best_match)),
                         "returnByValue": false,
                     }),
                 )
@@ -606,8 +749,8 @@ async fn resolve_text_regex_one(
                     json!({
                         "objectId": object_id,
                         "functionDeclaration": format!(
-                            "function(p,f){{return ({})[0] || null;}}",
-                            "(function(p,f){var r=new RegExp(p,f);return Array.from(this.querySelectorAll('*')).filter(function(el){var t=el.innerText||el.textContent||'';return r.test(t);});}).call(this,p,f)"
+                            "function(p,f){{return (({}).call(this,p,f))[0] || null;}}",
+                            build_text_regex_fn_body(pattern, best_match)
                         ),
                         "arguments": [{ "value": pattern }, { "value": flags }],
                         "returnByValue": false,
@@ -624,6 +767,7 @@ async fn resolve_text_regex_many(
     scope: &QueryScope<'_>,
     pattern: &str,
     flags: &str,
+    best_match: bool,
 ) -> Result<Vec<RemoteRef>> {
     let session = scope.session();
     let result = match scope {
@@ -632,7 +776,7 @@ async fn resolve_text_regex_many(
                 .call(
                     "Runtime.evaluate",
                     json!({
-                        "expression": build_text_regex_js_tab(pattern, flags),
+                        "expression": build_text_regex_js_tab(pattern, flags, best_match),
                         "returnByValue": false,
                     }),
                 )
@@ -645,7 +789,7 @@ async fn resolve_text_regex_many(
                     "Runtime.callFunctionOn",
                     json!({
                         "objectId": object_id,
-                        "functionDeclaration": build_text_regex_fn_body(),
+                        "functionDeclaration": build_text_regex_fn_body(pattern, best_match),
                         "arguments": [{ "value": pattern }, { "value": flags }],
                         "returnByValue": false,
                     }),
@@ -828,6 +972,31 @@ pub(crate) async fn extract_array_refs(
     // insertion order in practice, but the explicit sort defends
     // against engine-specific reorderings.
     Ok(out)
+}
+
+/// Read the rendered text length of `node` via `Runtime.callFunctionOn`
+/// returning `(this.innerText||this.textContent||'').length`. Dispatched
+/// on `scope`'s session so an OOPIF frame's node is read over the frame's
+/// own session. Used only by the cross-scope `include_frames` +
+/// `best_match` path to compare each scope's top candidate and pick the
+/// global closest-length winner. A missing/non-numeric result yields
+/// `usize::MAX` so a scope whose length cannot be read never wins a tie.
+pub(crate) async fn text_len_of(scope: &QueryScope<'_>, node: &RemoteRef) -> Result<usize> {
+    let result = scope
+        .session()
+        .call(
+            "Runtime.callFunctionOn",
+            json!({
+                "objectId": node.remote_object_id,
+                "functionDeclaration":
+                    "function(){return (this.innerText||this.textContent||'').length;}",
+                "returnByValue": true,
+            }),
+        )
+        .await?;
+    Ok(result["result"]["value"]
+        .as_u64()
+        .map_or(usize::MAX, |v| v as usize))
 }
 
 #[allow(dead_code)] // Both callers (extract_node_ref/extract_array_refs) are gated until T12.

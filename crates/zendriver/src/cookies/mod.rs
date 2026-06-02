@@ -16,11 +16,10 @@
 //!     value: "abc123".into(),
 //!     domain: ".example.com".into(),
 //!     path: "/".into(),
-//!     expires: None,
 //!     http_only: true,
 //!     secure: true,
 //!     same_site: Some(zendriver::SameSite::Lax),
-//!     url: None,
+//!     ..Default::default()
 //! }).await?;
 //! # Ok(()) }
 //! ```
@@ -59,6 +58,37 @@ pub enum SameSite {
     None,
 }
 
+/// Cookie priority hint as defined by the (non-standard) `Priority`
+/// attribute Chrome honors during eviction.
+///
+/// Mirrors the CDP `Network.CookiePriority` enum. Serializes as
+/// `"Low"` / `"Medium"` / `"High"` to match CDP exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CookiePriority {
+    /// Lowest retention priority — evicted first under storage pressure.
+    Low,
+    /// Default priority when the attribute is unspecified.
+    Medium,
+    /// Highest retention priority — evicted last.
+    High,
+}
+
+/// Scheme of the request that set the cookie.
+///
+/// Mirrors the CDP `Network.CookieSourceScheme` enum. Serializes as
+/// `"Unset"` / `"NonSecure"` / `"Secure"` to match CDP exactly. CDP uses
+/// this together with `secure` to implement the "schemeful same-site"
+/// model; `Unset` is the default for cookies set without a known scheme.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CookieSourceScheme {
+    /// Scheme unknown / not recorded.
+    Unset,
+    /// Cookie was set over a non-secure (`http`) origin.
+    NonSecure,
+    /// Cookie was set over a secure (`https`) origin.
+    Secure,
+}
+
 /// A single HTTP cookie.
 ///
 /// Field shape matches the public Rust/JSON contract (snake_case). An
@@ -72,7 +102,7 @@ pub enum SameSite {
 ///   present, CDP infers `domain` + `path` + `secure` from it. CDP never
 ///   emits this field on reads, so it's always `None` on cookies returned
 ///   by [`CookieJar::all`] / [`CookieJar::for_url`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Cookie {
     /// Cookie name.
     pub name: String,
@@ -102,6 +132,31 @@ pub struct Cookie {
     /// returned by reads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Eviction-priority hint (`Network.CookiePriority`). `None` lets
+    /// Chrome apply its default (`Medium`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<CookiePriority>,
+    /// First-Party Sets membership flag (`sameParty`). Rarely set by
+    /// hand; populated by CDP on reads when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub same_party: Option<bool>,
+    /// Scheme of the origin that set the cookie
+    /// (`Network.CookieSourceScheme`). Drives schemeful same-site.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_scheme: Option<CookieSourceScheme>,
+    /// Source port of the origin that set the cookie. `-1` in CDP means
+    /// "unspecified"; modeled as a plain `Option<i32>` here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_port: Option<i32>,
+    /// CHIPS partition key — the top-level site the partitioned cookie is
+    /// scoped to (e.g. `"https://example.com"`).
+    ///
+    /// Modeled as the top-level-site string for the common case. Newer CDP
+    /// channels expose `partitionKey` as a structured object
+    /// (`{ topLevelSite, hasCrossSiteAncestor }`); that variant is
+    /// deferred — set the string form for now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition_key: Option<String>,
 }
 
 /// Internal mirror of [`Cookie`] with CDP's camelCase rename. Used only at
@@ -124,6 +179,16 @@ struct CdpCookie {
     same_site: Option<SameSite>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    priority: Option<CookiePriority>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    same_party: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_scheme: Option<CookieSourceScheme>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_port: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    partition_key: Option<String>,
 }
 
 impl From<Cookie> for CdpCookie {
@@ -138,6 +203,11 @@ impl From<Cookie> for CdpCookie {
             secure: c.secure,
             same_site: c.same_site,
             url: c.url,
+            priority: c.priority,
+            same_party: c.same_party,
+            source_scheme: c.source_scheme,
+            source_port: c.source_port,
+            partition_key: c.partition_key,
         }
     }
 }
@@ -154,6 +224,11 @@ impl From<CdpCookie> for Cookie {
             secure: c.secure,
             same_site: c.same_site,
             url: c.url,
+            priority: c.priority,
+            same_party: c.same_party,
+            source_scheme: c.source_scheme,
+            source_port: c.source_port,
+            partition_key: c.partition_key,
         }
     }
 }
@@ -266,11 +341,10 @@ impl CookieJar {
     ///     value: "abc".into(),
     ///     domain: ".example.com".into(),
     ///     path: "/".into(),
-    ///     expires: None,
     ///     http_only: true,
     ///     secure: true,
     ///     same_site: Some(SameSite::Lax),
-    ///     url: None,
+    ///     ..Default::default()
     /// }).await?;
     /// # Ok(()) }
     /// ```
@@ -297,8 +371,7 @@ impl CookieJar {
     /// # let browser = zendriver::Browser::builder().launch().await?;
     /// let cookies = vec![
     ///     Cookie { name: "a".into(), value: "1".into(), domain: ".x.com".into(),
-    ///              path: "/".into(), expires: None, http_only: false, secure: false,
-    ///              same_site: None, url: None },
+    ///              path: "/".into(), ..Default::default() },
     /// ];
     /// browser.cookies().set_many(cookies).await?;
     /// # Ok(()) }
@@ -467,6 +540,7 @@ mod tests {
                     secure: true,
                     same_site: Some(SameSite::Strict),
                     url: None,
+                    ..Default::default()
                 })
                 .await
             }
@@ -530,5 +604,108 @@ mod tests {
         call_b.await.unwrap().unwrap();
 
         conn.shutdown();
+    }
+
+    /// A [`Cookie`] carrying the CHIPS / priority extension fields must
+    /// surface them on the `Storage.setCookies` wire payload with CDP's
+    /// camelCase names + enum string forms.
+    #[tokio::test]
+    async fn set_cookie_with_priority_and_partition_key_on_wire() {
+        let (mut mock, conn) = MockConnection::pair();
+        let jar = CookieJar::new(conn.clone());
+
+        let call = tokio::spawn({
+            let j = jar.clone();
+            async move {
+                j.set(Cookie {
+                    name: "sid".into(),
+                    value: "xyz".into(),
+                    domain: ".example.com".into(),
+                    path: "/".into(),
+                    priority: Some(CookiePriority::High),
+                    same_party: Some(true),
+                    source_scheme: Some(CookieSourceScheme::Secure),
+                    source_port: Some(443),
+                    partition_key: Some("https://top".into()),
+                    ..Default::default()
+                })
+                .await
+            }
+        });
+
+        let id = mock.expect_cmd("Storage.setCookies").await;
+        let params = &mock.last_sent()["params"];
+        let c = &params["cookies"]
+            .as_array()
+            .expect("setCookies payload must carry a cookies array")[0];
+        assert_eq!(c["priority"], "High");
+        assert_eq!(c["sameParty"], true);
+        assert_eq!(c["sourceScheme"], "Secure");
+        assert_eq!(c["sourcePort"], 443);
+        assert_eq!(c["partitionKey"], "https://top");
+        // Snake-case names must NOT leak onto the wire.
+        assert!(c.get("same_party").is_none());
+        assert!(c.get("source_scheme").is_none());
+        assert!(c.get("partition_key").is_none());
+
+        mock.reply(id, json!({})).await;
+        call.await.unwrap().unwrap();
+
+        conn.shutdown();
+    }
+
+    /// Serializing a [`Cookie`] with the new fields to JSON and back must
+    /// preserve every value losslessly (snake_case on disk).
+    #[test]
+    fn cookie_json_roundtrip_preserves_new_fields() {
+        let cookie = Cookie {
+            name: "sid".into(),
+            value: "xyz".into(),
+            domain: ".example.com".into(),
+            path: "/".into(),
+            priority: Some(CookiePriority::Low),
+            same_party: Some(false),
+            source_scheme: Some(CookieSourceScheme::NonSecure),
+            source_port: Some(80),
+            partition_key: Some("https://top.example".into()),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&cookie).unwrap();
+        // snake_case on disk for the public shape.
+        assert!(json.contains("\"source_scheme\""));
+        assert!(json.contains("\"partition_key\""));
+
+        let back: Cookie = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, cookie);
+        assert_eq!(back.priority, Some(CookiePriority::Low));
+        assert_eq!(back.same_party, Some(false));
+        assert_eq!(back.source_scheme, Some(CookieSourceScheme::NonSecure));
+        assert_eq!(back.source_port, Some(80));
+        assert_eq!(back.partition_key.as_deref(), Some("https://top.example"));
+    }
+
+    /// Deserializing a CDP cookie that omits the new fields must leave them
+    /// `None` (serde `default`) and must not panic — this is the
+    /// crash-immunity contract that protected rs from the Chrome-146
+    /// `sameParty` regression.
+    #[test]
+    fn cookie_read_missing_new_fields_is_none() {
+        let cdp: CdpCookie = serde_json::from_value(json!({
+            "name": "sid",
+            "value": "xyz",
+            "domain": ".example.com",
+            "path": "/",
+            "httpOnly": true,
+            "secure": true,
+        }))
+        .expect("a CDP cookie lacking the new fields must still parse");
+        let cookie: Cookie = cdp.into();
+
+        assert_eq!(cookie.priority, None);
+        assert_eq!(cookie.same_party, None);
+        assert_eq!(cookie.source_scheme, None);
+        assert_eq!(cookie.source_port, None);
+        assert_eq!(cookie.partition_key, None);
     }
 }

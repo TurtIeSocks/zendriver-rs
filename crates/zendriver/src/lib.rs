@@ -76,29 +76,36 @@ pub mod element;
 pub mod error;
 #[cfg(feature = "expect")]
 pub mod expect;
+pub(crate) mod expert;
 pub mod frame;
 pub mod input;
 pub(crate) mod isolated_world;
 pub mod network_idle;
+pub mod pdf;
 pub mod query;
 pub mod screenshot;
 pub mod storage;
 pub mod tab;
 pub mod traits;
+pub mod window;
 
-pub use browser::{Browser, BrowserBuilder};
+pub use browser::{Browser, BrowserBuilder, Channel, PermissionType};
 pub use browser_context::BrowserContext;
-pub use cookies::{Cookie, CookieJar, SameSite};
+pub use cookies::{Cookie, CookieJar, CookiePriority, CookieSourceScheme, SameSite};
 pub use element::Element;
 pub use element::actions::ClickOptions;
 pub use error::{BrowserError, Result, ZendriverError};
 pub use frame::Frame;
-pub use input::{Key, KeyModifiers, MouseButton, SpecialKey};
-pub use query::{AriaRole, BoundingBox, FindBuilder};
+pub use input::{Key, KeyModifiers, KeySequence, MouseButton, SpecialKey};
+pub use pdf::PdfBuilder;
+pub use query::{AriaRole, BoundingBox, FindBuilder, PageBox};
 pub use screenshot::{Format, ScreenshotBuilder};
 pub use storage::Storage;
-pub use tab::Tab;
+pub use tab::{
+    FrameResourceMatch, ReadyState, ReloadOptions, ScrollOptions, Tab, UserAgentOverride,
+};
 pub use traits::{Evaluable, Queryable};
+pub use window::{WindowBounds, WindowState};
 
 // Re-export selected transport types for advanced users.
 pub use zendriver_transport::{CallError, Connection, SessionHandle, TransportError};
@@ -170,9 +177,16 @@ pub use expect::download::{
 /// [`BrowserBuilder::ensure_chrome`] for the common "just download Chrome"
 /// case, or instantiate [`Fetcher`] directly for version/channel/cache
 /// customization.
+///
+/// The fetcher's release-channel enum is re-exported as `FetcherChannel` to
+/// avoid colliding with the browser-discovery [`Channel`] enum (Chrome /
+/// Chromium / Brave / Edge / Auto): the two name different concepts — a
+/// Chrome-for-Testing *release* channel (Stable/Beta/Dev/Canary) versus which
+/// installed *browser* to launch.
 #[cfg(feature = "fetcher")]
 pub use zendriver_fetcher::{
-    Channel, Fetcher, FetcherError, FetcherPhase, FetcherProgress, Platform, VersionSpec,
+    Channel as FetcherChannel, Fetcher, FetcherError, FetcherPhase, FetcherProgress, Platform,
+    VersionSpec,
 };
 
 /// Stealth profile + fingerprint configuration re-exported from `zendriver-stealth`.
@@ -213,6 +227,8 @@ mod auto_trait_assertions {
     fn public_surface_is_send_sync() {
         assert_send_sync::<Browser>();
         assert_send_sync::<BrowserBuilder>();
+        assert_send_sync::<Channel>();
+        assert_send_sync::<PermissionType>();
         assert_send_sync::<Tab>();
         assert_send_sync::<Element>();
         assert_send_sync::<Frame>();
@@ -221,6 +237,7 @@ mod auto_trait_assertions {
         assert_send_sync::<Cookie>();
         assert_send_sync::<SameSite>();
         assert_send_sync::<BoundingBox>();
+        assert_send_sync::<PageBox>();
         assert_send_sync::<AriaRole>();
         assert_send_sync::<Format>();
         assert_send_sync::<MouseButton>();
@@ -228,6 +245,13 @@ mod auto_trait_assertions {
         assert_send_sync::<SpecialKey>();
         assert_send_sync::<KeyModifiers>();
         assert_send_sync::<ClickOptions>();
+        assert_send_sync::<ReloadOptions>();
+        assert_send_sync::<ScrollOptions>();
+        assert_send_sync::<UserAgentOverride>();
+        assert_send_sync::<ReadyState>();
+        assert_send_sync::<FrameResourceMatch>();
+        assert_send_sync::<WindowBounds>();
+        assert_send_sync::<WindowState>();
         assert_send_sync::<ZendriverError>();
         assert_send_sync::<BrowserError>();
     }
@@ -301,7 +325,7 @@ mod auto_trait_assertions {
         assert_send_sync::<FetcherProgress>();
         assert_send_sync::<Platform>();
         assert_send_sync::<VersionSpec>();
-        assert_send_sync::<Channel>();
+        assert_send_sync::<FetcherChannel>();
     }
 
     #[test]

@@ -19,6 +19,7 @@
 //! ```
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -36,6 +37,219 @@ use crate::isolated_world::IsolatedWorldCache;
 use crate::screenshot::ScreenshotBuilder;
 
 const DEFAULT_LOAD_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Poll cadence for [`Tab::wait_for_ready_state`]'s `document.readyState`
+/// loop. Small enough to feel responsive, large enough not to spin the CDP
+/// channel.
+const READY_STATE_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Fixed `(x, y)` viewport anchor for [`Tab::scroll_with`] gestures. A
+/// constant in-viewport point keeps page scrolls deterministic and
+/// single-dispatch (no `Page.getLayoutMetrics` round-trip to derive a
+/// center) — the scroll *distance* is what matters, not the anchor.
+const SCROLL_ANCHOR: (f64, f64) = (100.0, 100.0);
+
+/// Per-call knobs for [`Tab::reload_with`].
+///
+/// `Default` reloads with `ignore_cache: false` and no injected script —
+/// the same behavior as the plain [`Tab::reload`] shortcut. Set
+/// `ignore_cache: true` for a hard refresh, and/or
+/// `script_to_evaluate_on_load` to inject a script that runs on every frame
+/// load triggered by the reload.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn ex() -> zendriver::Result<()> {
+/// use zendriver::ReloadOptions;
+/// # let browser = zendriver::Browser::builder().launch().await?;
+/// # let tab = browser.main_tab();
+/// tab.reload_with(ReloadOptions {
+///     ignore_cache: true,
+///     ..Default::default()
+/// }).await?;
+/// # Ok(()) }
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct ReloadOptions {
+    /// Bypass the HTTP cache for the reload (`Page.reload.ignoreCache`).
+    /// `false` by default — a soft refresh.
+    pub ignore_cache: bool,
+    /// Script source injected before any other page script on each frame
+    /// loaded by the reload (`Page.reload.scriptToEvaluateOnLoad`). Omitted
+    /// from the dispatch entirely when `None`.
+    pub script_to_evaluate_on_load: Option<String>,
+}
+
+/// Per-call knobs for [`Tab::scroll_with`].
+///
+/// `dx` / `dy` are signed pixel distances forwarded verbatim to
+/// `Input.synthesizeScrollGesture`'s `xDistance` / `yDistance`. Following
+/// the CDP convention a **negative** `dy` scrolls the page *down* (content
+/// moves up); a positive `dy` scrolls up. `speed` (px/s) plumbs through to
+/// the gesture's `speed` field when `Some`, and is omitted otherwise (Chrome
+/// picks its default).
+///
+/// For the common cases prefer the [`Tab::scroll_down`] / [`Tab::scroll_up`]
+/// shortcuts, which take an unsigned pixel amount and pick the sign for you.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn ex() -> zendriver::Result<()> {
+/// use zendriver::ScrollOptions;
+/// # let browser = zendriver::Browser::builder().launch().await?;
+/// # let tab = browser.main_tab();
+/// // Scroll down 400px and right 50px at a fixed speed.
+/// tab.scroll_with(ScrollOptions {
+///     dx: 50.0,
+///     dy: -400.0,
+///     speed: Some(800),
+/// }).await?;
+/// # Ok(()) }
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct ScrollOptions {
+    /// Horizontal scroll distance in pixels (`synthesizeScrollGesture.xDistance`).
+    pub dx: f64,
+    /// Vertical scroll distance in pixels (`synthesizeScrollGesture.yDistance`).
+    /// Negative scrolls the page down (CDP convention); positive scrolls up.
+    pub dy: f64,
+    /// Optional gesture speed in pixels/second (`synthesizeScrollGesture.speed`).
+    /// Omitted from the dispatch when `None`.
+    pub speed: Option<i64>,
+}
+
+/// Runtime user-agent override for [`Tab::set_user_agent_with`].
+///
+/// `accept_language` / `platform` are optional refinements — leave them
+/// `None` to override only the UA string. Each `None` field is omitted from
+/// the `Emulation.setUserAgentOverride` dispatch entirely (not sent as
+/// `null`).
+///
+/// # Stealth interaction (read before using under a stealth profile)
+///
+/// The active [`StealthProfile`](zendriver_stealth::StealthProfile) observer
+/// already issues `Emulation.setUserAgentOverride` carrying a coherent
+/// `userAgentMetadata` block (UA Client-Hints). This override is
+/// **last-write-wins and sends NO `userAgentMetadata`**, so applying it under
+/// the Spoofed profile *clobbers* that Client-Hints coherence and can
+/// *increase* fingerprint detectability (the UA string and the UA-CH high
+/// entropy values would disagree). For stealth, prefer setting the UA through
+/// the stealth profile instead. Use this for non-stealth tabs or a deliberate
+/// per-tab UA change where you accept the coherence trade-off.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn ex() -> zendriver::Result<()> {
+/// use zendriver::UserAgentOverride;
+/// # let browser = zendriver::Browser::builder().launch().await?;
+/// # let tab = browser.main_tab();
+/// tab.set_user_agent_with(UserAgentOverride {
+///     user_agent: "Mozilla/5.0 (custom) Gecko/20100101 Firefox/123.0".into(),
+///     accept_language: Some("en-US,en;q=0.9".into()),
+///     platform: Some("Linux x86_64".into()),
+/// }).await?;
+/// # Ok(()) }
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct UserAgentOverride {
+    /// Full `User-Agent` request-header / `navigator.userAgent` string
+    /// (`Emulation.setUserAgentOverride.userAgent`). Required.
+    pub user_agent: String,
+    /// `Accept-Language` header + `navigator.language(s)` override
+    /// (`Emulation.setUserAgentOverride.acceptLanguage`). Omitted when `None`.
+    pub accept_language: Option<String>,
+    /// `navigator.platform` override
+    /// (`Emulation.setUserAgentOverride.platform`). Omitted when `None`.
+    pub platform: Option<String>,
+}
+
+/// Document load milestone for [`Tab::wait_for_ready_state`].
+///
+/// Maps to the three values of the DOM `document.readyState` property and
+/// orders them by progress: `Loading` < `Interactive` < `Complete`. Passing a
+/// target to `wait_for_ready_state` polls until the document has reached *at
+/// least* that milestone — e.g. waiting for `Interactive` also returns once
+/// the page is fully `Complete`.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn ex() -> zendriver::Result<()> {
+/// use zendriver::ReadyState;
+/// # let browser = zendriver::Browser::builder().launch().await?;
+/// # let tab = browser.main_tab();
+/// tab.goto("https://example.com").await?;
+/// tab.wait_for_ready_state(ReadyState::Complete).await?;
+/// # Ok(()) }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ReadyState {
+    /// `document.readyState === "loading"` — the document is still parsing.
+    #[serde(rename = "loading")]
+    Loading,
+    /// `document.readyState === "interactive"` — parsed, but sub-resources
+    /// (images, stylesheets, frames) may still be loading.
+    #[serde(rename = "interactive")]
+    Interactive,
+    /// `document.readyState === "complete"` — the document and all
+    /// sub-resources have finished loading (the `load` event has fired).
+    #[serde(rename = "complete")]
+    Complete,
+}
+
+impl ReadyState {
+    /// Monotonic progress rank: `Loading` = 0 < `Interactive` = 1 <
+    /// `Complete` = 2. Used by [`Tab::wait_for_ready_state`] to decide whether
+    /// the observed state has reached the requested milestone.
+    fn rank(self) -> u8 {
+        match self {
+            ReadyState::Loading => 0,
+            ReadyState::Interactive => 1,
+            ReadyState::Complete => 2,
+        }
+    }
+
+    /// Parse a raw `document.readyState` string into a [`ReadyState`].
+    /// Returns `None` for any value other than the three documented states.
+    fn from_dom_str(s: &str) -> Option<Self> {
+        match s {
+            "loading" => Some(ReadyState::Loading),
+            "interactive" => Some(ReadyState::Interactive),
+            "complete" => Some(ReadyState::Complete),
+            _ => None,
+        }
+    }
+}
+
+/// A single resource within a frame whose content matched a
+/// [`Tab::search_frame_resources`] query.
+///
+/// `url` is the resource's request URL (the document, a script, a stylesheet,
+/// …) and `frame_id` is the CDP `frameId` of the frame that owns it. Returned
+/// only for resources whose body produced at least one match for the query.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn ex() -> zendriver::Result<()> {
+/// # let browser = zendriver::Browser::builder().launch().await?;
+/// # let tab = browser.main_tab();
+/// tab.goto("https://example.com").await?;
+/// for m in tab.search_frame_resources("apiKey").await? {
+///     println!("match in {} (frame {})", m.url, m.frame_id);
+/// }
+/// # Ok(()) }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameResourceMatch {
+    /// Request URL of the matched resource.
+    pub url: String,
+    /// CDP `frameId` of the frame that owns the resource.
+    pub frame_id: String,
+}
 
 /// Handle to a single CDP target session — one open page in Chrome.
 ///
@@ -134,6 +348,12 @@ pub(crate) struct TabInner {
     /// `None` when there is no pending navigation — `wait_for_load` falls
     /// back to a fresh subscribe + `document.readyState` short-circuit.
     pub(crate) pending_load: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    /// Whether a download path / behavior has been established for this Tab
+    /// (via [`Tab::set_download_path`] or a prior [`Tab::download_file`]).
+    /// Mirrors nodriver's `_download_behavior` guard: [`Tab::download_file`]
+    /// only installs a default `cwd/downloads` path when this is still
+    /// `false`, so it never clobbers a directory the caller chose explicitly.
+    pub(crate) download_behavior_set: std::sync::atomic::AtomicBool,
 }
 
 impl Drop for TabInner {
@@ -218,6 +438,7 @@ impl Tab {
                 frames,
                 frame_lifecycle_cancel,
                 pending_load: tokio::sync::Mutex::new(None),
+                download_behavior_set: std::sync::atomic::AtomicBool::new(false),
             }
         });
 
@@ -650,6 +871,52 @@ impl Tab {
         Ok(())
     }
 
+    /// Block until the document reaches at least the `until` load milestone.
+    ///
+    /// Polls `document.readyState` (via a main-world `Runtime.evaluate`) every
+    /// [`READY_STATE_POLL_INTERVAL`] and returns as soon as the observed state
+    /// ranks at or above `until` (see [`ReadyState`] for the
+    /// `Loading < Interactive < Complete` ordering). Bounded by a 30s outer
+    /// timeout, matching [`Tab::wait_for_load`].
+    ///
+    /// This is the finer-grained sibling of [`Tab::wait_for_load`]: use it when
+    /// you want to proceed at `Interactive` (DOM parsed, scripts runnable)
+    /// without waiting for every image / stylesheet that `Complete` implies.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Timeout`] if the requested state is not
+    /// reached within 30s; propagates [`ZendriverError::JsException`] if the
+    /// `document.readyState` read raises.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// use zendriver::ReadyState;
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// // Proceed as soon as the DOM is parsed, don't wait for sub-resources.
+    /// tab.wait_for_ready_state(ReadyState::Interactive).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn wait_for_ready_state(&self, until: ReadyState) -> Result<()> {
+        let deadline = tokio::time::Instant::now() + DEFAULT_LOAD_TIMEOUT;
+        loop {
+            let state: String = self.evaluate_main("document.readyState").await?;
+            if let Some(observed) = ReadyState::from_dom_str(&state) {
+                if observed.rank() >= until.rank() {
+                    return Ok(());
+                }
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(ZendriverError::Timeout(DEFAULT_LOAD_TIMEOUT));
+            }
+            tokio::time::sleep(READY_STATE_POLL_INTERVAL).await;
+        }
+    }
+
     /// Evaluate a JavaScript expression in an isolated world.
     ///
     /// Runs in a sandbox where page globals are NOT visible — the default for
@@ -780,6 +1047,61 @@ impl Tab {
             .cloned()
             .unwrap_or(Value::Null);
         serde_json::from_value(value).map_err(ZendriverError::Serde)
+    }
+
+    /// Dump a named JavaScript object (or any expression) as an untyped
+    /// [`serde_json::Value`].
+    ///
+    /// Evaluates `obj_name` in the page main world with `returnByValue: true`
+    /// and hands back the deep-serialized `result.value`. This is the untyped
+    /// sibling of [`Tab::evaluate_main`] — useful for grabbing a whole object
+    /// graph (`tab.js_dumps("window.performance").await?`) when you don't have
+    /// a concrete Rust type to deserialize into and just want to inspect the
+    /// structure.
+    ///
+    /// As nodriver's `js_dumps` notes: complex objects may not be fully
+    /// serializable (functions, cyclic references, host objects), so the
+    /// result is a best-effort snapshot, not a source of truth.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::JsException`] when the expression raises.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// let perf = tab.js_dumps("window.performance.timing").await?;
+    /// println!("{perf:#?}");
+    /// # Ok(()) }
+    /// ```
+    pub async fn js_dumps(&self, obj_name: &str) -> Result<Value> {
+        let res = self
+            .call(
+                "Runtime.evaluate",
+                json!({
+                    "expression": obj_name,
+                    "returnByValue": true,
+                }),
+            )
+            .await?;
+        if let Some(details) = res.get("exceptionDetails") {
+            let msg = details
+                .get("exception")
+                .and_then(|e| e.get("description"))
+                .and_then(|d| d.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            return Err(ZendriverError::JsException(msg));
+        }
+        Ok(res
+            .get("result")
+            .and_then(|r| r.get("value"))
+            .cloned()
+            .unwrap_or(Value::Null))
     }
 
     /// Ensure an isolated-world execution context exists for this tab's main
@@ -1090,6 +1412,163 @@ impl Tab {
         Ok(())
     }
 
+    /// Reload the tab's current page with explicit options.
+    ///
+    /// Dispatches `Page.reload` with the `ignoreCache` flag from `opts` and,
+    /// when `opts.script_to_evaluate_on_load` is `Some`, a
+    /// `scriptToEvaluateOnLoad` that runs before any other script on each
+    /// frame the reload loads. The script field is omitted from the dispatch
+    /// when `None`. For a plain soft refresh, use the [`Tab::reload`]
+    /// shortcut.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// use zendriver::ReloadOptions;
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.reload_with(ReloadOptions {
+    ///     ignore_cache: true,
+    ///     script_to_evaluate_on_load: Some("window.__reloaded = true".into()),
+    /// }).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn reload_with(&self, opts: ReloadOptions) -> Result<()> {
+        let mut params = json!({ "ignoreCache": opts.ignore_cache });
+        if let Some(script) = opts.script_to_evaluate_on_load {
+            params["scriptToEvaluateOnLoad"] = Value::String(script);
+        }
+        self.call("Page.reload", params).await?;
+        Ok(())
+    }
+
+    /// Full HTML source of the tab's current page.
+    ///
+    /// Dispatches `DOM.getDocument { depth: 0 }` to resolve the document's
+    /// root `nodeId`, then `DOM.getOuterHTML { nodeId }` to serialize it.
+    /// The result is the complete document markup including the doctype —
+    /// the page-level analogue of [`crate::Frame::content`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Navigation`] when Chrome's response is
+    /// missing the root `nodeId` or the serialized `outerHTML`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// let html = tab.content().await?;
+    /// assert!(html.contains("<html"));
+    /// # Ok(()) }
+    /// ```
+    pub async fn content(&self) -> Result<String> {
+        let doc = self.call("DOM.getDocument", json!({ "depth": 0 })).await?;
+        let node_id = doc["root"]["nodeId"].as_i64().ok_or_else(|| {
+            ZendriverError::Navigation("DOM.getDocument missing root.nodeId".into())
+        })?;
+        let res = self
+            .call("DOM.getOuterHTML", json!({ "nodeId": node_id }))
+            .await?;
+        res["outerHTML"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| ZendriverError::Navigation("DOM.getOuterHTML missing outerHTML".into()))
+    }
+
+    /// Scroll the page down by `pixels`.
+    ///
+    /// Dispatches `Input.synthesizeScrollGesture` anchored at a fixed
+    /// viewport point with a **negative** `yDistance` of `pixels` — the CDP
+    /// convention where a negative `yDistance` moves the page content up
+    /// (i.e. scrolls down). For horizontal scrolling, a custom speed, or
+    /// scrolling up, see [`Tab::scroll_with`] / [`Tab::scroll_up`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// tab.scroll_down(500.0).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn scroll_down(&self, pixels: f64) -> Result<()> {
+        self.scroll_with(ScrollOptions {
+            dx: 0.0,
+            dy: -pixels,
+            speed: None,
+        })
+        .await
+    }
+
+    /// Scroll the page up by `pixels`.
+    ///
+    /// Mirror of [`Tab::scroll_down`] with a **positive** `yDistance` of
+    /// `pixels`, which moves the page content down (scrolls up).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// tab.scroll_down(500.0).await?;
+    /// tab.scroll_up(200.0).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn scroll_up(&self, pixels: f64) -> Result<()> {
+        self.scroll_with(ScrollOptions {
+            dx: 0.0,
+            dy: pixels,
+            speed: None,
+        })
+        .await
+    }
+
+    /// Scroll the page by an explicit signed distance with optional speed.
+    ///
+    /// Dispatches `Input.synthesizeScrollGesture` anchored at a fixed
+    /// viewport point (`x: 100, y: 100` — a stable, in-viewport anchor that
+    /// avoids a `Page.getLayoutMetrics` round-trip), forwarding
+    /// [`ScrollOptions::dx`] / [`ScrollOptions::dy`] to `xDistance` /
+    /// `yDistance` and [`ScrollOptions::speed`] to `speed` when `Some`.
+    /// Negative `dy` scrolls the page down (CDP convention).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// use zendriver::ScrollOptions;
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.scroll_with(ScrollOptions { dx: 0.0, dy: -300.0, speed: Some(1200) }).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn scroll_with(&self, opts: ScrollOptions) -> Result<()> {
+        // Fixed in-viewport anchor for the gesture. Picking a constant point
+        // keeps the call deterministic + single-dispatch (no
+        // Page.getLayoutMetrics round-trip to compute a center); the scroll
+        // distance, not the anchor, is what callers care about.
+        let mut params = json!({
+            "x": SCROLL_ANCHOR.0,
+            "y": SCROLL_ANCHOR.1,
+            "xDistance": opts.dx,
+            "yDistance": opts.dy,
+        });
+        if let Some(speed) = opts.speed {
+            params["speed"] = Value::from(speed);
+        }
+        self.call("Input.synthesizeScrollGesture", params).await?;
+        Ok(())
+    }
+
     /// Wait until the tab's network has been idle (0 in-flight requests)
     /// for 500ms, with a 30s outer timeout. Playwright `networkidle`
     /// semantics.
@@ -1202,6 +1681,467 @@ impl Tab {
             }
         }
     }
+
+    /// Override this tab's user-agent string at runtime.
+    ///
+    /// Dispatches `Emulation.setUserAgentOverride { userAgent }`. Convenience
+    /// shortcut over [`Tab::set_user_agent_with`] for the UA-only case (no
+    /// `acceptLanguage` / `platform`).
+    ///
+    /// # Stealth warning
+    ///
+    /// This is **last-write-wins** over the stealth observer's own UA override
+    /// and sends NO `userAgentMetadata`, so under the Spoofed stealth profile
+    /// it clobbers the UA Client-Hints coherence the profile set up and can
+    /// *increase* detectability. Prefer the stealth profile's UA for stealth;
+    /// use this for non-stealth tabs or a deliberate per-tab UA change. See
+    /// [`UserAgentOverride`] for the full rationale.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.set_user_agent("Mozilla/5.0 (compatible; MyBot/1.0)").await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn set_user_agent(&self, user_agent: impl Into<String>) -> Result<()> {
+        self.set_user_agent_with(UserAgentOverride {
+            user_agent: user_agent.into(),
+            ..Default::default()
+        })
+        .await
+    }
+
+    /// Override this tab's user-agent (and optionally `Accept-Language` /
+    /// platform) at runtime.
+    ///
+    /// Dispatches `Emulation.setUserAgentOverride` with `userAgent` always set
+    /// and `acceptLanguage` / `platform` included only when the corresponding
+    /// [`UserAgentOverride`] field is `Some` (omitted, not `null`, otherwise).
+    /// For the UA-only case use the [`Tab::set_user_agent`] shortcut.
+    ///
+    /// # Stealth warning
+    ///
+    /// Same caveat as [`Tab::set_user_agent`]: this is last-write-wins and
+    /// sends no `userAgentMetadata`, so under the Spoofed stealth profile it
+    /// clobbers UA Client-Hints coherence. See [`UserAgentOverride`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// use zendriver::UserAgentOverride;
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.set_user_agent_with(UserAgentOverride {
+    ///     user_agent: "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/123.0".into(),
+    ///     accept_language: Some("de-DE,de;q=0.9".into()),
+    ///     platform: Some("Linux x86_64".into()),
+    /// }).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn set_user_agent_with(&self, ovr: UserAgentOverride) -> Result<()> {
+        let mut params = json!({ "userAgent": ovr.user_agent });
+        if let Some(lang) = ovr.accept_language {
+            params["acceptLanguage"] = Value::String(lang);
+        }
+        if let Some(platform) = ovr.platform {
+            params["platform"] = Value::String(platform);
+        }
+        self.call("Emulation.setUserAgentOverride", params).await?;
+        Ok(())
+    }
+
+    /// Move the cursor to `(x, y)` in viewport coordinates along a realistic
+    /// Bezier path.
+    ///
+    /// Tab-level analogue of [`crate::Element::hover`] for an arbitrary
+    /// coordinate (no element required) — useful for canvas/widget targets
+    /// and CAPTCHA-checkbox flows where the hit point is a fixed pixel rather
+    /// than a DOM node. Emits a sequence of `Input.dispatchMouseEvent
+    /// { type: "mouseMoved" }` calls and advances the per-tab cursor state.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.mouse_move(120.0, 240.0).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn mouse_move(&self, x: f64, y: f64) -> Result<()> {
+        let input = self.input().clone();
+        crate::input::mouse::move_realistic(&input, self, x, y).await
+    }
+
+    /// Click at `(x, y)` in viewport coordinates: a left, single, realistic
+    /// click.
+    ///
+    /// Moves the cursor to the point along a Bezier path, then emits the
+    /// `mousePressed` + `mouseReleased` pair. Tab-level analogue of
+    /// [`crate::Element::click`] for a raw coordinate. For right-click /
+    /// modifier-held / double-click / raw-teleport variants use
+    /// [`Tab::mouse_click_with`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.mouse_click(120.0, 240.0).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn mouse_click(&self, x: f64, y: f64) -> Result<()> {
+        let input = self.input().clone();
+        crate::input::mouse::click_at(
+            &input,
+            self,
+            x,
+            y,
+            crate::input::mouse::MouseButton::Left,
+            1,
+            true,
+        )
+        .await
+    }
+
+    /// Click at `(x, y)` in viewport coordinates with explicit
+    /// [`crate::ClickOptions`].
+    ///
+    /// Maps `opts.button` / `opts.click_count` / `opts.realistic` onto the
+    /// dispatch. Unlike [`crate::Element::click_with`], there is no element to
+    /// gate on, so `opts.force` and `opts.position` are ignored — the click
+    /// lands at the supplied `(x, y)` regardless. Use this for right-clicks /
+    /// modifier-held clicks / double-clicks / raw teleports at a coordinate.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// use zendriver::{ClickOptions, MouseButton};
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.mouse_click_with(50.0, 60.0, ClickOptions {
+    ///     button: MouseButton::Right,
+    ///     ..Default::default()
+    /// }).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn mouse_click_with(
+        &self,
+        x: f64,
+        y: f64,
+        opts: crate::element::actions::ClickOptions,
+    ) -> Result<()> {
+        let input = self.input().clone();
+        crate::input::mouse::click_at(
+            &input,
+            self,
+            x,
+            y,
+            opts.button,
+            opts.click_count,
+            opts.realistic,
+        )
+        .await
+    }
+
+    /// Flash a transient red dot at `(x, y)` for ~1 second — a visual debug
+    /// aid.
+    ///
+    /// Injects a small absolutely-positioned `<div>` at the viewport
+    /// coordinate via [`Tab::evaluate_main`], then schedules its own removal
+    /// after roughly a second. Handy for eyeballing where [`Tab::mouse_click`]
+    /// / [`Tab::mouse_move`] targets land when debugging coordinate math
+    /// against a headful Chrome. Has no effect on input state and is not
+    /// intended for production paths.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.flash_point(120.0, 240.0).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn flash_point(&self, x: f64, y: f64) -> Result<()> {
+        // Build the dot in the page main world so it's painted into the real
+        // document the user is watching. `returnByValue` short-circuits to
+        // undefined; we only care about the side effect.
+        let js = format!(
+            "(() => {{ \
+                const d = document.createElement('div'); \
+                d.style.cssText = 'position:fixed;left:{x}px;top:{y}px;width:10px;height:10px;\
+margin:-5px 0 0 -5px;border-radius:50%;background:red;z-index:2147483647;\
+pointer-events:none;opacity:0.85;'; \
+                document.body.appendChild(d); \
+                setTimeout(() => d.remove(), 1000); \
+            }})()"
+        );
+        let _: Value = self.evaluate_main(js).await?;
+        Ok(())
+    }
+
+    /// Drag the mouse from `from` to `to` with the left button held, moving in
+    /// `steps` interpolated hops.
+    ///
+    /// Ports nodriver's `Tab.mouse_drag`: emits a `mousePressed` (left button)
+    /// at `from`, then a sequence of `mouseMoved` events linearly interpolated
+    /// toward `to`, then a `mouseReleased` (left) at `to`. A larger `steps`
+    /// makes the drag look smoother / more human (nodriver suggests 50–100 for
+    /// "very smooth"); `steps` of 0 or 1 collapses to a single move straight to
+    /// `to`.
+    ///
+    /// This is the raw-coordinate, linearly-interpolated drag (faithful to
+    /// nodriver) — it does **not** use the realistic Bezier path that
+    /// [`Tab::mouse_move`] / [`crate::Element::click`] do, and it dispatches
+    /// directly rather than advancing the per-Tab cursor state.
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`ZendriverError::Transport`] / `Cdp` from the underlying
+    /// `Input.dispatchMouseEvent` calls.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// // Drag a slider handle 200px to the right over 40 smooth steps.
+    /// tab.mouse_drag((120.0, 300.0), (320.0, 300.0), 40).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn mouse_drag(&self, from: (f64, f64), to: (f64, f64), steps: usize) -> Result<()> {
+        // Press the left button at the source point.
+        self.call(
+            "Input.dispatchMouseEvent",
+            json!({
+                "type": "mousePressed",
+                "x": from.0, "y": from.1,
+                "button": "left",
+                "clickCount": 1,
+            }),
+        )
+        .await?;
+
+        // Interpolate the move. nodriver walks i in 0..=steps (steps+1 points,
+        // the first coinciding with `from`); steps <= 1 collapses to a single
+        // hop straight to `to`.
+        let steps = steps.max(1);
+        if steps == 1 {
+            self.call(
+                "Input.dispatchMouseEvent",
+                json!({ "type": "mouseMoved", "x": to.0, "y": to.1 }),
+            )
+            .await?;
+        } else {
+            let step_x = (to.0 - from.0) / steps as f64;
+            let step_y = (to.1 - from.1) / steps as f64;
+            for i in 0..=steps {
+                let x = from.0 + step_x * i as f64;
+                let y = from.1 + step_y * i as f64;
+                self.call(
+                    "Input.dispatchMouseEvent",
+                    json!({ "type": "mouseMoved", "x": x, "y": y }),
+                )
+                .await?;
+            }
+        }
+
+        // Release at the destination.
+        self.call(
+            "Input.dispatchMouseEvent",
+            json!({
+                "type": "mouseReleased",
+                "x": to.0, "y": to.1,
+                "button": "left",
+                "clickCount": 1,
+            }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Search the text content of every loaded frame resource for `query`,
+    /// returning the resources that contain at least one match.
+    ///
+    /// Ports nodriver's `search_frame_resources`. Fetches the page's resource
+    /// tree (`Page.getResourceTree`), walks every frame and its resources
+    /// (recursing into child frames), and for each resource runs
+    /// `Page.searchInResource { frameId, url, query }`. Resources whose search
+    /// returns a non-empty match list are collected into the result as
+    /// [`FrameResourceMatch`] records (resource URL + owning frame id).
+    ///
+    /// `query` is treated as a plain substring by Chrome (the underlying
+    /// `searchInResource` defaults to non-regex, case-sensitive matching).
+    /// Resources that error on search (e.g. a body Chrome no longer retains)
+    /// are skipped rather than failing the whole call.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Navigation`] if `Page.getResourceTree`'s
+    /// response is missing the frame tree; transport errors from
+    /// `getResourceTree` itself propagate.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// let hits = tab.search_frame_resources("__INITIAL_STATE__").await?;
+    /// println!("{} resources matched", hits.len());
+    /// # Ok(()) }
+    /// ```
+    pub async fn search_frame_resources(&self, query: &str) -> Result<Vec<FrameResourceMatch>> {
+        let tree = self.call("Page.getResourceTree", json!({})).await?;
+        let root = tree.get("frameTree").ok_or_else(|| {
+            ZendriverError::Navigation("Page.getResourceTree missing frameTree".into())
+        })?;
+
+        // Flatten the tree into (frame_id, resource_url) pairs. The frame node
+        // carries its id under `frame.id`; resources live in `resources[]`
+        // (each with a `url`), and nested frames in `childFrames[]` (each a
+        // FrameResourceTree of the same shape).
+        let mut pairs: Vec<(String, String)> = Vec::new();
+        let mut stack = vec![root];
+        while let Some(node) = stack.pop() {
+            let frame_id = node["frame"]["id"].as_str().unwrap_or("").to_string();
+            if let Some(resources) = node.get("resources").and_then(Value::as_array) {
+                for res in resources {
+                    if let Some(url) = res.get("url").and_then(Value::as_str) {
+                        pairs.push((frame_id.clone(), url.to_string()));
+                    }
+                }
+            }
+            if let Some(children) = node.get("childFrames").and_then(Value::as_array) {
+                stack.extend(children.iter());
+            }
+        }
+
+        // Search each resource; collect the ones with a non-empty match list.
+        let mut matches = Vec::new();
+        for (frame_id, url) in pairs {
+            let res = self
+                .call(
+                    "Page.searchInResource",
+                    json!({ "frameId": frame_id, "url": url, "query": query }),
+                )
+                .await;
+            // Skip resources Chrome can't search (stale body, unsupported
+            // type) rather than aborting the whole sweep.
+            let Ok(res) = res else { continue };
+            let has_match = res
+                .get("result")
+                .and_then(Value::as_array)
+                .is_some_and(|m| !m.is_empty());
+            if has_match {
+                matches.push(FrameResourceMatch { url, frame_id });
+            }
+        }
+        Ok(matches)
+    }
+
+    /// Bring this tab's page to the front of its browser window.
+    ///
+    /// Dispatches `Page.bringToFront` on this tab's session. Distinct from
+    /// [`Tab::activate`], which sends the browser-scope
+    /// `Target.activateTarget` to switch the active tab — `bring_to_front`
+    /// raises the page within its window (focus + paint) at session scope.
+    /// nodriver exposes both; they serve slightly different purposes, so
+    /// zendriver keeps both.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.bring_to_front().await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn bring_to_front(&self) -> Result<()> {
+        self.call("Page.bringToFront", json!({})).await?;
+        Ok(())
+    }
+
+    /// Dismiss Chrome's "Your connection is not private" interstitial by
+    /// typing the magic bypass phrase.
+    ///
+    /// On the SSL/cert warning page, Chrome accepts the literal keystrokes
+    /// `thisisunsafe` (typed anywhere with the page focused) as a proceed
+    /// gesture. This focuses the page `<body>` and fast-types that phrase.
+    /// No-op-ish on normal pages (the keystrokes go to the body and are
+    /// harmless). Mirrors nodriver's `select("body").send_keys("thisisunsafe")`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::ElementNotFound`] if the page has no `<body>`
+    /// to focus (should not happen on a real interstitial).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://self-signed.badssl.com").await?;
+    /// tab.bypass_insecure_connection_warning().await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn bypass_insecure_connection_warning(&self) -> Result<()> {
+        let body = self.find().css("body").one().await?;
+        body.type_text_fast("thisisunsafe").await
+    }
+
+    /// Compose the DevTools front-end "inspector" URL for this tab.
+    ///
+    /// Returns a string of the form
+    /// `http://{host}:{port}/devtools/inspector.html?ws={host}:{port}/devtools/page/{target_id}`,
+    /// where `{host}:{port}` is the remote-debugging endpoint the owning
+    /// [`crate::Browser`] connected to (parsed from Chrome's
+    /// `DevTools listening on ws://HOST:PORT/...` launch line). Open the
+    /// returned URL in any Chromium browser to attach the DevTools UI to this
+    /// page. This returns the URL only — it does not launch a browser.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Navigation`] when the owning browser has been
+    /// dropped or its debug endpoint is unknown (e.g. a Tab constructed
+    /// outside of a real `launch`, or a future transport that doesn't surface
+    /// the endpoint).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let url = tab.inspector_url()?;
+    /// println!("open this to inspect: {url}");
+    /// # Ok(()) }
+    /// ```
+    pub fn inspector_url(&self) -> Result<String> {
+        let browser = self.inner.browser.upgrade().ok_or_else(|| {
+            ZendriverError::Navigation("inspector_url: owning Browser has been dropped".into())
+        })?;
+        let host_port = browser.debug_host_port.as_deref().ok_or_else(|| {
+            ZendriverError::Navigation(
+                "inspector_url: browser debug endpoint not known (not launched via Browser::builder?)".into(),
+            )
+        })?;
+        let target_id = self.target_id();
+        Ok(format!(
+            "http://{host_port}/devtools/inspector.html?ws={host_port}/devtools/page/{target_id}"
+        ))
+    }
 }
 
 impl Tab {
@@ -1247,6 +2187,233 @@ impl Tab {
     /// ```
     pub fn find_all(&self) -> crate::query::FindAllBuilder<'_> {
         crate::query::FindAllBuilder::new_for_tab(self)
+    }
+
+    /// Collect every linked URL on the page — the `href` of `[href]` elements
+    /// (`<a>`, `<link>`, `<area>`, …) and the `src` of `[src]` elements
+    /// (`<img>`, `<script>`, `<iframe>`, …).
+    ///
+    /// When `absolute` is `true` the URLs are read from each element's
+    /// `.href` / `.src` DOM properties, which the browser has already resolved
+    /// against the document base URL (so a relative `href="/a"` comes back as
+    /// `https://host/a`). When `false` the raw attribute strings are returned
+    /// verbatim (often relative, as authored). Empty / missing values are
+    /// skipped.
+    ///
+    /// Mirrors nodriver's `get_all_urls`. This is the cheap string-list view;
+    /// for live [`Element`](crate::Element) handles to those nodes use
+    /// [`Tab::get_all_linked_sources`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::JsException`] if the collector script raises.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// let urls = tab.get_all_urls(true).await?;
+    /// for u in urls {
+    ///     println!("{u}");
+    /// }
+    /// # Ok(()) }
+    /// ```
+    pub async fn get_all_urls(&self, absolute: bool) -> Result<Vec<String>> {
+        // Read `.href` / `.src` DOM props (browser-resolved → absolute) when
+        // `absolute`, else the raw `getAttribute` values. A single main-world
+        // collector walks `[href], [src]` once and filters out empties.
+        let js = format!(
+            "(() => {{ \
+                const out = []; \
+                const abs = {absolute}; \
+                for (const el of document.querySelectorAll('[href], [src]')) {{ \
+                    const v = abs \
+                        ? (el.href || el.src || '') \
+                        : (el.getAttribute('href') || el.getAttribute('src') || ''); \
+                    if (v) out.push(v); \
+                }} \
+                return out; \
+            }})()"
+        );
+        self.evaluate_main(js).await
+    }
+
+    /// Live [`Element`](crate::Element) handles for every linked-source node on
+    /// the page (`[src], [href]`).
+    ///
+    /// Routes through [`Tab::find_all`] with a `[src], [href]` CSS selector and
+    /// terminates with `many_or_empty`, so a page with no such elements yields
+    /// an empty `Vec` rather than an error. Mirrors nodriver's
+    /// `get_all_linked_sources`; unlike [`Tab::get_all_urls`] (which returns
+    /// plain URL strings) this hands back interactable element handles you can
+    /// click / screenshot / inspect.
+    ///
+    /// # Errors
+    ///
+    /// Propagates query/transport errors from the underlying
+    /// [`Tab::find_all`] resolution.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// let assets = tab.get_all_linked_sources().await?;
+    /// println!("{} linked sources", assets.len());
+    /// # Ok(()) }
+    /// ```
+    pub async fn get_all_linked_sources(&self) -> Result<Vec<crate::Element>> {
+        self.find_all().css("[src], [href]").many_or_empty().await
+    }
+
+    /// Route this browser's downloads into `dir` at runtime, keeping each
+    /// file's server-suggested name.
+    ///
+    /// Dispatches `Browser.setDownloadBehavior { behavior: "allow",
+    /// downloadPath: <dir> }` at **browser scope** (no `sessionId`) — the
+    /// connection beneath every tab is the same, and Chrome does not honor
+    /// per-session download behavior reliably across versions, so the policy
+    /// applies browser-wide. `dir` must already exist; Chrome writes files
+    /// there under the names it would have used in the user's downloads
+    /// folder.
+    ///
+    /// This is distinct from [`Tab::expect_download`]
+    /// (gated by the `expect` feature), which configures `allowAndName`
+    /// against a private tempdir to *capture* a single download for
+    /// `await` + `save_to`. Use `set_download_path` when you just want
+    /// downloads to land in a known directory with their natural names;
+    /// use `expect_download` when you want to await and inspect one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Transport`] / `Cdp` if the CDP call fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.set_download_path("/tmp/downloads").await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn set_download_path(&self, dir: impl Into<PathBuf>) -> Result<()> {
+        let dir = dir.into();
+        self.inner
+            .session
+            .connection()
+            .call_raw(
+                "Browser.setDownloadBehavior",
+                json!({
+                    "behavior": "allow",
+                    "downloadPath": dir.to_string_lossy().to_string(),
+                }),
+                None,
+            )
+            .await?;
+        self.inner
+            .download_behavior_set
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Download the resource at `url` into the tab's download directory,
+    /// driven entirely from the page itself.
+    ///
+    /// Ports nodriver's `download_file` mechanism: it injects a main-world
+    /// script that `fetch`es `url`, wraps the response body in a `Blob`,
+    /// creates an object URL, and clicks a synthetic `<a download>` anchor —
+    /// so the bytes flow through the page's own network context (cookies,
+    /// referer, same-origin credentials) and Chrome saves them via the
+    /// configured download behavior. The anchor is removed and the object URL
+    /// revoked shortly after the click.
+    ///
+    /// If no download directory has been set on this tab (via
+    /// [`Tab::set_download_path`] or an earlier `download_file`), a default of
+    /// `<cwd>/downloads` is created and installed first — matching nodriver.
+    /// When `filename` is `None` the saved name is derived from the URL's last
+    /// path segment (query string stripped).
+    ///
+    /// Returns once the injection script has been dispatched — it does **not**
+    /// wait for the download to finish. For await/inspect semantics use
+    /// [`Tab::expect_download`] (gated by the `expect` feature).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Io`] if the default download directory cannot
+    /// be created; propagates [`ZendriverError::JsException`] if the injected
+    /// fetch/anchor script raises (e.g. a CORS-blocked `fetch`).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.set_download_path("/tmp/dl").await?;
+    /// tab.download_file("https://example.com/file.pdf", None).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn download_file(
+        &self,
+        url: impl Into<String>,
+        filename: Option<PathBuf>,
+    ) -> Result<()> {
+        let url = url.into();
+
+        // Establish a default download directory if the caller never set one
+        // (mirrors nodriver's `_download_behavior` guard so we don't clobber
+        // an explicitly-chosen directory).
+        if !self
+            .inner
+            .download_behavior_set
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            let dir = std::env::current_dir()?.join("downloads");
+            std::fs::create_dir_all(&dir)?;
+            self.set_download_path(dir).await?;
+        }
+
+        // Derive the saved filename from the URL tail (query stripped) when
+        // not supplied, matching nodriver.
+        let filename = filename
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| {
+                url.rsplit('/')
+                    .next()
+                    .unwrap_or("")
+                    .split('?')
+                    .next()
+                    .unwrap_or("")
+                    .to_string()
+            });
+
+        // Inject the fetch→blob→anchor[download]→click sequence into the page
+        // main world (the document's own network context). Values are JSON-
+        // encoded so quotes/specials in the URL or filename can't break out.
+        let url_lit = serde_json::to_string(&url)?;
+        let name_lit = serde_json::to_string(&filename)?;
+        let js = format!(
+            "(async () => {{ \
+                const response = await fetch({url_lit}); \
+                const blob = await response.blob(); \
+                const href = URL.createObjectURL(blob); \
+                const a = document.createElement('a'); \
+                a.href = href; \
+                a.download = {name_lit}; \
+                document.body.appendChild(a); \
+                a.click(); \
+                setTimeout(() => {{ document.body.removeChild(a); URL.revokeObjectURL(href); }}, 500); \
+            }})()"
+        );
+        let _: Value = self.evaluate_main(js).await?;
+        Ok(())
     }
 }
 
@@ -2011,6 +3178,201 @@ mod tests {
         conn.shutdown();
     }
 
+    #[tokio::test]
+    async fn reload_with_sets_ignore_cache_and_script() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                t.reload_with(ReloadOptions {
+                    ignore_cache: true,
+                    script_to_evaluate_on_load: Some("x".into()),
+                })
+                .await
+            }
+        });
+
+        let id = mock.expect_cmd("Page.reload").await;
+        assert_eq!(mock.last_sent()["params"]["ignoreCache"], true);
+        assert_eq!(mock.last_sent()["params"]["scriptToEvaluateOnLoad"], "x");
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn reload_with_omits_script_when_none() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                t.reload_with(ReloadOptions {
+                    ignore_cache: false,
+                    script_to_evaluate_on_load: None,
+                })
+                .await
+            }
+        });
+
+        let id = mock.expect_cmd("Page.reload").await;
+        assert_eq!(mock.last_sent()["params"]["ignoreCache"], false);
+        // scriptToEvaluateOnLoad must be omitted entirely when None.
+        assert!(
+            mock.last_sent()["params"]
+                .get("scriptToEvaluateOnLoad")
+                .is_none()
+        );
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    // --- Tab::content (B1) ---------------------------------------------
+
+    #[tokio::test]
+    async fn content_dispatches_get_document_then_outer_html() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.content().await }
+        });
+
+        // 1. DOM.getDocument { depth: 0 } → root nodeId.
+        let id_doc = mock.expect_cmd("DOM.getDocument").await;
+        assert_eq!(mock.last_sent()["params"]["depth"], 0);
+        mock.reply(id_doc, json!({ "root": { "nodeId": 7 } })).await;
+
+        // 2. DOM.getOuterHTML { nodeId } → outerHTML string.
+        let id_html = mock.expect_cmd("DOM.getOuterHTML").await;
+        assert_eq!(mock.last_sent()["params"]["nodeId"], 7);
+        mock.reply(
+            id_html,
+            json!({ "outerHTML": "<!DOCTYPE html><html><body>hi</body></html>" }),
+        )
+        .await;
+
+        let html = fut.await.unwrap().unwrap();
+        assert_eq!(html, "<!DOCTYPE html><html><body>hi</body></html>");
+        conn.shutdown();
+    }
+
+    // --- Tab scroll (B3) -----------------------------------------------
+
+    #[tokio::test]
+    async fn scroll_down_synthesizes_negative_y_gesture() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.scroll_down(300.0).await }
+        });
+
+        let id = mock.expect_cmd("Input.synthesizeScrollGesture").await;
+        let p = mock.last_sent();
+        // scroll_down(px) maps to a NEGATIVE yDistance (CDP: negative
+        // yDistance scrolls the page down / content up).
+        assert_eq!(p["params"]["yDistance"], -300.0);
+        assert_eq!(p["params"]["xDistance"], 0.0);
+        // Anchored at the fixed viewport point (100, 100).
+        assert_eq!(p["params"]["x"], 100.0);
+        assert_eq!(p["params"]["y"], 100.0);
+        // No speed override by default.
+        assert!(p["params"].get("speed").is_none());
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn scroll_up_synthesizes_positive_y_gesture() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.scroll_up(150.0).await }
+        });
+
+        let id = mock.expect_cmd("Input.synthesizeScrollGesture").await;
+        // scroll_up(px) maps to a POSITIVE yDistance.
+        assert_eq!(mock.last_sent()["params"]["yDistance"], 150.0);
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn scroll_with_forwards_speed() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                t.scroll_with(ScrollOptions {
+                    dx: 25.0,
+                    dy: -400.0,
+                    speed: Some(800),
+                })
+                .await
+            }
+        });
+
+        let id = mock.expect_cmd("Input.synthesizeScrollGesture").await;
+        let p = mock.last_sent();
+        // dx/dy forward verbatim to xDistance/yDistance; speed plumbs through.
+        assert_eq!(p["params"]["xDistance"], 25.0);
+        assert_eq!(p["params"]["yDistance"], -400.0);
+        assert_eq!(p["params"]["speed"], 800);
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn scroll_with_omits_speed_when_none() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                t.scroll_with(ScrollOptions {
+                    dx: 0.0,
+                    dy: 100.0,
+                    speed: None,
+                })
+                .await
+            }
+        });
+
+        let id = mock.expect_cmd("Input.synthesizeScrollGesture").await;
+        assert!(mock.last_sent()["params"].get("speed").is_none());
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
     // --- Tab::cookies (P4 T10) ----------------------------------------
 
     /// [`Tab::cookies`] returns a [`crate::CookieJar`] bound to the owning
@@ -2040,8 +3402,12 @@ mod tests {
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
                 _user_data: None,
+                _extension_dirs: Vec::new(),
+                owns_process: false,
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
+                debug_host_port: None,
+                ws_url: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
@@ -2061,6 +3427,7 @@ mod tests {
                 secure: false,
                 same_site: None,
                 url: None,
+                ..Default::default()
             })
             .await
         });
@@ -2524,6 +3891,786 @@ mod tests {
             .expect("stop() task panicked")
             .expect("stop() returned Err");
 
+        conn.shutdown();
+    }
+
+    // --- B4: set_user_agent --------------------------------------------
+
+    #[tokio::test]
+    async fn set_user_agent_dispatches_emulation_override() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                t.set_user_agent("Mozilla/5.0 (compatible; MyBot/1.0)")
+                    .await
+            }
+        });
+
+        let id = mock.expect_cmd("Emulation.setUserAgentOverride").await;
+        let sent = mock.last_sent();
+        assert_eq!(
+            sent["params"]["userAgent"],
+            "Mozilla/5.0 (compatible; MyBot/1.0)"
+        );
+        // UA-only shortcut omits the optional fields entirely.
+        assert!(sent["params"].get("acceptLanguage").is_none());
+        assert!(sent["params"].get("platform").is_none());
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn set_user_agent_with_includes_lang_and_platform() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                t.set_user_agent_with(UserAgentOverride {
+                    user_agent: "UA/1.0".into(),
+                    accept_language: Some("en-US,en;q=0.9".into()),
+                    platform: Some("Linux x86_64".into()),
+                })
+                .await
+            }
+        });
+
+        let id = mock.expect_cmd("Emulation.setUserAgentOverride").await;
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["userAgent"], "UA/1.0");
+        assert_eq!(sent["params"]["acceptLanguage"], "en-US,en;q=0.9");
+        assert_eq!(sent["params"]["platform"], "Linux x86_64");
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    // --- B5: raw mouse + flash_point -----------------------------------
+
+    #[tokio::test]
+    async fn mouse_click_emits_pressed_released_at_coords() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.mouse_click(123.0, 456.0).await }
+        });
+
+        // Realistic click: N mouseMoved frames (Bezier), then exactly one
+        // mousePressed + one mouseReleased. Drain every dispatch; the final
+        // two must be mousePressed then mouseReleased at (123, 456).
+        let mut saw_pressed = false;
+        let mut saw_released = false;
+        let mut last_two: Vec<String> = Vec::new();
+        loop {
+            let next = tokio::time::timeout(
+                Duration::from_millis(500),
+                mock.expect_cmd("Input.dispatchMouseEvent"),
+            )
+            .await;
+            match next {
+                Ok(id) => {
+                    let sent = mock.last_sent();
+                    let kind = sent["params"]["type"].as_str().unwrap_or("").to_string();
+                    if kind == "mousePressed" || kind == "mouseReleased" {
+                        // Press/release land at the exact target coordinate.
+                        assert_eq!(sent["params"]["x"], 123.0);
+                        assert_eq!(sent["params"]["y"], 456.0);
+                        assert_eq!(sent["params"]["button"], "left");
+                        if kind == "mousePressed" {
+                            saw_pressed = true;
+                        } else {
+                            saw_released = true;
+                        }
+                    }
+                    last_two.push(kind);
+                    mock.reply(id, json!({})).await;
+                }
+                Err(_) => break,
+            }
+        }
+
+        fut.await.unwrap().unwrap();
+        assert!(saw_pressed, "expected a mousePressed dispatch");
+        assert!(saw_released, "expected a mouseReleased dispatch");
+        let tail: Vec<&str> = last_two.iter().rev().take(2).map(String::as_str).collect();
+        // Reversed: [released, pressed] — i.e. the final two in order are
+        // mousePressed then mouseReleased.
+        assert_eq!(
+            tail,
+            vec!["mouseReleased", "mousePressed"],
+            "final two dispatches must be mousePressed then mouseReleased"
+        );
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn mouse_move_emits_mousemoved() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.mouse_move(50.0, 60.0).await }
+        });
+
+        // Realistic move emits one-or-more mouseMoved dispatches and NO
+        // press/release. Drain them all, asserting type along the way.
+        let mut saw_moved = false;
+        loop {
+            let next = tokio::time::timeout(
+                Duration::from_millis(500),
+                mock.expect_cmd("Input.dispatchMouseEvent"),
+            )
+            .await;
+            match next {
+                Ok(id) => {
+                    let kind = mock.last_sent()["params"]["type"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string();
+                    assert_eq!(kind, "mouseMoved", "mouse_move must only emit mouseMoved");
+                    saw_moved = true;
+                    mock.reply(id, json!({})).await;
+                }
+                Err(_) => break,
+            }
+        }
+
+        fut.await.unwrap().unwrap();
+        assert!(saw_moved, "expected at least one mouseMoved dispatch");
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn flash_point_dispatches_evaluate() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.flash_point(12.0, 34.0).await }
+        });
+
+        // flash_point injects a transient dot via a single main-world
+        // Runtime.evaluate. Assert the JS references the coordinates and a
+        // self-removal timer.
+        let id = mock.expect_cmd("Runtime.evaluate").await;
+        let expr = mock.last_sent()["params"]["expression"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        assert!(expr.contains("createElement"), "should build a dot element");
+        assert!(
+            expr.contains("12px") && expr.contains("34px"),
+            "should position at (x, y)"
+        );
+        assert!(
+            expr.contains("setTimeout") && expr.contains("remove"),
+            "should self-remove"
+        );
+        mock.reply(id, json!({ "result": { "type": "undefined" } }))
+            .await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    // --- B8: bring_to_front / bypass_insecure_connection_warning / inspector_url
+
+    #[tokio::test]
+    async fn bring_to_front_dispatches_page_bring_to_front() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.bring_to_front().await }
+        });
+
+        let id = mock.expect_cmd("Page.bringToFront").await;
+        // Session-scope command (unlike activate's browser-scope
+        // Target.activateTarget): the MockConnection session call path is used.
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn bypass_insecure_connection_warning_focuses_body_and_types_phrase() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.bypass_insecure_connection_warning().await }
+        });
+
+        // Step 1: find().css("body").one() resolves via querySelectorAll →
+        // getProperties → describeNode.
+        let id_q = mock.expect_cmd("Runtime.evaluate").await;
+        let expr = mock.last_sent()["params"]["expression"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        assert!(
+            expr.contains("document.querySelectorAll") && expr.contains("body"),
+            "expected querySelectorAll for body, got: {expr}"
+        );
+        mock.reply(
+            id_q,
+            json!({ "result": { "objectId": "RArr", "type": "object", "subtype": "array" } }),
+        )
+        .await;
+        let id_p = mock.expect_cmd("Runtime.getProperties").await;
+        mock.reply(
+            id_p,
+            json!({
+                "result": [
+                    { "name": "0", "value": { "objectId": "RBody", "type": "object", "subtype": "node" } },
+                    { "name": "length", "value": { "value": 1, "type": "number" } }
+                ]
+            }),
+        )
+        .await;
+        let id_d = mock.expect_cmd("DOM.describeNode").await;
+        mock.reply(id_d, json!({ "node": { "backendNodeId": 7 } }))
+            .await;
+
+        // Step 2: type_text_fast focuses the body first — actionability gate
+        // (TEXT_INPUT = visible → enabled, 2 callFunctionOn) then this.focus()
+        // (1 callFunctionOn). Reply truthy/undefined to each.
+        for _ in 0..2 {
+            let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+            mock.reply(
+                id,
+                json!({ "result": { "value": true, "type": "boolean" } }),
+            )
+            .await;
+        }
+        let id_focus = mock.expect_cmd("Runtime.callFunctionOn").await;
+        mock.reply(id_focus, json!({ "result": { "type": "undefined" } }))
+            .await;
+
+        // Step 3: each of the 12 chars of "thisisunsafe" emits a keyDown +
+        // keyUp via Input.dispatchKeyEvent. Drain them all and reconstruct
+        // the typed string from the keyDown events.
+        let phrase = "thisisunsafe";
+        let mut typed = String::new();
+        loop {
+            let next = tokio::time::timeout(
+                Duration::from_millis(500),
+                mock.expect_cmd("Input.dispatchKeyEvent"),
+            )
+            .await;
+            match next {
+                Ok(id) => {
+                    let sent = mock.last_sent();
+                    if sent["params"]["type"] == "keyDown" {
+                        if let Some(k) = sent["params"]["key"].as_str() {
+                            typed.push_str(k);
+                        }
+                    }
+                    mock.reply(id, json!({})).await;
+                }
+                Err(_) => break,
+            }
+        }
+
+        fut.await.unwrap().unwrap();
+        assert_eq!(typed, phrase, "must type the literal bypass phrase");
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn inspector_url_composes_expected_string() {
+        // `inspector_url` reaches the owning browser's `debug_host_port` via
+        // the Tab's Weak<BrowserInner>. Build a real BrowserInner (test
+        // helper) and set the endpoint, then mint a Tab bound to it.
+        let (_mock, conn) = MockConnection::pair();
+        let inner = crate::browser::test_only_inner_from_conn(conn.clone());
+        // Endpoint is `None` for the test helper by default → error path.
+        let tab = inner.main_tab.clone();
+        let err = tab.inspector_url().unwrap_err();
+        assert!(
+            matches!(err, ZendriverError::Navigation(_)),
+            "missing endpoint should surface Navigation error, got {err:?}"
+        );
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn inspector_url_with_endpoint_builds_devtools_frontend_url() {
+        let (_mock, conn) = MockConnection::pair();
+        // Construct a BrowserInner with a known debug endpoint + main tab
+        // target id so we can assert the exact composed URL.
+        let inner =
+            std::sync::Arc::new_cyclic(|weak: &std::sync::Weak<crate::browser::BrowserInner>| {
+                let session = SessionHandle::new(conn.clone(), "S1");
+                let input =
+                    crate::input::InputController::new(zendriver_stealth::InputProfile::native());
+                let main_tab = Tab::new(session, weak.clone(), input, "TARGET-XYZ".to_string());
+                let mut map = std::collections::HashMap::new();
+                map.insert("S1".to_string(), main_tab.clone());
+                crate::browser::BrowserInner {
+                    conn: conn.clone(),
+                    main_tab,
+                    child: tokio::sync::Mutex::new(None),
+                    _user_data: None,
+                    _extension_dirs: Vec::new(),
+                    owns_process: false,
+                    stealth_input_profile: zendriver_stealth::InputProfile::native(),
+                    tabs: tokio::sync::RwLock::new(map),
+                    debug_host_port: Some("127.0.0.1:9222".to_string()),
+                    ws_url: None,
+                    tabs_changed: tokio::sync::Notify::new(),
+                    #[cfg(feature = "interception")]
+                    proxy_auth_handle: std::sync::OnceLock::new(),
+                }
+            });
+        let url = inner.main_tab.inspector_url().unwrap();
+        assert_eq!(
+            url,
+            "http://127.0.0.1:9222/devtools/inspector.html?ws=127.0.0.1:9222/devtools/page/TARGET-XYZ"
+        );
+        conn.shutdown();
+    }
+
+    /// [`Tab::set_download_path`] dispatches `Browser.setDownloadBehavior`
+    /// with `behavior: "allow"` (keeps suggested filenames — distinct from
+    /// the `expect_download` coordinator's `allowAndName`) and the chosen
+    /// `downloadPath`, at browser scope.
+    #[tokio::test]
+    async fn tab_set_download_path_dispatches_set_download_behavior_allow() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.set_download_path("/tmp/x").await }
+        });
+
+        let id = mock.expect_cmd("Browser.setDownloadBehavior").await;
+        let params = &mock.last_sent()["params"];
+        assert_eq!(params["behavior"], "allow");
+        assert_eq!(params["downloadPath"], "/tmp/x");
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    // --- E1: js_dumps --------------------------------------------------
+
+    #[tokio::test]
+    async fn js_dumps_evaluates_with_return_by_value_and_returns_value() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.js_dumps("window.foo").await }
+        });
+
+        let id = mock.expect_cmd("Runtime.evaluate").await;
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["expression"], "window.foo");
+        // Must request a by-value deep serialization (untyped dump).
+        assert_eq!(sent["params"]["returnByValue"], true);
+        mock.reply(
+            id,
+            json!({ "result": { "type": "object", "value": { "a": 1, "b": [2, 3] } } }),
+        )
+        .await;
+
+        let val = fut.await.unwrap().unwrap();
+        assert_eq!(val, json!({ "a": 1, "b": [2, 3] }));
+        conn.shutdown();
+    }
+
+    // --- E2: get_all_urls + get_all_linked_sources ---------------------
+
+    #[tokio::test]
+    async fn get_all_urls_evaluates_collector_reading_href_and_src() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.get_all_urls(true).await }
+        });
+
+        // Single main-world collector walks [href], [src]; the JS must read
+        // both attribute kinds and (absolute=true) the resolved DOM props.
+        let id = mock.expect_cmd("Runtime.evaluate").await;
+        let expr = mock.last_sent()["params"]["expression"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        assert!(
+            expr.contains("href") && expr.contains("src"),
+            "collector must read both href and src, got: {expr}"
+        );
+        assert!(
+            expr.contains("querySelectorAll"),
+            "collector must query the DOM, got: {expr}"
+        );
+        mock.reply(
+            id,
+            json!({ "result": { "type": "object", "value": ["https://x.test/a", "https://x.test/b.png"] } }),
+        )
+        .await;
+
+        let urls = fut.await.unwrap().unwrap();
+        assert_eq!(urls, vec!["https://x.test/a", "https://x.test/b.png"]);
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn get_all_linked_sources_routes_through_find_all_css() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.get_all_linked_sources().await }
+        });
+
+        // find_all().css("[src], [href]") resolves via a querySelectorAll
+        // Runtime.evaluate carrying that exact selector, then getProperties,
+        // then a describeNode per node. Return one node so `many()` resolves
+        // on the first poll (an empty result would re-poll until the 10s
+        // default timeout — see `many_or_empty_returns_empty_vec_on_timeout`).
+        let id = mock.expect_cmd("Runtime.evaluate").await;
+        let expr = mock.last_sent()["params"]["expression"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        assert!(
+            expr.contains("querySelectorAll") && expr.contains("[src], [href]"),
+            "must route through find_all css with the linked-source selector, got: {expr}"
+        );
+        mock.reply(
+            id,
+            json!({ "result": { "objectId": "RArr", "type": "object", "subtype": "array" } }),
+        )
+        .await;
+        let id_p = mock.expect_cmd("Runtime.getProperties").await;
+        mock.reply(
+            id_p,
+            json!({ "result": [
+                { "name": "0", "value": { "objectId": "R0", "type": "object", "subtype": "node" } },
+                { "name": "length", "value": { "value": 1, "type": "number" } }
+            ] }),
+        )
+        .await;
+        let id_d = mock.expect_cmd("DOM.describeNode").await;
+        mock.reply(id_d, json!({ "node": { "backendNodeId": 20 } }))
+            .await;
+
+        let els = fut.await.unwrap().unwrap();
+        assert_eq!(els.len(), 1, "should return the one linked-source element");
+        conn.shutdown();
+    }
+
+    // --- E3: wait_for_ready_state --------------------------------------
+
+    #[tokio::test]
+    async fn wait_for_ready_state_polls_until_target_reached() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.wait_for_ready_state(ReadyState::Complete).await }
+        });
+
+        // Poll 1: still "loading" (rank 0 < Complete) → must keep polling.
+        let id1 = mock.expect_cmd("Runtime.evaluate").await;
+        assert_eq!(
+            mock.last_sent()["params"]["expression"],
+            "document.readyState"
+        );
+        mock.reply(
+            id1,
+            json!({ "result": { "type": "string", "value": "loading" } }),
+        )
+        .await;
+
+        // Poll 2: now "complete" → resolves Ok.
+        let id2 = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id2,
+            json!({ "result": { "type": "string", "value": "complete" } }),
+        )
+        .await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn wait_for_ready_state_returns_when_observed_state_exceeds_target() {
+        // Asking for Interactive must also resolve when the page is already
+        // fully Complete (Complete ⊇ Interactive ordering).
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.wait_for_ready_state(ReadyState::Interactive).await }
+        });
+
+        let id = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id,
+            json!({ "result": { "type": "string", "value": "complete" } }),
+        )
+        .await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    // --- E4: download_file ---------------------------------------------
+
+    #[tokio::test]
+    async fn download_file_sets_behavior_then_injects_fetch_anchor_script() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                t.download_file("https://x.test/path/file.pdf?token=abc", None)
+                    .await
+            }
+        });
+
+        // No path set yet → download_file installs a default download
+        // directory first (browser-scope setDownloadBehavior, behavior allow).
+        let id_dl = mock.expect_cmd("Browser.setDownloadBehavior").await;
+        let dl = mock.last_sent();
+        assert_eq!(dl["params"]["behavior"], "allow");
+        assert!(
+            dl["params"]["downloadPath"]
+                .as_str()
+                .unwrap_or("")
+                .ends_with("downloads"),
+            "default download path should end with /downloads"
+        );
+        mock.reply(id_dl, json!({})).await;
+
+        // Then the page-driven fetch→blob→anchor[download]→click injection.
+        let id_eval = mock.expect_cmd("Runtime.evaluate").await;
+        let expr = mock.last_sent()["params"]["expression"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        assert!(expr.contains("fetch("), "must fetch the url");
+        assert!(
+            expr.contains("createElement('a')") && expr.contains(".download"),
+            "must build a download anchor"
+        );
+        assert!(expr.contains(".click()"), "must click the anchor");
+        // URL is carried into the script; filename derived from the tail with
+        // the query string stripped.
+        assert!(
+            expr.contains("https://x.test/path/file.pdf?token=abc"),
+            "url must be injected"
+        );
+        assert!(
+            expr.contains("\"file.pdf\""),
+            "filename should be derived from url tail (query stripped), got: {expr}"
+        );
+        mock.reply(id_eval, json!({ "result": { "type": "undefined" } }))
+            .await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn download_file_skips_default_path_when_already_set() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        // Pre-set a download path; download_file must NOT re-install a default.
+        let set_fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.set_download_path("/tmp/chosen").await }
+        });
+        let id_set = mock.expect_cmd("Browser.setDownloadBehavior").await;
+        assert_eq!(mock.last_sent()["params"]["downloadPath"], "/tmp/chosen");
+        mock.reply(id_set, json!({})).await;
+        set_fut.await.unwrap().unwrap();
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                t.download_file("https://x.test/a.bin", Some(PathBuf::from("renamed.bin")))
+                    .await
+            }
+        });
+
+        // Next command must be the injection evaluate directly — no second
+        // setDownloadBehavior.
+        let id_eval = mock.expect_cmd("Runtime.evaluate").await;
+        let expr = mock.last_sent()["params"]["expression"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        // Explicit filename wins over the url-derived one.
+        assert!(
+            expr.contains("\"renamed.bin\""),
+            "explicit filename must be used"
+        );
+        mock.reply(id_eval, json!({ "result": { "type": "undefined" } }))
+            .await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    // --- E5: mouse_drag ------------------------------------------------
+
+    #[tokio::test]
+    async fn mouse_drag_emits_pressed_moves_released_in_order() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.mouse_drag((10.0, 20.0), (110.0, 20.0), 4).await }
+        });
+
+        // Drain every dispatch: expect mousePressed(left) first, then ≥1
+        // mouseMoved, then mouseReleased(left) last.
+        let mut kinds: Vec<String> = Vec::new();
+        let mut first_button = String::new();
+        let mut last_button = String::new();
+        loop {
+            let next = tokio::time::timeout(
+                Duration::from_millis(500),
+                mock.expect_cmd("Input.dispatchMouseEvent"),
+            )
+            .await;
+            match next {
+                Ok(id) => {
+                    let sent = mock.last_sent();
+                    let kind = sent["params"]["type"].as_str().unwrap_or("").to_string();
+                    if kind == "mousePressed" {
+                        first_button = sent["params"]["button"].as_str().unwrap_or("").to_string();
+                        // Press at the source point.
+                        assert_eq!(sent["params"]["x"], 10.0);
+                        assert_eq!(sent["params"]["y"], 20.0);
+                    }
+                    if kind == "mouseReleased" {
+                        last_button = sent["params"]["button"].as_str().unwrap_or("").to_string();
+                        // Release at the destination point.
+                        assert_eq!(sent["params"]["x"], 110.0);
+                        assert_eq!(sent["params"]["y"], 20.0);
+                    }
+                    kinds.push(kind);
+                    mock.reply(id, json!({})).await;
+                }
+                Err(_) => break,
+            }
+        }
+
+        fut.await.unwrap().unwrap();
+        assert_eq!(kinds.first().map(String::as_str), Some("mousePressed"));
+        assert_eq!(kinds.last().map(String::as_str), Some("mouseReleased"));
+        assert!(
+            kinds.iter().any(|k| k == "mouseMoved"),
+            "expected at least one mouseMoved between press and release"
+        );
+        assert_eq!(first_button, "left", "drag presses the left button");
+        assert_eq!(last_button, "left", "drag releases the left button");
+        conn.shutdown();
+    }
+
+    // --- E6: search_frame_resources ------------------------------------
+
+    #[tokio::test]
+    async fn search_frame_resources_walks_tree_then_searches_each_resource() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.search_frame_resources("needle").await }
+        });
+
+        // 1. Page.getResourceTree → one frame with two resources.
+        let id_tree = mock.expect_cmd("Page.getResourceTree").await;
+        mock.reply(
+            id_tree,
+            json!({
+                "frameTree": {
+                    "frame": { "id": "FRAME_A" },
+                    "resources": [
+                        { "url": "https://x.test/app.js", "type": "Script" },
+                        { "url": "https://x.test/style.css", "type": "Stylesheet" },
+                    ],
+                }
+            }),
+        )
+        .await;
+
+        // 2. Page.searchInResource for resource #1 → a match.
+        let id_s1 = mock.expect_cmd("Page.searchInResource").await;
+        let s1 = mock.last_sent();
+        assert_eq!(s1["params"]["frameId"], "FRAME_A");
+        assert_eq!(s1["params"]["query"], "needle");
+        let first_url = s1["params"]["url"].as_str().unwrap_or("").to_string();
+        mock.reply(
+            id_s1,
+            json!({ "result": [ { "lineNumber": 3, "lineContent": "var x = needle" } ] }),
+        )
+        .await;
+
+        // 3. searchInResource for resource #2 → no match (empty result).
+        let id_s2 = mock.expect_cmd("Page.searchInResource").await;
+        let second_url = mock.last_sent()["params"]["url"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        mock.reply(id_s2, json!({ "result": [] })).await;
+
+        let matches = fut.await.unwrap().unwrap();
+        // Only the first resource matched.
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].frame_id, "FRAME_A");
+        assert_eq!(matches[0].url, first_url);
+        // Sanity: both resources were searched (the two URLs differ).
+        assert_ne!(first_url, second_url);
         conn.shutdown();
     }
 }
