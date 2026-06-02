@@ -80,6 +80,8 @@ pub(crate) mod expert;
 pub mod frame;
 pub mod input;
 pub(crate) mod isolated_world;
+#[cfg(feature = "monitor")]
+pub mod monitor;
 pub mod network_idle;
 pub mod pdf;
 pub mod query;
@@ -156,6 +158,14 @@ pub use zendriver_imperva::ClearanceOutcome as ImpervaClearanceOutcome;
 
 /// Re-export the shared `UrlMatcher` used by `expect_*` and `monitor`.
 pub use url_matcher::UrlMatcher;
+
+/// Network monitor public types re-exports.
+///
+/// Gated by the `monitor` cargo feature. Drive via [`Tab::monitor`].
+#[cfg(feature = "monitor")]
+pub use monitor::{
+    FrameDirection, MonitoredRequest, MonitoredResponse, NetworkEvent, NetworkExchange,
+};
 
 /// `expect_request` API re-exports.
 #[cfg(feature = "expect")]
