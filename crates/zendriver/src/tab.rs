@@ -574,12 +574,24 @@ impl Tab {
     /// # Examples
     ///
     /// ```no_run
+    /// # use serde_json::json;
     /// # async fn ex() -> zendriver::Result<()> {
     /// # let browser = zendriver::Browser::builder().launch().await?;
     /// # let tab = browser.main_tab();
     /// tab.goto("https://example.com").await?;
+    ///
+    /// // Simple GET
     /// let resp = tab.request().get("https://example.com/api/data").send().await?;
-    /// println!("{}", resp.status());
+    /// println!("status={} body={}", resp.status(), resp.text()?);
+    ///
+    /// // POST with a JSON body
+    /// let resp = tab
+    ///     .request()
+    ///     .post("https://example.com/api/echo")
+    ///     .json(&json!({"key": "value"}))?
+    ///     .send()
+    ///     .await?;
+    /// println!("status={} body={}", resp.status(), resp.text()?);
     /// # Ok(()) }
     /// ```
     pub fn request(&self) -> crate::request::RequestBuilder<'_> {

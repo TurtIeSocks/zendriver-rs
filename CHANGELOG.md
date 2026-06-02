@@ -7,6 +7,11 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SEMVER.md].
 
 ### Added
 
+- `tab.monitor()` — persistent network monitor: a `Stream<NetworkEvent>` over
+  HTTP exchanges (lazy body), WebSocket frames, and EventSource messages,
+  behind the `monitor` feature (#223).
+- `tab.request()` — browser-context HTTP (`get`/`post`/…) inheriting cookies +
+  CORS via in-page fetch, with opt-in `bypass_cors()` (#189).
 - **Parity with nodriver / zendriver-py (phases P-A…P-D).** A large additive
   surface closing the feature gap with upstream while preserving every rs-only
   strength (3-tier stealth, single-socket flat transport, actionability,

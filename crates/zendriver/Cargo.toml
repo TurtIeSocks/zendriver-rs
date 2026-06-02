@@ -171,3 +171,11 @@ required-features = ["fetcher"]
 [[example]]
 name = "persona_basic"
 required-features = []
+
+[[example]]
+name = "network_monitor"
+required-features = ["monitor"]
+
+[[example]]
+name = "browser_request"
+required-features = []
