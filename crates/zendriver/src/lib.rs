@@ -85,6 +85,7 @@ pub mod monitor;
 pub mod network_idle;
 pub mod pdf;
 pub mod query;
+pub mod request;
 pub mod screenshot;
 pub mod storage;
 pub mod tab;
@@ -102,6 +103,7 @@ pub use frame::Frame;
 pub use input::{Key, KeyModifiers, KeySequence, MouseButton, SpecialKey};
 pub use pdf::PdfBuilder;
 pub use query::{AriaRole, BoundingBox, FindBuilder, PageBox};
+pub use request::{RequestBuilder, Response};
 pub use screenshot::{Format, ScreenshotBuilder};
 pub use storage::Storage;
 pub use tab::{
