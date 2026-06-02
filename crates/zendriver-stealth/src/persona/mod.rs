@@ -30,9 +30,47 @@ pub struct Persona {
     pub seed: Option<Seed>,
 }
 
+/// Fluent builder for [`Persona`]. Every setter is optional.
+#[derive(Debug, Clone, Default)]
+pub struct PersonaBuilder(Persona);
+
 impl Persona {
     pub fn try_from_json(s: &str) -> Result<Persona, serde_json::Error> {
         serde_json::from_str(s)
+    }
+
+    pub fn builder() -> PersonaBuilder {
+        PersonaBuilder(Persona::default())
+    }
+}
+
+impl PersonaBuilder {
+    pub fn seed(mut self, s: Seed) -> Self {
+        self.0.seed = Some(s);
+        self
+    }
+    pub fn timezone(mut self, tz: impl Into<String>) -> Self {
+        self.0.timezone = Some(tz.into());
+        self
+    }
+    pub fn locale(mut self, l: impl Into<String>) -> Self {
+        self.0.locale = Some(l.into());
+        self
+    }
+    pub fn device_memory_gb(mut self, gb: u32) -> Self {
+        self.0.device_memory_gb = Some(gb);
+        self
+    }
+    pub fn hardware_concurrency(mut self, n: u32) -> Self {
+        self.0.hardware_concurrency = Some(n);
+        self
+    }
+    pub fn webgl(mut self, w: WebglSpec) -> Self {
+        self.0.webgl = Some(w);
+        self
+    }
+    pub fn build(self) -> Persona {
+        self.0
     }
 }
 
@@ -84,6 +122,18 @@ mod persona_tests {
         let back: Persona = serde_json::from_str(&s).unwrap();
         assert_eq!(back.seed, Some(Seed::from_u64(5)));
         assert_eq!(back.timezone.as_deref(), Some("America/New_York"));
+    }
+
+    #[test]
+    fn builder_sets_fields() {
+        let p = Persona::builder()
+            .seed(Seed::from_u64(3))
+            .timezone("UTC")
+            .device_memory_gb(16)
+            .build();
+        assert_eq!(p.seed, Some(Seed::from_u64(3)));
+        assert_eq!(p.device_memory_gb, Some(16));
+        assert_eq!(p.timezone.as_deref(), Some("UTC"));
     }
 
     #[test]
