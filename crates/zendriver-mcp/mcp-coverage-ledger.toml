@@ -330,3 +330,52 @@ covered = "browser_monitor_start"
 [[entry]]
 api = "zendriver::NetworkEvent"
 covered = "browser_monitor_read"
+
+# ── Group D: DataDome bypass crate + WebGPU surface ─────────────────────────
+[[entry]]
+api = "zendriver::tab::Tab::datadome"
+covered = "browser_solve_datadome"
+
+[[entry]]
+api = "zendriver::DataDomeBypass"
+covered = "browser_solve_datadome"
+
+[[entry]]
+api = "zendriver::DataDomeClearanceOutcome"
+covered = "browser_solve_datadome"
+
+[[entry]]
+api = "zendriver::DataDomeSurface"
+excluded = "diagnostic enum surfaced via browser_solve_datadome.outcome; the standalone datadome_detect_surface fn is a Rust convenience"
+
+[[entry]]
+api = "zendriver::DataDomeError"
+excluded = "error type surfaced through browser_solve_datadome MCP errors"
+
+[[entry]]
+api = "zendriver::DataDomeChallenge"
+excluded = "captcha-solver callback type; the on_captcha hook is a documented MCP non-goal (same as imperva CaptchaChallenge)"
+
+[[entry]]
+api = "zendriver::DataDomeSolution"
+excluded = "captcha-solver callback type; on_captcha hook is a documented MCP non-goal"
+
+[[entry]]
+api = "zendriver::datadome_detect_surface"
+excluded = "Rust convenience probe; surface is reported via browser_solve_datadome.outcome"
+
+# `ZendriverError::DataDome` + its `From<DataDomeError>` impl are how the lib
+# folds datadome faults into the unified error enum; surfaced over MCP as
+# `browser_solve_datadome` errors (same routing as the Imperva/Cloudflare
+# variants). Both the short and module-qualified paths are emitted.
+[[entry]]
+api = "zendriver::ZendriverError::DataDome"
+covered = "browser_solve_datadome"
+
+[[entry]]
+api = "zendriver::error::ZendriverError::DataDome"
+covered = "browser_solve_datadome"
+
+[[entry]]
+api = "zendriver::error::ZendriverError::from"
+excluded = "blanket From<DataDomeError> conversion into the unified error enum; the resulting variant is covered above and surfaced via browser_solve_datadome errors"

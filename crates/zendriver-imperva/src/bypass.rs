@@ -18,32 +18,20 @@ use crate::captcha::{
     CaptchaChallenge, CaptchaSolution, CaptchaSolver, arc_solver, extract_captcha_site_key,
     inject_captcha_solution,
 };
-use crate::detection::{DetectionSnapshot, ImpervaSurface};
+use crate::detection::DetectionSnapshot;
 use crate::error::ImpervaError;
 
-/// Budget passed to [`probe_with_deadline`]: the absolute deadline the
-/// select races against, the original timeout duration for error reporting,
-/// and the most-recently-observed surface for `Timeout` diagnostics.
-#[derive(Debug, Clone, Copy)]
-struct ProbeBudget {
-    deadline: Instant,
-    timeout: Duration,
-    last_surface: Option<ImpervaSurface>,
-}
-
 /// Probe `detect_snapshot` against `session`, racing against the overall
-/// `deadline`. Returns `ImpervaError::Timeout` if the deadline wins so that
-/// no probe — including the pre-loop one — can outlive the caller's budget.
+/// `deadline`. Returns `Ok(None)` if the deadline wins so that no probe —
+/// including the pre-loop one — can outlive the caller's budget; the caller
+/// maps that sentinel to a [`ClearanceOutcome::TimedOut`].
 async fn probe_with_deadline(
     session: &SessionHandle,
-    budget: ProbeBudget,
-) -> Result<DetectionSnapshot, ImpervaError> {
+    deadline: Instant,
+) -> Result<Option<DetectionSnapshot>, ImpervaError> {
     tokio::select! {
-        res = crate::detection::detect_snapshot(session) => res,
-        () = tokio::time::sleep_until(budget.deadline) => Err(ImpervaError::Timeout {
-            timeout: budget.timeout,
-            last_surface: budget.last_surface,
-        }),
+        res = crate::detection::detect_snapshot(session) => res.map(Some),
+        () = tokio::time::sleep_until(deadline) => Ok(None),
     }
 }
 
@@ -64,6 +52,12 @@ pub enum ClearanceOutcome {
     ChallengeGone,
     /// No Imperva surface present at call time. Fast path; no waiting.
     AlreadyClear,
+    /// Deadline elapsed without clearance. `last_surface` is the most recent
+    /// surface the poll loop observed (`None` if the deadline won before the
+    /// first probe completed).
+    TimedOut {
+        last_surface: Option<crate::detection::ImpervaSurface>,
+    },
 }
 
 /// Drives an Imperva clearance flow against a single tab's session.
@@ -185,10 +179,12 @@ impl<'tab> ImpervaBypass<'tab> {
     ///   Imperva challenge markers (hybrid AND signal).
     /// - `Ok(ClearanceOutcome::ChallengeGone)` — body markers cleared but
     ///   no reese84 token was ever observed (e.g., legacy Incapsula).
+    /// - `Ok(ClearanceOutcome::TimedOut { last_surface })` — overall timeout
+    ///   elapsed before clearance. `last_surface` carries the most-recent
+    ///   observed surface. Not a fault: a deadline in a bot-management flow
+    ///   is a normal "didn't finish, retry or give up" terminal.
     ///
     /// # Errors
-    /// - [`ImpervaError::Timeout`] — overall timeout elapsed before
-    ///   clearance. `last_surface` carries the most-recent observed surface.
     /// - [`ImpervaError::CaptchaRequired`] — CAPTCHA surface detected
     ///   but no `on_captcha` solver was registered.
     /// - [`ImpervaError::CaptchaSolver`] — registered solver returned an
@@ -214,19 +210,13 @@ impl<'tab> ImpervaBypass<'tab> {
     /// ```
     pub async fn wait_for_clearance(self) -> Result<ClearanceOutcome, ImpervaError> {
         let deadline = Instant::now() + self.timeout;
-        let timeout = self.timeout;
 
         // Every probe — including the first — is raced against the deadline.
         // A hung CDP call cannot exceed the caller's stated timeout budget.
-        let snapshot = probe_with_deadline(
-            self.session,
-            ProbeBudget {
-                deadline,
-                timeout,
-                last_surface: None,
-            },
-        )
-        .await?;
+        // `None` means the deadline won before the first probe resolved.
+        let Some(snapshot) = probe_with_deadline(self.session, deadline).await? else {
+            return Ok(ClearanceOutcome::TimedOut { last_surface: None });
+        };
 
         // Fast path: nothing to clear.
         if matches!(snapshot.surface, crate::detection::ImpervaSurface::None) && snapshot.body_clean
@@ -270,14 +260,8 @@ impl<'tab> ImpervaBypass<'tab> {
             (None, None)
         };
 
-        self.poll_loop(
-            deadline,
-            timeout,
-            next_snapshot,
-            interception_rx,
-            interception_guard,
-        )
-        .await
+        self.poll_loop(deadline, next_snapshot, interception_rx, interception_guard)
+            .await
     }
 
     /// Core poll loop, factored out so unit tests can drive it with a
@@ -290,7 +274,6 @@ impl<'tab> ImpervaBypass<'tab> {
     pub(crate) async fn poll_loop(
         self,
         deadline: Instant,
-        timeout: Duration,
         mut next_snapshot: Option<DetectionSnapshot>,
         mut interception_rx: Option<tokio::sync::oneshot::Receiver<()>>,
         _interception_guard: Option<crate::interception::InterceptionGuard>,
@@ -314,17 +297,12 @@ impl<'tab> ImpervaBypass<'tab> {
         loop {
             let snap = match next_snapshot.take() {
                 Some(s) => s,
-                None => {
-                    probe_with_deadline(
-                        self.session,
-                        ProbeBudget {
-                            deadline,
-                            timeout,
-                            last_surface,
-                        },
-                    )
-                    .await?
-                }
+                None => match probe_with_deadline(self.session, deadline).await? {
+                    Some(s) => s,
+                    // Deadline won the probe race — terminate with the
+                    // most-recent surface observed so far.
+                    None => return Ok(ClearanceOutcome::TimedOut { last_surface }),
+                },
             };
 
             let token = snap.reese84.as_ref().filter(|v| !v.is_empty());
@@ -362,19 +340,13 @@ impl<'tab> ImpervaBypass<'tab> {
             }
 
             if Instant::now() >= deadline {
-                return Err(ImpervaError::Timeout {
-                    timeout,
-                    last_surface,
-                });
+                return Ok(ClearanceOutcome::TimedOut { last_surface });
             }
 
             tokio::select! {
                 _ = ticker.tick() => {}
                 () = tokio::time::sleep_until(deadline) => {
-                    return Err(ImpervaError::Timeout {
-                        timeout,
-                        last_surface,
-                    });
+                    return Ok(ClearanceOutcome::TimedOut { last_surface });
                 }
                 Ok(()) = async {
                     match interception_rx.as_mut() {
@@ -576,12 +548,12 @@ mod tests {
             .await;
         }
 
-        let err = fut.await.unwrap().unwrap_err();
-        match err {
-            ImpervaError::Timeout { last_surface, .. } => {
+        let outcome = fut.await.unwrap().unwrap();
+        match outcome {
+            ClearanceOutcome::TimedOut { last_surface } => {
                 assert_eq!(last_surface, Some(ImpervaSurface::Reese84));
             }
-            other => panic!("expected Timeout, got {other:?}"),
+            other => panic!("expected TimedOut, got {other:?}"),
         }
         conn.shutdown();
     }
@@ -888,9 +860,7 @@ mod tests {
             async move {
                 let bypass = ImpervaBypass::new(&s).poll_interval(Duration::from_secs(1));
                 let deadline = Instant::now() + Duration::from_secs(5);
-                bypass
-                    .poll_loop(deadline, Duration::from_secs(5), None, Some(rx), None)
-                    .await
+                bypass.poll_loop(deadline, None, Some(rx), None).await
             }
         });
 

@@ -22,11 +22,11 @@
 //! 4. If we previously observed an iframe + clicked, and the iframe is now
 //!    gone without a token, resolves to [`ClearanceOutcome::ChallengeGone`]
 //!    (clearance-cookie shortcut).
-//! 5. Errors with [`CloudflareError::ClearanceTimeout`] on deadline when
-//!    challenge markers were seen but never resolved, or
-//!    [`CloudflareError::NoChallenge`] when the entire timeout window
-//!    elapsed without observing any challenge markers — the caller likely
-//!    invoked the bypass on a page that has no Cloudflare gate at all.
+//! 5. Resolves to [`ClearanceOutcome::TimedOut`] on deadline, carrying
+//!    `saw_challenge` — `true` when challenge markers were seen but never
+//!    resolved, `false` when the entire timeout window elapsed without
+//!    observing any challenge markers (the caller likely invoked the bypass
+//!    on a page that has no Cloudflare gate at all).
 
 use std::time::Duration;
 
@@ -46,6 +46,13 @@ pub enum ClearanceOutcome {
     TokenAcquired(String),
     /// The challenge container disappeared without yielding a token.
     ChallengeGone,
+    /// Deadline elapsed without a terminal clearance state. `saw_challenge`
+    /// is `true` if any challenge marker (container, hidden input, or live
+    /// iframe) was ever observed; `false` if none ever appeared — the caller
+    /// likely invoked the bypass on a page that has no Cloudflare gate at all.
+    /// Not a fault: a deadline in a bot-management flow is a normal "didn't
+    /// finish, retry or give up" terminal.
+    TimedOut { saw_challenge: bool },
 }
 
 /// Default poll interval for `wait_for_clearance`.
@@ -95,14 +102,14 @@ impl<'a> CloudflareBypass<'a> {
     ///   present, we clicked it, and the challenge container then
     ///   disappeared without yielding a token (e.g. a clearance cookie
     ///   shortcut).
+    /// - `Ok(ClearanceOutcome::TimedOut { saw_challenge })` — `timeout`
+    ///   elapsed without a terminal clearance state. `saw_challenge` is
+    ///   `true` if challenge markers were observed (markers present but
+    ///   never resolved); `false` if none ever appeared (the caller likely
+    ///   invoked the bypass on a page that has no Cloudflare gate). Not a
+    ///   fault — a deadline here is a normal "retry or give up" signal.
     ///
     /// # Errors
-    /// - [`CloudflareError::NoChallenge`] — `timeout` elapsed without any
-    ///   challenge markers ever being observed on the page (no container,
-    ///   no hidden input, no iframe). The caller likely invoked the bypass
-    ///   on a page that has no Cloudflare gate.
-    /// - [`CloudflareError::ClearanceTimeout`] — `timeout` elapsed with
-    ///   challenge markers present but neither success state observed.
     /// - [`CloudflareError::Call`] / [`CloudflareError::JsError`] — CDP or
     ///   in-page evaluator failure.
     ///
@@ -165,10 +172,8 @@ impl<'a> CloudflareBypass<'a> {
             }
 
             if Instant::now() >= deadline {
-                return Err(if ever_seen_markers {
-                    CloudflareError::ClearanceTimeout
-                } else {
-                    CloudflareError::NoChallenge
+                return Ok(ClearanceOutcome::TimedOut {
+                    saw_challenge: ever_seen_markers,
                 });
             }
 

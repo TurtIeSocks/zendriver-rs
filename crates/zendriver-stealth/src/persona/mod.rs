@@ -3,6 +3,7 @@
 pub mod seed;
 pub mod specs;
 pub mod surface;
+pub(crate) mod webgpu_adapter;
 
 pub use seed::Seed;
 pub use specs::{FontSpec, HardwareSpec, SurfaceCfg, UaSpec, WebglSpec, WebrtcSpec};
@@ -25,6 +26,7 @@ pub struct Persona {
     pub timezone: Option<String>,
     pub locale: Option<String>,
     pub webgl: Option<WebglSpec>,
+    pub webgpu: Option<SurfaceCfg>,
     pub canvas: Option<SurfaceCfg>,
     pub audio: Option<SurfaceCfg>,
     pub fonts: Option<FontSpec>,
@@ -96,6 +98,7 @@ impl Persona {
             timezone: over.timezone.or(self.timezone),
             locale: over.locale.or(self.locale),
             webgl: over.webgl.or(self.webgl),
+            webgpu: over.webgpu.or(self.webgpu),
             canvas: over.canvas.or(self.canvas),
             audio: over.audio.or(self.audio),
             fonts: over.fonts.or(self.fonts),
@@ -143,6 +146,9 @@ impl Persona {
             }
             Surface::Hardware => {
                 self.hardware.get_or_insert_with(Default::default).strategy = Some(strategy)
+            }
+            Surface::Webgpu => {
+                self.webgpu.get_or_insert_with(Default::default).strategy = Some(strategy)
             }
         }
     }
@@ -411,6 +417,17 @@ mod persona_tests {
         let webgl = p.webgl.as_ref().unwrap();
         assert_eq!(webgl.strategy, Some(Strategy::Value));
         assert_eq!(webgl.unmasked_renderer.as_deref(), Some("ANGLE (x)"));
+    }
+
+    #[test]
+    fn apply_surface_override_webgpu() {
+        use crate::{Strategy, Surface};
+        let mut p = Persona::default();
+        p.apply_surface_override(Surface::Webgpu, Strategy::Block);
+        assert_eq!(
+            p.webgpu.as_ref().and_then(|c| c.strategy),
+            Some(Strategy::Block)
+        );
     }
 
     #[test]

@@ -2717,6 +2717,27 @@ impl Tab {
     }
 }
 
+#[cfg(feature = "datadome")]
+impl Tab {
+    /// Construct a [`DataDomeBypass`](zendriver_datadome::DataDomeBypass) bound
+    /// to this tab's session.
+    ///
+    /// Chain `timeout` / `poll_interval` / `with_interception` / `on_captcha`,
+    /// then `wait_for_clearance` to detect the active DataDome surface
+    /// (device-check, captcha, or block) and poll until the `datadome`
+    /// clearance cookie lands.
+    ///
+    /// **Stealth strongly recommended.** DataDome's device-check scores the
+    /// browser fingerprint; without `BrowserBuilder::stealth` (including the
+    /// `Surface::Webgpu` coherence patch) the device-check will not clear.
+    ///
+    /// Gated by the `datadome` cargo feature.
+    #[must_use]
+    pub fn datadome(&self) -> zendriver_datadome::DataDomeBypass<'_> {
+        zendriver_datadome::DataDomeBypass::new(self.session())
+    }
+}
+
 #[cfg(feature = "interception")]
 impl Tab {
     /// Construct a fluent

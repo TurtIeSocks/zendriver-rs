@@ -1,10 +1,9 @@
 //! Imperva-bypass errors.
 
-use std::time::Duration;
 use zendriver_interception::InterceptionError;
 use zendriver_transport::CallError;
 
-use crate::detection::{CaptchaKind, ImpervaSurface};
+use crate::detection::CaptchaKind;
 
 /// Error returned by [`ImpervaBypass`] operations.
 ///
@@ -12,14 +11,6 @@ use crate::detection::{CaptchaKind, ImpervaSurface};
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ImpervaError {
-    /// `wait_for_clearance` exceeded the configured timeout.
-    /// `last_surface` is the most recent surface observed by the poll loop.
-    #[error("clearance not achieved within {timeout:?}")]
-    Timeout {
-        timeout: Duration,
-        last_surface: Option<ImpervaSurface>,
-    },
-
     /// CAPTCHA detected, but no `on_captcha` solver was registered.
     #[error("CAPTCHA required but no solver registered: {kind:?}")]
     CaptchaRequired { kind: CaptchaKind },
@@ -48,15 +39,6 @@ pub enum ImpervaError {
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn display_timeout_includes_duration() {
-        let e = ImpervaError::Timeout {
-            timeout: Duration::from_secs(30),
-            last_surface: Some(ImpervaSurface::Reese84),
-        };
-        assert_eq!(e.to_string(), "clearance not achieved within 30s");
-    }
 
     #[test]
     fn display_captcha_required_includes_kind() {

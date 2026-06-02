@@ -4,7 +4,7 @@ expression: "schema_for! (tools::imperva::Outcome)"
 ---
 $schema: "https://json-schema.org/draft/2020-12/schema"
 title: Outcome
-description: "Terminal outcome of an Imperva bypass attempt.\n\n`TokenAcquired` / `ChallengeGone` / `AlreadyClear` mirror the lib's\n[`ImpervaClearanceOutcome`] variants. `Timeout` is the MCP layer's\ncollapse of [`ImpervaError::Timeout`] into the success channel — agents\nbranch on `outcome` without try/catch around a timeout."
+description: "Terminal outcome of an Imperva bypass attempt.\n\n`TokenAcquired` / `ChallengeGone` / `AlreadyClear` mirror the lib's\n[`ImpervaClearanceOutcome`] variants. `Timeout` mirrors the lib's\n[`ImpervaClearanceOutcome::TimedOut`] — a deadline in a bot-management\nflow is a normal outcome, not an error — surfacing it on the success\nchannel so agents branch on `outcome` without try/catch around a timeout."
 oneOf:
   - description: "reese84 token acquired (value in [`SolveImpervaOutput::reese84`])."
     type: string

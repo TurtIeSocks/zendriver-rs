@@ -52,6 +52,7 @@ More working examples in [`crates/zendriver/examples/`](crates/zendriver/example
 | `expect`       | no       | Playwright-style `expect_response()` / `expect_request()`     | (in-tree, no extra crate)             |
 | `cloudflare`   | no       | Solve Cloudflare Turnstile challenges                         | `zendriver-cloudflare`                |
 | `imperva`      | no       | Imperva WAF / Incapsula bypass (reese84 / legacy / CAPTCHA)   | `zendriver-imperva`                   |
+| `datadome`     | no       | DataDome bypass (device-check / CAPTCHA / block) + `Surface::Webgpu` coherence | `zendriver-datadome` |
 | `fetcher`      | no       | Auto-download a pinned Chrome for Testing build               | `zendriver-fetcher` + `reqwest`/`zip` |
 
 Separate binary crate (not a feature on `zendriver`):
@@ -83,10 +84,10 @@ Same as above — only spell out the feature if you want it visible in `Cargo.to
 **Everything:**
 
 ```bash
-cargo add zendriver --features "interception expect cloudflare imperva fetcher"
+cargo add zendriver --features "interception expect cloudflare imperva datadome fetcher"
 ```
 
-Adds request interception, `expect()` matchers, Cloudflare Turnstile bypass, Imperva WAF / Incapsula bypass, and the Chrome for Testing fetcher.
+Adds request interception, `expect()` matchers, Cloudflare Turnstile bypass, Imperva WAF / Incapsula bypass, DataDome bypass, and the Chrome for Testing fetcher.
 
 ## Drive a stealth browser from your AI agent
 
@@ -116,6 +117,7 @@ cargo install zendriver-mcp
 - **Stateful primitives** agents need for real work — `browser_cookies_persist` for save/load auth, full `browser_storage_*`, multi-tab management, frame traversal
 - **Anti-bot superpowers** (gated cargo features, on by default for the published binary):
   - `browser_solve_turnstile` — Cloudflare Turnstile bypass without a CAPTCHA-solving service
+  - `browser_solve_datadome` — DataDome device-check / CAPTCHA / block bypass (with `Surface::Webgpu` coherence)
   - `browser_intercept_*` — block/redirect/respond/modify requests via CDP `Fetch.*`
   - `browser_expect_register / _await` — Playwright-style "wait for response/dialog/download" matchers, split across MCP calls so the agent can act in between
   - `browser_install_chrome` — pull a pinned Chrome-for-Testing build on demand

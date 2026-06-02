@@ -9,6 +9,7 @@ members = [
     "crates/zendriver-fetcher",
     "crates/zendriver-mcp",
     "crates/zendriver-imperva",
+    "crates/zendriver-datadome",
     "crates/zendriver-fingerprints",
 ]
 
@@ -29,6 +30,7 @@ zendriver-interception  = { path = "crates/zendriver-interception", version = "0
 zendriver-fetcher       = { path = "crates/zendriver-fetcher", version = "0.1.2" }
 zendriver-mcp           = { path = "crates/zendriver-mcp", version = "0.3.0" }
 zendriver-imperva       = { path = "crates/zendriver-imperva", version = "0.1.3" }
+zendriver-datadome      = { path = "crates/zendriver-datadome", version = "0.1.0" }
 zendriver-fingerprints  = { path = "crates/zendriver-fingerprints", version = "0.1.2" }
 
 # MCP server

@@ -14,6 +14,7 @@
 - [Network monitor & HTTP](./network.md)
 - [Cloudflare](./cloudflare.md)
 - [Imperva WAF / Incapsula](./imperva.md)
+- [DataDome](./datadome.md)
 - [Fetcher](./fetcher.md)
 - [MCP server](./mcp.md)
 - [Migration from Playwright](./migration-playwright.md)

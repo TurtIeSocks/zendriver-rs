@@ -12,6 +12,7 @@ pub enum Surface {
     ClientRects,
     Webrtc,
     Hardware,
+    Webgpu,
 }
 
 /// How a resolved persona is applied to a surface in the page.
@@ -36,7 +37,9 @@ impl Surface {
     pub fn kind(self) -> SurfaceKind {
         match self {
             Surface::Canvas | Surface::Audio | Surface::ClientRects => SurfaceKind::Noise,
-            Surface::Webgl | Surface::Fonts | Surface::Hardware => SurfaceKind::Value,
+            Surface::Webgl | Surface::Fonts | Surface::Hardware | Surface::Webgpu => {
+                SurfaceKind::Value
+            }
             Surface::Webrtc => SurfaceKind::Policy,
         }
     }
@@ -112,5 +115,19 @@ mod tests {
     #[test]
     fn webrtc_default_is_block() {
         assert_eq!(Surface::Webrtc.resolve_strategy(None), Strategy::Block);
+    }
+
+    #[test]
+    fn webgpu_is_value_kind_default_value() {
+        assert_eq!(Surface::Webgpu.kind(), SurfaceKind::Value);
+        assert_eq!(Surface::Webgpu.resolve_strategy(None), Strategy::Value);
+    }
+
+    #[test]
+    fn webgpu_block_passes() {
+        assert_eq!(
+            Surface::Webgpu.resolve_strategy(Some(Strategy::Block)),
+            Strategy::Block
+        );
     }
 }

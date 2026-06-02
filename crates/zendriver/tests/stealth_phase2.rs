@@ -179,3 +179,53 @@ async fn native_fails_sannysoft_navigator_webdriver_but_passes_user_agent() {
 
     browser.close().await.expect("close");
 }
+
+/// Assert that the WebGPU adapter vendor reported by `navigator.gpu` coheres
+/// with the spoofed WebGL renderer. If the platform has no GPU, the test is a
+/// no-op pass (both values null). This validates the `Surface::Webgpu`
+/// coherence patch ships correctly with `stealth()`.
+#[tokio::test]
+#[serial]
+async fn webgpu_adapter_coheres_with_webgl_renderer() {
+    let browser = Browser::builder()
+        .stealth(StealthProfile::spoofed())
+        .headless(true)
+        .launch()
+        .await
+        .expect("launch");
+    let tab = browser.main_tab();
+    tab.goto("about:blank").await.expect("goto");
+    tab.wait_for_load().await.ok();
+
+    let v: serde_json::Value = tab
+        .evaluate_main(
+            r#"(async () => {
+            const a = navigator.gpu && await navigator.gpu.requestAdapter();
+            const c = document.createElement('canvas').getContext('webgl');
+            const dbg = c && c.getExtension('WEBGL_debug_renderer_info');
+            return {
+              gpuVendor: a && a.info ? a.info.vendor : null,
+              webglRenderer: dbg ? c.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : null,
+            };
+        })()"#,
+        )
+        .await
+        .expect("eval");
+
+    // If WebGPU is available, its vendor must be substring-consistent with
+    // the WebGL renderer (both nvidia / both intel / etc.). If gpuVendor is
+    // null (no GPU in this env), the test is a no-op pass.
+    if let Some(vendor) = v.get("gpuVendor").and_then(|x| x.as_str()) {
+        let renderer = v
+            .get("webglRenderer")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_lowercase();
+        assert!(
+            renderer.contains(vendor) || (vendor == "intel" && renderer.contains("intel")),
+            "webgpu vendor {vendor} must cohere with webgl renderer {renderer}"
+        );
+    }
+
+    browser.close().await.expect("close");
+}

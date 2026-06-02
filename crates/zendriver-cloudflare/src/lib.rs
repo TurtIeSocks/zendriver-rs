@@ -33,6 +33,9 @@
 //! match outcome {
 //!     ClearanceOutcome::TokenAcquired(token) => println!("got token: {token}"),
 //!     ClearanceOutcome::ChallengeGone => println!("challenge cleared"),
+//!     ClearanceOutcome::TimedOut { saw_challenge } => {
+//!         println!("timed out; saw_challenge = {saw_challenge}")
+//!     }
 //! }
 //! # Ok(()) }
 //! ```

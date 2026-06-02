@@ -153,6 +153,11 @@ pub enum ZendriverError {
     #[error("imperva: {0}")]
     Imperva(Box<zendriver_imperva::ImpervaError>),
 
+    /// DataDome bypass sub-crate error. Gated by feature `datadome`.
+    #[cfg(feature = "datadome")]
+    #[error("datadome: {0}")]
+    DataDome(Box<zendriver_datadome::DataDomeError>),
+
     /// Chrome-for-Testing fetcher error. Gated by feature `fetcher`.
     #[cfg(feature = "fetcher")]
     #[error("fetcher: {0}")]
@@ -197,6 +202,13 @@ impl From<zendriver_cloudflare::CloudflareError> for ZendriverError {
 impl From<zendriver_imperva::ImpervaError> for ZendriverError {
     fn from(e: zendriver_imperva::ImpervaError) -> Self {
         Self::Imperva(Box::new(e))
+    }
+}
+
+#[cfg(feature = "datadome")]
+impl From<zendriver_datadome::DataDomeError> for ZendriverError {
+    fn from(e: zendriver_datadome::DataDomeError) -> Self {
+        Self::DataDome(Box::new(e))
     }
 }
 

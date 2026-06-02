@@ -4,10 +4,10 @@
 //! Mirrors [`tools/cloudflare.rs`][crate::tools::cloudflare]: the lib's
 //! [`ImpervaBypass::wait_for_clearance`] models its terminal state as
 //! `Result<ImpervaClearanceOutcome, ImpervaError>`. The MCP layer collapses
-//! the [`ImpervaError::Timeout`] arm into a non-error
-//! [`Outcome::Timeout`] — a deadline in a bot-management flow is a normal
-//! "didn't finish, retry or give up" signal, not a server error — and keeps
-//! every other `ImpervaError` (CAPTCHA-without-solver, CDP failure, JS error)
+//! the lib-side [`ImpervaClearanceOutcome::TimedOut`] terminal into a
+//! non-error [`Outcome::Timeout`] — a deadline in a bot-management flow is a
+//! normal "didn't finish, retry or give up" signal, not a server error — and
+//! keeps every `ImpervaError` (CAPTCHA-without-solver, CDP failure, JS error)
 //! as a real MCP error.
 //!
 //! Unlike Cloudflare's three states, Imperva reports a fourth —
@@ -31,7 +31,7 @@ use rmcp::ErrorData;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use zendriver::{ImpervaClearanceOutcome, ImpervaError, ZendriverError};
+use zendriver::{ImpervaClearanceOutcome, ZendriverError};
 
 use crate::errors::{McpServerError, map_error};
 use crate::state::SessionState;
@@ -69,9 +69,10 @@ fn default_timeout() -> u64 {
 /// Terminal outcome of an Imperva bypass attempt.
 ///
 /// `TokenAcquired` / `ChallengeGone` / `AlreadyClear` mirror the lib's
-/// [`ImpervaClearanceOutcome`] variants. `Timeout` is the MCP layer's
-/// collapse of [`ImpervaError::Timeout`] into the success channel — agents
-/// branch on `outcome` without try/catch around a timeout.
+/// [`ImpervaClearanceOutcome`] variants. `Timeout` mirrors the lib's
+/// [`ImpervaClearanceOutcome::TimedOut`] — a deadline in a bot-management
+/// flow is a normal outcome, not an error — surfacing it on the success
+/// channel so agents branch on `outcome` without try/catch around a timeout.
 #[derive(Debug, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
@@ -134,8 +135,9 @@ pub async fn solve_imperva(
             outcome: Outcome::AlreadyClear,
             reese84: None,
         }),
-        // Timeout collapses into the success channel — see module docs.
-        Err(ImpervaError::Timeout { .. }) => Ok(SolveImpervaOutput {
+        // TimedOut is a lib-side success terminal; collapse it into the
+        // success-channel `Outcome::Timeout` — see module docs.
+        Ok(ImpervaClearanceOutcome::TimedOut { .. }) => Ok(SolveImpervaOutput {
             outcome: Outcome::Timeout,
             reese84: None,
         }),

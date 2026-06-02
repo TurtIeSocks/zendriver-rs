@@ -9,6 +9,12 @@ pub use zendriver::CloudflareBypass
 pub use zendriver::CloudflareError
 pub use zendriver::Connection
 pub use zendriver::CookieSnapshot
+pub use zendriver::DataDomeBypass
+pub use zendriver::DataDomeChallenge
+pub use zendriver::DataDomeClearanceOutcome
+pub use zendriver::DataDomeError
+pub use zendriver::DataDomeSolution
+pub use zendriver::DataDomeSurface
 pub use zendriver::DetectionSnapshot
 pub use zendriver::Fetcher
 pub use zendriver::FetcherChannel
@@ -38,6 +44,7 @@ pub use zendriver::Strategy
 pub use zendriver::Surface
 pub use zendriver::TransportError
 pub use zendriver::VersionSpec
+pub use zendriver::datadome_detect_surface
 pub use zendriver::detect_surface
 pub mod zendriver::browser
 pub enum zendriver::browser::Channel
@@ -887,6 +894,7 @@ pub zendriver::error::ZendriverError::Cdp::message: alloc::string::String
 pub zendriver::error::ZendriverError::Cloudflare(alloc::boxed::Box<zendriver_cloudflare::error::CloudflareError>)
 pub zendriver::error::ZendriverError::ConflictingSelectors
 pub zendriver::error::ZendriverError::Cookie(alloc::string::String)
+pub zendriver::error::ZendriverError::DataDome(alloc::boxed::Box<zendriver_datadome::error::DataDomeError>)
 pub zendriver::error::ZendriverError::Disconnected
 pub zendriver::error::ZendriverError::ElementNotFound
 pub zendriver::error::ZendriverError::ElementNotFound::selector: alloc::string::String
@@ -917,6 +925,8 @@ impl core::convert::From<zendriver::error::BrowserError> for zendriver::error::Z
 pub fn zendriver::error::ZendriverError::from(zendriver::error::BrowserError) -> Self
 impl core::convert::From<zendriver_cloudflare::error::CloudflareError> for zendriver::error::ZendriverError
 pub fn zendriver::error::ZendriverError::from(zendriver_cloudflare::error::CloudflareError) -> Self
+impl core::convert::From<zendriver_datadome::error::DataDomeError> for zendriver::error::ZendriverError
+pub fn zendriver::error::ZendriverError::from(zendriver_datadome::error::DataDomeError) -> Self
 impl core::convert::From<zendriver_fetcher::error::FetcherError> for zendriver::error::ZendriverError
 pub fn zendriver::error::ZendriverError::from(zendriver_fetcher::error::FetcherError) -> Self
 impl core::convert::From<zendriver_imperva::error::ImpervaError> for zendriver::error::ZendriverError
@@ -3885,6 +3895,8 @@ pub async fn zendriver::tab::Tab::wait_for_ready_state(&self, zendriver::tab::Re
 impl zendriver::tab::Tab
 pub fn zendriver::tab::Tab::cloudflare(&self) -> zendriver_cloudflare::bypass::CloudflareBypass<'_>
 impl zendriver::tab::Tab
+pub fn zendriver::tab::Tab::datadome(&self) -> zendriver_datadome::bypass::DataDomeBypass<'_>
+impl zendriver::tab::Tab
 pub async fn zendriver::tab::Tab::download_file(&self, impl core::convert::Into<alloc::string::String>, core::option::Option<std::path::PathBuf>) -> zendriver::error::Result<()>
 pub fn zendriver::tab::Tab::find(&self) -> zendriver::query::FindBuilder<'_>
 pub fn zendriver::tab::Tab::find_all(&self) -> zendriver::query::FindAllBuilder<'_>
@@ -5299,6 +5311,7 @@ pub zendriver::ZendriverError::Cdp::message: alloc::string::String
 pub zendriver::ZendriverError::Cloudflare(alloc::boxed::Box<zendriver_cloudflare::error::CloudflareError>)
 pub zendriver::ZendriverError::ConflictingSelectors
 pub zendriver::ZendriverError::Cookie(alloc::string::String)
+pub zendriver::ZendriverError::DataDome(alloc::boxed::Box<zendriver_datadome::error::DataDomeError>)
 pub zendriver::ZendriverError::Disconnected
 pub zendriver::ZendriverError::ElementNotFound
 pub zendriver::ZendriverError::ElementNotFound::selector: alloc::string::String
@@ -5329,6 +5342,8 @@ impl core::convert::From<zendriver::error::BrowserError> for zendriver::error::Z
 pub fn zendriver::error::ZendriverError::from(zendriver::error::BrowserError) -> Self
 impl core::convert::From<zendriver_cloudflare::error::CloudflareError> for zendriver::error::ZendriverError
 pub fn zendriver::error::ZendriverError::from(zendriver_cloudflare::error::CloudflareError) -> Self
+impl core::convert::From<zendriver_datadome::error::DataDomeError> for zendriver::error::ZendriverError
+pub fn zendriver::error::ZendriverError::from(zendriver_datadome::error::DataDomeError) -> Self
 impl core::convert::From<zendriver_fetcher::error::FetcherError> for zendriver::error::ZendriverError
 pub fn zendriver::error::ZendriverError::from(zendriver_fetcher::error::FetcherError) -> Self
 impl core::convert::From<zendriver_imperva::error::ImpervaError> for zendriver::error::ZendriverError
@@ -7348,6 +7363,8 @@ pub async fn zendriver::tab::Tab::wait_for_load(&self) -> zendriver::error::Resu
 pub async fn zendriver::tab::Tab::wait_for_ready_state(&self, zendriver::tab::ReadyState) -> zendriver::error::Result<()>
 impl zendriver::tab::Tab
 pub fn zendriver::tab::Tab::cloudflare(&self) -> zendriver_cloudflare::bypass::CloudflareBypass<'_>
+impl zendriver::tab::Tab
+pub fn zendriver::tab::Tab::datadome(&self) -> zendriver_datadome::bypass::DataDomeBypass<'_>
 impl zendriver::tab::Tab
 pub async fn zendriver::tab::Tab::download_file(&self, impl core::convert::Into<alloc::string::String>, core::option::Option<std::path::PathBuf>) -> zendriver::error::Result<()>
 pub fn zendriver::tab::Tab::find(&self) -> zendriver::query::FindBuilder<'_>

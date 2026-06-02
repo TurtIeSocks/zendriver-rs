@@ -160,6 +160,18 @@ pub use zendriver_imperva::{
 #[cfg(feature = "imperva")]
 pub use zendriver_imperva::ClearanceOutcome as ImpervaClearanceOutcome;
 
+/// DataDome bypass surface re-exports. Gated by the `datadome` cargo feature.
+#[cfg(feature = "datadome")]
+pub use zendriver_datadome::{
+    DataDomeBypass, DataDomeChallenge, DataDomeError, DataDomeSolution, DataDomeSurface,
+    detect_surface as datadome_detect_surface,
+};
+
+/// DataDome clearance outcome (aliased to avoid colliding with the cloudflare
+/// and imperva `ClearanceOutcome`).
+#[cfg(feature = "datadome")]
+pub use zendriver_datadome::ClearanceOutcome as DataDomeClearanceOutcome;
+
 /// Re-export the shared `UrlMatcher` used by `expect_*` and `monitor`.
 pub use url_matcher::UrlMatcher;
 
@@ -354,6 +366,18 @@ mod auto_trait_assertions {
         assert_send_sync::<CookieSnapshot>();
         assert_send_sync::<DetectionSnapshot>();
         assert_send_sync::<ImpervaClearanceOutcome>();
+    }
+
+    #[cfg(feature = "datadome")]
+    #[allow(unused_imports)]
+    use crate::{DataDomeBypass, DataDomeClearanceOutcome, DataDomeError, DataDomeSurface};
+    #[cfg(feature = "datadome")]
+    #[test]
+    fn datadome_surface_is_send_sync() {
+        assert_send_sync::<DataDomeBypass<'_>>();
+        assert_send_sync::<DataDomeError>();
+        assert_send_sync::<DataDomeSurface>();
+        assert_send_sync::<DataDomeClearanceOutcome>();
     }
 
     #[cfg(feature = "fetcher")]

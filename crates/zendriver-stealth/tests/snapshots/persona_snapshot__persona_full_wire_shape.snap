@@ -10,6 +10,7 @@ expression: p
   "timezone": "UTC",
   "locale": null,
   "webgl": null,
+  "webgpu": null,
   "canvas": null,
   "audio": null,
   "fonts": null,

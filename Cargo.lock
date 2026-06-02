@@ -3325,6 +3325,7 @@ dependencies = [
  "url",
  "wiremock",
  "zendriver-cloudflare",
+ "zendriver-datadome",
  "zendriver-fetcher",
  "zendriver-imperva",
  "zendriver-interception",
@@ -3343,6 +3344,22 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tracing",
+ "zendriver-transport",
+]
+
+[[package]]
+name = "zendriver-datadome"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tokio-util",
+ "tracing",
+ "zendriver-interception",
  "zendriver-transport",
 ]
 
