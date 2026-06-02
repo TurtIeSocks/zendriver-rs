@@ -7,6 +7,16 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SEMVER.md].
 
 ### Added
 
+- bs4-like combinable predicate finders on `find()`/`find_all()`: `tag`,
+  `attr`, `attr_contains`, `attr_starts_with`, `attr_ends_with`, `has_attr`,
+  `attr_regex`, `containing_text`, `text_equals`, `text_matches` (#55).
+- `select`/`select_all` CSS convenience aliases on `Tab`/`Frame`/`Element`.
+- Verified `include_frames()` finds elements in nested iframes (#239).
+- `tab.monitor()` — persistent network monitor: a `Stream<NetworkEvent>` over
+  HTTP exchanges (lazy body), WebSocket frames, and EventSource messages,
+  behind the `monitor` feature (#223).
+- `tab.request()` — browser-context HTTP (`get`/`post`/…) inheriting cookies +
+  CORS via in-page fetch, with opt-in `bypass_cors()` (#189).
 - `BrowserBuilder::preference(key, value)` — set Chrome profile preferences
   (merged into `Default/Preferences` at launch; dotted keys expand to nested
   objects). Port-owned temp profiles receive a default password-manager /
@@ -16,7 +26,6 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SEMVER.md].
   locks the unknown-field tolerance that shielded rs from the Chrome-146
   `sameParty` cookie break (nodriver #33/#34), and the Chrome version fallback
   (used on `chrome --version` probe failure) is bumped with a CI floor guard.
-
 - **Parity with nodriver / zendriver-py (phases P-A…P-D).** A large additive
   surface closing the feature gap with upstream while preserving every rs-only
   strength (3-tier stealth, single-socket flat transport, actionability,

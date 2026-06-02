@@ -11,6 +11,7 @@
 - [Input](./input.md)
 - [Interception](./interception.md)
 - [Expect()](./expect.md)
+- [Network monitor & HTTP](./network.md)
 - [Cloudflare](./cloudflare.md)
 - [Imperva WAF / Incapsula](./imperva.md)
 - [Fetcher](./fetcher.md)

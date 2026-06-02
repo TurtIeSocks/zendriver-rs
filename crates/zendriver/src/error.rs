@@ -72,6 +72,14 @@ pub enum ZendriverError {
         selector: String,
     },
 
+    /// A predicate method (`.tag`/`.attr`/`.containing_text`/…) was combined
+    /// with a single-selector method (`.css`/`.xpath`/`.text`/`.role`) on one
+    /// query. Use one selector style per query.
+    #[error(
+        "predicate methods (.tag/.attr/…) cannot be combined with .css()/.xpath()/.text()/.role(); use one selector style per query"
+    )]
+    ConflictingSelectors,
+
     /// Generic operation timeout.
     #[error("timed out after {0:?}")]
     Timeout(Duration),
@@ -149,6 +157,14 @@ pub enum ZendriverError {
     #[cfg(feature = "fetcher")]
     #[error("fetcher: {0}")]
     Fetcher(Box<zendriver_fetcher::FetcherError>),
+
+    /// Network monitor error (setup, task failure, CDP subscription problem).
+    #[error("network monitor: {0}")]
+    NetworkMonitor(String),
+
+    /// Browser-context HTTP request error.
+    #[error("browser request: {0}")]
+    Request(String),
 }
 
 impl From<zendriver_transport::TransportError> for ZendriverError {
@@ -385,6 +401,20 @@ mod tests {
     }
 
     #[test]
+    fn network_monitor_and_request_errors_render() {
+        assert!(
+            ZendriverError::NetworkMonitor("x".into())
+                .to_string()
+                .contains("monitor")
+        );
+        assert!(
+            ZendriverError::Request("y".into())
+                .to_string()
+                .contains("request")
+        );
+    }
+
+    #[test]
     fn from_stealth_error_works() {
         let se = zendriver_stealth::StealthError::ChromeVersionDetect("test".into());
         let ze: ZendriverError = se.into();
@@ -450,6 +480,13 @@ mod tests {
     fn display_history_navigation() {
         let e = ZendriverError::HistoryNavigation("no back history".into());
         assert_eq!(e.to_string(), "history navigation failed: no back history");
+    }
+
+    #[test]
+    fn conflicting_selectors_message() {
+        let e = ZendriverError::ConflictingSelectors;
+        assert!(e.to_string().contains("predicate"));
+        assert!(e.to_string().contains("css"));
     }
 
     #[test]

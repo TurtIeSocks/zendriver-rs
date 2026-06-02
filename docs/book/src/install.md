@@ -43,6 +43,7 @@ spawn calls.
 | (default)      | zendriver-transport, -stealth     | Navigation, queries, input, cookies, storage, screenshots, multi-tab     | none                                        |
 | `interception` | zendriver-interception            | Block/modify/serve requests via the Fetch CDP domain                     | none                                        |
 | `expect`       | (in-tree module)                  | Playwright-style `expect_request` / `expect_response` / `expect_dialog`  | none                                        |
+| `monitor`      | (in-tree module)                  | `tab.monitor()` — persistent `Stream<NetworkEvent>` (HTTP / WS / SSE)     | none                                        |
 | `cloudflare`   | zendriver-cloudflare, interception| Auto-solve Cloudflare Turnstile challenges                               | none                                        |
 | `fetcher`      | zendriver-fetcher                 | Download Chrome for Testing on-demand via the official JSON API         | `reqwest`, `zip`, `sha2`, `dirs`            |
 

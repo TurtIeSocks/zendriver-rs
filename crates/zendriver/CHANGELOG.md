@@ -5,6 +5,26 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-06-02
+
+
+## [0.2.4] - 2026-06-02
+
+### Added
+
+- PredicateSet types + CSS compilation
+- Predicate JS post-filter compilation
+- ConflictingSelectors variant
+- Predicate methods on FindBuilder
+- Predicate methods on FindAllBuilder
+- Predicate resolution + mixing guard at terminal
+- Select/select_all CSS aliases on Tab/Frame/Element
+
+### Changed
+
+- Simplify resolver match, drop dead helper, doc attr-name safety
+
+
 ## [0.2.3] - 2026-06-02
 
 ### Added

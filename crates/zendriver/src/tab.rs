@@ -523,6 +523,81 @@ impl Tab {
         &self.inner.session
     }
 
+    /// Start a persistent network monitor over this tab's session.
+    ///
+    /// Returns a [`crate::monitor::MonitorBuilder`]; configure an optional URL
+    /// filter via [`MonitorBuilder::url_pattern`](crate::monitor::MonitorBuilder::url_pattern)
+    /// then call
+    /// [`start()`](crate::monitor::MonitorBuilder::start) to obtain a
+    /// [`crate::monitor::NetworkMonitor`] — a
+    /// [`Stream`](futures::Stream)`<Item = `[`NetworkEvent`](crate::monitor::NetworkEvent)`>`
+    /// over HTTP exchanges, WebSocket frames, and EventSource messages. The
+    /// monitor is passive (CDP `Network` domain) — read-only; use the
+    /// `interception` feature to modify requests.
+    ///
+    /// Dropping the returned monitor (or calling
+    /// [`stop()`](crate::monitor::NetworkMonitor::stop)) cancels its background
+    /// task.
+    ///
+    /// Gated by the `monitor` cargo feature.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use futures::StreamExt;
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let mut monitor = tab.monitor().url_pattern("/api/").start().await?;
+    /// tab.goto("https://example.com").await?;
+    /// while let Some(event) = monitor.next().await {
+    ///     if let zendriver::NetworkEvent::Http(exchange) = event {
+    ///         println!("{} -> {:?}", exchange.request.url, exchange.status());
+    ///     }
+    /// }
+    /// # Ok(()) }
+    /// ```
+    #[cfg(feature = "monitor")]
+    pub fn monitor(&self) -> crate::monitor::MonitorBuilder {
+        crate::monitor::MonitorBuilder::new(self.session().clone())
+    }
+
+    /// Make an HTTP request from the browser context (inherits cookies/CORS).
+    ///
+    /// Returns a [`RequestBuilder`][crate::request::RequestBuilder] that lets
+    /// you set the method, URL, headers, and body. Call
+    /// [`send()`][crate::request::RequestBuilder::send] to execute via
+    /// in-page `fetch`, or chain
+    /// [`bypass_cors()`][crate::request::RequestBuilder::bypass_cors] first to
+    /// use the privileged `Network.loadNetworkResource` path (GET only).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use serde_json::json;
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    ///
+    /// // Simple GET
+    /// let resp = tab.request().get("https://example.com/api/data").send().await?;
+    /// println!("status={} body={}", resp.status(), resp.text()?);
+    ///
+    /// // POST with a JSON body
+    /// let resp = tab
+    ///     .request()
+    ///     .post("https://example.com/api/echo")
+    ///     .json(&json!({"key": "value"}))?
+    ///     .send()
+    ///     .await?;
+    /// println!("status={} body={}", resp.status(), resp.text()?);
+    /// # Ok(()) }
+    /// ```
+    pub fn request(&self) -> crate::request::RequestBuilder<'_> {
+        crate::request::RequestBuilder::new(self)
+    }
+
     /// The top-level [`Frame`] for this tab.
     ///
     /// First call dispatches `Page.getFrameTree` on the tab's session,
@@ -2187,6 +2262,51 @@ impl Tab {
     /// ```
     pub fn find_all(&self) -> crate::query::FindAllBuilder<'_> {
         crate::query::FindAllBuilder::new_for_tab(self)
+    }
+
+    /// Find one element by CSS selector. Python-parity convenience for
+    /// `find().css(sel).one()`. For modifiers (frames / nth / timeout) use the
+    /// builder directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::ElementNotFound`] if no element matches.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// let h1 = tab.select("h1").await?;
+    /// # let _ = h1;
+    /// # Ok(()) }
+    /// ```
+    pub async fn select(&self, css: &str) -> crate::error::Result<crate::Element> {
+        self.find().css(css).one().await
+    }
+
+    /// Find all elements by CSS selector. Python-parity convenience for
+    /// `find_all().css(sel).many()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::ElementNotFound`] if no elements match.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// let links = tab.select_all("a").await?;
+    /// println!("{} links", links.len());
+    /// # Ok(()) }
+    /// ```
+    pub async fn select_all(&self, css: &str) -> crate::error::Result<Vec<crate::Element>> {
+        self.find_all().css(css).many().await
     }
 
     /// Collect every linked URL on the page — the `href` of `[href]` elements

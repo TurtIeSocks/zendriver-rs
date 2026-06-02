@@ -25,9 +25,73 @@
 //! `.one()` (errors on empty), `.one_or_none()` (returns `None`). Terminals
 //! on [`FindAllBuilder`]: `.many()` (errors on empty), `.many_or_empty()`
 //! (returns empty `Vec`).
+//!
+//! # Predicate mode (bs4-like combinable matchers)
+//!
+//! Ten predicate methods let you match elements without writing a CSS
+//! selector by hand. All active predicates are AND-ed together:
+//!
+//! | Method | Matches |
+//! |---|---|
+//! | `.tag(name)` | element tag name |
+//! | `.attr(name, value)` | exact attribute value — `[name="value"]` |
+//! | `.attr_contains(name, sub)` | attribute contains substring — `[name*="sub"]` |
+//! | `.attr_starts_with(name, pre)` | attribute value prefix — `[name^="pre"]` |
+//! | `.attr_ends_with(name, suf)` | attribute value suffix — `[name$="suf"]` |
+//! | `.has_attr(name)` | attribute is present — `[name]` |
+//! | `.attr_regex(name, pat)` | attribute value matches JS regex (post-filter) |
+//! | `.containing_text(sub)` | element text contains substring (post-filter) |
+//! | `.text_equals(exact)` | trimmed element text equals string (post-filter) |
+//! | `.text_matches(pat)` | element text matches JS regex (post-filter) |
+//!
+//! Structural predicates (`.tag`, `.attr*`, `.has_attr`) compile to a single
+//! CSS selector that the browser evaluates natively. Regex and text
+//! predicates (`.attr_regex`, `.containing_text`, `.text_equals`,
+//! `.text_matches`) are applied as a JS post-filter over the CSS candidates —
+//! so the browser does the heavy lifting and only the survivors are inspected
+//! in JS.
+//!
+//! **Mixing rule:** predicate methods cannot be combined with single-selector
+//! methods (`.css()`, `.xpath()`, `.text*()`, `.role*()`). Using both on one
+//! builder returns `Err(`[`crate::ZendriverError::ConflictingSelectors`]`)` at
+//! the terminal (`.one()` / `.many()` / etc.).
+//!
+//! ```no_run
+//! # async fn ex() -> zendriver::Result<()> {
+//! # let browser = zendriver::Browser::builder().launch().await?;
+//! # let tab = browser.main_tab();
+//! tab.goto("https://example.com").await?;
+//! // Predicate find: button whose class contains "primary" and text starts with "Buy"
+//! let btn = tab
+//!     .find()
+//!     .tag("button")
+//!     .attr_contains("class", "primary")
+//!     .containing_text("Buy")
+//!     .one()
+//!     .await?;
+//! // CSS convenience alias (equivalent to find().css(…).many())
+//! let links = tab.select_all("nav a").await?;
+//! # let _ = (btn, links);
+//! # Ok(()) }
+//! ```
+//!
+//! # Note: predicate elements are not auto-refreshable
+//!
+//! Elements found through predicate methods carry an *Evaluation* origin
+//! (they are the result of a `Runtime.evaluate` / `callFunctionOn` call that
+//! embeds the full predicate expression). Because the predicate set — especially
+//! the regex and text post-filters — cannot be reduced to a single stored
+//! selector string, the returned [`crate::Element`] handles **cannot be
+//! transparently re-fetched** if the element is detached and the query needs
+//! to be retried.
+//!
+//! Elements found via `.css()`, `.xpath()`, or the other single-selector
+//! kinds are refreshable as before — they carry a stored selector that the
+//! query layer can re-issue against the live DOM.
 
 pub mod actionability;
 pub mod modifiers;
+pub(crate) mod predicate;
 pub mod role;
 pub mod selectors;
 
@@ -106,11 +170,178 @@ use tokio::time::Instant;
 use crate::element::Element;
 use crate::error::{Result, ZendriverError};
 use crate::frame::Frame;
+use crate::query::predicate::{AttrPred, PredicateSet, TextPred};
 use crate::query::selectors::{QueryScope, RemoteRef, SelectorKind, text_len_of};
 use crate::tab::Tab;
 
+/// Generates the 10 predicate setters shared by `FindBuilder` + `FindAllBuilder`.
+/// Both structs must have a `predicates: PredicateSet` field.
+macro_rules! predicate_methods {
+    () => {
+        /// Match by tag name (compiles into the CSS selector). Predicate mode.
+        #[must_use]
+        pub fn tag(mut self, name: impl Into<String>) -> Self {
+            self.predicates.tag = Some(name.into());
+            self
+        }
+        /// Match an exact attribute value `[name="value"]`.
+        #[must_use]
+        pub fn attr(mut self, name: &str, value: &str) -> Self {
+            self.predicates
+                .attrs
+                .push(AttrPred::Exact(name.into(), value.into()));
+            self
+        }
+        /// Match a substring of an attribute value `[name*="sub"]`.
+        #[must_use]
+        pub fn attr_contains(mut self, name: &str, sub: &str) -> Self {
+            self.predicates
+                .attrs
+                .push(AttrPred::Contains(name.into(), sub.into()));
+            self
+        }
+        /// Match an attribute value prefix `[name^="pre"]`.
+        #[must_use]
+        pub fn attr_starts_with(mut self, name: &str, pre: &str) -> Self {
+            self.predicates
+                .attrs
+                .push(AttrPred::StartsWith(name.into(), pre.into()));
+            self
+        }
+        /// Match an attribute value suffix `[name$="suf"]`.
+        #[must_use]
+        pub fn attr_ends_with(mut self, name: &str, suf: &str) -> Self {
+            self.predicates
+                .attrs
+                .push(AttrPred::EndsWith(name.into(), suf.into()));
+            self
+        }
+        /// Require the attribute be present `[name]`.
+        #[must_use]
+        pub fn has_attr(mut self, name: &str) -> Self {
+            self.predicates.attrs.push(AttrPred::Has(name.into()));
+            self
+        }
+        /// Match an attribute value against a JS regex (post-filter).
+        #[must_use]
+        pub fn attr_regex(mut self, name: &str, pattern: &str) -> Self {
+            self.predicates
+                .attrs
+                .push(AttrPred::Regex(name.into(), pattern.into()));
+            self
+        }
+        /// Match elements whose text contains `sub` (post-filter).
+        #[must_use]
+        pub fn containing_text(mut self, sub: &str) -> Self {
+            self.predicates.texts.push(TextPred::Contains(sub.into()));
+            self
+        }
+        /// Match elements whose trimmed text equals `exact` (post-filter).
+        #[must_use]
+        pub fn text_equals(mut self, exact: &str) -> Self {
+            self.predicates.texts.push(TextPred::Equals(exact.into()));
+            self
+        }
+        /// Match elements whose text matches a JS regex `pattern` (post-filter).
+        #[must_use]
+        pub fn text_matches(mut self, pattern: &str) -> Self {
+            self.predicates
+                .texts
+                .push(TextPred::Matches(pattern.into()));
+            self
+        }
+    };
+}
+
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// `true` when a query mixes a single-selector kind (`.css`/`.xpath`/
+/// `.text*`/`.role*`) with bs4-like predicate methods (`.tag`/`.attr`/…).
+/// The two styles are mutually exclusive; a terminal that sees a conflict
+/// returns [`ZendriverError::ConflictingSelectors`] before dispatching any
+/// CDP call. Extracted as a free function so the rule is unit-testable
+/// without constructing a `Tab`.
+fn has_conflict(selector: &Option<SelectorKind>, predicates: &PredicateSet) -> bool {
+    selector.is_some() && !predicates.is_empty()
+}
+
+/// What a terminal resolves: either a single [`SelectorKind`] (with its
+/// effective `best_match` flag) or a [`PredicateSet`]. Unifying the two
+/// behind one type lets the poll loop, `nth`/`visible_only` pick, the
+/// cross-frame fan-out, and `Element` synthesis be written ONCE — only
+/// the per-scope candidate fetch and the synthesis provenance differ.
+enum Resolver<'a> {
+    /// Single-selector path. `best_match` is the already-resolved
+    /// effective flag (`effective_best_match`), honored only for text
+    /// selectors. Synthesizes elements with full `Query` provenance so
+    /// `Element::refresh` can re-run the selector.
+    Selector {
+        selector: &'a SelectorKind,
+        best_match: bool,
+    },
+    /// Predicate path. Synthesizes elements with `Evaluation` provenance
+    /// (not auto-refreshable): the `Query` origin only carries a
+    /// `SelectorKind`, and compiling a `PredicateSet` down to one would
+    /// silently drop the regex/text post-filters on refresh — returning a
+    /// *different* element. Losing refresh is the honest, correct choice
+    /// over a refresh that re-resolves to the wrong node.
+    Predicate { predicates: &'a PredicateSet },
+}
+
+impl Resolver<'_> {
+    /// Resolve every candidate against `scope` in document order.
+    async fn resolve(&self, scope: &QueryScope<'_>) -> Result<Vec<RemoteRef>> {
+        match self {
+            Resolver::Selector {
+                selector,
+                best_match,
+            } => selector.resolve_many_inner(scope, *best_match).await,
+            Resolver::Predicate { predicates } => {
+                crate::query::selectors::resolve_predicate_many(scope, predicates).await
+            }
+        }
+    }
+
+    /// Wrap a resolved `RemoteRef` into an `Element`, preserving the
+    /// provenance appropriate to this resolver (see the variant docs).
+    fn synthesize(&self, r: RemoteRef, scope: &QueryScope<'_>, nth: usize) -> Element {
+        match self {
+            Resolver::Selector { selector, .. } => {
+                Element::synthesize_query(r, scope, selector, nth)
+            }
+            Resolver::Predicate { .. } => Element::from_jsret(
+                scope.synthesize_tab(),
+                r.backend_node_id,
+                r.remote_object_id,
+            ),
+        }
+    }
+
+    /// Short, log-friendly description for the `ElementNotFound` payload.
+    fn describe(&self) -> String {
+        match self {
+            Resolver::Selector { selector, .. } => describe_selector(selector),
+            Resolver::Predicate { predicates } => describe_predicates(predicates),
+        }
+    }
+
+    /// `Some(selector)` only when this is a text selector with `best_match`
+    /// active — the single case where the cross-frame fan-out runs the
+    /// closest-text-length scoring path (`consider_scope_best` /
+    /// `text_len_of`). Predicate and non-best-match selector resolvers
+    /// return `None`, so they take the cheaper "first hit / concatenate"
+    /// cross-frame branch.
+    fn best_match_selector(&self) -> Option<&SelectorKind> {
+        match self {
+            Resolver::Selector {
+                selector,
+                best_match: true,
+            } => Some(selector),
+            _ => None,
+        }
+    }
+}
 
 /// Chainable single-element query builder.
 ///
@@ -152,6 +383,9 @@ pub struct FindBuilder<'scope> {
     /// `tab = None`).
     pub(crate) frame: Option<&'scope Frame>,
     pub(crate) selector: Option<SelectorKind>,
+    /// Accumulated bs4-like predicates. Mutually exclusive with `selector`
+    /// (enforced at the terminal — see `one`/`one_or_none`).
+    pub(crate) predicates: PredicateSet,
     pub(crate) timeout: Duration,
     pub(crate) nth: Option<usize>,
     pub(crate) visible_only: bool,
@@ -176,12 +410,15 @@ pub struct FindBuilder<'scope> {
 }
 
 impl<'scope> FindBuilder<'scope> {
+    predicate_methods! {}
+
     pub(crate) fn new_for_tab(tab: &'scope Tab) -> Self {
         Self {
             tab: Some(tab),
             element: None,
             frame: None,
             selector: None,
+            predicates: Default::default(),
             timeout: DEFAULT_TIMEOUT,
             nth: None,
             visible_only: false,
@@ -202,6 +439,7 @@ impl<'scope> FindBuilder<'scope> {
             element: Some(element),
             frame: None,
             selector: None,
+            predicates: Default::default(),
             timeout: DEFAULT_TIMEOUT,
             nth: None,
             visible_only: false,
@@ -222,6 +460,7 @@ impl<'scope> FindBuilder<'scope> {
             element: None,
             frame: Some(frame),
             selector: None,
+            predicates: Default::default(),
             timeout: DEFAULT_TIMEOUT,
             nth: None,
             visible_only: false,
@@ -487,6 +726,7 @@ impl<'scope> FindBuilder<'scope> {
             element: self.element,
             frame: self.frame,
             selector: self.selector,
+            predicates: self.predicates,
             timeout: self.timeout,
             nth: self.nth,
             visible_only: self.visible_only,
@@ -587,13 +827,41 @@ impl<'scope> FindBuilder<'scope> {
     /// # Ok(()) }
     /// ```
     pub async fn one(self) -> Result<Element> {
-        let selector = self.selector.ok_or_else(|| {
-            ZendriverError::Navigation(
-                "FindBuilder requires a selector (.css/.xpath/.text/.role/...)".into(),
-            )
-        })?;
+        // Mixing a single-selector kind with predicate methods is a usage
+        // error — reject it before any CDP dispatch.
+        if has_conflict(&self.selector, &self.predicates) {
+            return Err(ZendriverError::ConflictingSelectors);
+        }
+        let predicate_mode = !self.predicates.is_empty();
+        let selector = if predicate_mode {
+            None
+        } else {
+            Some(self.selector.ok_or_else(|| {
+                ZendriverError::Navigation(
+                    "FindBuilder requires a selector (.css/.xpath/.text/.role/...) or a predicate (.tag/.attr/...)"
+                        .into(),
+                )
+            })?)
+        };
+        // `best_match` only applies to text selectors; it is meaningless
+        // (and unset) in predicate mode.
+        let best_match = selector
+            .as_ref()
+            .is_some_and(|s| effective_best_match(self.best_match, s));
+        // `selector` is `Some` iff we are *not* in predicate mode (the
+        // `else` arm above either bound it or returned early), so the
+        // resolver follows directly from whether a selector is present.
+        let resolver = match &selector {
+            Some(sel) => Resolver::Selector {
+                selector: sel,
+                best_match,
+            },
+            None => Resolver::Predicate {
+                predicates: &self.predicates,
+            },
+        };
+
         let deadline = Instant::now() + self.timeout;
-        let best_match = effective_best_match(self.best_match, &selector);
         let want_nth = self.nth.unwrap_or(0);
 
         // `include_frames` only fans out for a plain Tab-scoped builder.
@@ -605,7 +873,7 @@ impl<'scope> FindBuilder<'scope> {
             && self.frame.is_none();
 
         if let (true, Some(tab)) = (fan_frames, self.tab) {
-            return one_across_frames(tab, &selector, best_match, want_nth, deadline).await;
+            return one_across_frames(tab, &resolver, want_nth, deadline).await;
         }
 
         // Precedence: Element > in_frame override > Frame > Tab.
@@ -628,7 +896,7 @@ impl<'scope> FindBuilder<'scope> {
             }
         };
         loop {
-            let candidates = selector.resolve_many_inner(&scope, best_match).await?;
+            let candidates = resolver.resolve(&scope).await?;
 
             // Visible-only filter: TODO(T16) — depends on
             // `actionability::check_visible`, which depends on
@@ -638,13 +906,11 @@ impl<'scope> FindBuilder<'scope> {
             let filtered = candidates;
 
             if let Some(picked) = filtered.into_iter().nth(want_nth) {
-                return Ok(Element::synthesize_query(
-                    picked, &scope, &selector, want_nth,
-                ));
+                return Ok(resolver.synthesize(picked, &scope, want_nth));
             }
             if Instant::now() >= deadline {
                 return Err(ZendriverError::ElementNotFound {
-                    selector: describe_selector(&selector),
+                    selector: resolver.describe(),
                 });
             }
             tokio::time::sleep(POLL_INTERVAL).await;
@@ -709,6 +975,9 @@ pub struct FindAllBuilder<'scope> {
     /// [`FindAllBuilder::new_for_frame`].
     pub(crate) frame: Option<&'scope Frame>,
     pub(crate) selector: Option<SelectorKind>,
+    /// Accumulated bs4-like predicates. Mutually exclusive with `selector`
+    /// (enforced at the terminal — see `many`/`many_or_empty`).
+    pub(crate) predicates: PredicateSet,
     pub(crate) timeout: Duration,
     pub(crate) visible_only: bool,
     /// Frame override populated by [`FindAllBuilder::in_frame`]. See
@@ -726,12 +995,15 @@ pub struct FindAllBuilder<'scope> {
 }
 
 impl<'scope> FindAllBuilder<'scope> {
+    predicate_methods! {}
+
     pub(crate) fn new_for_tab(tab: &'scope Tab) -> Self {
         Self {
             tab: Some(tab),
             element: None,
             frame: None,
             selector: None,
+            predicates: Default::default(),
             timeout: DEFAULT_TIMEOUT,
             visible_only: false,
             in_frame: None,
@@ -750,6 +1022,7 @@ impl<'scope> FindAllBuilder<'scope> {
             element: Some(element),
             frame: None,
             selector: None,
+            predicates: Default::default(),
             timeout: DEFAULT_TIMEOUT,
             visible_only: false,
             in_frame: None,
@@ -767,6 +1040,7 @@ impl<'scope> FindAllBuilder<'scope> {
             element: None,
             frame: Some(frame),
             selector: None,
+            predicates: Default::default(),
             timeout: DEFAULT_TIMEOUT,
             visible_only: false,
             in_frame: None,
@@ -871,6 +1145,7 @@ impl<'scope> FindAllBuilder<'scope> {
             element: self.element,
             frame: self.frame,
             selector: self.selector,
+            predicates: self.predicates,
             timeout: self.timeout,
             visible_only: self.visible_only,
             in_frame: Some(frame),
@@ -941,13 +1216,38 @@ impl<'scope> FindAllBuilder<'scope> {
     /// # Ok(()) }
     /// ```
     pub async fn many(self) -> Result<Vec<Element>> {
-        let selector = self.selector.ok_or_else(|| {
-            ZendriverError::Navigation(
-                "FindAllBuilder requires a selector (.css/.xpath/.text/.role/...)".into(),
-            )
-        })?;
+        // Reject mixing single-selector + predicate methods before any
+        // CDP dispatch (see `FindBuilder::one`).
+        if has_conflict(&self.selector, &self.predicates) {
+            return Err(ZendriverError::ConflictingSelectors);
+        }
+        let predicate_mode = !self.predicates.is_empty();
+        let selector = if predicate_mode {
+            None
+        } else {
+            Some(self.selector.ok_or_else(|| {
+                ZendriverError::Navigation(
+                    "FindAllBuilder requires a selector (.css/.xpath/.text/.role/...) or a predicate (.tag/.attr/...)"
+                        .into(),
+                )
+            })?)
+        };
+        let best_match = selector
+            .as_ref()
+            .is_some_and(|s| effective_best_match(self.best_match, s));
+        // See `FindBuilder::one`: `selector` is `Some` iff not in predicate
+        // mode, so the resolver follows directly from its presence.
+        let resolver = match &selector {
+            Some(sel) => Resolver::Selector {
+                selector: sel,
+                best_match,
+            },
+            None => Resolver::Predicate {
+                predicates: &self.predicates,
+            },
+        };
+
         let deadline = Instant::now() + self.timeout;
-        let best_match = effective_best_match(self.best_match, &selector);
 
         let fan_frames = self.include_frames
             && self.element.is_none()
@@ -955,7 +1255,7 @@ impl<'scope> FindAllBuilder<'scope> {
             && self.frame.is_none();
 
         if let (true, Some(tab)) = (fan_frames, self.tab) {
-            return many_across_frames(tab, &selector, best_match, deadline).await;
+            return many_across_frames(tab, &resolver, deadline).await;
         }
 
         // See `FindBuilder::one` for the precedence rationale.
@@ -971,7 +1271,7 @@ impl<'scope> FindAllBuilder<'scope> {
             }
         };
         loop {
-            let candidates = selector.resolve_many_inner(&scope, best_match).await?;
+            let candidates = resolver.resolve(&scope).await?;
 
             // Visible-only filter: TODO(T16) — depends on
             // `actionability::check_visible`, which depends on
@@ -985,13 +1285,13 @@ impl<'scope> FindAllBuilder<'scope> {
                 let elements: Vec<Element> = filtered
                     .into_iter()
                     .enumerate()
-                    .map(|(i, r)| Element::synthesize_query(r, &scope, &selector, i))
+                    .map(|(i, r)| resolver.synthesize(r, &scope, i))
                     .collect();
                 return Ok(elements);
             }
             if Instant::now() >= deadline {
                 return Err(ZendriverError::ElementNotFound {
-                    selector: describe_selector(&selector),
+                    selector: resolver.describe(),
                 });
             }
             tokio::time::sleep(POLL_INTERVAL).await;
@@ -1068,20 +1368,20 @@ fn effective_best_match(requested: bool, sel: &SelectorKind) -> bool {
 /// (main before frames, frames in registry order).
 async fn one_across_frames(
     tab: &Tab,
-    selector: &SelectorKind,
-    best_match: bool,
+    resolver: &Resolver<'_>,
     want_nth: usize,
     deadline: Instant,
 ) -> Result<Element> {
     loop {
         let frames = tab.frames().await?;
 
-        if best_match {
+        if let Some(selector) = resolver.best_match_selector() {
             // Gather each scope's nth candidate + its text-length distance
             // to the needle, then pick the global minimum. The per-scope
             // JS sort already puts the closest-length candidate at index
             // `want_nth`; we re-read its raw length here and recompute the
-            // distance to compare *across* scopes.
+            // distance to compare *across* scopes. Only text selectors
+            // with `best_match` reach here (see `best_match_selector`).
             let needle_len = needle_len_of(selector).unwrap_or(0);
             let mut best: Option<(usize, RemoteRef, ScopeTag)> = None;
             let main_scope = QueryScope::Tab(tab);
@@ -1117,30 +1417,26 @@ async fn one_across_frames(
             }
         } else {
             // First hit wins: main first, then frames in registry order.
+            // Covers both plain selectors and the predicate path (which
+            // never uses best_match). `resolver.resolve` dispatches the
+            // per-scope query — predicate or selector — against each scope.
             let main_scope = QueryScope::Tab(tab);
-            let main_hits = selector.resolve_many_inner(&main_scope, false).await?;
+            let main_hits = resolver.resolve(&main_scope).await?;
             if let Some(picked) = main_hits.into_iter().nth(want_nth) {
-                return Ok(Element::synthesize_query(
-                    picked,
-                    &main_scope,
-                    selector,
-                    want_nth,
-                ));
+                return Ok(resolver.synthesize(picked, &main_scope, want_nth));
             }
             for frame in &frames {
                 let scope = QueryScope::Frame(frame);
-                let hits = selector.resolve_many_inner(&scope, false).await?;
+                let hits = resolver.resolve(&scope).await?;
                 if let Some(picked) = hits.into_iter().nth(want_nth) {
-                    return Ok(Element::synthesize_query(
-                        picked, &scope, selector, want_nth,
-                    ));
+                    return Ok(resolver.synthesize(picked, &scope, want_nth));
                 }
             }
         }
 
         if Instant::now() >= deadline {
             return Err(ZendriverError::ElementNotFound {
-                selector: describe_selector(selector),
+                selector: resolver.describe(),
             });
         }
         tokio::time::sleep(POLL_INTERVAL).await;
@@ -1153,8 +1449,7 @@ async fn one_across_frames(
 /// or the deadline passes (mirroring the single-scope `many()` loop).
 async fn many_across_frames(
     tab: &Tab,
-    selector: &SelectorKind,
-    best_match: bool,
+    resolver: &Resolver<'_>,
     deadline: Instant,
 ) -> Result<Vec<Element>> {
     loop {
@@ -1162,23 +1457,13 @@ async fn many_across_frames(
         let mut elements: Vec<Element> = Vec::new();
 
         let main_scope = QueryScope::Tab(tab);
-        for (i, r) in selector
-            .resolve_many_inner(&main_scope, best_match)
-            .await?
-            .into_iter()
-            .enumerate()
-        {
-            elements.push(Element::synthesize_query(r, &main_scope, selector, i));
+        for (i, r) in resolver.resolve(&main_scope).await?.into_iter().enumerate() {
+            elements.push(resolver.synthesize(r, &main_scope, i));
         }
         for frame in &frames {
             let scope = QueryScope::Frame(frame);
-            for (i, r) in selector
-                .resolve_many_inner(&scope, best_match)
-                .await?
-                .into_iter()
-                .enumerate()
-            {
-                elements.push(Element::synthesize_query(r, &scope, selector, i));
+            for (i, r) in resolver.resolve(&scope).await?.into_iter().enumerate() {
+                elements.push(resolver.synthesize(r, &scope, i));
             }
         }
 
@@ -1187,7 +1472,7 @@ async fn many_across_frames(
         }
         if Instant::now() >= deadline {
             return Err(ZendriverError::ElementNotFound {
-                selector: describe_selector(selector),
+                selector: resolver.describe(),
             });
         }
         tokio::time::sleep(POLL_INTERVAL).await;
@@ -1257,6 +1542,19 @@ fn describe_selector(sel: &SelectorKind) -> String {
         SelectorKind::Role(role, Some(name)) => {
             format!("role_named({}, {name})", role.to_css())
         }
+    }
+}
+
+/// Render a short, log-friendly description of a [`PredicateSet`] for the
+/// `ElementNotFound { selector }` payload — the compiled CSS selector,
+/// plus the JS post-filter when any `attr_regex`/text predicate is set.
+fn describe_predicates(pred: &PredicateSet) -> String {
+    let css = pred.to_css_selector();
+    let filter = pred.to_js_filter();
+    if filter == "true" {
+        format!("predicate(css={css})")
+    } else {
+        format!("predicate(css={css}, filter={filter})")
     }
 }
 
@@ -1943,6 +2241,132 @@ mod tests {
     /// main scope returns an empty array, then the single registered frame's
     /// session resolves one node — `.one()` must return it, dispatching the
     /// frame query on the frame's own session.
+    // --- T4/T5: predicate builder accumulation (separate nested mod) ---
+    #[cfg(test)]
+    mod predicate_builder_tests {
+        use super::super::*;
+        use crate::query::predicate::{AttrPred, TextPred};
+
+        fn bare() -> FindBuilder<'static> {
+            FindBuilder {
+                tab: None,
+                element: None,
+                frame: None,
+                selector: None,
+                predicates: Default::default(),
+                timeout: DEFAULT_TIMEOUT,
+                nth: None,
+                visible_only: false,
+                in_frame: None,
+                include_frames: false,
+                best_match: false,
+            }
+        }
+
+        #[test]
+        fn predicate_methods_accumulate() {
+            let b = bare()
+                .tag("div")
+                .attr("data-x", "y")
+                .attr_contains("class", "z")
+                .has_attr("ready")
+                .attr_regex("id", r"\d+")
+                .containing_text("Buy")
+                .text_equals("OK")
+                .text_matches(r"^\$");
+            assert_eq!(b.predicates.tag.as_deref(), Some("div"));
+            assert_eq!(b.predicates.attrs.len(), 4);
+            assert_eq!(b.predicates.texts.len(), 3);
+            assert!(matches!(b.predicates.attrs[0], AttrPred::Exact(_, _)));
+            assert!(matches!(b.predicates.texts[2], TextPred::Matches(_)));
+        }
+
+        fn bare_all() -> FindAllBuilder<'static> {
+            FindAllBuilder {
+                tab: None,
+                element: None,
+                frame: None,
+                selector: None,
+                predicates: Default::default(),
+                timeout: DEFAULT_TIMEOUT,
+                visible_only: false,
+                in_frame: None,
+                include_frames: false,
+                best_match: false,
+            }
+        }
+
+        #[test]
+        fn find_all_predicates_accumulate() {
+            let b = bare_all().tag("a").has_attr("href").containing_text("Next");
+            assert_eq!(b.predicates.tag.as_deref(), Some("a"));
+            assert_eq!(b.predicates.attrs.len(), 1);
+            assert_eq!(b.predicates.texts.len(), 1);
+        }
+
+        // --- T6: conflict guard (unit-testable without a Tab) ----------
+
+        /// A `PredicateSet` carrying a single `tag` — enough to make
+        /// `is_empty()` false for the conflict-guard tests.
+        fn tag_pred(tag: &str) -> PredicateSet {
+            PredicateSet {
+                tag: Some(tag.into()),
+                ..Default::default()
+            }
+        }
+
+        #[test]
+        fn has_conflict_true_when_both_selector_and_predicate_set() {
+            let sel = Some(SelectorKind::Css("div".into()));
+            assert!(has_conflict(&sel, &tag_pred("span")));
+        }
+
+        #[test]
+        fn has_conflict_false_for_selector_only() {
+            let sel = Some(SelectorKind::Css("div".into()));
+            assert!(!has_conflict(&sel, &PredicateSet::default()));
+        }
+
+        #[test]
+        fn has_conflict_false_for_predicate_only() {
+            assert!(!has_conflict(&None, &tag_pred("span")));
+        }
+
+        #[test]
+        fn has_conflict_false_when_neither_set() {
+            assert!(!has_conflict(&None, &PredicateSet::default()));
+        }
+
+        #[test]
+        fn builder_with_css_and_tag_reports_conflict() {
+            // The terminal reads `has_conflict(&self.selector,
+            // &self.predicates)` first; mirror that here so the guard's
+            // builder-level wiring is covered without a browser.
+            let mut b = bare();
+            b.selector = Some(SelectorKind::Css("div".into()));
+            b = b.tag("span");
+            assert!(has_conflict(&b.selector, &b.predicates));
+        }
+
+        #[test]
+        fn describe_predicates_renders_css_and_filter() {
+            // CSS-only (no post-filter) omits the filter clause.
+            assert_eq!(
+                describe_predicates(&tag_pred("button")),
+                "predicate(css=button)"
+            );
+            // Adding a text predicate adds the JS post-filter to the label.
+            let pred = PredicateSet {
+                tag: Some("button".into()),
+                texts: vec![TextPred::Contains("Buy".into())],
+                ..Default::default()
+            };
+            let d = describe_predicates(&pred);
+            assert!(d.starts_with("predicate(css=button, filter="), "{d}");
+            assert!(d.contains("includes"), "{d}");
+        }
+    }
+
     #[tokio::test]
     async fn include_frames_one_falls_through_to_frame() {
         let (mut mock, conn) = MockConnection::pair();
