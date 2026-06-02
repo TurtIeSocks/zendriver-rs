@@ -320,6 +320,12 @@ pub(crate) struct TabInner {
     /// `None` when there is no pending navigation — `wait_for_load` falls
     /// back to a fresh subscribe + `document.readyState` short-circuit.
     pub(crate) pending_load: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    /// Whether a download path / behavior has been established for this Tab
+    /// (via [`Tab::set_download_path`] or a prior [`Tab::download_file`]).
+    /// Mirrors nodriver's `_download_behavior` guard: [`Tab::download_file`]
+    /// only installs a default `cwd/downloads` path when this is still
+    /// `false`, so it never clobbers a directory the caller chose explicitly.
+    pub(crate) download_behavior_set: std::sync::atomic::AtomicBool,
 }
 
 impl Drop for TabInner {
@@ -404,6 +410,7 @@ impl Tab {
                 frames,
                 frame_lifecycle_cancel,
                 pending_load: tokio::sync::Mutex::new(None),
+                download_behavior_set: std::sync::atomic::AtomicBool::new(false),
             }
         });
 
@@ -2119,6 +2126,103 @@ impl Tab {
                 None,
             )
             .await?;
+        self.inner
+            .download_behavior_set
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Download the resource at `url` into the tab's download directory,
+    /// driven entirely from the page itself.
+    ///
+    /// Ports nodriver's `download_file` mechanism: it injects a main-world
+    /// script that `fetch`es `url`, wraps the response body in a `Blob`,
+    /// creates an object URL, and clicks a synthetic `<a download>` anchor —
+    /// so the bytes flow through the page's own network context (cookies,
+    /// referer, same-origin credentials) and Chrome saves them via the
+    /// configured download behavior. The anchor is removed and the object URL
+    /// revoked shortly after the click.
+    ///
+    /// If no download directory has been set on this tab (via
+    /// [`Tab::set_download_path`] or an earlier `download_file`), a default of
+    /// `<cwd>/downloads` is created and installed first — matching nodriver.
+    /// When `filename` is `None` the saved name is derived from the URL's last
+    /// path segment (query string stripped).
+    ///
+    /// Returns once the injection script has been dispatched — it does **not**
+    /// wait for the download to finish. For await/inspect semantics use
+    /// [`Tab::expect_download`] (gated by the `expect` feature).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Io`] if the default download directory cannot
+    /// be created; propagates [`ZendriverError::JsException`] if the injected
+    /// fetch/anchor script raises (e.g. a CORS-blocked `fetch`).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.set_download_path("/tmp/dl").await?;
+    /// tab.download_file("https://example.com/file.pdf", None).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn download_file(
+        &self,
+        url: impl Into<String>,
+        filename: Option<PathBuf>,
+    ) -> Result<()> {
+        let url = url.into();
+
+        // Establish a default download directory if the caller never set one
+        // (mirrors nodriver's `_download_behavior` guard so we don't clobber
+        // an explicitly-chosen directory).
+        if !self
+            .inner
+            .download_behavior_set
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            let dir = std::env::current_dir()?.join("downloads");
+            std::fs::create_dir_all(&dir)?;
+            self.set_download_path(dir).await?;
+        }
+
+        // Derive the saved filename from the URL tail (query stripped) when
+        // not supplied, matching nodriver.
+        let filename = filename
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| {
+                url.rsplit('/')
+                    .next()
+                    .unwrap_or("")
+                    .split('?')
+                    .next()
+                    .unwrap_or("")
+                    .to_string()
+            });
+
+        // Inject the fetch→blob→anchor[download]→click sequence into the page
+        // main world (the document's own network context). Values are JSON-
+        // encoded so quotes/specials in the URL or filename can't break out.
+        let url_lit = serde_json::to_string(&url)?;
+        let name_lit = serde_json::to_string(&filename)?;
+        let js = format!(
+            "(async () => {{ \
+                const response = await fetch({url_lit}); \
+                const blob = await response.blob(); \
+                const href = URL.createObjectURL(blob); \
+                const a = document.createElement('a'); \
+                a.href = href; \
+                a.download = {name_lit}; \
+                document.body.appendChild(a); \
+                a.click(); \
+                setTimeout(() => {{ document.body.removeChild(a); URL.revokeObjectURL(href); }}, 500); \
+            }})()"
+        );
+        let _: Value = self.evaluate_main(js).await?;
         Ok(())
     }
 }
@@ -4143,6 +4247,108 @@ mod tests {
             json!({ "result": { "type": "string", "value": "complete" } }),
         )
         .await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    // --- E4: download_file ---------------------------------------------
+
+    #[tokio::test]
+    async fn download_file_sets_behavior_then_injects_fetch_anchor_script() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                t.download_file("https://x.test/path/file.pdf?token=abc", None)
+                    .await
+            }
+        });
+
+        // No path set yet → download_file installs a default download
+        // directory first (browser-scope setDownloadBehavior, behavior allow).
+        let id_dl = mock.expect_cmd("Browser.setDownloadBehavior").await;
+        let dl = mock.last_sent();
+        assert_eq!(dl["params"]["behavior"], "allow");
+        assert!(
+            dl["params"]["downloadPath"]
+                .as_str()
+                .unwrap_or("")
+                .ends_with("downloads"),
+            "default download path should end with /downloads"
+        );
+        mock.reply(id_dl, json!({})).await;
+
+        // Then the page-driven fetch→blob→anchor[download]→click injection.
+        let id_eval = mock.expect_cmd("Runtime.evaluate").await;
+        let expr = mock.last_sent()["params"]["expression"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        assert!(expr.contains("fetch("), "must fetch the url");
+        assert!(
+            expr.contains("createElement('a')") && expr.contains(".download"),
+            "must build a download anchor"
+        );
+        assert!(expr.contains(".click()"), "must click the anchor");
+        // URL is carried into the script; filename derived from the tail with
+        // the query string stripped.
+        assert!(
+            expr.contains("https://x.test/path/file.pdf?token=abc"),
+            "url must be injected"
+        );
+        assert!(
+            expr.contains("\"file.pdf\""),
+            "filename should be derived from url tail (query stripped), got: {expr}"
+        );
+        mock.reply(id_eval, json!({ "result": { "type": "undefined" } }))
+            .await;
+
+        fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn download_file_skips_default_path_when_already_set() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        // Pre-set a download path; download_file must NOT re-install a default.
+        let set_fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.set_download_path("/tmp/chosen").await }
+        });
+        let id_set = mock.expect_cmd("Browser.setDownloadBehavior").await;
+        assert_eq!(mock.last_sent()["params"]["downloadPath"], "/tmp/chosen");
+        mock.reply(id_set, json!({})).await;
+        set_fut.await.unwrap().unwrap();
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                t.download_file("https://x.test/a.bin", Some(PathBuf::from("renamed.bin")))
+                    .await
+            }
+        });
+
+        // Next command must be the injection evaluate directly — no second
+        // setDownloadBehavior.
+        let id_eval = mock.expect_cmd("Runtime.evaluate").await;
+        let expr = mock.last_sent()["params"]["expression"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        // Explicit filename wins over the url-derived one.
+        assert!(
+            expr.contains("\"renamed.bin\""),
+            "explicit filename must be used"
+        );
+        mock.reply(id_eval, json!({ "result": { "type": "undefined" } }))
+            .await;
 
         fut.await.unwrap().unwrap();
         conn.shutdown();
