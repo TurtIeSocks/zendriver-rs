@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["find_chrome_executable"],"struct":["Browser","BrowserBuilder"]};
+window.SIDEBAR_ITEMS = {"enum":["Channel","PermissionType"],"fn":["find_chrome_executable","find_chrome_executable_for_channel"],"struct":["Browser","BrowserBuilder"]};
