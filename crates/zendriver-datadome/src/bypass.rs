@@ -159,17 +159,33 @@ impl<'tab> DataDomeBypass<'tab> {
                 .map_err(DataDomeError::CaptchaSolver)?;
             crate::captcha::apply_solution(self.session, &solution, &site_url).await?;
             // Page reloaded — discard the stale snapshot, force a re-probe.
-            return self.poll_loop(deadline, None).await;
+            return self.poll_loop(deadline, None, None, None).await;
         }
 
-        // Interception fast-path is wired in Task 4.1.
-        self.poll_loop(deadline, Some(snapshot)).await
+        // Optional Fetch-domain fast-path. The guard's `Drop` cooperatively
+        // cancels the spawned task (token check at every loop boundary)
+        // with `abort()` as a backstop.
+        let (interception_rx, interception_guard) = if self.interception_enabled {
+            let (rx, guard) = crate::interception::spawn_signal(self.session);
+            (Some(rx), Some(guard))
+        } else {
+            (None, None)
+        };
+        self.poll_loop(
+            deadline,
+            Some(snapshot),
+            interception_rx,
+            interception_guard,
+        )
+        .await
     }
 
     pub(crate) async fn poll_loop(
         self,
         deadline: Instant,
         mut next_snapshot: Option<DetectionSnapshot>,
+        mut interception_rx: Option<tokio::sync::oneshot::Receiver<()>>,
+        _interception_guard: Option<crate::interception::InterceptionGuard>,
     ) -> Result<ClearanceOutcome, DataDomeError> {
         use tokio::time::{Interval, MissedTickBehavior};
 
@@ -208,6 +224,19 @@ impl<'tab> DataDomeBypass<'tab> {
                 _ = ticker.tick() => {}
                 () = tokio::time::sleep_until(deadline) => {
                     return Ok(ClearanceOutcome::TimedOut { last_surface });
+                }
+                Ok(()) = async {
+                    match interception_rx.as_mut() {
+                        Some(rx) => rx.await,
+                        // Never-resolves fallback keeps this arm inert when
+                        // interception is disabled; `select!` polls the
+                        // remaining arms unaffected.
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    // Drop the receiver so we don't re-await a closed channel
+                    // on the next iteration; loop body re-probes immediately.
+                    interception_rx = None;
                 }
             }
         }
@@ -471,6 +500,42 @@ mod tests {
             fut.await.unwrap().unwrap_err(),
             DataDomeError::CaptchaRequired
         ));
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn interception_signal_triggers_reprobe() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tx.send(()).unwrap(); // signal already fired
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move {
+                DataDomeBypass::new(&s)
+                    .poll_interval(Duration::from_secs(10))
+                    .poll_loop(
+                        Instant::now() + Duration::from_secs(5),
+                        None,
+                        Some(rx),
+                        None,
+                    )
+                    .await
+            }
+        });
+        // The signal arm fires immediately → one detect probe → cleared.
+        let id = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id,
+            snap_reply(
+                json!({"surface":"none","datadome":"DD","dd":null,"captcha_url":null,"body_clean":true}),
+            ),
+        )
+        .await;
+        match fut.await.unwrap().unwrap() {
+            ClearanceOutcome::Cleared { datadome } => assert_eq!(datadome, "DD"),
+            other => panic!("expected Cleared, got {other:?}"),
+        }
         conn.shutdown();
     }
 }
