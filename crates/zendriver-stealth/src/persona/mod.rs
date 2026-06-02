@@ -139,6 +139,100 @@ impl Persona {
     }
 }
 
+/// Minimal eval surface so stealth can probe a live page without depending on
+/// the `zendriver` core crate (which would be a dependency cycle).
+///
+/// The `zendriver` crate implements this for its `Tab`, mapping its own
+/// evaluation error into [`StealthError::Probe`].
+#[async_trait::async_trait]
+pub trait JsProbe {
+    /// Evaluate `js` in the page and return the result as a JSON value.
+    async fn eval_json(&self, js: &str) -> Result<serde_json::Value, crate::StealthError>;
+}
+
+/// JS run by [`Persona::from_browser`] to read the live browser's REAL
+/// fingerprint-relevant values (platform, memory, timezone, locale, WebGL
+/// vendor/renderer). Returns a single JSON object.
+const PROBE_JS: &str = r#"(() => {
+  const c = document.createElement('canvas').getContext('webgl');
+  const dbg = c && c.getExtension('WEBGL_debug_renderer_info');
+  return {
+    platform: navigator.platform,
+    deviceMemory: navigator.deviceMemory,
+    hardwareConcurrency: navigator.hardwareConcurrency,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    locale: navigator.language,
+    webglVendor: dbg ? c.getParameter(dbg.UNMASKED_VENDOR_WEBGL) : null,
+    webglRenderer: dbg ? c.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : null,
+  };
+})()"#;
+
+impl Persona {
+    /// Probe the live Chrome for its REAL webgl/platform/memory/timezone
+    /// values, producing a maximally coherent host persona.
+    ///
+    /// Runs [`PROBE_JS`] through the supplied [`JsProbe`] (the `zendriver`
+    /// `Tab` implements it) and maps the resulting JSON onto a [`Persona`].
+    /// Fields the browser does not expose are left `None`.
+    pub async fn from_browser<P: JsProbe + Sync>(
+        probe: &P,
+    ) -> Result<Persona, crate::StealthError> {
+        let v = probe.eval_json(PROBE_JS).await?;
+        Ok(persona_from_probe(&v))
+    }
+}
+
+/// Map the [`PROBE_JS`] JSON result onto a [`Persona`].
+fn persona_from_probe(v: &serde_json::Value) -> Persona {
+    let mut p = Persona::default();
+
+    // `navigator.platform` strings match `Platform::js_string()`:
+    // "Win32" / "MacIntel" / "Linux x86_64" (any other → Linux fallback).
+    if let Some(plat) = v.get("platform").and_then(|x| x.as_str()) {
+        p.platform = Some(match plat {
+            "Win32" => Platform::Win32,
+            "MacIntel" => Platform::MacIntel,
+            _ => Platform::LinuxX86_64,
+        });
+    }
+
+    // `navigator.deviceMemory` is a JS number (gigabytes).
+    if let Some(mem) = v.get("deviceMemory").and_then(|x| x.as_u64()) {
+        p.device_memory_gb = Some(mem as u32);
+    }
+
+    if let Some(hc) = v.get("hardwareConcurrency").and_then(|x| x.as_u64()) {
+        p.hardware_concurrency = Some(hc as u32);
+    }
+
+    if let Some(tz) = v.get("timezone").and_then(|x| x.as_str()) {
+        p.timezone = Some(tz.to_string());
+    }
+
+    if let Some(loc) = v.get("locale").and_then(|x| x.as_str()) {
+        p.locale = Some(loc.to_string());
+    }
+
+    // WebGL vendor/renderer become a value-substitution WebglSpec when present.
+    let vendor = v
+        .get("webglVendor")
+        .and_then(|x| x.as_str())
+        .map(str::to_string);
+    let renderer = v
+        .get("webglRenderer")
+        .and_then(|x| x.as_str())
+        .map(str::to_string);
+    if vendor.is_some() || renderer.is_some() {
+        p.webgl = Some(WebglSpec {
+            strategy: None,
+            unmasked_vendor: vendor,
+            unmasked_renderer: renderer,
+        });
+    }
+
+    p
+}
+
 #[cfg(test)]
 mod persona_tests {
     use super::*;
@@ -199,6 +293,62 @@ mod persona_tests {
         assert_eq!(a.timezone.as_deref(), Some("Europe/Paris"));
         let b: Persona = json.parse().unwrap();
         assert_eq!(b.seed, Some(Seed::from_u64(99)));
+    }
+
+    struct FakeProbe(serde_json::Value);
+
+    #[async_trait::async_trait]
+    impl JsProbe for FakeProbe {
+        async fn eval_json(&self, _js: &str) -> Result<serde_json::Value, crate::StealthError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn from_browser_maps_probe_fields() {
+        let probe = FakeProbe(serde_json::json!({
+            "platform": "MacIntel",
+            "deviceMemory": 16,
+            "hardwareConcurrency": 10,
+            "timezone": "America/New_York",
+            "locale": "en-US",
+            "webglVendor": "Google Inc. (Apple)",
+            "webglRenderer": "ANGLE (Apple, Apple M1, OpenGL 4.1)",
+        }));
+        let p = Persona::from_browser(&probe).await.unwrap();
+        assert_eq!(p.platform, Some(Platform::MacIntel));
+        assert_eq!(p.device_memory_gb, Some(16));
+        assert_eq!(p.hardware_concurrency, Some(10));
+        assert_eq!(p.timezone.as_deref(), Some("America/New_York"));
+        assert_eq!(p.locale.as_deref(), Some("en-US"));
+        let webgl = p.webgl.expect("webgl spec populated from probe");
+        assert_eq!(
+            webgl.unmasked_renderer.as_deref(),
+            Some("ANGLE (Apple, Apple M1, OpenGL 4.1)")
+        );
+        assert_eq!(
+            webgl.unmasked_vendor.as_deref(),
+            Some("Google Inc. (Apple)")
+        );
+    }
+
+    #[tokio::test]
+    async fn from_browser_handles_missing_webgl_and_linux_platform() {
+        // Null WebGL (debug-info ext unavailable) + a Linux platform string
+        // that isn't a literal enum name → Linux fallback, no webgl spec.
+        let probe = FakeProbe(serde_json::json!({
+            "platform": "Linux x86_64",
+            "deviceMemory": 8,
+            "hardwareConcurrency": 4,
+            "timezone": "UTC",
+            "locale": "en-GB",
+            "webglVendor": serde_json::Value::Null,
+            "webglRenderer": serde_json::Value::Null,
+        }));
+        let p = Persona::from_browser(&probe).await.unwrap();
+        assert_eq!(p.platform, Some(Platform::LinuxX86_64));
+        assert_eq!(p.device_memory_gb, Some(8));
+        assert!(p.webgl.is_none(), "null webgl → no spec");
     }
 
     #[test]

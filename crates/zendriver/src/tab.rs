@@ -2648,6 +2648,25 @@ impl crate::traits::Evaluable for Tab {
     }
 }
 
+/// Live-probe seam for [`zendriver_stealth::Persona::from_browser`].
+///
+/// Implemented here (rather than in `zendriver-stealth`) so the stealth crate
+/// stays free of a `zendriver` dependency. The `ZendriverError` from
+/// [`Tab::evaluate`] is mapped into [`zendriver_stealth::StealthError::Probe`]
+/// — going the other direction (a `From<ZendriverError>` in stealth) would
+/// require stealth to depend on this crate, which is a cycle.
+#[async_trait::async_trait]
+impl zendriver_stealth::JsProbe for Tab {
+    async fn eval_json(
+        &self,
+        js: &str,
+    ) -> std::result::Result<Value, zendriver_stealth::StealthError> {
+        self.evaluate::<Value>(js)
+            .await
+            .map_err(|e| zendriver_stealth::StealthError::Probe(e.to_string()))
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {

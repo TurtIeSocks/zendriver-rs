@@ -18,6 +18,16 @@ pub enum StealthError {
 
     #[error("invalid fingerprint override: {0}")]
     InvalidOverride(String),
+
+    /// A live-browser probe (e.g. [`crate::Persona::from_browser`]) failed.
+    ///
+    /// Carries the upstream error's message as a `String` rather than the
+    /// concrete type: the probe runs through the [`crate::JsProbe`] seam so
+    /// that `zendriver-stealth` need not depend on the `zendriver` core crate
+    /// (which would be a dependency cycle). The caller's `JsProbe` impl maps
+    /// its own error into this variant.
+    #[error("live-browser probe failed: {0}")]
+    Probe(String),
 }
 
 #[cfg(test)]

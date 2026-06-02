@@ -54,4 +54,4 @@ pub use profile::{Platform, ProfileKind, StealthProfile};
 pub use persona::seed::Seed;
 pub use persona::specs::{FontSpec, HardwareSpec, SurfaceCfg, UaSpec, WebglSpec, WebrtcSpec};
 pub use persona::surface::{Strategy, Surface, SurfaceKind};
-pub use persona::{Persona, PersonaBuilder};
+pub use persona::{JsProbe, Persona, PersonaBuilder};
