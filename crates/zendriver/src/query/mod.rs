@@ -28,6 +28,7 @@
 
 pub mod actionability;
 pub mod modifiers;
+pub(crate) mod predicate;
 pub mod role;
 pub mod selectors;
 
