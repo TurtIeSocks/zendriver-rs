@@ -12,7 +12,7 @@ use serde_json::json;
 use zendriver_transport::{ObserverError, PausedSession, TargetObserver};
 
 use crate::patches::bootstrap_script;
-use crate::{Fingerprint, ProfileKind, StealthProfile};
+use crate::{Fingerprint, Persona, ProfileKind, StealthProfile};
 
 /// Observer that applies a [`StealthProfile`] + [`Fingerprint`] to every page
 /// target. Workers and iframes are skipped — workers have no DOM and iframes
@@ -30,10 +30,27 @@ pub struct StealthObserver {
 impl StealthObserver {
     /// Build a new observer. Bootstrap source is composed eagerly so the
     /// per-target hot path only pays a `clone`/borrow.
+    ///
+    /// The bootstrap is driven by a [`Persona`] (surface-spoofing config) plus
+    /// the [`Fingerprint`] (coherent UA / Chrome identity). This constructor
+    /// uses [`Persona::default`] — no surface overrides, identity-only patches
+    /// keep their current behavior. The launch path (a later task) will thread
+    /// a caller-supplied persona via [`StealthObserver::with_persona`].
     #[must_use]
     pub fn new(profile: StealthProfile, fingerprint: Fingerprint) -> Self {
+        Self::with_persona(profile, fingerprint, Persona::default())
+    }
+
+    /// Build a new observer with an explicit [`Persona`] driving the surface
+    /// patches. `identity` still supplies the coherent UA / Chrome version.
+    #[must_use]
+    pub fn with_persona(
+        profile: StealthProfile,
+        fingerprint: Fingerprint,
+        persona: Persona,
+    ) -> Self {
         let bootstrap = if profile.kind() == ProfileKind::Spoofed {
-            bootstrap_script(&fingerprint)
+            bootstrap_script(&persona, &fingerprint)
         } else {
             String::new()
         };

@@ -3383,6 +3383,7 @@ version = "0.1.4"
 dependencies = [
  "async-trait",
  "chromiumoxide_cdp",
+ "fastrand",
  "futures",
  "insta",
  "num_cpus",
