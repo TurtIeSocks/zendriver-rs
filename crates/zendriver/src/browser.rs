@@ -30,7 +30,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
-use zendriver_stealth::{StealthObserver, StealthProfile};
+use zendriver_stealth::{Persona, Seed, StealthObserver, StealthProfile, Strategy, Surface};
 use zendriver_transport::{
     Connection, ObserverError, PausedSession, SessionHandle, TargetObserver,
 };
@@ -283,6 +283,28 @@ pub(crate) fn parse_devtools_line(line: &str) -> Option<String> {
     }
 }
 
+/// Load (or first-time generate + persist) the fingerprint [`Seed`] bound to a
+/// `user_data_dir`.
+///
+/// Stored as a single base-10 `u64` in `<dir>/.zd_persona_seed`. On reuse the
+/// file is read and parsed; on first use (or any read/parse failure) a fresh
+/// [`Seed::random`] is generated and written, giving a stable per-profile
+/// fingerprint across runs. All filesystem errors are swallowed (best-effort):
+/// a dir that can't be written simply yields a fresh random seed each launch
+/// rather than failing the build.
+fn persisted_seed(dir: &Path) -> Seed {
+    let path = dir.join(".zd_persona_seed");
+    if let Ok(contents) = std::fs::read_to_string(&path) {
+        if let Ok(value) = contents.trim().parse::<u64>() {
+            return Seed::from_u64(value);
+        }
+    }
+    let seed = Seed::random();
+    let _ = std::fs::create_dir_all(dir);
+    let _ = std::fs::write(&path, seed.value().to_string());
+    seed
+}
+
 /// Fluent builder for a [`Browser`] launch.
 ///
 /// Start with [`Browser::builder`] (seeded with [`zendriver_stealth::StealthProfile::native`]),
@@ -331,6 +353,16 @@ pub struct BrowserBuilder {
     pub(crate) force_open_shadow_roots: bool,
     pub(crate) extra_args: Vec<String>,
     pub(crate) stealth: Option<StealthProfile>,
+    /// Base fingerprint [`Persona`] driving the spoofed-mode surface patches.
+    /// `None` → [`Persona::system`] (host-probed) is used. See
+    /// [`BrowserBuilder::persona`] and [`BrowserBuilder::resolved_persona`].
+    pub(crate) persona: Option<Persona>,
+    /// Optional overlay merged on top of the base persona (field-wise, `Some`
+    /// wins). See [`BrowserBuilder::persona_overlay`].
+    pub(crate) persona_overlay: Option<Persona>,
+    /// Per-surface render-strategy overrides, applied last over the resolved
+    /// persona. See [`BrowserBuilder::surface`].
+    pub(crate) surface_overrides: Vec<(Surface, Strategy)>,
     pub(crate) extra_observers: Vec<Arc<dyn TargetObserver>>,
     /// Optional `(username, password)` for proxy / HTTP basic-auth handling.
     /// Only honored when the `interception` feature is enabled; when present
@@ -359,6 +391,9 @@ impl std::fmt::Debug for BrowserBuilder {
             .field("force_open_shadow_roots", &self.force_open_shadow_roots)
             .field("extra_args", &self.extra_args)
             .field("stealth", &self.stealth)
+            .field("persona", &self.persona)
+            .field("persona_overlay", &self.persona_overlay)
+            .field("surface_overrides", &self.surface_overrides)
             .field(
                 "extra_observers",
                 &format_args!("<{} observers>", self.extra_observers.len()),
@@ -752,6 +787,108 @@ impl BrowserBuilder {
     pub fn stealth(mut self, profile: StealthProfile) -> Self {
         self.stealth = Some(profile);
         self
+    }
+
+    /// Set the base fingerprint [`Persona`] driving the spoofed-mode surface
+    /// patches (canvas/WebGL/audio/fonts/clientRects/WebRTC/hardware).
+    ///
+    /// When unset, [`Persona::system`] (host-probed) is used. Combine with
+    /// [`BrowserBuilder::persona_overlay`] for field-wise tweaks and
+    /// [`BrowserBuilder::surface`] for per-surface render-strategy overrides;
+    /// [`BrowserBuilder::resolved_persona`] returns the effective result.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use zendriver::Persona;
+    /// let builder = zendriver::Browser::builder()
+    ///     .persona(Persona::builder().device_memory_gb(16).build());
+    /// ```
+    #[must_use]
+    pub fn persona(mut self, persona: Persona) -> Self {
+        self.persona = Some(persona);
+        self
+    }
+
+    /// Overlay a partial [`Persona`] on top of the base persona. Every `Some`
+    /// field in the overlay wins; `None` inherits from the base.
+    ///
+    /// Handy for layering a small JSON tweak (e.g. just a timezone) over a
+    /// host-probed or pool-sampled base persona.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let builder = zendriver::Browser::builder()
+    ///     .persona_overlay(r#"{"timezone":"UTC"}"#.parse().unwrap());
+    /// ```
+    #[must_use]
+    pub fn persona_overlay(mut self, overlay: Persona) -> Self {
+        self.persona_overlay = Some(overlay);
+        self
+    }
+
+    /// Override a single fingerprint [`Surface`]'s render [`Strategy`].
+    ///
+    /// Applied last, on top of the resolved persona + overlay. Repeatable —
+    /// each call layers another surface override.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use zendriver::{Strategy, Surface};
+    /// let builder = zendriver::Browser::builder()
+    ///     .surface(Surface::Webrtc, Strategy::Native);
+    /// ```
+    #[must_use]
+    pub fn surface(mut self, surface: Surface, strategy: Strategy) -> Self {
+        self.surface_overrides.push((surface, strategy));
+        self
+    }
+
+    /// Compute the effective [`Persona`] this builder will hand to the stealth
+    /// observer.
+    ///
+    /// Resolution order: base persona ([`Persona::system`] when unset) →
+    /// [`persona_overlay`](BrowserBuilder::persona_overlay) (field-wise merge) →
+    /// each [`surface`](BrowserBuilder::surface) override → a seed persisted
+    /// alongside [`user_data_dir`](BrowserBuilder::user_data_dir) when the
+    /// resolved persona has no explicit seed.
+    ///
+    /// Callable before launch — it does not require a live browser.
+    #[must_use]
+    pub fn resolved_persona(&self) -> Persona {
+        // Did the caller pin a seed explicitly (via `.persona` or
+        // `.persona_overlay`)? Capture this BEFORE the `system()` fallback,
+        // which injects a fresh random seed of its own — an explicit seed must
+        // win over the `user_data_dir`-persisted one below.
+        let explicit_seed = self
+            .persona
+            .as_ref()
+            .and_then(|p| p.seed)
+            .or_else(|| self.persona_overlay.as_ref().and_then(|p| p.seed));
+
+        let mut persona = self.persona.clone().unwrap_or_else(Persona::system);
+        if let Some(overlay) = &self.persona_overlay {
+            persona = persona.overlay(overlay.clone());
+        }
+        for (surface, strategy) in &self.surface_overrides {
+            persona.apply_surface_override(*surface, *strategy);
+        }
+
+        // Seed persistence: when the caller did not pin a seed but a
+        // `user_data_dir` is set, the seed is read from (or written to) a file
+        // inside that dir so the same profile yields a stable fingerprint
+        // across runs. This overrides the ephemeral random seed that
+        // `Persona::system()` injects. Without a `user_data_dir`, the random
+        // seed stands (fresh identity per launch).
+        if explicit_seed.is_none() {
+            if let Some(dir) = &self.user_data_dir {
+                persona.seed = Some(persisted_seed(dir));
+            }
+        }
+
+        persona
     }
 
     /// Register an additional [`TargetObserver`].
@@ -1625,8 +1762,11 @@ impl BrowserBuilder {
         let (mut observers, extra_flags): (Vec<Arc<dyn TargetObserver>>, Vec<String>) =
             if let Some(ref profile) = self.stealth {
                 let fp = profile.resolve_fingerprint(&exe)?;
-                let stealth_obs: Arc<dyn TargetObserver> =
-                    Arc::new(StealthObserver::new(profile.clone(), fp));
+                let stealth_obs: Arc<dyn TargetObserver> = Arc::new(StealthObserver::with_persona(
+                    profile.clone(),
+                    fp,
+                    self.resolved_persona(),
+                ));
                 let mut obs_vec = Vec::with_capacity(3 + self.extra_observers.len());
                 obs_vec.push(stealth_obs);
                 obs_vec.push(registrar.clone() as Arc<dyn TargetObserver>);
@@ -1835,8 +1975,11 @@ impl BrowserBuilder {
             // No executable to resolve a fingerprint from on the connect path;
             // fall back to the profile's default fingerprint.
             let fp = profile.resolve_fingerprint(Path::new(""))?;
-            let stealth_obs: Arc<dyn TargetObserver> =
-                Arc::new(StealthObserver::new(profile.clone(), fp));
+            let stealth_obs: Arc<dyn TargetObserver> = Arc::new(StealthObserver::with_persona(
+                profile.clone(),
+                fp,
+                self.resolved_persona(),
+            ));
             let mut obs_vec = Vec::with_capacity(3 + self.extra_observers.len());
             obs_vec.push(stealth_obs);
             obs_vec.push(registrar.clone() as Arc<dyn TargetObserver>);
@@ -2778,6 +2921,59 @@ mod tests {
     fn candidate_paths_is_nonempty() {
         let v = candidate_paths_for_channel(Channel::Auto);
         assert!(!v.is_empty());
+    }
+
+    #[test]
+    fn builder_accepts_persona_and_overrides() {
+        // Exercises the re-exported `zendriver::{Persona, Surface, Strategy}`
+        // and the full resolve pipeline: base persona → overlay → surface
+        // override. No browser launched — `resolved_persona` is `&self`.
+        let b = Browser::builder()
+            .persona(Persona::builder().device_memory_gb(16).build())
+            .persona_overlay(r#"{"timezone":"UTC"}"#.parse().unwrap())
+            .surface(Surface::Webrtc, Strategy::Native);
+        let p = b.resolved_persona();
+        assert_eq!(p.device_memory_gb, Some(16));
+        assert_eq!(p.timezone.as_deref(), Some("UTC"));
+        assert_eq!(
+            p.webrtc.as_ref().and_then(|w| w.strategy),
+            Some(Strategy::Native),
+            "surface override must set the WebRTC strategy"
+        );
+    }
+
+    #[test]
+    fn seed_persists_in_user_data_dir() {
+        // Two builders pointed at the same profile dir (no explicit seed) must
+        // resolve to the SAME seed: the first writes `.zd_persona_seed`, the
+        // second reads it back.
+        let dir = tempfile::tempdir().unwrap();
+        let s1 = Browser::builder()
+            .user_data_dir(dir.path())
+            .resolved_persona()
+            .seed
+            .unwrap();
+        let s2 = Browser::builder()
+            .user_data_dir(dir.path())
+            .resolved_persona()
+            .seed
+            .unwrap();
+        assert_eq!(s1, s2, "same profile dir → same seed across builders");
+    }
+
+    #[test]
+    fn explicit_seed_overrides_user_data_dir_persistence() {
+        // An explicitly-pinned seed must win over the persisted one.
+        let dir = tempfile::tempdir().unwrap();
+        let pinned = Browser::builder()
+            .persona(Persona::builder().seed(Seed::from_u64(777)).build())
+            .user_data_dir(dir.path())
+            .resolved_persona()
+            .seed
+            .unwrap();
+        assert_eq!(pinned, Seed::from_u64(777));
+        // And the persistence file is NOT consulted/created for the pinned seed.
+        assert!(!dir.path().join(".zd_persona_seed").exists());
     }
 
     #[test]

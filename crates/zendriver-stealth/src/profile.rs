@@ -20,7 +20,7 @@ pub enum ProfileKind {
 }
 
 /// JS `navigator.platform` value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Platform {
     Win32,
     MacIntel,

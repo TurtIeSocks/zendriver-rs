@@ -107,6 +107,12 @@ pub use tab::{
 pub use traits::{Evaluable, Queryable};
 pub use window::{WindowBounds, WindowState};
 
+// Fingerprint-spoofing surface: the `Persona` config + per-surface render
+// strategy knobs, re-exported from `zendriver-stealth` so callers can wire
+// `Browser::builder().persona(...)` / `.surface(...)` without depending on the
+// stealth crate directly.
+pub use zendriver_stealth::{Persona, PersonaBuilder, Seed, Strategy, Surface};
+
 // Re-export selected transport types for advanced users.
 pub use zendriver_transport::{CallError, Connection, SessionHandle, TransportError};
 
@@ -191,7 +197,10 @@ pub use zendriver_fetcher::{
 
 /// Stealth profile + fingerprint configuration re-exported from `zendriver-stealth`.
 pub mod stealth {
-    pub use zendriver_stealth::{Fingerprint, Platform, StealthProfile, UserAgentMetadata};
+    pub use zendriver_stealth::{
+        Fingerprint, Persona, PersonaBuilder, Platform, Seed, StealthProfile, Strategy, Surface,
+        UserAgentMetadata,
+    };
 }
 
 /// Convenience entry point: launch a Chrome instance with default settings.
