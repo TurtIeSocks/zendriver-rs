@@ -35,6 +35,22 @@ pub enum ZendriverError {
     #[error("transport: {0}")]
     Transport(Box<zendriver_transport::TransportError>),
 
+    /// The connection to Chrome dropped unexpectedly — the WebSocket died
+    /// without a caller-requested [`Browser::close`](crate::Browser::close)
+    /// (Chrome crashed, the socket was severed, a Close frame arrived
+    /// out-of-band). A CDP call awaiting a reply when the drop happened
+    /// resolves to this, distinct from the clean-shutdown
+    /// [`ZendriverError::Transport`] surfaced after `close()`.
+    ///
+    /// Recover with [`Browser::reconnect`](crate::Browser::reconnect) (which
+    /// re-dials the live Chrome process) — but note that existing
+    /// `Tab`/`Frame`/`Element` handles are invalidated by a reconnect and must
+    /// be re-acquired via
+    /// [`Browser::main_tab`](crate::Browser::main_tab) /
+    /// [`Browser::tabs`](crate::Browser::tabs).
+    #[error("connection to chrome lost unexpectedly")]
+    Disconnected,
+
     /// Chrome returned a CDP RPC error (a method call returned `error.code` /
     /// `error.message`).
     #[error("CDP RPC error [{code}] {message}")]
@@ -178,6 +194,13 @@ impl From<zendriver_fetcher::FetcherError> for ZendriverError {
 impl From<CallError> for ZendriverError {
     fn from(e: CallError) -> Self {
         match e {
+            // An unexpected ws death drains in-flight calls with the
+            // `Disconnected` transport variant; surface it as the distinct
+            // top-level `Disconnected` so callers can tell a dropped
+            // connection apart from a clean `close()`-driven shutdown.
+            CallError::Transport(zendriver_transport::TransportError::Disconnected) => {
+                ZendriverError::Disconnected
+            }
             CallError::Transport(t) => ZendriverError::Transport(Box::new(t)),
             CallError::Rpc(code, message, data) => {
                 // Special-case: Chrome returns -32000 "Cannot find context in
@@ -331,6 +354,34 @@ mod tests {
         let ce = CallError::Transport(zendriver_transport::TransportError::Shutdown);
         let ze: ZendriverError = ce.into();
         assert!(matches!(ze, ZendriverError::Transport(_)));
+    }
+
+    #[test]
+    fn from_call_error_disconnected_maps_to_disconnected_not_transport() {
+        // An unexpected ws death must surface as the distinct `Disconnected`
+        // variant, NOT the opaque `Transport`/`Shutdown` one — that's the
+        // whole point of typed disconnect.
+        let ce = CallError::Transport(zendriver_transport::TransportError::Disconnected);
+        let ze: ZendriverError = ce.into();
+        assert!(matches!(ze, ZendriverError::Disconnected));
+    }
+
+    #[test]
+    fn shutdown_and_disconnected_are_distinguishable() {
+        let shutdown: ZendriverError =
+            CallError::Transport(zendriver_transport::TransportError::Shutdown).into();
+        let disconnected: ZendriverError =
+            CallError::Transport(zendriver_transport::TransportError::Disconnected).into();
+        assert!(matches!(shutdown, ZendriverError::Transport(_)));
+        assert!(matches!(disconnected, ZendriverError::Disconnected));
+    }
+
+    #[test]
+    fn display_disconnected_is_stable() {
+        assert_eq!(
+            ZendriverError::Disconnected.to_string(),
+            "connection to chrome lost unexpectedly"
+        );
     }
 
     #[test]

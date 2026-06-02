@@ -167,6 +167,24 @@ impl MockConnection {
             .expect("driver closed");
     }
 
+    /// Simulate an *unexpected* WebSocket disconnect: drop the server→driver
+    /// channel so the actor's stream returns `None` (the socket vanished).
+    /// In-flight CDP calls then drain with
+    /// [`crate::error::TransportError::Disconnected`] — distinct from the
+    /// clean shutdown produced by [`Connection::shutdown`]. Mirrors Chrome
+    /// dying or the socket being severed mid-session; the canonical way for a
+    /// downstream test to exercise the typed-disconnect path without a real
+    /// WebSocket.
+    ///
+    /// Consumes the mock: once the channel is closed there is nothing more to
+    /// drive from the server side.
+    pub fn disconnect(self) {
+        drop(self.server_in);
+        // `server_out` is dropped with `self`; the driver's sink writes will
+        // start failing, but the stream-end (`None`) is what trips the
+        // disconnect drain.
+    }
+
     /// Emit a CDP event scoped to a specific session.
     pub async fn emit_event_for_session(&self, method: &str, params: Value, session_id: &str) {
         let frame = serde_json::json!({

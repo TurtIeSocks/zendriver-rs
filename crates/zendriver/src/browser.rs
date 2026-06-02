@@ -916,6 +916,13 @@ pub(crate) struct BrowserInner {
     /// real Chrome. Consumed by [`Tab::inspector_url`] (reached via the Tab's
     /// `Weak<BrowserInner>`) to compose the DevTools front-end URL.
     pub(crate) debug_host_port: Option<String>,
+    /// Full `ws://HOST:PORT/devtools/browser/<id>` endpoint Chrome was
+    /// launched with (or attached to). This browser-level endpoint survives as
+    /// long as the Chrome process lives — even across a dropped socket — so
+    /// [`Browser::reconnect`] re-dials it to re-establish the transport.
+    /// `None` for test-constructed browsers that never dialed a real Chrome
+    /// (reconnect is then unavailable and returns an error).
+    pub(crate) ws_url: Option<String>,
     /// Fires every time the [`TabRegistrar`] observer mutates [`Self::tabs`]
     /// (insert on attach, remove on detach). [`Browser::new_tab_at`] waits
     /// on this in lieu of the previous 50ms polling loop — it arms the
@@ -993,6 +1000,7 @@ pub(crate) fn test_only_inner_from_conn(conn: Connection) -> Arc<BrowserInner> {
             stealth_input_profile: input_profile,
             tabs: tokio::sync::RwLock::new(map),
             debug_host_port: None,
+            ws_url: None,
             tabs_changed: tokio::sync::Notify::new(),
             #[cfg(feature = "interception")]
             proxy_auth_handle: std::sync::OnceLock::new(),
@@ -1172,6 +1180,9 @@ pub(crate) struct FinishConnect {
     pub(crate) extension_dirs: Vec<TempDir>,
     /// `host:port` of the debug endpoint, for [`Tab::inspector_url`].
     pub(crate) debug_host_port: Option<String>,
+    /// Full `ws://…/devtools/browser/<id>` endpoint, retained on
+    /// [`BrowserInner`] so [`Browser::reconnect`] can re-dial it.
+    pub(crate) ws_url: Option<String>,
     /// Whether the resulting handle owns (and must terminate) the process.
     pub(crate) owns_process: bool,
 }
@@ -1198,6 +1209,7 @@ pub(crate) async fn finish_connect(
         owned_tmp,
         extension_dirs,
         debug_host_port,
+        ws_url,
         owns_process,
     } = args;
 
@@ -1267,6 +1279,7 @@ pub(crate) async fn finish_connect(
             stealth_input_profile: input_profile,
             tabs: tokio::sync::RwLock::new(HashMap::new()),
             debug_host_port,
+            ws_url,
             tabs_changed: tokio::sync::Notify::new(),
             #[cfg(feature = "interception")]
             proxy_auth_handle: std::sync::OnceLock::new(),
@@ -1703,6 +1716,7 @@ impl BrowserBuilder {
             owned_tmp,
             extension_dirs,
             debug_host_port: debug_host_port_from_ws(&ws_url),
+            ws_url: Some(ws_url),
             owns_process: true,
         })
         .await?;
@@ -1849,6 +1863,7 @@ impl BrowserBuilder {
             owned_tmp: None,
             extension_dirs: Vec::new(),
             debug_host_port: debug_host_port_from_ws(&ws_url),
+            ws_url: Some(ws_url),
             owns_process: false,
         })
         .await?;
@@ -2447,6 +2462,107 @@ impl Browser {
         self.inner.tabs.read().await.len()
     }
 
+    /// Re-establish a dropped connection to the **same** still-running Chrome
+    /// process (scoped reconnect — see the invalidation caveat below).
+    ///
+    /// When a CDP call returns [`ZendriverError::Disconnected`] the WebSocket
+    /// died but the Chrome process is typically still alive — its browser-level
+    /// `/devtools/browser/<id>` endpoint survives. `reconnect` re-dials that
+    /// endpoint on the existing [`Connection`] (so raw event subscribers stay
+    /// attached to the same broadcast bus), re-applies the WebSocket size
+    /// config, re-arms `Target.setAutoAttach { flatten: true }` — which
+    /// re-fires the observer chain so the stealth patches re-inject on every
+    /// target — and refreshes the tab registry.
+    ///
+    /// # Handle invalidation — IMPORTANT
+    ///
+    /// Re-attaching to Chrome's targets yields **new `sessionId`s**. Every
+    /// [`Tab`], `Frame`, and `Element` handle obtained before the reconnect
+    /// caches a now-stale session id and **must not be reused** — calls on
+    /// them will fail. After `reconnect` returns, **re-acquire** handles:
+    ///
+    /// - live page handles via [`Browser::tabs`] (the registry is rebuilt from
+    ///   the re-attached targets);
+    /// - **not** via [`Browser::main_tab`], which still returns the
+    ///   pre-reconnect handle (its cached session id is stale). Swapping the
+    ///   cached main-tab handle in place is part of the deferred
+    ///   transparent-reconnect work; for now treat `main_tab()` as invalid
+    ///   after a reconnect and use `tabs()`.
+    ///
+    /// # What is NOT restored (deferred)
+    ///
+    /// This is the scoped v1. It does **not** replay per-feature domain arming
+    /// (`Network.enable`, active `Fetch` interception rules, `DOMStorage.enable`,
+    /// download behavior, …) that individual features turned on before the
+    /// drop — re-arm those yourself after reconnecting. Transparent
+    /// handle-preserving reconnect (session-id remap so existing `Tab`s keep
+    /// working) is tracked as follow-up work.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Disconnected`] if this browser was constructed
+    /// without a known ws endpoint (e.g. a test harness) so there is nothing to
+    /// re-dial, and [`ZendriverError::Transport`] / [`ZendriverError::Cdp`] if
+    /// the re-dial or the post-reconnect handshake fails. On a failed re-dial
+    /// the existing (dead) connection is left untouched.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # async fn do_work(_t: &zendriver::Tab) -> zendriver::Result<()> { Ok(()) }
+    /// // A long-running scraper that survives a dropped socket:
+    /// let tab = browser.main_tab();
+    /// if let Err(zendriver::ZendriverError::Disconnected) = do_work(&tab).await {
+    ///     browser.reconnect().await?; // re-dial the same Chrome process
+    ///     // Old handles are stale now — re-acquire from the rebuilt registry:
+    ///     let tab = browser.tabs().await.into_iter().next().unwrap();
+    ///     do_work(&tab).await?;
+    /// }
+    /// # Ok(()) }
+    /// ```
+    pub async fn reconnect(&self) -> Result<(), ZendriverError> {
+        let ws_url = self
+            .inner
+            .ws_url
+            .clone()
+            .ok_or(ZendriverError::Disconnected)?;
+
+        // Re-dial onto the SAME Connection (same event bus, same observer
+        // chain). Dials first; only swaps the live socket on success, so a
+        // failed reconnect doesn't tear down a connection that might recover.
+        self.inner.conn.redial(&ws_url).await?;
+
+        // Drop the stale tab registry — every entry's session id is invalid
+        // now. The re-armed auto-attach below re-populates it from the
+        // re-attached targets via the `TabRegistrar` observer.
+        self.inner.tabs.write().await.clear();
+
+        // Re-arm browser-scoped auto-attach. Chrome re-fires
+        // `Target.attachedToTarget` for every existing target, which runs the
+        // observer chain again — stealth re-injects on each target, and the
+        // registrar re-inserts a fresh `Tab` (with a fresh session id) for each
+        // page. `flatten: true` re-applies the single-socket flat session model.
+        self.inner
+            .conn
+            .call_raw(
+                "Target.setAutoAttach",
+                json!({
+                    "autoAttach": true,
+                    "waitForDebuggerOnStart": true,
+                    "flatten": true,
+                }),
+                None,
+            )
+            .await?;
+
+        // Wake any `new_tab_at` waiters now that the registry has been reset
+        // and is being repopulated by the observer chain.
+        self.inner.tabs_changed.notify_waiters();
+        Ok(())
+    }
+
     /// Graceful shutdown of the Chrome subprocess.
     ///
     /// Cancels the transport, sends SIGTERM to Chrome, waits up to 5s, then
@@ -2989,6 +3105,22 @@ mod tests {
         insta::assert_yaml_snapshot!("default_launch_flags", flags);
     }
 
+    #[tokio::test]
+    async fn reconnect_without_ws_url_errors_disconnected() {
+        use zendriver_transport::testing::MockConnection;
+        // `test_only_browser_from_conn` builds a browser with `ws_url: None`
+        // (no real Chrome was dialed), so there's nothing to re-dial — the
+        // reconnect attempt must surface `Disconnected` rather than panic or
+        // hang.
+        let (_mock, conn) = MockConnection::pair();
+        let browser = test_only_browser_from_conn(conn);
+        let res = browser.reconnect().await;
+        assert!(
+            matches!(res, Err(ZendriverError::Disconnected)),
+            "reconnect with no ws_url must error Disconnected, got {res:?}"
+        );
+    }
+
     #[test]
     fn non_headless_launch_flags_snapshot() {
         let b = BrowserBuilder::new().headless(false);
@@ -3032,6 +3164,7 @@ mod tests {
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
+                ws_url: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
@@ -3120,6 +3253,7 @@ mod tests {
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
+                ws_url: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
@@ -3224,6 +3358,7 @@ mod tests {
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
+                ws_url: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
@@ -3321,6 +3456,7 @@ mod tests {
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
+                ws_url: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
@@ -3385,6 +3521,7 @@ mod tests {
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
+                ws_url: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
@@ -3451,6 +3588,7 @@ mod tests {
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
+                ws_url: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
@@ -3507,6 +3645,7 @@ mod tests {
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
+                ws_url: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
@@ -3640,6 +3779,7 @@ mod tests {
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
+                ws_url: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
@@ -3987,6 +4127,7 @@ mod tests {
                 debug_host_port: debug_host_port_from_ws(
                     "ws://127.0.0.1:9222/devtools/browser/abc",
                 ),
+                ws_url: Some("ws://127.0.0.1:9222/devtools/browser/abc".to_string()),
                 owns_process: false,
             })
             .await
@@ -4049,6 +4190,7 @@ mod tests {
                 owned_tmp: None,
                 extension_dirs: Vec::new(),
                 debug_host_port: None,
+                ws_url: None,
                 owns_process: false,
             })
             .await

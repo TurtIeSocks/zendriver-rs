@@ -5,6 +5,14 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+### Added
+
+- `Browser::reconnect()` — re-establish a dropped connection to the same still-running Chrome process (re-dials the surviving `/devtools/browser/<id>` endpoint on the existing `Connection`, re-arms `Target.setAutoAttach{flatten:true}` so stealth re-injects, refreshes the tab registry). Scoped v1: existing `Tab`/`Frame`/`Element` handles are **invalidated** — re-acquire via `tabs()` (not `main_tab()`, which still returns the stale handle). Per-feature domain re-arm (`Network.enable`, `Fetch` rules, etc.) and transparent handle-preserving reconnect are deferred.
+
+### Changed
+
+- An unexpected WebSocket drop (Chrome died / socket severed) now surfaces in-flight CDP calls as the new distinct `ZendriverError::Disconnected` variant, instead of the opaque shutdown error used for a clean `close()`. Long-running callers can now tell "connection lost" apart from "I closed it" and recover via `Browser::reconnect()`.
+
 ## [0.1.4] - 2026-06-01
 
 ### Added

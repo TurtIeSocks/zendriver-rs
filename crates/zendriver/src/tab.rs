@@ -2868,6 +2868,7 @@ mod tests {
                 stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
+                ws_url: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
@@ -3686,6 +3687,7 @@ mod tests {
                 stealth_input_profile: zendriver_stealth::InputProfile::native(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: Some("127.0.0.1:9222".to_string()),
+                ws_url: None,
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
