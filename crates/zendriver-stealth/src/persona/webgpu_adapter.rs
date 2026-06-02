@@ -117,4 +117,47 @@ mod tests {
         // Never panics, never randomizes: a stable coherent default.
         assert_eq!(a.vendor, "intel");
     }
+
+    #[test]
+    fn amd_renderer_maps_to_amd_adapter() {
+        let a = adapter_for_renderer(
+            "ANGLE (AMD, AMD Radeon RX 7900 XT Direct3D11 vs_5_0 ps_5_0, D3D11)",
+        );
+        assert_eq!(a.vendor, "amd");
+        assert_eq!(a.architecture, "rdna-3");
+        assert!(a.description.contains("Radeon"));
+    }
+
+    #[test]
+    fn apple_renderer_maps_to_apple_adapter() {
+        let a =
+            adapter_for_renderer("ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Pro, Unspecified)");
+        assert_eq!(a.vendor, "apple");
+        assert_eq!(a.architecture, "common-3");
+    }
+
+    #[test]
+    fn nvidia_arch_by_generation() {
+        assert_eq!(
+            adapter_for_renderer("NVIDIA GeForce RTX 3080").architecture,
+            "ampere"
+        );
+        assert_eq!(
+            adapter_for_renderer("NVIDIA GeForce RTX 2070").architecture,
+            "turing"
+        );
+        // generic nvidia (no recognized generation) → ampere default
+        assert_eq!(
+            adapter_for_renderer("NVIDIA GeForce GTX 1080").architecture,
+            "ampere"
+        );
+    }
+
+    #[test]
+    fn extract_model_falls_back_when_no_parens() {
+        // A vendor-matching renderer with no ANGLE "(...)" → "{Vendor} Graphics".
+        let a = adapter_for_renderer("nvidia geforce");
+        assert_eq!(a.vendor, "nvidia");
+        assert_eq!(a.description, "NVIDIA Graphics");
+    }
 }
