@@ -760,7 +760,7 @@ impl ZendriverServer {
     /// Register a one-shot expectation against the current tab.
     #[tool(
         name = "browser_expect_register",
-        description = "Register a one-shot expectation against the current tab. `kind` selects `request` / `response` / `dialog` / `download`. `matcher.url_substr` / `matcher.url_regex` filter request and response by URL (regex wins if both set; default matches every URL). `dialog` and `download` ignore matcher fields entirely. `pre_await_timeout_ms` (default 60_000 = 60s) is the inner timeout applied to the lib's `.timeout(d)` so the user has time to trigger the action between `_register` and `_await`. Returns `{ expectation_id }` — pass to `browser_expect_await` or `browser_expect_cancel`."
+        description = "Register a one-shot expectation against the current tab. `kind` selects `request` / `response` / `dialog` / `download`. `matcher.url_substr` / `matcher.url_regex` filter request and response by URL (regex wins if both set; default matches every URL). `dialog` and `download` ignore matcher fields entirely. `pre_await_timeout_ms` (default 60_000 = 60s) is the inner timeout applied to the lib's `.timeout(d)` so the user has time to trigger the action between `_register` and `_await`. Drive params (decided here because the matched handle is consumed by the spawned task): `dialog_action` (`accept`/`dismiss`, plus `dialog_prompt_text` for prompts) drives a matched dialog so the page's blocking call returns; `fetch_body: true` inlines the response body as `body_base64`; `save_to: <path>` copies a completed download to the MCP host. Returns `{ expectation_id }` — pass to `browser_expect_await` or `browser_expect_cancel`."
     )]
     pub async fn browser_expect_register(
         &self,
@@ -772,7 +772,7 @@ impl ZendriverServer {
     /// Wait for a previously-registered expectation to resolve.
     #[tool(
         name = "browser_expect_await",
-        description = "Wait for a previously-registered expectation to resolve. `timeout_ms` (default 30_000 = 30s) is the outer wait on the spawned task's matched-event channel. Returns `{ expectation_id, event }` where `event` is a JSON object whose shape depends on the expectation's `kind`: request/response carry `url` / `headers` / `method` or `status`; dialog carries `dialog_type` / `message` / `default_prompt`; download carries `suggested_filename` / `guid` / `download_dir`. Response bodies and download bytes are NOT fetched in v0 — agents that need them can poll via `browser_evaluate` or a future kind-specific tool."
+        description = "Wait for a previously-registered expectation to resolve. `timeout_ms` (default 30_000 = 30s) is the outer wait on the spawned task's matched-event channel. Returns `{ expectation_id, event }` where `event` is a JSON object whose shape depends on the expectation's `kind`: request/response carry `url` / `headers` / `method` or `status`; dialog carries `dialog_type` / `message` / `default_prompt` / `driven`; download carries `suggested_filename` / `guid` / `download_dir` / `saved_path`. When the expectation was registered with `fetch_body: true`, response events also carry `body_base64` + `body_len`. Dialog drive and download save are requested at register time (see `browser_expect_register`)."
     )]
     pub async fn browser_expect_await(
         &self,

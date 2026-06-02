@@ -181,6 +181,7 @@ mod expect_snaps {
     use super::*;
 
     schema_snap!(expect_kind, tools::expect::ExpectKind);
+    schema_snap!(expect_dialog_action, tools::expect::DialogAction);
     schema_snap!(expect_matcher, tools::expect::ExpectMatcher);
     schema_snap!(expect_register_in, tools::expect::RegisterInput);
     schema_snap!(expect_register_out, tools::expect::RegisterOutput);

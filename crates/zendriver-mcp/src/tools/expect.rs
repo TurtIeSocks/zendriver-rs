@@ -19,28 +19,40 @@
 //!   spawned task so the lib-level `.matched()` future is killed promptly
 //!   rather than left to time out on its own.
 //!
-//! ## Wire-shape mappers (`event_to_json`)
+//! ## Wire-shape mappers + drive
 //!
-//! Each kind has a small free fn that flattens its lib-side struct
+//! Each kind has a small async free fn that flattens its lib-side struct
 //! (`MatchedRequest` / `MatchedResponse` / `MatchedDialog` / `MatchedDownload`)
-//! into a `serde_json::Value`. Bodies (`MatchedResponse::body()`,
-//! `MatchedDownload::save_to(...)`) are NOT fetched in v0 — they require an
-//! extra round-trip and aren't part of the event itself. Dialog
-//! accept/dismiss is also not exposed; Chrome's default handling fires
-//! when the `MatchedDialog` is dropped at task end.
+//! into a `serde_json::Value` and, when asked, *drives* the matched object
+//! before it is dropped. The drive parameters live on
+//! `browser_expect_register` (not `_await`) because the spawned task owns the
+//! matched handle and several drive methods consume it (`accept` / `dismiss` /
+//! `save_to`); the decision must therefore be made at register time, before
+//! the triggering action runs:
+//!
+//! - **Dialog** — `dialog_action: accept|dismiss` (+ `dialog_prompt_text`)
+//!   drives the dialog so the page's blocking `alert/confirm/prompt` returns.
+//! - **Response** — `fetch_body: true` fetches the body and inlines it as
+//!   `body_base64` + `body_len`.
+//! - **Download** — `save_to: <path>` waits for completion and copies the file
+//!   to the MCP host, reporting `saved_path`.
 
 #![cfg(feature = "expect")]
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use rmcp::ErrorData;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, oneshot};
 use zendriver::{
-    MatchedDialog, MatchedDownload, MatchedRequest, MatchedResponse, UrlMatcher, ZendriverError,
+    DialogType, MatchedDialog, MatchedDownload, MatchedRequest, MatchedResponse, UrlMatcher,
+    ZendriverError,
 };
 
 use crate::errors::{McpServerError, map_error};
@@ -74,6 +86,23 @@ impl ExpectKind {
             Self::Download => "download",
         }
     }
+}
+
+/// How to drive a matched JavaScript dialog (`kind: dialog` only).
+///
+/// Applied by the spawned task the instant the dialog opens — so the page's
+/// blocking `alert()` / `confirm()` / `prompt()` call returns promptly and
+/// the matched event carries the chosen action. Omitting `dialog_action`
+/// falls back to Chrome's default handling (the dialog is accepted when the
+/// matched handle is dropped at task end).
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DialogAction {
+    /// Accept the dialog. For a `prompt`, submit `dialog_prompt_text` (or the
+    /// dialog's default value when that is unset).
+    Accept,
+    /// Dismiss / cancel the dialog.
+    Dismiss,
 }
 
 /// URL match predicate for request/response expectations. Dialog and
@@ -134,6 +163,22 @@ pub struct RegisterInput {
     /// triggers the event between `register` and `await`.
     #[serde(default = "default_pre_timeout")]
     pub pre_await_timeout_ms: u64,
+    /// Dialog only: drive the matched dialog (`accept` / `dismiss`) instead
+    /// of leaving Chrome's default handling. Decided here, at register time,
+    /// because the matched dialog handle is consumed by the spawned task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dialog_action: Option<DialogAction>,
+    /// Dialog only: prompt answer for `dialog_action: accept` on a `prompt`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dialog_prompt_text: Option<String>,
+    /// Response only: fetch the response body and include it (base64) in the
+    /// matched event as `body_base64` + `body_len`. One extra CDP round-trip.
+    #[serde(default)]
+    pub fetch_body: bool,
+    /// Download only: copy the completed download to this path on the MCP
+    /// host; the matched event reports it as `saved_path`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub save_to: Option<String>,
 }
 
 fn default_pre_timeout() -> u64 {
@@ -162,6 +207,12 @@ pub async fn register(
     let pre_await = Duration::from_millis(input.pre_await_timeout_ms);
     let matcher = input.matcher.unwrap_or_default().into_url_matcher()?;
     let kind = input.kind;
+    // Drive params, captured before the per-kind spawn moves them in. Each is
+    // meaningful for exactly one kind (see field docs); the others are unused.
+    let dialog_action = input.dialog_action;
+    let dialog_prompt = input.dialog_prompt_text;
+    let fetch_body = input.fetch_body;
+    let save_to = input.save_to;
 
     let tab = {
         let s = state.lock().await;
@@ -187,18 +238,20 @@ pub async fn register(
         ExpectKind::Response => {
             let exp = tab.expect_response(matcher).timeout(pre_await);
             tokio::spawn(async move {
-                let msg = exp
-                    .matched()
-                    .await
-                    .map(response_to_json)
-                    .map_err(err_to_str);
+                let msg = match exp.matched().await {
+                    Ok(m) => response_to_json(m, fetch_body).await,
+                    Err(e) => Err(err_to_str(e)),
+                };
                 let _ = tx.send(msg);
             })
         }
         ExpectKind::Dialog => {
             let exp = tab.expect_dialog().timeout(pre_await);
             tokio::spawn(async move {
-                let msg = exp.matched().await.map(dialog_to_json).map_err(err_to_str);
+                let msg = match exp.matched().await {
+                    Ok(m) => dialog_to_json(m, dialog_action, dialog_prompt).await,
+                    Err(e) => Err(err_to_str(e)),
+                };
                 let _ = tx.send(msg);
             })
         }
@@ -213,11 +266,10 @@ pub async fn register(
                 .map_err(|e| map_error(McpServerError::from(e)))?
                 .timeout(pre_await);
             tokio::spawn(async move {
-                let msg = exp
-                    .matched()
-                    .await
-                    .map(download_to_json)
-                    .map_err(err_to_str);
+                let msg = match exp.matched().await {
+                    Ok(m) => download_to_json(m, save_to).await,
+                    Err(e) => Err(err_to_str(e)),
+                };
                 let _ = tx.send(msg);
             })
         }
@@ -397,55 +449,101 @@ fn request_to_json(m: MatchedRequest) -> Value {
     })
 }
 
-/// Flatten a [`MatchedResponse`] to a wire JSON object.
+/// Flatten a [`MatchedResponse`] to a wire JSON object, optionally fetching
+/// the response body (base64) when `fetch_body` is set.
 ///
-/// Body is NOT fetched in v0 — `body()` is an async CDP round-trip and
-/// not part of the event itself.
-fn response_to_json(m: MatchedResponse) -> Value {
-    json!({
+/// `body()` is an async CDP round-trip, so it is opt-in: agents that only
+/// need status/headers skip it.
+async fn response_to_json(m: MatchedResponse, fetch_body: bool) -> Result<Value, String> {
+    let mut v = json!({
         "kind": "response",
         "url": m.url,
         "status": m.status,
         "status_text": m.status_text,
         "headers": m.headers,
         "request_id": m.request_id,
-    })
+    });
+    if fetch_body {
+        let bytes = m.body().await.map_err(err_to_str)?;
+        v["body_len"] = json!(bytes.len());
+        v["body_base64"] = json!(BASE64.encode(&bytes));
+    }
+    Ok(v)
 }
 
-/// Flatten a [`MatchedDialog`] to a wire JSON object.
+/// Render a [`DialogType`] as a stable lowercase wire string.
+fn dialog_type_str(d: &DialogType) -> &'static str {
+    match d {
+        DialogType::Alert => "alert",
+        DialogType::Beforeunload => "beforeunload",
+        DialogType::Confirm => "confirm",
+        DialogType::Prompt => "prompt",
+    }
+}
+
+/// Flatten a [`MatchedDialog`] to a wire JSON object, driving the dialog
+/// (`accept` / `dismiss`) when `action` is set.
 ///
-/// `dialog_type` is rendered as a lowercase string for stable wire output.
-/// `accept`/`dismiss` are NOT exposed in v0 — Chrome's default handling
-/// applies when the matched-dialog handle is dropped at task end.
-fn dialog_to_json(m: MatchedDialog) -> Value {
-    let kind = match m.dialog_type {
-        zendriver::DialogType::Alert => "alert",
-        zendriver::DialogType::Beforeunload => "beforeunload",
-        zendriver::DialogType::Confirm => "confirm",
-        zendriver::DialogType::Prompt => "prompt",
+/// Fields are captured by reference first so the handle stays intact for the
+/// consuming `accept`/`dismiss` call. With no `action`, the handle is dropped
+/// here and Chrome's default handling applies.
+async fn dialog_to_json(
+    m: MatchedDialog,
+    action: Option<DialogAction>,
+    prompt: Option<String>,
+) -> Result<Value, String> {
+    let dialog_type = dialog_type_str(&m.dialog_type);
+    let message = m.message.clone();
+    let default_prompt = m.default_prompt.clone();
+    let url = m.url.clone();
+    let driven = match action {
+        Some(DialogAction::Accept) => {
+            m.accept(prompt).await.map_err(err_to_str)?;
+            "accept"
+        }
+        Some(DialogAction::Dismiss) => {
+            m.dismiss().await.map_err(err_to_str)?;
+            "dismiss"
+        }
+        None => {
+            drop(m);
+            "default"
+        }
     };
-    json!({
+    Ok(json!({
         "kind": "dialog",
-        "dialog_type": kind,
-        "message": m.message,
-        "default_prompt": m.default_prompt,
-        "url": m.url,
-    })
+        "dialog_type": dialog_type,
+        "message": message,
+        "default_prompt": default_prompt,
+        "url": url,
+        "driven": driven,
+    }))
 }
 
-/// Flatten a [`MatchedDownload`] to a wire JSON object.
+/// Flatten a [`MatchedDownload`] to a wire JSON object, optionally copying the
+/// completed download to `save_to` on the MCP host.
 ///
-/// `path()` is not awaited here — the download is only `InProgress` at
-/// `Page.downloadWillBegin` time. Agents needing the on-disk path can call
-/// a future tool that polls completion + reads the file.
-fn download_to_json(m: MatchedDownload) -> Value {
-    json!({
+/// `MatchedDownload::save_to` waits for completion before copying, so the
+/// reported `saved_path` is a fully-written file.
+async fn download_to_json(m: MatchedDownload, save_to: Option<String>) -> Result<Value, String> {
+    let url = m.url.clone();
+    let suggested_filename = m.suggested_filename.clone();
+    let guid = m.guid.clone();
+    let download_dir = m.download_dir.to_string_lossy().into_owned();
+    let saved_path = if let Some(dest) = save_to {
+        m.save_to(PathBuf::from(&dest)).await.map_err(err_to_str)?;
+        Some(dest)
+    } else {
+        None
+    };
+    Ok(json!({
         "kind": "download",
-        "url": m.url,
-        "suggested_filename": m.suggested_filename,
-        "guid": m.guid,
-        "download_dir": m.download_dir.to_string_lossy(),
-    })
+        "url": url,
+        "suggested_filename": suggested_filename,
+        "guid": guid,
+        "download_dir": download_dir,
+        "saved_path": saved_path,
+    }))
 }
 
 #[cfg(test)]
@@ -540,6 +638,10 @@ mod tests {
                 kind: ExpectKind::Request,
                 matcher: None,
                 pre_await_timeout_ms: 1_000,
+                dialog_action: None,
+                dialog_prompt_text: None,
+                fetch_body: false,
+                save_to: None,
             },
         )
         .await

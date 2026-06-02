@@ -7,6 +7,20 @@ title: RegisterInput
 description: "Input for `browser_expect_register`."
 type: object
 properties:
+  dialog_action:
+    description: "Dialog only: drive the matched dialog (`accept` / `dismiss`) instead\nof leaving Chrome's default handling. Decided here, at register time,\nbecause the matched dialog handle is consumed by the spawned task."
+    anyOf:
+      - $ref: "#/$defs/DialogAction"
+      - type: "null"
+  dialog_prompt_text:
+    description: "Dialog only: prompt answer for `dialog_action: accept` on a `prompt`."
+    type:
+      - string
+      - "null"
+  fetch_body:
+    description: "Response only: fetch the response body and include it (base64) in the\nmatched event as `body_base64` + `body_len`. One extra CDP round-trip."
+    type: boolean
+    default: false
   kind:
     description: Which event family to watch.
     $ref: "#/$defs/ExpectKind"
@@ -21,10 +35,24 @@ properties:
     format: uint64
     default: 60000
     minimum: 0
+  save_to:
+    description: "Download only: copy the completed download to this path on the MCP\nhost; the matched event reports it as `saved_path`."
+    type:
+      - string
+      - "null"
 additionalProperties: false
 required:
   - kind
 $defs:
+  DialogAction:
+    description: "How to drive a matched JavaScript dialog (`kind: dialog` only).\n\nApplied by the spawned task the instant the dialog opens — so the page's\nblocking `alert()` / `confirm()` / `prompt()` call returns promptly and\nthe matched event carries the chosen action. Omitting `dialog_action`\nfalls back to Chrome's default handling (the dialog is accepted when the\nmatched handle is dropped at task end)."
+    oneOf:
+      - description: "Accept the dialog. For a `prompt`, submit `dialog_prompt_text` (or the\ndialog's default value when that is unset)."
+        type: string
+        const: accept
+      - description: Dismiss / cancel the dialog.
+        type: string
+        const: dismiss
   ExpectKind:
     description: "Which `Page.*` / `Network.*` family the expectation listens on."
     oneOf:
