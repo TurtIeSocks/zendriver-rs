@@ -52,9 +52,12 @@ pub async fn download(
 ) -> Result<DownloadOutput, ErrorData> {
     let s = state.lock().await;
     let tab = current_tab(&s).await?;
-    tab.download_file(input.url.as_str(), input.filename.as_deref().map(PathBuf::from))
-        .await
-        .map_err(|e| map_error(McpServerError::from(e)))?;
+    tab.download_file(
+        input.url.as_str(),
+        input.filename.as_deref().map(PathBuf::from),
+    )
+    .await
+    .map_err(|e| map_error(McpServerError::from(e)))?;
     Ok(DownloadOutput {
         ok: true,
         url: input.url,

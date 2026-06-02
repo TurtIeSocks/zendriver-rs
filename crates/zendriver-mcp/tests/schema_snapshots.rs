@@ -68,7 +68,10 @@ schema_snap!(navigation_goto_in, tools::navigation::GotoInput);
 schema_snap!(navigation_history_in, tools::navigation::HistoryInput);
 schema_snap!(navigation_reload_in, tools::navigation::ReloadInput);
 schema_snap!(navigation_ready_state_arg, tools::navigation::ReadyStateArg);
-schema_snap!(navigation_wait_for_load_in, tools::navigation::WaitForLoadInput);
+schema_snap!(
+    navigation_wait_for_load_in,
+    tools::navigation::WaitForLoadInput
+);
 schema_snap!(navigation_idle_in, tools::navigation::IdleInput);
 schema_snap!(navigation_idle_out, tools::navigation::IdleOutput);
 
@@ -111,8 +114,14 @@ schema_snap!(reads_state_in, tools::reads::ElementStateInput);
 schema_snap!(reads_state_out, tools::reads::ElementState);
 schema_snap!(reads_get_links_in, tools::reads::GetLinksInput);
 schema_snap!(reads_get_links_out, tools::reads::GetLinksOutput);
-schema_snap!(reads_search_resources_in, tools::reads::SearchResourcesInput);
-schema_snap!(reads_search_resources_out, tools::reads::SearchResourcesOutput);
+schema_snap!(
+    reads_search_resources_in,
+    tools::reads::SearchResourcesInput
+);
+schema_snap!(
+    reads_search_resources_out,
+    tools::reads::SearchResourcesOutput
+);
 schema_snap!(reads_resource_match, tools::reads::ResourceMatch);
 
 // ---------- actions --------------------------------------------------------

@@ -112,7 +112,9 @@ pub async fn solve_imperva(
     // `tab.imperva()` borrows `tab` for the bypass's lifetime; the builder
     // methods consume + return `self`, and `wait_for_clearance` consumes it,
     // so the bypass lives only for the single await below.
-    let mut bypass = tab.imperva().timeout(Duration::from_millis(input.timeout_ms));
+    let mut bypass = tab
+        .imperva()
+        .timeout(Duration::from_millis(input.timeout_ms));
     if let Some(p) = input.poll_interval_ms {
         bypass = bypass.poll_interval(Duration::from_millis(p));
     }

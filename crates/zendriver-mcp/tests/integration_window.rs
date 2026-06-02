@@ -56,7 +56,11 @@ async fn end_to_end_window_resize() {
         .await
         .expect("browser_set_window ok");
     let set_body = structured(&set_resp);
-    assert_eq!(set_body["width"], serde_json::json!(800), "body: {set_body}");
+    assert_eq!(
+        set_body["width"],
+        serde_json::json!(800),
+        "body: {set_body}"
+    );
     assert_eq!(
         set_body["height"],
         serde_json::json!(600),
@@ -71,7 +75,11 @@ async fn end_to_end_window_resize() {
         .await
         .expect("browser_get_window ok");
     let get_body = structured(&get_resp);
-    assert_eq!(get_body["width"], serde_json::json!(800), "body: {get_body}");
+    assert_eq!(
+        get_body["width"],
+        serde_json::json!(800),
+        "body: {get_body}"
+    );
 
     client
         .call_tool(CallToolRequestParams::new("browser_close").with_arguments(Default::default()))

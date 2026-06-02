@@ -113,10 +113,7 @@ pub async fn mouse(
     } else {
         None
     };
-    Ok(ActionOutput {
-        ok: true,
-        snapshot,
-    })
+    Ok(ActionOutput { ok: true, snapshot })
 }
 
 #[cfg(test)]

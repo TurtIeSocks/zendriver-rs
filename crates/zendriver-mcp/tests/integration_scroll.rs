@@ -52,11 +52,13 @@ async fn end_to_end_scroll_and_mouse() {
 
     // Scroll down 1000px; positive dy = down.
     let scroll_resp = client
-        .call_tool(CallToolRequestParams::new("browser_scroll").with_arguments({
-            let mut m = serde_json::Map::new();
-            m.insert("dy".into(), serde_json::json!(1000.0));
-            m
-        }))
+        .call_tool(
+            CallToolRequestParams::new("browser_scroll").with_arguments({
+                let mut m = serde_json::Map::new();
+                m.insert("dy".into(), serde_json::json!(1000.0));
+                m
+            }),
+        )
         .await
         .expect("browser_scroll ok");
     let body = structured(&scroll_resp);
@@ -77,7 +79,11 @@ async fn end_to_end_scroll_and_mouse() {
         .await
         .expect("browser_mouse ok");
     let mouse_body = structured(&mouse_resp);
-    assert_eq!(mouse_body["ok"], serde_json::json!(true), "body: {mouse_body}");
+    assert_eq!(
+        mouse_body["ok"],
+        serde_json::json!(true),
+        "body: {mouse_body}"
+    );
 
     client
         .call_tool(CallToolRequestParams::new("browser_close").with_arguments(Default::default()))

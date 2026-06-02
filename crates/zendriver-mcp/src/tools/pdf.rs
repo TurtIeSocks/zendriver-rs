@@ -60,7 +60,10 @@ pub struct PdfInput {
 }
 
 /// Export the current page to PDF.
-pub async fn pdf(state: Arc<Mutex<SessionState>>, input: PdfInput) -> Result<BlobOutput, ErrorData> {
+pub async fn pdf(
+    state: Arc<Mutex<SessionState>>,
+    input: PdfInput,
+) -> Result<BlobOutput, ErrorData> {
     let s = state.lock().await;
     let tab = current_tab(&s).await?;
     let mut builder = tab.pdf_builder();

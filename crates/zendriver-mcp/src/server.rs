@@ -697,7 +697,9 @@ impl ZendriverServer {
         &self,
         Parameters(input): Parameters<window::SetWindowInput>,
     ) -> Result<Json<window::WindowBoundsDto>, ErrorData> {
-        window::set_window(self.state.clone(), input).await.map(Json)
+        window::set_window(self.state.clone(), input)
+            .await
+            .map(Json)
     }
 
     /// Export the current page to PDF.
@@ -747,7 +749,9 @@ impl ZendriverServer {
         &self,
         Parameters(input): Parameters<actions::KeySequenceInput>,
     ) -> Result<Json<actions::ActionOutput>, ErrorData> {
-        actions::key_sequence(self.state.clone(), input).await.map(Json)
+        actions::key_sequence(self.state.clone(), input)
+            .await
+            .map(Json)
     }
 
     /// Download a URL through the page's own network context.
@@ -759,7 +763,9 @@ impl ZendriverServer {
         &self,
         Parameters(input): Parameters<download::DownloadInput>,
     ) -> Result<Json<download::DownloadOutput>, ErrorData> {
-        download::download(self.state.clone(), input).await.map(Json)
+        download::download(self.state.clone(), input)
+            .await
+            .map(Json)
     }
 
     /// Set the directory downloads are saved into.
@@ -799,7 +805,9 @@ impl ZendriverServer {
         &self,
         Parameters(input): Parameters<frames::FrameGotoInput>,
     ) -> Result<Json<actions::AckOutput>, ErrorData> {
-        frames::frame_goto(self.state.clone(), input).await.map(Json)
+        frames::frame_goto(self.state.clone(), input)
+            .await
+            .map(Json)
     }
 }
 
