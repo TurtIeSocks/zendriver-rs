@@ -77,6 +77,7 @@ pub mod error;
 #[cfg(feature = "expect")]
 pub mod expect;
 pub(crate) mod expert;
+pub(crate) mod url_matcher;
 pub mod frame;
 pub mod input;
 pub(crate) mod isolated_world;
@@ -153,9 +154,8 @@ pub use zendriver_imperva::{
 #[cfg(feature = "imperva")]
 pub use zendriver_imperva::ClearanceOutcome as ImpervaClearanceOutcome;
 
-/// Re-export the shared `UrlMatcher` used by the `expect_*` helpers.
-#[cfg(feature = "expect")]
-pub use expect::UrlMatcher;
+/// Re-export the shared `UrlMatcher` used by `expect_*` and `monitor`.
+pub use url_matcher::UrlMatcher;
 
 /// `expect_request` API re-exports.
 #[cfg(feature = "expect")]
@@ -265,10 +265,14 @@ mod auto_trait_assertions {
         assert_send_sync::<BrowserError>();
     }
 
+    #[test]
+    fn url_matcher_is_send_sync() {
+        assert_send_sync::<UrlMatcher>();
+    }
+
     #[cfg(feature = "expect")]
     #[test]
     fn expect_surface_is_send_sync() {
-        assert_send_sync::<UrlMatcher>();
         assert_send_sync::<MatchedRequest>();
         assert_send_sync::<RequestExpectation>();
         assert_send_sync::<MatchedResponse>();
