@@ -24,7 +24,7 @@ path = "src/lib.rs"
 default = ["interception", "expect", "cloudflare", "imperva", "fetcher", "monitor"]
 interception  = ["zendriver/interception", "dep:uuid"]
 expect        = ["zendriver/expect", "dep:uuid"]
-monitor       = ["zendriver/monitor", "dep:uuid"]
+monitor       = ["zendriver/monitor", "dep:uuid", "dep:futures"]
 cloudflare    = ["zendriver/cloudflare"]
 imperva       = ["zendriver/imperva"]
 fetcher       = ["zendriver/fetcher"]
@@ -49,6 +49,7 @@ async-trait         = { workspace = true }
 base64              = { workspace = true }
 axum                = { workspace = true }
 uuid                    = { workspace = true, optional = true }
+futures                 = { workspace = true, optional = true }
 zendriver-fingerprints  = { workspace = true, optional = true, features = ["pool", "generative"] }
 
 [dev-dependencies]

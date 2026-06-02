@@ -1,0 +1,14 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::monitor::StartOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: StartOutput
+description: "Output of `browser_monitor_start`."
+type: object
+properties:
+  handle:
+    description: "Opaque handle for the running monitor. Pass to `browser_monitor_read`\nand `browser_monitor_stop`."
+    type: string
+required:
+  - handle

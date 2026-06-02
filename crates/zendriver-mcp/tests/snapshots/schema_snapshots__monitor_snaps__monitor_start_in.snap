@@ -1,0 +1,19 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::monitor::StartInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: StartInput
+description: "Input for `browser_monitor_start`."
+type: object
+properties:
+  capture_bodies:
+    description: "Fetch each HTTP response body at observe-time and inline it on the\n`http` event (`body` + `body_base64`). One extra CDP round-trip per\nexchange; off by default to keep the buffer light."
+    type: boolean
+    default: false
+  url_pattern:
+    description: "Restrict buffered events to those whose URL contains this substring.\nOmit to buffer every observed event."
+    type:
+      - string
+      - "null"
+additionalProperties: false

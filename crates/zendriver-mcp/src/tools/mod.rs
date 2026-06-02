@@ -28,6 +28,8 @@ pub mod imperva;
 #[cfg(feature = "interception")]
 pub mod intercept;
 pub mod lifecycle;
+#[cfg(feature = "monitor")]
+pub mod monitor;
 pub mod mouse;
 pub mod navigation;
 pub mod pdf;

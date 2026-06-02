@@ -3372,6 +3372,7 @@ dependencies = [
  "axum",
  "base64",
  "clap",
+ "futures",
  "insta",
  "regex",
  "rmcp",

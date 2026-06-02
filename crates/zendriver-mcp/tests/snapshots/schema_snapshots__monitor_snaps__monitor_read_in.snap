@@ -1,0 +1,22 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::monitor::ReadInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: ReadInput
+description: "Input for `browser_monitor_read`."
+type: object
+properties:
+  handle:
+    description: "Handle returned by an earlier `browser_monitor_start`."
+    type: string
+  max:
+    description: "Maximum number of events to drain this call. Omit to drain all buffered\nevents."
+    type:
+      - integer
+      - "null"
+    format: uint
+    minimum: 0
+additionalProperties: false
+required:
+  - handle

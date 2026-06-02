@@ -207,6 +207,21 @@ mod fingerprints_snaps {
     );
 }
 
+// ---------- monitor (feature-gated) ---------------------------------------
+
+#[cfg(feature = "monitor")]
+mod monitor_snaps {
+    use super::*;
+
+    schema_snap!(monitor_event, zendriver_mcp::state::MonitorEvent);
+    schema_snap!(monitor_start_in, tools::monitor::StartInput);
+    schema_snap!(monitor_start_out, tools::monitor::StartOutput);
+    schema_snap!(monitor_read_in, tools::monitor::ReadInput);
+    schema_snap!(monitor_read_out, tools::monitor::ReadOutput);
+    schema_snap!(monitor_stop_in, tools::monitor::StopInput);
+    schema_snap!(monitor_stop_out, tools::monitor::StopOutput);
+}
+
 // ---------- interception (feature-gated) ----------------------------------
 
 #[cfg(feature = "interception")]
