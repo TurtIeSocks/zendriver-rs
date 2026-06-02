@@ -77,7 +77,6 @@ pub mod error;
 #[cfg(feature = "expect")]
 pub mod expect;
 pub(crate) mod expert;
-pub(crate) mod url_matcher;
 pub mod frame;
 pub mod input;
 pub(crate) mod isolated_world;
@@ -88,6 +87,7 @@ pub mod screenshot;
 pub mod storage;
 pub mod tab;
 pub mod traits;
+pub(crate) mod url_matcher;
 pub mod window;
 
 pub use browser::{Browser, BrowserBuilder, Channel, PermissionType};
