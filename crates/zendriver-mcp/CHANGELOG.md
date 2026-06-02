@@ -3,6 +3,17 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.2.0] - 2026-06-02
+
+### Added
+
+- Browser_solve_imperva + imperva feature (Task A1)
+- Scroll, window, pdf/mhtml, coordinate-mouse tools (Tasks A2-A5)
+- Drive matched expectations — dialog accept/dismiss, response body, download save (Task A6)
+- Tier 2 tools — chords, download, runtime-UA, fine stealth, modify_response, frame nav/load waits (Phase B)
+- Tier 3 tools + docs — links, resource search, element extras, set-text/clear modes, TLS bypass (Phase C + D1)
+
+
 ## [0.1.5] - 2026-06-02
 
 ### Added
