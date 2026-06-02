@@ -1,0 +1,105 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::mouse::MouseInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: MouseInput
+description: "Input for `browser_mouse`."
+type: object
+properties:
+  action:
+    description: Which pointer operation to perform.
+    $ref: "#/$defs/MouseAction"
+  button:
+    description: "Which button to dispatch (`click` only). Default `left`."
+    anyOf:
+      - $ref: "#/$defs/MouseButtonArg"
+      - type: "null"
+  click_count:
+    description: "`clickCount` for `click` (set `2` for a double-click). Default `1`."
+    type:
+      - integer
+      - "null"
+    format: uint32
+    minimum: 0
+  modifiers:
+    description: "Modifier keys held during a `click`. Default none."
+    type: array
+    default: []
+    items:
+      $ref: "#/$defs/ModifierArg"
+  return_snapshot:
+    description: "When `true`, include the trimmed page HTML in the response."
+    type: boolean
+    default: false
+  steps:
+    description: "Interpolation steps for `drag`. Default `20`."
+    type: integer
+    format: uint
+    default: 20
+    minimum: 0
+  to_x:
+    description: "Drag destination X (required for `drag`)."
+    type:
+      - number
+      - "null"
+    format: double
+  to_y:
+    description: "Drag destination Y (required for `drag`)."
+    type:
+      - number
+      - "null"
+    format: double
+  x:
+    description: "Target X in CSS pixels (viewport-relative). For `drag`, the start X."
+    type: number
+    format: double
+  y:
+    description: "Target Y in CSS pixels (viewport-relative). For `drag`, the start Y."
+    type: number
+    format: double
+additionalProperties: false
+required:
+  - action
+  - x
+  - y
+$defs:
+  ModifierArg:
+    description: "MCP-layer keyboard-modifier flag, mapped onto [`zendriver::KeyModifiers`].\n\nShared by coordinate-mouse clicks (`browser_mouse`) and keyboard chords\n(`browser_press` / `browser_key_sequence`)."
+    oneOf:
+      - description: "`Alt` (Option on macOS)."
+        type: string
+        const: alt
+      - description: "`Control`."
+        type: string
+        const: ctrl
+      - description: "`Meta` (Command on macOS, Windows key on Windows)."
+        type: string
+        const: meta
+      - description: "`Shift`."
+        type: string
+        const: shift
+  MouseAction:
+    description: "Which pointer operation `browser_mouse` performs."
+    oneOf:
+      - description: "Move the cursor to `(x, y)` along a realistic Bezier path."
+        type: string
+        const: move
+      - description: "Click at `(x, y)`."
+        type: string
+        const: click
+      - description: "Press at `(x, y)`, drag to `(to_x, to_y)` over `steps`, release."
+        type: string
+        const: drag
+  MouseButtonArg:
+    description: "MCP-layer mouse button enum, mapped to [`zendriver::MouseButton`].\n\nOnly the three commonly-dispatched buttons; thumb buttons (Back /\nForward) are deliberately omitted to keep the schema small."
+    oneOf:
+      - description: Primary button (default).
+        type: string
+        const: left
+      - description: Middle button (scroll wheel click).
+        type: string
+        const: middle
+      - description: Secondary button.
+        type: string
+        const: right

@@ -1,0 +1,15 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::pdf::SaveMhtmlInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: SaveMhtmlInput
+description: "Input for `browser_save_mhtml`."
+type: object
+properties:
+  save_path:
+    description: Write the MHTML to this path on the MCP host instead of inlining base64.
+    type:
+      - string
+      - "null"
+additionalProperties: false

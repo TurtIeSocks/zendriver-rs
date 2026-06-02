@@ -25,9 +25,13 @@ pub mod imperva;
 #[cfg(feature = "interception")]
 pub mod intercept;
 pub mod lifecycle;
+pub mod mouse;
 pub mod navigation;
+pub mod pdf;
 pub mod reads;
+pub mod scroll;
 pub mod snapshot;
 pub mod stealth;
 pub mod storage;
 pub mod tabs;
+pub mod window;

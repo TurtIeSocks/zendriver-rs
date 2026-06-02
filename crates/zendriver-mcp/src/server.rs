@@ -40,8 +40,8 @@ use crate::tools::imperva;
 #[cfg(feature = "interception")]
 use crate::tools::intercept;
 use crate::tools::{
-    actions, cookies, eval, find, frames, lifecycle, navigation, reads, snapshot, stealth, storage,
-    tabs,
+    actions, cookies, eval, find, frames, lifecycle, mouse, navigation, pdf, reads, scroll,
+    snapshot, stealth, storage, tabs, window,
 };
 
 /// rmcp handler carrying the per-session [`SessionState`].
@@ -603,6 +603,80 @@ impl ZendriverServer {
         storage::storage_clear(self.state.clone(), input)
             .await
             .map(Json)
+    }
+
+    // ---------- scroll / window / pdf / mouse (Tier 1 coverage) ----------
+
+    /// Scroll the page by a signed pixel distance.
+    #[tool(
+        name = "browser_scroll",
+        description = "Scroll the page by a signed pixel distance via `Input.synthesizeScrollGesture`. Intuitive axes: positive `dy` scrolls **down**, positive `dx` scrolls **right** (the tool negates internally for CDP). Optional `speed` (px/sec). Returns the resulting `{ scroll_x, scroll_y }` (and the trimmed HTML when `return_snapshot: true`). Use `browser_scroll_into_view` instead when you want to bring a specific element into view."
+    )]
+    pub async fn browser_scroll(
+        &self,
+        Parameters(input): Parameters<scroll::PageScrollInput>,
+    ) -> Result<Json<scroll::PageScrollOutput>, ErrorData> {
+        scroll::scroll(self.state.clone(), input).await.map(Json)
+    }
+
+    /// Read the current OS window bounds + state.
+    #[tool(
+        name = "browser_get_window",
+        description = "Read the current OS window bounds + state (`Browser.getWindowForTarget`). Returns `{ left?, top?, width?, height?, state }` in device-independent pixels; geometry fields are omitted for a minimized window. `state` is one of `normal` / `minimized` / `maximized` / `fullscreen`."
+    )]
+    pub async fn browser_get_window(
+        &self,
+        Parameters(_): Parameters<EmptyInput>,
+    ) -> Result<Json<window::WindowBoundsDto>, ErrorData> {
+        window::get_window(self.state.clone()).await.map(Json)
+    }
+
+    /// Resize / reposition / change the state of the OS window.
+    #[tool(
+        name = "browser_set_window",
+        description = "Resize, reposition, or change the state of the OS window hosting the current tab. `mode`: `size` (resize to `width`×`height`, both required), `bounds` (set any subset of `left`/`top`/`width`/`height`/`state`), `maximize`, `minimize`, or `fullscreen`. Returns the resulting bounds. Affects viewport size for screenshots + responsive layouts."
+    )]
+    pub async fn browser_set_window(
+        &self,
+        Parameters(input): Parameters<window::SetWindowInput>,
+    ) -> Result<Json<window::WindowBoundsDto>, ErrorData> {
+        window::set_window(self.state.clone(), input).await.map(Json)
+    }
+
+    /// Export the current page to PDF.
+    #[tool(
+        name = "browser_pdf",
+        description = "Export the current page to PDF (`Page.printToPDF`). All options optional: `landscape`, `print_background`, `scale`, `paper_width`/`paper_height` (inches), `margin_*` (inches), `page_ranges` (e.g. `\"1-3, 5\"`), `prefer_css_page_size`. When `save_path` is set the bytes are written to disk on the MCP host and `{ saved_path, byte_len }` is returned; otherwise the bytes are base64-inlined in `{ byte_len, base64 }` (blobs over 5 MiB require `save_path`)."
+    )]
+    pub async fn browser_pdf(
+        &self,
+        Parameters(input): Parameters<pdf::PdfInput>,
+    ) -> Result<Json<crate::tools::common::BlobOutput>, ErrorData> {
+        pdf::pdf(self.state.clone(), input).await.map(Json)
+    }
+
+    /// Capture an MHTML archive of the current page.
+    #[tool(
+        name = "browser_save_mhtml",
+        description = "Capture a single-file MHTML archive of the current page (`Page.captureSnapshot`) — HTML plus inlined subresources. When `save_path` is set the bytes are written to disk on the MCP host; otherwise base64-inlined (same `BlobOutput` shape as `browser_pdf`)."
+    )]
+    pub async fn browser_save_mhtml(
+        &self,
+        Parameters(input): Parameters<pdf::SaveMhtmlInput>,
+    ) -> Result<Json<crate::tools::common::BlobOutput>, ErrorData> {
+        pdf::save_mhtml(self.state.clone(), input).await.map(Json)
+    }
+
+    /// Dispatch a coordinate-anchored mouse action.
+    #[tool(
+        name = "browser_mouse",
+        description = "Dispatch a coordinate-anchored pointer action for canvas / drag-and-drop / map / game interactions not reachable via element-targeted tools. `action`: `move` (Bezier path to `x,y`), `click` (at `x,y`, with optional `button` / `click_count` / `modifiers`), or `drag` (press at `x,y`, drag to `to_x,to_y` over `steps`, release). Coordinates are viewport CSS pixels. Returns `{ ok }` (and trimmed HTML when `return_snapshot: true`)."
+    )]
+    pub async fn browser_mouse(
+        &self,
+        Parameters(input): Parameters<mouse::MouseInput>,
+    ) -> Result<Json<actions::ActionOutput>, ErrorData> {
+        mouse::mouse(self.state.clone(), input).await.map(Json)
     }
 }
 

@@ -1,0 +1,30 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::scroll::PageScrollInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: PageScrollInput
+description: "Input for `browser_scroll`."
+type: object
+properties:
+  dx:
+    description: "Horizontal scroll distance in CSS pixels. Positive scrolls the view\nright; negative scrolls left. Default `0`."
+    type: number
+    format: double
+    default: 0
+  dy:
+    description: "Vertical scroll distance in CSS pixels. Positive scrolls the view\n**down** the page; negative scrolls up. Default `0`."
+    type: number
+    format: double
+    default: 0
+  return_snapshot:
+    description: "When `true`, include the trimmed page HTML in the response."
+    type: boolean
+    default: false
+  speed:
+    description: "Optional gesture speed in pixels/second. Omitted → Chrome's default."
+    type:
+      - integer
+      - "null"
+    format: int64
+additionalProperties: false

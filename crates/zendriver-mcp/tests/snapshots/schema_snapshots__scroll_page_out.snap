@@ -1,0 +1,25 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::scroll::PageScrollOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: PageScrollOutput
+description: "Output of `browser_scroll`: the page scroll offset after the gesture."
+type: object
+properties:
+  scroll_x:
+    description: "`window.scrollX` after the gesture."
+    type: number
+    format: double
+  scroll_y:
+    description: "`window.scrollY` after the gesture."
+    type: number
+    format: double
+  snapshot:
+    description: "Trimmed rendered HTML, populated only when `return_snapshot: true`."
+    type:
+      - string
+      - "null"
+required:
+  - scroll_x
+  - scroll_y

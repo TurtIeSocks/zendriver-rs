@@ -26,7 +26,31 @@ macro_rules! schema_snap {
 // ---------- shared ---------------------------------------------------------
 
 schema_snap!(common_empty_input, tools::common::EmptyInput);
+schema_snap!(common_modifier_arg, tools::common::ModifierArg);
+schema_snap!(common_blob_output, tools::common::BlobOutput);
 schema_snap!(selectors_selector, selectors::Selector);
+
+// ---------- scroll ---------------------------------------------------------
+
+schema_snap!(scroll_page_in, tools::scroll::PageScrollInput);
+schema_snap!(scroll_page_out, tools::scroll::PageScrollOutput);
+
+// ---------- window ---------------------------------------------------------
+
+schema_snap!(window_state_dto, tools::window::WindowStateDto);
+schema_snap!(window_bounds_dto, tools::window::WindowBoundsDto);
+schema_snap!(window_set_mode, tools::window::SetWindowMode);
+schema_snap!(window_set_in, tools::window::SetWindowInput);
+
+// ---------- pdf ------------------------------------------------------------
+
+schema_snap!(pdf_in, tools::pdf::PdfInput);
+schema_snap!(pdf_save_mhtml_in, tools::pdf::SaveMhtmlInput);
+
+// ---------- mouse ----------------------------------------------------------
+
+schema_snap!(mouse_action, tools::mouse::MouseAction);
+schema_snap!(mouse_in, tools::mouse::MouseInput);
 
 // ---------- lifecycle ------------------------------------------------------
 

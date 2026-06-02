@@ -1,0 +1,26 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::common::BlobOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: BlobOutput
+description: "Structured result for tools that produce a binary blob (PDF, MHTML,\ndownloaded file).\n\nWhen the caller passes a `save_path`, the bytes are written to disk on the\nMCP server host and only `{ saved_path, byte_len }` is returned. Otherwise\nthe bytes are base64-inlined in `base64` (subject to [`MAX_INLINE_BYTES`])."
+type: object
+properties:
+  base64:
+    description: "Base64-encoded bytes. Populated only when no `save_path` was given and\nthe blob is within the inline size limit."
+    type:
+      - string
+      - "null"
+  byte_len:
+    description: Size of the blob in bytes.
+    type: integer
+    format: uint
+    minimum: 0
+  saved_path:
+    description: "Absolute/!relative path the bytes were written to, when `save_path`\nwas supplied. Path is on the MCP server host, not the client machine."
+    type:
+      - string
+      - "null"
+required:
+  - byte_len

@@ -1,0 +1,54 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::window::WindowBoundsDto)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: WindowBoundsDto
+description: Window geometry + state DTO (output of both window tools).
+type: object
+properties:
+  height:
+    description: "Window height, in DIP. `None` when not reported."
+    type:
+      - integer
+      - "null"
+    format: int64
+  left:
+    description: "Window left edge (screen X), in DIP. `None` when not reported."
+    type:
+      - integer
+      - "null"
+    format: int64
+  state:
+    description: Current window state.
+    anyOf:
+      - $ref: "#/$defs/WindowStateDto"
+      - type: "null"
+  top:
+    description: "Window top edge (screen Y), in DIP. `None` when not reported."
+    type:
+      - integer
+      - "null"
+    format: int64
+  width:
+    description: "Window width, in DIP. `None` when not reported."
+    type:
+      - integer
+      - "null"
+    format: int64
+$defs:
+  WindowStateDto:
+    description: "Wire mirror of [`zendriver::WindowState`]."
+    oneOf:
+      - description: Normal (windowed) — the only state that may carry explicit geometry.
+        type: string
+        const: normal
+      - description: Minimized to the OS taskbar / dock.
+        type: string
+        const: minimized
+      - description: Maximized to fill the screen work area.
+        type: string
+        const: maximized
+      - description: Fullscreen (chrome / OS decorations hidden).
+        type: string
+        const: fullscreen

@@ -1,0 +1,20 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::common::ModifierArg)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: ModifierArg
+description: "MCP-layer keyboard-modifier flag, mapped onto [`zendriver::KeyModifiers`].\n\nShared by coordinate-mouse clicks (`browser_mouse`) and keyboard chords\n(`browser_press` / `browser_key_sequence`)."
+oneOf:
+  - description: "`Alt` (Option on macOS)."
+    type: string
+    const: alt
+  - description: "`Control`."
+    type: string
+    const: ctrl
+  - description: "`Meta` (Command on macOS, Windows key on Windows)."
+    type: string
+    const: meta
+  - description: "`Shift`."
+    type: string
+    const: shift
