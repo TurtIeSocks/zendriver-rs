@@ -40,8 +40,8 @@ use crate::tools::imperva;
 #[cfg(feature = "interception")]
 use crate::tools::intercept;
 use crate::tools::{
-    actions, cookies, eval, find, frames, lifecycle, mouse, navigation, pdf, reads, scroll,
-    snapshot, stealth, storage, tabs, window,
+    actions, cookies, download, eval, find, frames, lifecycle, mouse, navigation, pdf, reads,
+    scroll, snapshot, stealth, storage, tabs, window,
 };
 
 /// rmcp handler carrying the per-session [`SessionState`].
@@ -146,10 +146,13 @@ impl ZendriverServer {
     }
 
     /// Reload the current tab.
-    #[tool(name = "browser_reload", description = "Reload the current tab.")]
+    #[tool(
+        name = "browser_reload",
+        description = "Reload the current tab. Set `ignore_cache: true` for a hard reload that bypasses the HTTP cache. `return_snapshot: true` includes the trimmed page HTML."
+    )]
     pub async fn browser_reload(
         &self,
-        Parameters(input): Parameters<navigation::HistoryInput>,
+        Parameters(input): Parameters<navigation::ReloadInput>,
     ) -> Result<Json<navigation::NavOutput>, ErrorData> {
         navigation::reload(self.state.clone(), input)
             .await
@@ -252,13 +255,27 @@ impl ZendriverServer {
     /// Configure the session's default stealth profile.
     #[tool(
         name = "browser_set_stealth_profile",
-        description = "Configure the session's default stealth profile. NOTE: takes effect on the NEXT `browser_open` call; does NOT re-fingerprint an already-open browser. Call `browser_close` + `browser_open` to apply live."
+        description = "Configure the session's default stealth profile + optional fine-grained fingerprint `overrides` (`platform` / `locale` / `timezone` / `memory_gb` / `cpu_count` / `chrome_version` / `user_agent` / `bypass_csp`). Overrides are layered onto the profile and most meaningful with a `spoof_*` profile. NOTE: takes effect on the NEXT `browser_open`; does NOT re-fingerprint an already-open browser. `overrides` replaces any previously-set overrides (omit to clear)."
     )]
     pub async fn browser_set_stealth_profile(
         &self,
         Parameters(input): Parameters<stealth::SetStealthProfileInput>,
     ) -> Result<Json<stealth::SetStealthProfileOutput>, ErrorData> {
         stealth::set_stealth_profile(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Override the current tab's User-Agent at runtime.
+    #[tool(
+        name = "browser_set_user_agent",
+        description = "Override the current tab's User-Agent at runtime (`Emulation.setUserAgentOverride`), with optional `accept_language` and `platform`. Last-write-wins and sends NO userAgentMetadata — under a Spoofed stealth profile this can clobber UA-Client-Hints coherence and INCREASE detectability. Prefer the stealth profile for stealth-sensitive tabs; use this for non-stealth tabs or a deliberate per-tab change."
+    )]
+    pub async fn browser_set_user_agent(
+        &self,
+        Parameters(input): Parameters<stealth::SetUserAgentInput>,
+    ) -> Result<Json<actions::AckOutput>, ErrorData> {
+        stealth::set_user_agent(self.state.clone(), input)
             .await
             .map(Json)
     }
@@ -677,6 +694,72 @@ impl ZendriverServer {
         Parameters(input): Parameters<mouse::MouseInput>,
     ) -> Result<Json<actions::ActionOutput>, ErrorData> {
         mouse::mouse(self.state.clone(), input).await.map(Json)
+    }
+
+    // ---------- keyboard chords / downloads / load waits (Tier 2) --------
+
+    /// Dispatch a mixed text / key-chord sequence into an element.
+    #[tool(
+        name = "browser_key_sequence",
+        description = "Focus an element and dispatch an ordered sequence of typed text and (chorded) key presses — the way to send shortcuts like Ctrl+A, Cmd+C, or Tab-between-fields in one call. Each step sets `text` (literal text) OR `key` (a special-key name or single char) with optional `modifiers` (`alt`/`ctrl`/`meta`/`shift`). Example: `[{\"key\":\"a\",\"modifiers\":[\"ctrl\"]},{\"text\":\"new value\"}]`."
+    )]
+    pub async fn browser_key_sequence(
+        &self,
+        Parameters(input): Parameters<actions::KeySequenceInput>,
+    ) -> Result<Json<actions::ActionOutput>, ErrorData> {
+        actions::key_sequence(self.state.clone(), input).await.map(Json)
+    }
+
+    /// Download a URL through the page's own network context.
+    #[tool(
+        name = "browser_download",
+        description = "Download `url` by fetching it from the page's own network context (cookies / referer / same-origin credentials) and saving it via Chrome's download behavior. Optional `filename` sets the saved name (else derived from the URL). Fire-and-forget: returns once the fetch is dispatched, NOT when the file lands — for await/save-to-path use `browser_expect_register { kind: download, save_to }`."
+    )]
+    pub async fn browser_download(
+        &self,
+        Parameters(input): Parameters<download::DownloadInput>,
+    ) -> Result<Json<download::DownloadOutput>, ErrorData> {
+        download::download(self.state.clone(), input).await.map(Json)
+    }
+
+    /// Set the directory downloads are saved into.
+    #[tool(
+        name = "browser_set_download_path",
+        description = "Set the directory (on the MCP host) Chrome saves downloads into for the current tab (`Browser.setDownloadBehavior`). Created if missing. Applies to subsequent `browser_download` calls and any in-page-triggered downloads."
+    )]
+    pub async fn browser_set_download_path(
+        &self,
+        Parameters(input): Parameters<download::SetDownloadPathInput>,
+    ) -> Result<Json<actions::AckOutput>, ErrorData> {
+        download::set_download_path(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Wait for a document-load milestone on the tab or a frame.
+    #[tool(
+        name = "browser_wait_for_load",
+        description = "Wait for a load milestone. With no args, waits for the tab's `load` event. `ready_state` (`interactive` / `complete`) waits for that `document.readyState`. `frame_id` waits for a specific frame's load instead (ignoring `ready_state`). Distinct from `browser_wait_for_idle`, which waits for network quiet."
+    )]
+    pub async fn browser_wait_for_load(
+        &self,
+        Parameters(input): Parameters<navigation::WaitForLoadInput>,
+    ) -> Result<Json<navigation::NavOutput>, ErrorData> {
+        navigation::wait_for_load(self.state.clone(), input)
+            .await
+            .map(Json)
+    }
+
+    /// Navigate a specific frame to a URL.
+    #[tool(
+        name = "browser_frame_goto",
+        description = "Navigate the frame identified by `frame_id` (from `browser_frame_list`) to `url`, then wait for its load. Works on the main frame of an out-of-process iframe; in-process child frames surface the lib's navigation error. For top-level navigation use `browser_goto`."
+    )]
+    pub async fn browser_frame_goto(
+        &self,
+        Parameters(input): Parameters<frames::FrameGotoInput>,
+    ) -> Result<Json<actions::AckOutput>, ErrorData> {
+        frames::frame_goto(self.state.clone(), input).await.map(Json)
     }
 }
 

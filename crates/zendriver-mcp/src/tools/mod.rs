@@ -13,6 +13,7 @@ pub mod actions;
 pub mod cloudflare;
 pub mod common;
 pub mod cookies;
+pub mod download;
 pub mod eval;
 #[cfg(feature = "expect")]
 pub mod expect;

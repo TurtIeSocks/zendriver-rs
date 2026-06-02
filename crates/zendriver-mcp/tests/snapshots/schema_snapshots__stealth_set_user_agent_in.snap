@@ -1,0 +1,25 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::stealth::SetUserAgentInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: SetUserAgentInput
+description: "Input for `browser_set_user_agent`."
+type: object
+properties:
+  accept_language:
+    description: "Optional `Accept-Language` override applied alongside the UA."
+    type:
+      - string
+      - "null"
+  platform:
+    description: "Optional `navigator.platform` override."
+    type:
+      - string
+      - "null"
+  user_agent:
+    description: "Full User-Agent string to send via `Emulation.setUserAgentOverride`."
+    type: string
+additionalProperties: false
+required:
+  - user_agent

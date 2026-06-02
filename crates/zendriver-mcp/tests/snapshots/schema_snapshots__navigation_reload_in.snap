@@ -1,0 +1,18 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::navigation::ReloadInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: ReloadInput
+description: "Arg block for `browser_reload`."
+type: object
+properties:
+  ignore_cache:
+    description: "Bypass the HTTP cache (hard reload) when `true`. Default `false`\n(normal soft reload)."
+    type: boolean
+    default: false
+  return_snapshot:
+    description: "When `true`, include the trimmed page HTML in the response."
+    type: boolean
+    default: false
+additionalProperties: false

@@ -75,3 +75,27 @@ oneOf:
     additionalProperties: false
     required:
       - kind
+  - description: "Continue the *response* with an overridden status and/or headers\n(pauses at the response stage). Other fields are left at Chrome's\noriginals. The body is not rewritten — use `respond` to synthesize a\nwhole response instead."
+    type: object
+    properties:
+      headers:
+        description: "Headers to merge over the response's originals (full-replacement\nsemantics, same as `modify_request`; case-insensitive names)."
+        type: object
+        additionalProperties:
+          type: string
+        default: {}
+      kind:
+        type: string
+        const: modify_response
+      status:
+        description: "Override the HTTP status code. Omit to keep Chrome's original."
+        type:
+          - integer
+          - "null"
+        format: uint16
+        default: ~
+        maximum: 65535
+        minimum: 0
+    additionalProperties: false
+    required:
+      - kind

@@ -58,6 +58,29 @@ pub async fn current_tab(s: &SessionState) -> Result<zendriver::Tab, ErrorData> 
         .ok_or_else(|| map_error(McpServerError::NoCurrentTab))
 }
 
+/// Look up a [`zendriver::Frame`] on `tab` by id.
+///
+/// Surfaces [`ZendriverError::FrameNotFound`] through the standard error
+/// pipeline (which adds a `browser_frame_list` suggestion) when no frame
+/// matches. Shared by `eval`, `frames`, and `navigation`.
+pub async fn lookup_frame(
+    tab: &zendriver::Tab,
+    frame_id: &str,
+) -> Result<zendriver::Frame, ErrorData> {
+    let frames = tab
+        .frames()
+        .await
+        .map_err(|e| map_error(McpServerError::from(e)))?;
+    frames
+        .into_iter()
+        .find(|f| f.id() == frame_id)
+        .ok_or_else(|| {
+            map_error(McpServerError::from(
+                zendriver::ZendriverError::FrameNotFound(frame_id.to_string()),
+            ))
+        })
+}
+
 /// Collect a trimmed snapshot of the current rendered HTML.
 ///
 /// Uses `document.documentElement.outerHTML` (rather than CDP's

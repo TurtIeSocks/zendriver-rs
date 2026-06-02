@@ -66,6 +66,9 @@ schema_snap!(navigation_nav_out, tools::navigation::NavOutput);
 schema_snap!(navigation_wait_for, tools::navigation::WaitFor);
 schema_snap!(navigation_goto_in, tools::navigation::GotoInput);
 schema_snap!(navigation_history_in, tools::navigation::HistoryInput);
+schema_snap!(navigation_reload_in, tools::navigation::ReloadInput);
+schema_snap!(navigation_ready_state_arg, tools::navigation::ReadyStateArg);
+schema_snap!(navigation_wait_for_load_in, tools::navigation::WaitForLoadInput);
 schema_snap!(navigation_idle_in, tools::navigation::IdleInput);
 schema_snap!(navigation_idle_out, tools::navigation::IdleOutput);
 
@@ -84,11 +87,13 @@ schema_snap!(tabs_activate_out, tools::tabs::TabActivateOutput);
 
 schema_snap!(frames_frame_summary, tools::frames::FrameSummary);
 schema_snap!(frames_list_out, tools::frames::FrameListOutput);
+schema_snap!(frames_frame_goto_in, tools::frames::FrameGotoInput);
 
 // ---------- stealth --------------------------------------------------------
 
 schema_snap!(stealth_set_in, tools::stealth::SetStealthProfileInput);
 schema_snap!(stealth_set_out, tools::stealth::SetStealthProfileOutput);
+schema_snap!(stealth_set_user_agent_in, tools::stealth::SetUserAgentInput);
 
 // ---------- find -----------------------------------------------------------
 
@@ -119,6 +124,14 @@ schema_snap!(actions_clear_in, tools::actions::ClearInput);
 schema_snap!(actions_focus_in, tools::actions::FocusInput);
 schema_snap!(actions_scroll_in, tools::actions::ScrollInput);
 schema_snap!(actions_upload_in, tools::actions::UploadInput);
+schema_snap!(actions_key_step, tools::actions::KeyStep);
+schema_snap!(actions_key_sequence_in, tools::actions::KeySequenceInput);
+
+// ---------- download -------------------------------------------------------
+
+schema_snap!(download_in, tools::download::DownloadInput);
+schema_snap!(download_out, tools::download::DownloadOutput);
+schema_snap!(download_set_path_in, tools::download::SetDownloadPathInput);
 
 // ---------- snapshot -------------------------------------------------------
 

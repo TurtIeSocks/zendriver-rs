@@ -1,0 +1,30 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::navigation::WaitForLoadInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: WaitForLoadInput
+description: "Input for `browser_wait_for_load`."
+type: object
+properties:
+  frame_id:
+    description: "When set, wait for the given frame's load instead of the tab's main\nframe. `ready_state` is ignored in this case (frames expose only a\nload wait)."
+    type:
+      - string
+      - "null"
+  ready_state:
+    description: "Wait until the document reaches this `readyState`. When unset (and no\n`frame_id`), waits for the tab's `load` event."
+    anyOf:
+      - $ref: "#/$defs/ReadyStateArg"
+      - type: "null"
+additionalProperties: false
+$defs:
+  ReadyStateArg:
+    description: "Document-ready milestone `browser_wait_for_load` can target."
+    oneOf:
+      - description: "`document.readyState === \"interactive\"` — DOM parsed, sub-resources\nmay still be loading."
+        type: string
+        const: interactive
+      - description: "`document.readyState === \"complete\"` — the `load` event has fired."
+        type: string
+        const: complete

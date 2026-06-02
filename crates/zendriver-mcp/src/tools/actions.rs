@@ -40,13 +40,13 @@ use rmcp::ErrorData;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use zendriver::{ClickOptions, Key, MouseButton, SpecialKey};
+use zendriver::{ClickOptions, Key, KeySequence, MouseButton, SpecialKey};
 
 use crate::errors::{McpServerError, map_error};
 use crate::selectors::Selector;
 use crate::snapshot::html_trim;
 use crate::state::SessionState;
-use crate::tools::common::current_tab;
+use crate::tools::common::{ModifierArg, current_tab, modifiers_to_bits};
 use crate::tools::find::resolve;
 
 // ---------- shared output ------------------------------------------------
@@ -314,6 +314,10 @@ pub struct PressInput {
     /// Named special key (e.g. "Enter", "Tab", "ArrowUp") OR a single
     /// character (e.g. "a"). Special-key names are case-insensitive.
     pub key: String,
+    /// Modifier keys to hold while pressing `key` (a chord, e.g.
+    /// `["ctrl"]` + `key: "a"` for select-all). Default none.
+    #[serde(default)]
+    pub modifiers: Vec<ModifierArg>,
     /// When `true`, include the trimmed page HTML in the response.
     #[serde(default)]
     pub return_snapshot: bool,
@@ -328,10 +332,92 @@ pub async fn press(
     input: PressInput,
 ) -> Result<ActionOutput, ErrorData> {
     let key = parse_key(&input.key)?;
+    let mods = modifiers_to_bits(&input.modifiers);
     let s = state.lock().await;
     let tab = current_tab(&s).await?;
     let el = resolve(&tab, &input.selector).await?;
-    el.press(key)
+    if mods.is_empty() {
+        el.press(key)
+            .await
+            .map_err(|e| map_error(McpServerError::from(e)))?;
+    } else {
+        el.press_with(key, mods)
+            .await
+            .map_err(|e| map_error(McpServerError::from(e)))?;
+    }
+    ok_with_snapshot(&tab, input.return_snapshot).await
+}
+
+// ---------- browser_key_sequence -----------------------------------------
+
+/// One step in a [`KeySequenceInput`]: either literal text or a key press
+/// (optionally a modifier chord). Exactly one of `text` / `key` must be set.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct KeyStep {
+    /// Literal text to type (grapheme-by-grapheme). Mutually exclusive with
+    /// `key`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Key to press — a special-key name or single character (see
+    /// `browser_press`). Mutually exclusive with `text`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// Modifiers held while pressing `key` (ignored for `text`).
+    #[serde(default)]
+    pub modifiers: Vec<ModifierArg>,
+}
+
+/// Input for `browser_key_sequence`.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct KeySequenceInput {
+    #[serde(flatten)]
+    pub selector: Selector,
+    /// Ordered steps to dispatch: a mix of typed text and (chorded) key
+    /// presses. Example: `[{ "key": "a", "modifiers": ["ctrl"] }, { "text":
+    /// "replacement" }]` selects-all then types over it.
+    pub sequence: Vec<KeyStep>,
+    /// When `true`, include the trimmed page HTML in the response.
+    #[serde(default)]
+    pub return_snapshot: bool,
+}
+
+/// Focus an element + dispatch a mixed text / key-chord sequence in order.
+pub async fn key_sequence(
+    state: Arc<Mutex<SessionState>>,
+    input: KeySequenceInput,
+) -> Result<ActionOutput, ErrorData> {
+    // Build the lib sequence up front so a bad key name fails before we touch
+    // the browser.
+    let mut seq = KeySequence::new();
+    for step in &input.sequence {
+        match (&step.text, &step.key) {
+            (Some(text), None) => seq = seq.text(text.clone()),
+            (None, Some(key_str)) => {
+                let key = parse_key(key_str)?;
+                let mods = modifiers_to_bits(&step.modifiers);
+                if mods.is_empty() {
+                    match key {
+                        Key::Special(sk) => seq = seq.key(sk),
+                        Key::Char(_) => seq = seq.chord(key, mods),
+                    }
+                } else {
+                    seq = seq.chord(key, mods);
+                }
+            }
+            _ => {
+                return Err(ErrorData::invalid_params(
+                    "each sequence step must set exactly one of `text` or `key`".to_string(),
+                    None,
+                ));
+            }
+        }
+    }
+    let s = state.lock().await;
+    let tab = current_tab(&s).await?;
+    let el = resolve(&tab, &input.selector).await?;
+    el.type_keys(seq)
         .await
         .map_err(|e| map_error(McpServerError::from(e)))?;
     ok_with_snapshot(&tab, input.return_snapshot).await
@@ -573,6 +659,7 @@ mod tests {
             PressInput {
                 selector: css("input"),
                 key: "Enter".into(),
+                modifiers: Vec::new(),
                 return_snapshot: false,
             },
         )

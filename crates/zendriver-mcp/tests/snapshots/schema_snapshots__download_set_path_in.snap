@@ -1,0 +1,15 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::download::SetDownloadPathInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: SetDownloadPathInput
+description: "Input for `browser_set_download_path`."
+type: object
+properties:
+  path:
+    description: "Directory (on the MCP host) Chrome should save downloads into. Created\nif it does not exist."
+    type: string
+additionalProperties: false
+required:
+  - path

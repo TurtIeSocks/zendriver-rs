@@ -40,6 +40,57 @@ pub enum StealthProfileChoice {
     SpoofWindows,
 }
 
+/// Platform to spoof via a fine-grained stealth override.
+///
+/// Wire mirror of `zendriver::stealth::Platform`; kept here (platform-agnostic)
+/// so the override schema stays stable independent of host detection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StealthPlatformChoice {
+    /// Windows.
+    Win32,
+    /// macOS (Intel).
+    MacIntel,
+    /// Linux x86_64.
+    LinuxX86_64,
+}
+
+/// Fine-grained stealth fingerprint overrides layered onto the chosen
+/// [`StealthProfileChoice`] at the next `browser_open`.
+///
+/// Every field is optional — an unset field leaves the base profile's value
+/// in place. Most meaningful paired with a `spoof_*` profile; applying these
+/// to `native` overrides the auto-detected real fingerprint and can *reduce*
+/// stealth if the values disagree with the host.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StealthOverrides {
+    /// Spoofed `navigator.platform` / UA platform token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<StealthPlatformChoice>,
+    /// Spoofed locale (e.g. `"en-US"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
+    /// Spoofed timezone (IANA name, e.g. `"America/New_York"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
+    /// Spoofed `navigator.deviceMemory` in GiB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_gb: Option<u32>,
+    /// Spoofed `navigator.hardwareConcurrency`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_count: Option<u32>,
+    /// Spoofed Chrome major version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chrome_version: Option<u32>,
+    /// Full User-Agent string override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_agent: Option<String>,
+    /// Toggle Content-Security-Policy bypass.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bypass_csp: Option<bool>,
+}
+
 /// State held for the duration of a single MCP session.
 ///
 /// `browser` is `None` until `browser_open` is called. `current_tab_id`
@@ -48,6 +99,7 @@ pub struct SessionState {
     pub browser: Option<Browser>,
     pub current_tab_id: Option<String>,
     pub stealth_profile_choice: StealthProfileChoice,
+    pub stealth_overrides: StealthOverrides,
 
     #[cfg(feature = "expect")]
     pub expectations: HashMap<ExpectationId, ExpectationHandle>,
@@ -96,6 +148,7 @@ impl SessionState {
             browser: None,
             current_tab_id: None,
             stealth_profile_choice: StealthProfileChoice::default(),
+            stealth_overrides: StealthOverrides::default(),
             #[cfg(feature = "expect")]
             expectations: HashMap::new(),
             #[cfg(feature = "interception")]

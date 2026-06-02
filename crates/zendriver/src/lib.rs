@@ -118,7 +118,7 @@ pub use zendriver_transport::{CallError, Connection, SessionHandle, TransportErr
 #[cfg(feature = "interception")]
 pub use zendriver_interception::{
     AbortReason, InterceptBuilder, InterceptHandle, InterceptionError, PausedRequest, RequestInfo,
-    RequestOverrides, RequestStage, ResourceType, ResponseInfo,
+    RequestOverrides, RequestStage, ResourceType, ResponseInfo, ResponseOverrides,
 };
 
 /// Cloudflare Turnstile bypass re-exports.

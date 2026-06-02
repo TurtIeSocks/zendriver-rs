@@ -13,11 +13,12 @@ use rmcp::ErrorData;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
+use zendriver::{ReadyState, ReloadOptions};
 
 use crate::errors::{McpServerError, map_error};
 use crate::snapshot::html_trim;
 use crate::state::SessionState;
-use crate::tools::common::{EmptyInput, current_tab};
+use crate::tools::common::{EmptyInput, current_tab, lookup_frame};
 
 // ---------- shared types --------------------------------------------------
 
@@ -160,17 +161,99 @@ pub async fn forward(
     nav_output(&tab, input.return_snapshot).await
 }
 
-/// Reload the current page.
+/// Arg block for `browser_reload`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReloadInput {
+    /// Bypass the HTTP cache (hard reload) when `true`. Default `false`
+    /// (normal soft reload).
+    #[serde(default)]
+    pub ignore_cache: bool,
+    /// When `true`, include the trimmed page HTML in the response.
+    #[serde(default)]
+    pub return_snapshot: bool,
+}
+
+/// Reload the current page, optionally bypassing the cache.
 pub async fn reload(
     state: Arc<Mutex<SessionState>>,
-    input: HistoryInput,
+    input: ReloadInput,
 ) -> Result<NavOutput, ErrorData> {
     let s = state.lock().await;
     let tab = current_tab(&s).await?;
-    tab.reload()
+    if input.ignore_cache {
+        tab.reload_with(ReloadOptions {
+            ignore_cache: true,
+            ..ReloadOptions::default()
+        })
         .await
         .map_err(|e| map_error(McpServerError::from(e)))?;
+    } else {
+        tab.reload()
+            .await
+            .map_err(|e| map_error(McpServerError::from(e)))?;
+    }
     nav_output(&tab, input.return_snapshot).await
+}
+
+/// Document-ready milestone `browser_wait_for_load` can target.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadyStateArg {
+    /// `document.readyState === "interactive"` — DOM parsed, sub-resources
+    /// may still be loading.
+    Interactive,
+    /// `document.readyState === "complete"` — the `load` event has fired.
+    Complete,
+}
+
+impl From<ReadyStateArg> for ReadyState {
+    fn from(r: ReadyStateArg) -> Self {
+        match r {
+            ReadyStateArg::Interactive => ReadyState::Interactive,
+            ReadyStateArg::Complete => ReadyState::Complete,
+        }
+    }
+}
+
+/// Input for `browser_wait_for_load`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WaitForLoadInput {
+    /// Wait until the document reaches this `readyState`. When unset (and no
+    /// `frame_id`), waits for the tab's `load` event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ready_state: Option<ReadyStateArg>,
+    /// When set, wait for the given frame's load instead of the tab's main
+    /// frame. `ready_state` is ignored in this case (frames expose only a
+    /// load wait).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_id: Option<String>,
+}
+
+/// Wait for a load milestone on the tab (or a specific frame).
+pub async fn wait_for_load(
+    state: Arc<Mutex<SessionState>>,
+    input: WaitForLoadInput,
+) -> Result<NavOutput, ErrorData> {
+    let s = state.lock().await;
+    let tab = current_tab(&s).await?;
+    if let Some(fid) = input.frame_id.as_deref() {
+        let frame = lookup_frame(&tab, fid).await?;
+        frame
+            .wait_for_load()
+            .await
+            .map_err(|e| map_error(McpServerError::from(e)))?;
+    } else if let Some(rs) = input.ready_state {
+        tab.wait_for_ready_state(rs.into())
+            .await
+            .map_err(|e| map_error(McpServerError::from(e)))?;
+    } else {
+        tab.wait_for_load()
+            .await
+            .map_err(|e| map_error(McpServerError::from(e)))?;
+    }
+    nav_output(&tab, false).await
 }
 
 // ---------- browser_wait_for_idle -----------------------------------------
@@ -280,7 +363,7 @@ mod tests {
     #[tokio::test]
     async fn reload_with_no_browser_suggests_browser_open() {
         let state = Arc::new(Mutex::new(SessionState::new()));
-        let err = reload(state, HistoryInput::default())
+        let err = reload(state, ReloadInput::default())
             .await
             .expect_err("must error without an open browser");
         assert!(err.message.contains("browser_open"));
