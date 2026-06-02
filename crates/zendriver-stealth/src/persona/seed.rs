@@ -35,7 +35,9 @@ fn system_seed_value() -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     // Stable machine id, best-effort per OS; fall back to hostname + cpu brand.
     machine_id().hash(&mut h);
-    sysinfo::System::host_name().unwrap_or_default().hash(&mut h);
+    sysinfo::System::host_name()
+        .unwrap_or_default()
+        .hash(&mut h);
     h.finish()
 }
 

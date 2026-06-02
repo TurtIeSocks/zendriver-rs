@@ -110,7 +110,9 @@ impl Persona {
     /// Falls back to host platform when unset.
     pub fn resolved_platform_js(&self) -> String {
         let plat = self.platform.unwrap_or_else(|| {
-            Persona::system().platform.unwrap_or(crate::Platform::LinuxX86_64)
+            Persona::system()
+                .platform
+                .unwrap_or(crate::Platform::LinuxX86_64)
         });
         plat.js_string().to_string()
     }
@@ -149,9 +151,11 @@ mod persona_tests {
 
     #[test]
     fn persona_round_trips_json() {
-        let mut p = Persona::default();
-        p.seed = Some(Seed::from_u64(5));
-        p.timezone = Some("America/New_York".into());
+        let p = Persona {
+            seed: Some(Seed::from_u64(5)),
+            timezone: Some("America/New_York".into()),
+            ..Persona::default()
+        };
         let s = serde_json::to_string(&p).unwrap();
         let back: Persona = serde_json::from_str(&s).unwrap();
         assert_eq!(back.seed, Some(Seed::from_u64(5)));

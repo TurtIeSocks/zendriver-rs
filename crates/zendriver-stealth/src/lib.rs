@@ -36,11 +36,11 @@
 
 pub mod error;
 pub mod fingerprint;
-pub mod persona;
 pub mod flags;
 pub mod input_profile;
 pub mod observer;
 pub mod patches;
+pub mod persona;
 pub mod profile;
 pub mod ua;
 
