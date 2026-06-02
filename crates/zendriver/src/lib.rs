@@ -78,6 +78,7 @@ pub mod error;
 pub mod expect;
 pub(crate) mod expert;
 pub mod frame;
+pub(crate) mod preferences;
 pub mod input;
 pub(crate) mod isolated_world;
 pub mod network_idle;
