@@ -25,6 +25,69 @@
 //! `.one()` (errors on empty), `.one_or_none()` (returns `None`). Terminals
 //! on [`FindAllBuilder`]: `.many()` (errors on empty), `.many_or_empty()`
 //! (returns empty `Vec`).
+//!
+//! # Predicate mode (bs4-like combinable matchers)
+//!
+//! Ten predicate methods let you match elements without writing a CSS
+//! selector by hand. All active predicates are AND-ed together:
+//!
+//! | Method | Matches |
+//! |---|---|
+//! | `.tag(name)` | element tag name |
+//! | `.attr(name, value)` | exact attribute value — `[name="value"]` |
+//! | `.attr_contains(name, sub)` | attribute contains substring — `[name*="sub"]` |
+//! | `.attr_starts_with(name, pre)` | attribute value prefix — `[name^="pre"]` |
+//! | `.attr_ends_with(name, suf)` | attribute value suffix — `[name$="suf"]` |
+//! | `.has_attr(name)` | attribute is present — `[name]` |
+//! | `.attr_regex(name, pat)` | attribute value matches JS regex (post-filter) |
+//! | `.containing_text(sub)` | element text contains substring (post-filter) |
+//! | `.text_equals(exact)` | trimmed element text equals string (post-filter) |
+//! | `.text_matches(pat)` | element text matches JS regex (post-filter) |
+//!
+//! Structural predicates (`.tag`, `.attr*`, `.has_attr`) compile to a single
+//! CSS selector that the browser evaluates natively. Regex and text
+//! predicates (`.attr_regex`, `.containing_text`, `.text_equals`,
+//! `.text_matches`) are applied as a JS post-filter over the CSS candidates —
+//! so the browser does the heavy lifting and only the survivors are inspected
+//! in JS.
+//!
+//! **Mixing rule:** predicate methods cannot be combined with single-selector
+//! methods (`.css()`, `.xpath()`, `.text*()`, `.role*()`). Using both on one
+//! builder returns `Err(`[`crate::ZendriverError::ConflictingSelectors`]`)` at
+//! the terminal (`.one()` / `.many()` / etc.).
+//!
+//! ```no_run
+//! # async fn ex() -> zendriver::Result<()> {
+//! # let browser = zendriver::Browser::builder().launch().await?;
+//! # let tab = browser.main_tab();
+//! tab.goto("https://example.com").await?;
+//! // Predicate find: button whose class contains "primary" and text starts with "Buy"
+//! let btn = tab
+//!     .find()
+//!     .tag("button")
+//!     .attr_contains("class", "primary")
+//!     .containing_text("Buy")
+//!     .one()
+//!     .await?;
+//! // CSS convenience alias (equivalent to find().css(…).many())
+//! let links = tab.select_all("nav a").await?;
+//! # let _ = (btn, links);
+//! # Ok(()) }
+//! ```
+//!
+//! # Note: predicate elements are not auto-refreshable
+//!
+//! Elements found through predicate methods carry an *Evaluation* origin
+//! (they are the result of a `Runtime.evaluate` / `callFunctionOn` call that
+//! embeds the full predicate expression). Because the predicate set — especially
+//! the regex and text post-filters — cannot be reduced to a single stored
+//! selector string, the returned [`crate::Element`] handles **cannot be
+//! transparently re-fetched** if the element is detached and the query needs
+//! to be retried.
+//!
+//! Elements found via `.css()`, `.xpath()`, or the other single-selector
+//! kinds are refreshable as before — they carry a stored selector that the
+//! query layer can re-issue against the live DOM.
 
 pub mod actionability;
 pub mod modifiers;
