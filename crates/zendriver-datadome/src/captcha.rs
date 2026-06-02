@@ -118,7 +118,7 @@ pub(crate) async fn apply_solution(
     site_url: &str,
 ) -> Result<(), DataDomeError> {
     let domain = cookie_domain(site_url);
-    session
+    let res = session
         .call(
             "Network.setCookie",
             json!({
@@ -131,6 +131,12 @@ pub(crate) async fn apply_solution(
             }),
         )
         .await?;
+    if res.get("success").and_then(|s| s.as_bool()) == Some(false) {
+        tracing::warn!(
+            domain = %domain,
+            "datadome: Network.setCookie reported success=false — the solved cookie was rejected (bad domain?); clearance will likely time out"
+        );
+    }
     session.call("Page.reload", json!({})).await?;
     Ok(())
 }
@@ -165,6 +171,47 @@ mod tests {
     use super::*;
     use serde_json::json;
     use zendriver_transport::testing::MockConnection;
+
+    #[test]
+    fn cookie_domain_derives_etld_plus_one() {
+        assert_eq!(cookie_domain("https://shop.example.com/x"), ".example.com");
+        assert_eq!(cookie_domain("https://example.com/"), ".example.com");
+        assert_eq!(
+            cookie_domain("https://a.b.example.com/p?q=1"),
+            ".example.com"
+        );
+        assert_eq!(cookie_domain("http://localhost:8080/"), "localhost");
+        // Known v1 limitation: no public-suffix list, so multi-label TLDs
+        // degrade to the wrong parent (documented). Must never panic.
+        assert_eq!(cookie_domain("https://shop.example.co.uk/"), ".co.uk");
+    }
+
+    #[tokio::test]
+    async fn build_challenge_handles_null_eval_without_panicking() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let snap = crate::detection::DetectionSnapshot {
+            surface: crate::detection::DataDomeSurface::Captcha,
+            datadome: Some("CID".into()),
+            dd: None,
+            captcha_url: Some("https://geo.captcha-delivery.com/captcha/?cid=CID".into()),
+            body_clean: false,
+        };
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move { build_challenge(&s, &snap).await }
+        });
+        let id = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(id, json!({"result":{"type":"undefined"}})).await; // no value field
+        let ch = fut.await.unwrap().unwrap();
+        assert_eq!(
+            ch.captcha_url,
+            "https://geo.captcha-delivery.com/captcha/?cid=CID"
+        );
+        assert_eq!(ch.cid.as_deref(), Some("CID")); // falls back to snap.datadome
+        assert!(ch.site_url.is_empty() && ch.user_agent.is_empty());
+        conn.shutdown();
+    }
 
     #[tokio::test]
     async fn apply_solution_sets_cookie_then_reloads() {

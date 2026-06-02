@@ -202,7 +202,15 @@ impl<'tab> DataDomeBypass<'tab> {
         loop {
             let snap = match next_snapshot.take() {
                 Some(s) => s,
-                None => crate::detection::detect_snapshot(self.session).await?,
+                None => match tokio::time::timeout_at(
+                    deadline,
+                    crate::detection::detect_snapshot(self.session),
+                )
+                .await
+                {
+                    Ok(res) => res?,
+                    Err(_) => return Ok(ClearanceOutcome::TimedOut { last_surface }),
+                },
             };
 
             let cookie = snap.datadome.as_ref().filter(|v| !v.is_empty());
@@ -502,6 +510,28 @@ mod tests {
             fut.await.unwrap().unwrap_err(),
             DataDomeError::CaptchaRequired
         ));
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn poll_loop_probe_hang_respects_deadline() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move {
+                DataDomeBypass::new(&s)
+                    .poll_interval(Duration::from_millis(1))
+                    .poll_loop(Instant::now() + Duration::from_millis(30), None, None, None)
+                    .await
+            }
+        });
+        // First in-loop probe is received but NEVER answered → deadline fires.
+        let _id = mock.expect_cmd("Runtime.evaluate").await;
+        match fut.await.unwrap().unwrap() {
+            ClearanceOutcome::TimedOut { .. } => {}
+            other => panic!("expected TimedOut, got {other:?}"),
+        }
         conn.shutdown();
     }
 
