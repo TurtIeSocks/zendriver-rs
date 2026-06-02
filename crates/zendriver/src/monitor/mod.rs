@@ -459,6 +459,9 @@ async fn run_monitor(
                             continue;
                         };
                         urls.insert(p.request_id.clone(), p.url.clone());
+                        if urls.len() > MAX_TRACKED {
+                            evict_oldest(&mut urls, &mut partial);
+                        }
                         if filter_allows(filter.as_ref(), Some(&p.url))
                             && tx
                                 .send(NetworkEvent::WebSocketOpen {
