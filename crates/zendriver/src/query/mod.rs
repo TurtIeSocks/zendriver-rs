@@ -107,8 +107,88 @@ use tokio::time::Instant;
 use crate::element::Element;
 use crate::error::{Result, ZendriverError};
 use crate::frame::Frame;
+use crate::query::predicate::{AttrPred, PredicateSet, TextPred};
 use crate::query::selectors::{QueryScope, RemoteRef, SelectorKind, text_len_of};
 use crate::tab::Tab;
+
+/// Generates the 10 predicate setters shared by `FindBuilder` + `FindAllBuilder`.
+/// Both structs must have a `predicates: PredicateSet` field.
+macro_rules! predicate_methods {
+    () => {
+        /// Match by tag name (compiles into the CSS selector). Predicate mode.
+        #[must_use]
+        pub fn tag(mut self, name: impl Into<String>) -> Self {
+            self.predicates.tag = Some(name.into());
+            self
+        }
+        /// Match an exact attribute value `[name="value"]`.
+        #[must_use]
+        pub fn attr(mut self, name: &str, value: &str) -> Self {
+            self.predicates
+                .attrs
+                .push(AttrPred::Exact(name.into(), value.into()));
+            self
+        }
+        /// Match a substring of an attribute value `[name*="sub"]`.
+        #[must_use]
+        pub fn attr_contains(mut self, name: &str, sub: &str) -> Self {
+            self.predicates
+                .attrs
+                .push(AttrPred::Contains(name.into(), sub.into()));
+            self
+        }
+        /// Match an attribute value prefix `[name^="pre"]`.
+        #[must_use]
+        pub fn attr_starts_with(mut self, name: &str, pre: &str) -> Self {
+            self.predicates
+                .attrs
+                .push(AttrPred::StartsWith(name.into(), pre.into()));
+            self
+        }
+        /// Match an attribute value suffix `[name$="suf"]`.
+        #[must_use]
+        pub fn attr_ends_with(mut self, name: &str, suf: &str) -> Self {
+            self.predicates
+                .attrs
+                .push(AttrPred::EndsWith(name.into(), suf.into()));
+            self
+        }
+        /// Require the attribute be present `[name]`.
+        #[must_use]
+        pub fn has_attr(mut self, name: &str) -> Self {
+            self.predicates.attrs.push(AttrPred::Has(name.into()));
+            self
+        }
+        /// Match an attribute value against a JS regex (post-filter).
+        #[must_use]
+        pub fn attr_regex(mut self, name: &str, pattern: &str) -> Self {
+            self.predicates
+                .attrs
+                .push(AttrPred::Regex(name.into(), pattern.into()));
+            self
+        }
+        /// Match elements whose text contains `sub` (post-filter).
+        #[must_use]
+        pub fn containing_text(mut self, sub: &str) -> Self {
+            self.predicates.texts.push(TextPred::Contains(sub.into()));
+            self
+        }
+        /// Match elements whose trimmed text equals `exact` (post-filter).
+        #[must_use]
+        pub fn text_equals(mut self, exact: &str) -> Self {
+            self.predicates.texts.push(TextPred::Equals(exact.into()));
+            self
+        }
+        /// Match elements whose text matches a JS regex `pattern` (post-filter).
+        #[must_use]
+        pub fn text_matches(mut self, pattern: &str) -> Self {
+            self.predicates
+                .texts
+                .push(TextPred::Matches(pattern.into()));
+            self
+        }
+    };
+}
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -153,6 +233,9 @@ pub struct FindBuilder<'scope> {
     /// `tab = None`).
     pub(crate) frame: Option<&'scope Frame>,
     pub(crate) selector: Option<SelectorKind>,
+    /// Accumulated bs4-like predicates. Mutually exclusive with `selector`
+    /// (enforced at the terminal — see `one`/`one_or_none`).
+    pub(crate) predicates: PredicateSet,
     pub(crate) timeout: Duration,
     pub(crate) nth: Option<usize>,
     pub(crate) visible_only: bool,
@@ -177,12 +260,15 @@ pub struct FindBuilder<'scope> {
 }
 
 impl<'scope> FindBuilder<'scope> {
+    predicate_methods! {}
+
     pub(crate) fn new_for_tab(tab: &'scope Tab) -> Self {
         Self {
             tab: Some(tab),
             element: None,
             frame: None,
             selector: None,
+            predicates: Default::default(),
             timeout: DEFAULT_TIMEOUT,
             nth: None,
             visible_only: false,
@@ -203,6 +289,7 @@ impl<'scope> FindBuilder<'scope> {
             element: Some(element),
             frame: None,
             selector: None,
+            predicates: Default::default(),
             timeout: DEFAULT_TIMEOUT,
             nth: None,
             visible_only: false,
@@ -223,6 +310,7 @@ impl<'scope> FindBuilder<'scope> {
             element: None,
             frame: Some(frame),
             selector: None,
+            predicates: Default::default(),
             timeout: DEFAULT_TIMEOUT,
             nth: None,
             visible_only: false,
@@ -488,6 +576,7 @@ impl<'scope> FindBuilder<'scope> {
             element: self.element,
             frame: self.frame,
             selector: self.selector,
+            predicates: self.predicates,
             timeout: self.timeout,
             nth: self.nth,
             visible_only: self.visible_only,
@@ -1944,6 +2033,48 @@ mod tests {
     /// main scope returns an empty array, then the single registered frame's
     /// session resolves one node — `.one()` must return it, dispatching the
     /// frame query on the frame's own session.
+    // --- T4/T5: predicate builder accumulation -----------------------
+
+    #[cfg(test)]
+    mod predicate_builder_tests {
+        use super::super::*;
+        use crate::query::predicate::{AttrPred, TextPred};
+
+        fn bare() -> FindBuilder<'static> {
+            FindBuilder {
+                tab: None,
+                element: None,
+                frame: None,
+                selector: None,
+                predicates: Default::default(),
+                timeout: DEFAULT_TIMEOUT,
+                nth: None,
+                visible_only: false,
+                in_frame: None,
+                include_frames: false,
+                best_match: false,
+            }
+        }
+
+        #[test]
+        fn predicate_methods_accumulate() {
+            let b = bare()
+                .tag("div")
+                .attr("data-x", "y")
+                .attr_contains("class", "z")
+                .has_attr("ready")
+                .attr_regex("id", r"\d+")
+                .containing_text("Buy")
+                .text_equals("OK")
+                .text_matches(r"^\$");
+            assert_eq!(b.predicates.tag.as_deref(), Some("div"));
+            assert_eq!(b.predicates.attrs.len(), 4);
+            assert_eq!(b.predicates.texts.len(), 3);
+            assert!(matches!(b.predicates.attrs[0], AttrPred::Exact(_, _)));
+            assert!(matches!(b.predicates.texts[2], TextPred::Matches(_)));
+        }
+    }
+
     #[tokio::test]
     async fn include_frames_one_falls_through_to_frame() {
         let (mut mock, conn) = MockConnection::pair();
