@@ -1,0 +1,20 @@
+---
+source: crates/zendriver-stealth/tests/persona_snapshot.rs
+expression: p
+---
+{
+  "platform": null,
+  "ua": null,
+  "hardware_concurrency": null,
+  "device_memory_gb": 8,
+  "timezone": "UTC",
+  "locale": null,
+  "webgl": null,
+  "canvas": null,
+  "audio": null,
+  "fonts": null,
+  "client_rects": null,
+  "webrtc": null,
+  "hardware": null,
+  "seed": 1
+}
