@@ -11,7 +11,10 @@ pub(crate) fn default_suppression() -> Vec<(String, Value)> {
     vec![
         ("credentials_enable_service".into(), json!(false)),
         ("profile.password_manager_enabled".into(), json!(false)),
-        ("profile.password_manager_leak_detection".into(), json!(false)),
+        (
+            "profile.password_manager_leak_detection".into(),
+            json!(false),
+        ),
         ("autofill.profile_enabled".into(), json!(false)),
         ("autofill.credit_card_enabled".into(), json!(false)),
     ]
@@ -58,11 +61,7 @@ use std::path::Path;
 /// profile (`owned == false`) gets ONLY `user_prefs` (and nothing at all if
 /// `user_prefs` is empty). Best-effort: any IO/parse failure is logged and
 /// ignored (flags still suppress at the flag level).
-pub(crate) fn write_preferences(
-    user_data_dir: &Path,
-    owned: bool,
-    user_prefs: &[(String, Value)],
-) {
+pub(crate) fn write_preferences(user_data_dir: &Path, owned: bool, user_prefs: &[(String, Value)]) {
     let mut prefs: Vec<(String, Value)> = Vec::new();
     if owned {
         prefs.extend(default_suppression());
@@ -147,8 +146,7 @@ mod io_tests {
     fn owned_writes_default_suppression() {
         let dir = tempfile::tempdir().unwrap();
         write_preferences(dir.path(), true, &[]);
-        let s =
-            std::fs::read_to_string(dir.path().join("Default/Preferences")).unwrap();
+        let s = std::fs::read_to_string(dir.path().join("Default/Preferences")).unwrap();
         let v: Value = serde_json::from_str(&s).unwrap();
         assert_eq!(v["credentials_enable_service"], json!(false));
         assert_eq!(v["profile"]["password_manager_enabled"], json!(false));
@@ -165,11 +163,7 @@ mod io_tests {
     fn supplied_preserves_existing_and_adds_user_pref() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("Default")).unwrap();
-        std::fs::write(
-            dir.path().join("Default/Preferences"),
-            r#"{"foo":1}"#,
-        )
-        .unwrap();
+        std::fs::write(dir.path().join("Default/Preferences"), r#"{"foo":1}"#).unwrap();
         write_preferences(dir.path(), false, &[("x.y".into(), json!(true))]);
         let v: Value = serde_json::from_str(
             &std::fs::read_to_string(dir.path().join("Default/Preferences")).unwrap(),
