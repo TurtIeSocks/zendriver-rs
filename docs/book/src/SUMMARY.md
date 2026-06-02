@@ -4,6 +4,7 @@
 - [Install](./install.md)
 - [Quickstart](./quickstart.md)
 - [Stealth](./stealth.md)
+- [Fingerprint spoofing](./fingerprint.md)
 - [Multi-tab](./multi-tab.md)
 - [Per-context isolation](./browser-context.md)
 - [Frames](./frames.md)

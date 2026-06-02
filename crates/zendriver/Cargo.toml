@@ -165,3 +165,7 @@ required-features = ["imperva"]
 [[example]]
 name = "fetcher_demo"
 required-features = ["fetcher"]
+
+[[example]]
+name = "persona_basic"
+required-features = []
