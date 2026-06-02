@@ -221,19 +221,19 @@ flow.</p>
 //!   - `ChallengeGone` — the interactive iframe was clicked and the
 //!     challenge container then disappeared without a token (e.g.
 //!     clearance-cookie shortcut).
-//!   - `Err(NoChallenge)` — the full timeout window elapsed without any
-//!     challenge markers ever being observed (no container, no hidden
-//!     input, no iframe). The page likely has no Cloudflare gate; not a
-//!     failure.
-//!   - `Err(ClearanceTimeout)` — 30s elapsed with markers present but
-//!     neither success state observed.
+//!   - `TimedOut { saw_challenge: false }` — the full timeout window
+//!     elapsed without any challenge markers ever being observed (no
+//!     container, no hidden input, no iframe). The page likely has no
+//!     Cloudflare gate; not a failure.
+//!   - `TimedOut { saw_challenge: true }` — 30s elapsed with markers
+//!     present but neither success state observed.
 //!
 //! Requires the `cloudflare` cargo feature:
 //! `cargo run --example cloudflare_bypass --features cloudflare`.
 
 use std::time::Duration;
 
-use zendriver::{Browser, CloudflareError};
+use zendriver::{Browser, ClearanceOutcome};
 
 #[tokio::main]
 #[allow(clippy::result_large_err)] // example boundary; users wrap in their own Error
@@ -251,13 +251,17 @@ async fn main() -&gt; zendriver::Result&lt;()&gt; {
         .wait_for_clearance(Duration::from_secs(30))
         .await
     {
-        Ok(outcome) =&gt; println!("cleared: {outcome:?}"),
-        Err(CloudflareError::NoChallenge) =&gt; {
+        Ok(ClearanceOutcome::TimedOut {
+            saw_challenge: false,
+        }) =&gt; {
             println!("no challenge detected (page already cleared or no CF gate present)");
         }
-        Err(CloudflareError::ClearanceTimeout) =&gt; {
+        Ok(ClearanceOutcome::TimedOut {
+            saw_challenge: true,
+        }) =&gt; {
             println!("clearance timed out within 30s");
         }
+        Ok(outcome) =&gt; println!("cleared: {outcome:?}"),
         Err(e) =&gt; return Err(e.into()),
     }
 

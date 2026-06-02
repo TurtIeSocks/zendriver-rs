@@ -2419,19 +2419,19 @@ flow.</p>
 //!   - `ChallengeGone` — the interactive iframe was clicked and the
 //!     challenge container then disappeared without a token (e.g.
 //!     clearance-cookie shortcut).
-//!   - `Err(NoChallenge)` — the full timeout window elapsed without any
-//!     challenge markers ever being observed (no container, no hidden
-//!     input, no iframe). The page likely has no Cloudflare gate; not a
-//!     failure.
-//!   - `Err(ClearanceTimeout)` — 30s elapsed with markers present but
-//!     neither success state observed.
+//!   - `TimedOut { saw_challenge: false }` — the full timeout window
+//!     elapsed without any challenge markers ever being observed (no
+//!     container, no hidden input, no iframe). The page likely has no
+//!     Cloudflare gate; not a failure.
+//!   - `TimedOut { saw_challenge: true }` — 30s elapsed with markers
+//!     present but neither success state observed.
 //!
 //! Requires the `cloudflare` cargo feature:
 //! `cargo run --example cloudflare_bypass --features cloudflare`.
 
 use std::time::Duration;
 
-use zendriver::{Browser, CloudflareError};
+use zendriver::{Browser, ClearanceOutcome};
 
 #[tokio::main]
 #[allow(clippy::result_large_err)] // example boundary; users wrap in their own Error
@@ -2449,13 +2449,17 @@ async fn main() -&gt; zendriver::Result&lt;()&gt; {
         .wait_for_clearance(Duration::from_secs(30))
         .await
     {
-        Ok(outcome) =&gt; println!("cleared: {outcome:?}"),
-        Err(CloudflareError::NoChallenge) =&gt; {
+        Ok(ClearanceOutcome::TimedOut {
+            saw_challenge: false,
+        }) =&gt; {
             println!("no challenge detected (page already cleared or no CF gate present)");
         }
-        Err(CloudflareError::ClearanceTimeout) =&gt; {
+        Ok(ClearanceOutcome::TimedOut {
+            saw_challenge: true,
+        }) =&gt; {
             println!("clearance timed out within 30s");
         }
+        Ok(outcome) =&gt; println!("cleared: {outcome:?}"),
         Err(e) =&gt; return Err(e.into()),
     }
 
@@ -2701,6 +2705,163 @@ burden (Imperva ships new obfuscated builds frequently) and the lack of
 CAPTCHA fallback in a pure-HTTP design make it a poor fit alongside a
 browser-automation library. If you need pure-HTTP Imperva bypass for
 high-throughput scraping, build that as a separate crate.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="datadome"><a class="header" href="#datadome">DataDome</a></h1>
+<p>The <code>datadome</code> cargo feature (sub-crate: <code>zendriver-datadome</code>) provides a
+passive bypass driver for sites protected by DataDome. It detects the active
+DataDome surface (<code>device_check</code>, <code>captcha</code>, or <code>block</code>), then polls the page
+until the <code>datadome</code> clearance cookie lands, optionally escalating a CAPTCHA
+surface to a caller-supplied async solver.</p>
+<blockquote>
+<p><strong>Stealth strongly recommended.</strong> DataDome's dominant surface is an
+<strong>invisible device-check</strong> that scores the browser fingerprint. Without
+<code>BrowserBuilder::stealth</code> the device-check will not clear on the vast
+majority of real DataDome-protected sites. The <code>stealth()</code> profile now
+includes the <code>Surface::Webgpu</code> coherence patch (issue #20) which aligns
+<code>navigator.gpu</code> adapter info with the spoofed WebGL renderer — a DataDome
+signal previously unmasked.</p>
+</blockquote>
+<h2 id="enabling-the-feature"><a class="header" href="#enabling-the-feature">Enabling the feature</a></h2>
+<pre><code class="language-toml">[dependencies]
+zendriver = { version = "*", features = ["datadome"] }
+</code></pre>
+<p>To run the integration test suite against a real Chrome:</p>
+<pre><code class="language-bash">cargo test -p zendriver --features datadome-tests --test datadome_v0 -- --ignored
+</code></pre>
+<h2 id="quick-start-2"><a class="header" href="#quick-start-2">Quick start</a></h2>
+<pre><pre class="playground"><code class="language-rust no_run">use std::time::Duration;
+use zendriver::stealth::StealthProfile;
+use zendriver::{Browser, DataDomeClearanceOutcome};
+
+#[tokio::main]
+async fn main() -&gt; zendriver::Result&lt;()&gt; {
+    let browser = Browser::builder()
+        .stealth(StealthProfile::spoofed())
+        .launch()
+        .await?;
+    let tab = browser.main_tab();
+    tab.goto("https://protected.example.com").await?;
+    tab.wait_for_load().await?;
+
+    let outcome = tab
+        .datadome()
+        .timeout(Duration::from_secs(60))
+        .wait_for_clearance()
+        .await?;
+
+    match outcome {
+        DataDomeClearanceOutcome::Cleared { datadome } =&gt; {
+            println!("cleared — datadome cookie: {datadome}")
+        }
+        DataDomeClearanceOutcome::AlreadyClear =&gt; println!("no DataDome surface"),
+        DataDomeClearanceOutcome::Blocked =&gt; println!("IP banned — change your proxy"),
+        DataDomeClearanceOutcome::TimedOut { .. } =&gt; println!("timed out"),
+        DataDomeClearanceOutcome::ChallengeGone =&gt; println!("challenge cleared without cookie"),
+    }
+
+    browser.close().await?;
+    Ok(())
+}</code></pre></pre>
+<h2 id="tabdatadome-builder"><a class="header" href="#tabdatadome-builder"><code>tab.datadome()</code> builder</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Method</th><th>Default</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>.timeout(Duration)</code></td><td>30 s</td><td>Maximum total wait for a terminal outcome.</td></tr>
+<tr><td><code>.poll_interval(Duration)</code></td><td>250 ms</td><td>How often to re-probe the page during the poll loop.</td></tr>
+<tr><td><code>.with_interception()</code></td><td>off</td><td>Enable Fetch-domain fast-path: signals on first 2xx response from <code>captcha-delivery.com</code> or any <code>datadome*</code> URL.</td></tr>
+<tr><td><code>.on_captcha(solver)</code></td><td>none</td><td>Register an async CAPTCHA solver. Without it, a CAPTCHA surface returns <code>DataDomeError::CaptchaRequired</code>.</td></tr>
+</tbody></table>
+</div>
+<p>Call <code>.wait_for_clearance().await</code> to start the drive.</p>
+<h2 id="surface-variants-1"><a class="header" href="#surface-variants-1">Surface variants</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Variant</th><th>What it is</th><th>How it's detected</th></tr></thead><tbody>
+<tr><td><code>DeviceCheck</code></td><td>Invisible JS interrogation (<code>window.dd.t == 'fe'</code>). Scores the browser fingerprint.</td><td><code>window.dd</code> present + no captcha-delivery iframe.</td></tr>
+<tr><td><code>Captcha</code></td><td>Slider / puzzle / press-hold via <code>captcha-delivery.com</code> iframe.</td><td><code>captcha-delivery.com</code> iframe src present.</td></tr>
+<tr><td><code>Block</code></td><td>IP banned (<code>window.dd.t == 'bv'</code>). Nothing in-browser clears this.</td><td><code>window.dd.t == 'bv'</code>.</td></tr>
+<tr><td><code>None</code></td><td>No DataDome surface. Fast <code>AlreadyClear</code> path.</td><td>Default — <code>window.dd</code> absent + no iframe.</td></tr>
+</tbody></table>
+</div>
+<p>Detection precedence: <strong>Block &gt; Captcha &gt; DeviceCheck &gt; None</strong>.</p>
+<h2 id="clearance-signal"><a class="header" href="#clearance-signal">Clearance signal</a></h2>
+<p><code>Cleared</code> requires <em>both</em>:</p>
+<ol>
+<li>The <code>datadome</code> cookie is present and non-empty.</li>
+<li><code>window.dd</code> is absent and no <code>captcha-delivery.com</code> iframe is present (<code>body_clean</code>).</li>
+</ol>
+<p><code>ChallengeGone</code> fires when body markers clear but no <code>datadome</code> cookie is
+observed (rare / legacy path). Legacy flows that never set the cookie use this
+path.</p>
+<h2 id="captcha-handling-1"><a class="header" href="#captcha-handling-1">CAPTCHA handling</a></h2>
+<p>Without an <code>on_captcha</code> callback, a CAPTCHA surface returns
+<code>DataDomeError::CaptchaRequired</code> immediately (no waiting). Plug in your
+solver:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">use zendriver_datadome::{DataDomeSolution, DataDomeBypass};
+</span><span class="boring">async fn ex(tab: &amp;zendriver_transport::SessionHandle) -&gt; Result&lt;(), zendriver_datadome::DataDomeError&gt; {
+</span>let _ = DataDomeBypass::new(tab)
+    .on_captcha(|challenge| async move {
+        // challenge.captcha_url — the captcha-delivery.com iframe URL.
+        // challenge.user_agent — must match the page UA (solver requirement).
+        // Wire to 2captcha / capsolver / your own service:
+        let cookie = call_my_service(&amp;challenge.captcha_url, &amp;challenge.user_agent).await?;
+        Ok(DataDomeSolution { datadome_cookie: cookie })
+    })
+    .wait_for_clearance()
+    .await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">async fn call_my_service(_: &amp;str, _: &amp;str) -&gt; Result&lt;String, Box&lt;dyn std::error::Error + Send + Sync&gt;&gt; { Ok(String::new()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p><strong>The solver returns the <code>datadome</code> COOKIE value</strong> — DataDome whitelists the
+browser by setting this cookie (not a form-field token like hCaptcha/reCAPTCHA).
+The driver applies it via <code>Network.setCookie</code> scoped to the registrable domain
+and reloads the page.</p>
+<p><code>DataDomeChallenge</code> carries: <code>captcha_url</code>, <code>site_url</code>, <code>user_agent</code>, <code>cid</code>
+(DataDome challenge ID), and <code>hash</code>. <code>DataDomeSolution</code> holds
+<code>datadome_cookie</code>.</p>
+<h2 id="blocked--timedout-outcomes"><a class="header" href="#blocked--timedout-outcomes"><code>Blocked</code> / <code>TimedOut</code> outcomes</a></h2>
+<ul>
+<li><strong><code>Blocked</code></strong> — <code>window.dd.t == 'bv'</code> means DataDome has banned the IP at
+the edge. Nothing the browser does will clear this. Change your proxy to a
+residential IP, or wait out the ban.</li>
+<li><strong><code>TimedOut { last_surface }</code></strong> — the deadline elapsed without reaching a
+terminal state. <code>last_surface</code> records the most recent surface the poll loop
+observed. Common causes: fingerprint scoring failure (see stealth note),
+IP reputation, or a CAPTCHA with no solver registered.</li>
+</ul>
+<h2 id="fetch-domain-fast-path-1"><a class="header" href="#fetch-domain-fast-path-1">Fetch-domain fast path</a></h2>
+<p><code>.with_interception()</code> spawns a <code>Fetch</code> subscription that signals on first
+2xx response to <code>captcha-delivery.com</code> or any <code>datadome*</code> URL. Polling
+continues in parallel; the first signal wins. Useful on sites where the cookie
+is set faster than the default 250 ms poll cadence.</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">use zendriver_datadome::DataDomeBypass;
+</span><span class="boring">async fn ex(tab: &amp;zendriver_transport::SessionHandle) -&gt; Result&lt;(), zendriver_datadome::DataDomeError&gt; {
+</span>let _ = DataDomeBypass::new(tab)
+    .with_interception()
+    .wait_for_clearance()
+    .await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<h2 id="webgpu--issue-20-stealth-note"><a class="header" href="#webgpu--issue-20-stealth-note">WebGPU / issue #20 stealth note</a></h2>
+<p>DataDome's device-check probes <code>navigator.gpu.requestAdapter()</code> and compares
+the reported <code>GPUAdapterInfo.vendor</code> + <code>architecture</code> against its device
+dataset. Before the <code>Surface::Webgpu</code> patch (issue #20), Chrome running under
+<code>zendriver</code> leaked the platform's real GPU adapter info even when the WebGL
+renderer was spoofed — the inconsistency read as a bot signal.</p>
+<p><code>Surface::Webgpu</code> (shipped with <code>zendriver-stealth</code>) derives a coherent
+<code>GPUAdapterInfo</code> from the spoofed WebGL renderer string and overrides
+<code>navigator.gpu.requestAdapter()</code> so both surfaces report the same hardware.
+This patch is included in <code>BrowserBuilder::stealth(StealthProfile::spoofed())</code>
+with no extra configuration required.</p>
+<p><strong>Containers / CI:</strong> WebGPU requires a real GPU. In GPU-less containers,
+<code>requestAdapter()</code> returns <code>null</code> both before and after the patch — which is
+itself coherent (no GPU present). The patch does not fabricate adapters in
+GPU-less environments.</p>
+<h2 id="active-sensor-reverse-engineering--out-of-scope"><a class="header" href="#active-sensor-reverse-engineering--out-of-scope">Active sensor reverse-engineering — out of scope</a></h2>
+<p>Computing DataDome's invisible device-check score in pure Rust (outside of a
+real browser) is not in scope for this crate. DataDome updates its obfuscated
+JS sensor frequently; maintaining a pure-HTTP solver alongside a
+browser-automation library is a poor fit. If you need pure-HTTP DataDome bypass
+for high-throughput scraping, build that as a separate crate.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="fetcher"><a class="header" href="#fetcher">Fetcher</a></h1>
 <p>The <code>fetcher</code> Cargo feature downloads a Chrome binary from Google's
 <a href="https://googlechromelabs.github.io/chrome-for-testing/">Chrome for Testing</a> (CFT) distribution and hands back a path you

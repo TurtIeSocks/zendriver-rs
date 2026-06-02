@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Outcome"],"fn":["solve_datadome"],"struct":["SolveDataDomeInput","SolveDataDomeOutput"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["DataDomeSurface"],"fn":["detect_surface"],"struct":["DdConfig","DetectionSnapshot"]};
