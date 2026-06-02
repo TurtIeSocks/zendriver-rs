@@ -2,6 +2,8 @@
 //! CSS selector (structural parts) + a JS boolean post-filter (regex/text).
 //! Pure — no CDP, fully unit-testable.
 
+#![allow(dead_code)] // types/methods will be consumed in T4-T6 wiring
+
 use serde_json::json;
 
 #[derive(Debug, Clone, Default)]
@@ -54,11 +56,7 @@ impl PredicateSet {
                 AttrPred::Regex(..) => {}
             }
         }
-        if s.is_empty() {
-            "*".to_string()
-        } else {
-            s
-        }
+        if s.is_empty() { "*".to_string() } else { s }
     }
 
     /// Post-filter predicates (`attr_regex` + all text predicates) → a JS
