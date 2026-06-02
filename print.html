@@ -441,6 +441,12 @@ visible text").</li>
 <li><code>.xpath("//div[@id='main']")</code> — XPath escape hatch.</li>
 <li><code>.role(AriaRole::Button)</code> — ARIA-role + accessible-name match
 (Playwright-style).</li>
+<li><code>.tag("button").attr_contains("class", "primary").containing_text("Buy")</code>
+— bs4-like combinable <em>predicate</em> finders (<code>tag</code>, <code>attr</code>, <code>attr_contains</code>,
+<code>attr_starts_with</code>, <code>attr_ends_with</code>, <code>has_attr</code>, <code>attr_regex</code>,
+<code>containing_text</code>, <code>text_equals</code>, <code>text_matches</code>), all AND-ed together.
+Predicate methods can't be mixed with the single-selector methods above on
+one query (doing so errors with <code>ConflictingSelectors</code>).</li>
 <li><code>.nth(2)</code> — pick the 2nd match.</li>
 <li><code>.visible_only()</code> — skip <code>display:none</code> / zero-bbox elements.</li>
 <li><code>.timeout(Duration::from_secs(5))</code> — override the default 30s wait.</li>
@@ -449,6 +455,10 @@ visible text").</li>
 <code>exists</code>) consumes the builder and dispatches. <code>.one()</code> waits for
 exactly one match — errors with <code>ElementNotUnique</code> if there are zero or
 more than one — making it perfect for queries that should be deterministic.</p>
+<p>For the common CSS case, <code>tab.select("h1")</code> / <code>tab.select_all("nav a")</code> are
+Python-parity convenience aliases for <code>find().css(...).one()</code> /
+<code>find_all().css(...).many()</code>. The same pair exists on <code>Frame</code> and <code>Element</code>
+(<code>Element::select</code> scopes to that element's subtree).</p>
 <h3 id="5-read-element-text"><a class="header" href="#5-read-element-text">5. Read element text</a></h3>
 <pre><code class="language-rust ignore">let text = h1.inner_text().await?;
 println!("h1 text: {text}");</code></pre>
@@ -3612,6 +3622,7 @@ new variants may land in minor releases.</p>
 <tr><td><code>Transport(TransportError)</code></td><td>WebSocket failure (Chrome crashed, socket reset).</td><td>Retry the operation; if recurring, check Chrome's stderr for crash dumps.</td></tr>
 <tr><td><code>Cdp { code, message, data }</code></td><td>Chrome returned a CDP RPC error.</td><td>Inspect <code>message</code> — <code>Invalid params</code> usually means a stale <code>RemoteObjectId</code> or wrong type signature.</td></tr>
 <tr><td><code>ElementNotFound { selector }</code></td><td>Query selector matched zero elements within the timeout.</td><td>Confirm the page actually rendered the element (<code>tab.wait_for_load()</code> / <code>wait_for_idle()</code>); check the selector with <code>tab.find().css(...).count()</code>.</td></tr>
+<tr><td><code>ConflictingSelectors</code></td><td>A query mixed a single-selector method (<code>.css</code>/<code>.xpath</code>/<code>.text</code>/<code>.role</code>) with bs4-like predicate methods (<code>.tag</code>/<code>.attr*</code>/<code>.containing_text</code>/…).</td><td>Use one selector style per query — either a single selector <em>or</em> combinable predicates, not both.</td></tr>
 <tr><td><code>Timeout(Duration)</code></td><td>Generic operation timeout.</td><td>Increase the timeout via the builder, or address the underlying slow operation.</td></tr>
 <tr><td><code>Navigation(String)</code></td><td>Page navigation failed (DNS, refused, crashed) <strong>or</strong> an in-flight call lost its context to a navigation.</td><td>Check the URL / DNS / network; for the context-lost case, sequence the action after <code>tab.wait_for_load()</code>.</td></tr>
 <tr><td><code>JsException(String)</code></td><td>A JS expression in <code>evaluate()</code> raised an exception.</td><td>Wrap the JS in <code>try { ... } catch (e) { return null; }</code> if you want a soft failure; otherwise fix the JS.</td></tr>
