@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["FpSource"],"fn":["generate"],"struct":["GenerateInput","GenerateOutput"]};

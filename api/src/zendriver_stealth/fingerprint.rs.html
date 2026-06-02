@@ -86,8 +86,8 @@
 <a href=#86 id=86 data-nosnippet>86</a>
 <a href=#87 id=87 data-nosnippet>87</a><span class="doccomment">/// Default Chrome version used when `chrome --version` probe fails.
 <a href=#88 id=88 data-nosnippet>88</a>/// Bump on each release of zendriver-rs.
-<a href=#89 id=89 data-nosnippet>89</a></span><span class="kw">const </span>FALLBACK_CHROME_FULL: <span class="kw-2">&amp;</span>str = <span class="string">"120.0.6099.234"</span>;
-<a href=#90 id=90 data-nosnippet>90</a><span class="kw">const </span>FALLBACK_CHROME_MAJOR: u32 = <span class="number">120</span>;
+<a href=#89 id=89 data-nosnippet>89</a></span><span class="kw">const </span>FALLBACK_CHROME_FULL: <span class="kw-2">&amp;</span>str = <span class="string">"148.0.7778.181"</span>;
+<a href=#90 id=90 data-nosnippet>90</a><span class="kw">const </span>FALLBACK_CHROME_MAJOR: u32 = <span class="number">148</span>;
 <a href=#91 id=91 data-nosnippet>91</a>
 <a href=#92 id=92 data-nosnippet>92</a><span class="doccomment">/// Probed system + Chrome facts used to compose stealth values.
 <a href=#93 id=93 data-nosnippet>93</a></span><span class="attr">#[derive(Debug, Clone, Serialize)]
@@ -317,5 +317,17 @@
 <a href=#317 id=317 data-nosnippet>317</a>        <span class="macro">assert!</span>(fp.ua_string.contains(<span class="string">"Windows NT 10.0"</span>));
 <a href=#318 id=318 data-nosnippet>318</a>        <span class="macro">assert!</span>(fp.ua_string.contains(<span class="string">"Chrome/120.0.6099.234"</span>));
 <a href=#319 id=319 data-nosnippet>319</a>    }
-<a href=#320 id=320 data-nosnippet>320</a>}
+<a href=#320 id=320 data-nosnippet>320</a>
+<a href=#321 id=321 data-nosnippet>321</a>    <span class="attr">#[test]
+<a href=#322 id=322 data-nosnippet>322</a>    </span><span class="kw">fn </span>fallback_chrome_is_not_ancient() {
+<a href=#323 id=323 data-nosnippet>323</a>        <span class="comment">// Tripwire: forces a conscious bump when Chrome moves well past this floor.
+<a href=#324 id=324 data-nosnippet>324</a>        // Floor is 4 majors below the probed version (148) at the time of writing.
+<a href=#325 id=325 data-nosnippet>325</a>        </span><span class="kw">const </span>{
+<a href=#326 id=326 data-nosnippet>326</a>            <span class="macro">assert!</span>(
+<a href=#327 id=327 data-nosnippet>327</a>                FALLBACK_CHROME_MAJOR &gt;= <span class="number">144</span>,
+<a href=#328 id=328 data-nosnippet>328</a>                <span class="string">"FALLBACK_CHROME_MAJOR is stale; bump it (and this floor) to current stable"
+<a href=#329 id=329 data-nosnippet>329</a>            </span>)
+<a href=#330 id=330 data-nosnippet>330</a>        };
+<a href=#331 id=331 data-nosnippet>331</a>    }
+<a href=#332 id=332 data-nosnippet>332</a>}
 </code></pre></div></section></main></body></html>

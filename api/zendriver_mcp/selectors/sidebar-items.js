@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["SelectorError"],"struct":["Selector"]};
+window.SIDEBAR_ITEMS = {"enum":["AttrOp","SelectorError"],"struct":["AttrPredicate","Selector"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["HttpMethod"],"fn":["request"],"struct":["RequestInput","RequestOutput"]};
