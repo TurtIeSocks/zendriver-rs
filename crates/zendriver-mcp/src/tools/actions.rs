@@ -624,6 +624,8 @@ mod tests {
             text_regex: None,
             role: None,
             role_name: None,
+            tag: None,
+            attrs: vec![],
             nth: None,
             visible_only: true,
             timeout_ms: 5000,
