@@ -7,6 +7,38 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SEMVER.md].
 
 ### Added
 
+- **Parity with nodriver / zendriver-py (phases P-A…P-D).** A large additive
+  surface closing the feature gap with upstream while preserving every rs-only
+  strength (3-tier stealth, single-socket flat transport, actionability,
+  Imperva, MCP). Design + plans in
+  `docs/superpowers/{specs,plans}/2026-06-01-parity-phase-*.md`.
+  - **Input / query (P-A):** full keyboard parity — non-ASCII/emoji/CJK via the
+    `char` event path, Shift synthesis for uppercase/symbols, real
+    modifier-wrapper key events for chords (`press_with`), and
+    `Element::type_keys(KeySequence)` for mixed input. Cross-frame
+    `Tab::find().include_frames()` + nodriver-style `.best_match()`
+    (closest-text-length). React-controlled-input fix in `Element::clear` /
+    `set_value` (native prototype setter) + new `Element::clear_by_deleting`.
+  - **Tab / page (P-B):** `content()`, PDF export (`pdf_builder` / `print_to_pdf`),
+    MHTML (`snapshot_mhtml` / `save_snapshot`), `scroll_down` / `scroll_up` /
+    `scroll_with`, runtime `set_user_agent`, coordinate `mouse_move` /
+    `mouse_click` / `mouse_click_with` / `flash_point`, `reload_with`,
+    window-state (`window_bounds` / `set_window_bounds` / `set_window_size` /
+    `maximize` / `minimize` / `fullscreen`), `bring_to_front`,
+    `bypass_insecure_connection_warning`, `inspector_url`, `Browser::new_window`.
+  - **Launch / config (P-C):** `Browser::connect` / `BrowserBuilder::connect` to
+    an already-running Chrome (ws:// or http:// endpoint; never kills the
+    attached process), `expert` mode + opt-in `force_open_shadow_roots`,
+    extension loading (`add_extension` / `extensions`, `.crx` auto-unzip),
+    `lang` / `user_agent` / `sandbox` / `channel` (Brave/Edge) builders, and
+    `grant_permissions` / `grant_all_permissions` / `reset_permissions`.
+  - **Network / cookies (P-D):** `Fetch.continueResponse` via
+    `PausedRequest::continue_response` + `Rule::ModifyResponse`; CHIPS + priority
+    cookie fields (`partition_key` / `priority` / `same_party` /
+    `source_scheme` / `source_port`); runtime `Tab`/`Browser::set_download_path`;
+    filtered cookie persistence (`save_to_file_matching` /
+    `load_from_file_matching`); reconnection v1 — typed
+    `ZendriverError::Disconnected` + manual `Browser::reconnect`.
 - `zendriver-mcp` — Model Context Protocol server crate exposing
   zendriver-rs through 49 MCP tools over stdio + streamable HTTP. See
   the [MCP chapter](https://turtiesocks.github.io/zendriver-rs/mcp.html).
@@ -20,6 +52,15 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SEMVER.md].
 
 ### Changed
 
+- **Parity (P-A…P-D) behavior/API changes:** `zendriver::Channel` now names the
+  browser-brand enum (Chrome/Chromium/Brave/Edge/Auto); the fetcher
+  release-channel enum is re-exported as `FetcherChannel`. `Element::press_with`
+  now emits real modifier keyDown/keyUp wrapper events (was modifier-bits only).
+  `Element::clear` / `set_value` now assign through the native prototype value
+  setter (defeats React `_valueTracker`) and `clear` also fires `change`. The
+  WebSocket message/frame cap was raised to 256 MiB (was tungstenite's default).
+  Unexpected socket loss now surfaces `ZendriverError::Disconnected` (distinct
+  from a clean shutdown).
 - `zendriver-cloudflare::CloudflareBypass::wait_for_clearance` now drives a
   unified poll loop instead of an upfront iframe-detect + click + poll.
   Each tick fetches token, iframe bbox (shadow-DOM aware), and a
