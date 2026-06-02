@@ -906,6 +906,61 @@ impl Tab {
         serde_json::from_value(value).map_err(ZendriverError::Serde)
     }
 
+    /// Dump a named JavaScript object (or any expression) as an untyped
+    /// [`serde_json::Value`].
+    ///
+    /// Evaluates `obj_name` in the page main world with `returnByValue: true`
+    /// and hands back the deep-serialized `result.value`. This is the untyped
+    /// sibling of [`Tab::evaluate_main`] — useful for grabbing a whole object
+    /// graph (`tab.js_dumps("window.performance").await?`) when you don't have
+    /// a concrete Rust type to deserialize into and just want to inspect the
+    /// structure.
+    ///
+    /// As nodriver's `js_dumps` notes: complex objects may not be fully
+    /// serializable (functions, cyclic references, host objects), so the
+    /// result is a best-effort snapshot, not a source of truth.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::JsException`] when the expression raises.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// let perf = tab.js_dumps("window.performance.timing").await?;
+    /// println!("{perf:#?}");
+    /// # Ok(()) }
+    /// ```
+    pub async fn js_dumps(&self, obj_name: &str) -> Result<Value> {
+        let res = self
+            .call(
+                "Runtime.evaluate",
+                json!({
+                    "expression": obj_name,
+                    "returnByValue": true,
+                }),
+            )
+            .await?;
+        if let Some(details) = res.get("exceptionDetails") {
+            let msg = details
+                .get("exception")
+                .and_then(|e| e.get("description"))
+                .and_then(|d| d.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            return Err(ZendriverError::JsException(msg));
+        }
+        Ok(res
+            .get("result")
+            .and_then(|r| r.get("value"))
+            .cloned()
+            .unwrap_or(Value::Null))
+    }
+
     /// Ensure an isolated-world execution context exists for this tab's main
     /// frame, returning its `executionContextId`. Cached after first call.
     pub(crate) async fn ensure_isolated_world(&self) -> Result<i64> {
@@ -1827,6 +1882,88 @@ impl Tab {
     /// ```
     pub fn find_all(&self) -> crate::query::FindAllBuilder<'_> {
         crate::query::FindAllBuilder::new_for_tab(self)
+    }
+
+    /// Collect every linked URL on the page — the `href` of `[href]` elements
+    /// (`<a>`, `<link>`, `<area>`, …) and the `src` of `[src]` elements
+    /// (`<img>`, `<script>`, `<iframe>`, …).
+    ///
+    /// When `absolute` is `true` the URLs are read from each element's
+    /// `.href` / `.src` DOM properties, which the browser has already resolved
+    /// against the document base URL (so a relative `href="/a"` comes back as
+    /// `https://host/a`). When `false` the raw attribute strings are returned
+    /// verbatim (often relative, as authored). Empty / missing values are
+    /// skipped.
+    ///
+    /// Mirrors nodriver's `get_all_urls`. This is the cheap string-list view;
+    /// for live [`Element`](crate::Element) handles to those nodes use
+    /// [`Tab::get_all_linked_sources`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::JsException`] if the collector script raises.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// let urls = tab.get_all_urls(true).await?;
+    /// for u in urls {
+    ///     println!("{u}");
+    /// }
+    /// # Ok(()) }
+    /// ```
+    pub async fn get_all_urls(&self, absolute: bool) -> Result<Vec<String>> {
+        // Read `.href` / `.src` DOM props (browser-resolved → absolute) when
+        // `absolute`, else the raw `getAttribute` values. A single main-world
+        // collector walks `[href], [src]` once and filters out empties.
+        let js = format!(
+            "(() => {{ \
+                const out = []; \
+                const abs = {absolute}; \
+                for (const el of document.querySelectorAll('[href], [src]')) {{ \
+                    const v = abs \
+                        ? (el.href || el.src || '') \
+                        : (el.getAttribute('href') || el.getAttribute('src') || ''); \
+                    if (v) out.push(v); \
+                }} \
+                return out; \
+            }})()"
+        );
+        self.evaluate_main(js).await
+    }
+
+    /// Live [`Element`](crate::Element) handles for every linked-source node on
+    /// the page (`[src], [href]`).
+    ///
+    /// Routes through [`Tab::find_all`] with a `[src], [href]` CSS selector and
+    /// terminates with `many_or_empty`, so a page with no such elements yields
+    /// an empty `Vec` rather than an error. Mirrors nodriver's
+    /// `get_all_linked_sources`; unlike [`Tab::get_all_urls`] (which returns
+    /// plain URL strings) this hands back interactable element handles you can
+    /// click / screenshot / inspect.
+    ///
+    /// # Errors
+    ///
+    /// Propagates query/transport errors from the underlying
+    /// [`Tab::find_all`] resolution.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// let assets = tab.get_all_linked_sources().await?;
+    /// println!("{} linked sources", assets.len());
+    /// # Ok(()) }
+    /// ```
+    pub async fn get_all_linked_sources(&self) -> Result<Vec<crate::Element>> {
+        self.find_all().css("[src], [href]").many_or_empty().await
     }
 
     /// Route this browser's downloads into `dir` at runtime, keeping each
@@ -3723,6 +3860,35 @@ mod tests {
         mock.reply(id, json!({})).await;
 
         fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    // --- E1: js_dumps --------------------------------------------------
+
+    #[tokio::test]
+    async fn js_dumps_evaluates_with_return_by_value_and_returns_value() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.js_dumps("window.foo").await }
+        });
+
+        let id = mock.expect_cmd("Runtime.evaluate").await;
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["expression"], "window.foo");
+        // Must request a by-value deep serialization (untyped dump).
+        assert_eq!(sent["params"]["returnByValue"], true);
+        mock.reply(
+            id,
+            json!({ "result": { "type": "object", "value": { "a": 1, "b": [2, 3] } } }),
+        )
+        .await;
+
+        let val = fut.await.unwrap().unwrap();
+        assert_eq!(val, json!({ "a": 1, "b": [2, 3] }));
         conn.shutdown();
     }
 }
