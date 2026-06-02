@@ -265,6 +265,84 @@ async fn resolve_css_many(scope: &QueryScope<'_>, selector: &str) -> Result<Vec<
 }
 
 // ---------------------------------------------------------------------
+// Predicate (bs4-like combinable matchers)
+// ---------------------------------------------------------------------
+//
+// A `PredicateSet` compiles to a CSS selector (`tag` + structural attrs)
+// plus a JS boolean post-filter (`attr_regex` + text predicates). The
+// terminal builds ONE `querySelectorAll(css).filter(el => <jsFilter>)`
+// per scope — exactly mirroring `resolve_css_many`'s scope dispatch
+// (`contextId` for frames, `this` for element subtrees) so predicates
+// cross frames the same way CSS does.
+
+use crate::query::predicate::PredicateSet;
+
+/// Resolve `pred` against `scope` and return every match in document
+/// order. Compiles to `Array.from((document|this).querySelectorAll(css))
+/// .filter(el => <jsFilter>)`, with the CSS selector JSON-embedded so a
+/// quote/backslash in an attribute value can't break out of the JS
+/// string literal. Empty `Vec` for no matches (not an error).
+pub(crate) async fn resolve_predicate_many(
+    scope: &QueryScope<'_>,
+    pred: &PredicateSet,
+) -> Result<Vec<RemoteRef>> {
+    let session = scope.session();
+    let ctx = scope.execution_context_id().await?;
+    let css = pred.to_css_selector();
+    let filter = pred.to_js_filter();
+    let result = match scope {
+        QueryScope::Tab(_) | QueryScope::Frame(_) => {
+            let expr = format!(
+                "Array.from(document.querySelectorAll({})).filter(function(el){{return {};}})",
+                json!(css),
+                filter,
+            );
+            let mut params = json!({
+                "expression": expr,
+                "returnByValue": false,
+            });
+            if let Some(id) = ctx {
+                params["contextId"] = json!(id);
+            }
+            session.call("Runtime.evaluate", params).await?
+        }
+        QueryScope::Element(el) => {
+            let object_id = el.remote_object_id_cloned().await?;
+            let func = format!(
+                "function(){{return Array.from(this.querySelectorAll({})).filter(function(el){{return {};}});}}",
+                json!(css),
+                filter,
+            );
+            session
+                .call(
+                    "Runtime.callFunctionOn",
+                    json!({
+                        "objectId": object_id,
+                        "functionDeclaration": func,
+                        "returnByValue": false,
+                    }),
+                )
+                .await?
+        }
+    };
+    extract_array_refs(session, &result["result"]).await
+}
+
+/// Resolve `pred` against `scope` and return the first match (or `None`).
+/// Thin `resolve_predicate_many(...).next()` so the dispatch and JS stay
+/// in one place.
+#[allow(dead_code)] // `.one()` uses resolve_predicate_many directly today; kept for symmetry with the css resolvers.
+pub(crate) async fn resolve_predicate_one(
+    scope: &QueryScope<'_>,
+    pred: &PredicateSet,
+) -> Result<Option<RemoteRef>> {
+    Ok(resolve_predicate_many(scope, pred)
+        .await?
+        .into_iter()
+        .next())
+}
+
+// ---------------------------------------------------------------------
 // XPath
 // ---------------------------------------------------------------------
 

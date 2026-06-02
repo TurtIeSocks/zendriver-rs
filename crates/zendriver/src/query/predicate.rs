@@ -31,20 +31,17 @@ pub(crate) enum TextPred {
 /// Quote a value as a JSON string (`"v"`) — safe for both CSS attribute
 /// values and JS string literals (the selector is later JSON-embedded into
 /// the JS source, double-escaping correctly).
-#[allow(dead_code)] // consumed in T6 (predicate terminal wiring)
 fn q(v: &str) -> String {
     json!(v).to_string()
 }
 
 impl PredicateSet {
-    #[allow(dead_code)] // consumed in T6 (conflict guard at terminal)
     pub(crate) fn is_empty(&self) -> bool {
         self.tag.is_none() && self.attrs.is_empty() && self.texts.is_empty()
     }
 
     /// Structural predicates → a CSS selector. `attr_regex` + text predicates
     /// are post-filters and are NOT emitted here. Empty set → `"*"`.
-    #[allow(dead_code)] // consumed in T6 (resolve_predicate_many)
     pub(crate) fn to_css_selector(&self) -> String {
         let mut s = self.tag.clone().unwrap_or_default();
         for a in &self.attrs {
@@ -63,7 +60,6 @@ impl PredicateSet {
     /// Post-filter predicates (`attr_regex` + all text predicates) → a JS
     /// boolean expression over a bound `el`. Returns `"true"` when there are
     /// no post-filters (so the caller can always `.filter(el => <expr>)`).
-    #[allow(dead_code)] // consumed in T6 (resolve_predicate_many)
     pub(crate) fn to_js_filter(&self) -> String {
         const TXT: &str = r#"(el.innerText||el.textContent||"")"#;
         let mut checks: Vec<String> = Vec::new();
