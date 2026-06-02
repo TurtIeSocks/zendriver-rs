@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["PoolError"],"fn":["cache_path","load_or_download"],"struct":["PoolSet"]};

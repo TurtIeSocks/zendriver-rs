@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["Platform"],"struct":["Fingerprint","StealthProfile","UserAgentMetadata"]};
+window.SIDEBAR_ITEMS = {"enum":["Platform","Strategy","Surface"],"struct":["Fingerprint","Persona","PersonaBuilder","Seed","StealthProfile","UserAgentMetadata"]};

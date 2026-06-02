@@ -700,6 +700,156 @@ fingerprints in the function-source readouts. zendriver's bootstrap
 papers over the obvious patches, but a determined adversary will
 still find drift.</li>
 </ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="fingerprint-spoofing"><a class="header" href="#fingerprint-spoofing">Fingerprint spoofing</a></h1>
+<p>zendriver-rs ships a first-class fingerprint layer that lets you control what
+every browser surface reveals to detection scripts — canvas pixel noise, WebGL
+renderer strings, WebRTC IP candidates, hardware hints, and more — without
+touching any CDP internals directly.</p>
+<h2 id="two-orthogonal-axes"><a class="header" href="#two-orthogonal-axes">Two orthogonal axes</a></h2>
+<p>Fingerprint control lives on two independent axes:</p>
+<div class="table-wrapper"><table><thead><tr><th>Axis</th><th>What it controls</th><th>Where it lives</th></tr></thead><tbody>
+<tr><td><strong>Persona source</strong></td><td>The identity values injected (UA, platform, WebGL vendor, seed, …)</td><td><code>zendriver-stealth</code> (core), or <code>zendriver-fingerprints</code> (pool / generative)</td></tr>
+<tr><td><strong>Per-surface render strategy</strong></td><td><em>How</em> each surface is modified in-page</td><td><code>Strategy</code> enum, set per <code>Surface</code></td></tr>
+</tbody></table>
+</div>
+<p>You can mix any persona source with any per-surface strategy independently.</p>
+<h2 id="the-7-surfaces"><a class="header" href="#the-7-surfaces">The 7 surfaces</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Surface</th><th>Kind</th><th>Default strategy</th><th>What it affects</th></tr></thead><tbody>
+<tr><td><code>Canvas</code></td><td>Noise</td><td><code>Seeded</code></td><td><code>getImageData</code>, <code>toDataURL</code> pixel data</td></tr>
+<tr><td><code>Audio</code></td><td>Noise</td><td><code>Seeded</code></td><td><code>AnalyserNode</code> frequency / time-domain data</td></tr>
+<tr><td><code>ClientRects</code></td><td>Noise</td><td><code>Seeded</code></td><td><code>getBoundingClientRect</code> sub-pixel dimensions</td></tr>
+<tr><td><code>Webgl</code></td><td>Value</td><td><code>Value</code></td><td><code>UNMASKED_VENDOR_WEBGL</code>, <code>UNMASKED_RENDERER_WEBGL</code></td></tr>
+<tr><td><code>Fonts</code></td><td>Value</td><td><code>Value</code></td><td><code>measureText</code> width noise + <code>FontFaceSet.check</code> allow-list</td></tr>
+<tr><td><code>Hardware</code></td><td>Value</td><td><code>Value</code></td><td>Battery level, media-device count, speech voices</td></tr>
+<tr><td><code>Webrtc</code></td><td>Policy</td><td><code>Block</code></td><td>ICE candidate leak suppression / fake IP</td></tr>
+</tbody></table>
+</div>
+<h2 id="the-5-strategies"><a class="header" href="#the-5-strategies">The 5 strategies</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Strategy</th><th>Effect</th></tr></thead><tbody>
+<tr><td><code>Native</code></td><td>No patch — raw browser output.</td></tr>
+<tr><td><code>Seeded</code></td><td>Deterministic per-seed noise; same seed → same output every run.</td></tr>
+<tr><td><code>Random</code></td><td>Fresh random noise on every call; maximally unpredictable.</td></tr>
+<tr><td><code>Block</code></td><td>Empty / zero output (appropriate for policy surfaces).</td></tr>
+<tr><td><code>Value</code></td><td>Substitute a specific value from the <code>Persona</code> spec.</td></tr>
+</tbody></table>
+</div>
+<p>Noise surfaces (Canvas, Audio, ClientRects) accept <code>Native</code>, <code>Seeded</code>,
+<code>Random</code>, <code>Block</code>. Value surfaces (Webgl, Fonts, Hardware) accept <code>Native</code>,
+<code>Value</code>, <code>Block</code>. The policy surface (Webrtc) accepts <code>Native</code>, <code>Block</code>,
+<code>Value</code> (fake IP). Requesting a meaningless combination logs a warning and
+falls back to the surface's kind default.</p>
+<h2 id="persona-sources"><a class="header" href="#persona-sources">Persona sources</a></h2>
+<h3 id="personasystem--host-probed-cached"><a class="header" href="#personasystem--host-probed-cached"><code>Persona::system()</code> — host-probed, cached</a></h3>
+<p>Reads the real machine's platform, CPU count, and memory via <code>sysinfo</code>. The
+result is cached in a <code>OnceLock</code> — first call probes, subsequent calls clone.
+A random seed is generated per process.</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::{Browser, Persona};
+
+let browser = Browser::builder()
+    .persona(Persona::system())
+    .launch().await?;
+<span class="boring">}</span></code></pre></pre>
+<h3 id="personabuilder--explicit"><a class="header" href="#personabuilder--explicit"><code>Persona::builder()</code> — explicit</a></h3>
+<p>Build any combination of fields; unset fields inherit from <code>system()</code>.</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::{Browser, Persona, Seed};
+
+let persona = Persona::builder()
+    .seed(Seed::from_u64(42))       // reproducible noise
+    .device_memory_gb(16)
+    .timezone("America/Los_Angeles")
+    .build();
+
+let browser = Browser::builder()
+    .persona(persona)
+    .launch().await?;
+<span class="boring">}</span></code></pre></pre>
+<h3 id="personafrom_browsertab--live-probe"><a class="header" href="#personafrom_browsertab--live-probe"><code>Persona::from_browser(tab)</code> — live probe</a></h3>
+<p>Read the real browser's values (WebGL renderer, timezone, locale, …) from a
+running <code>Tab</code> and produce a maximally coherent <code>Persona</code>. Useful when you want
+to match the identity of an existing browser session.</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::{Browser, Persona};
+
+let browser = Browser::builder().launch().await?;
+let tab = browser.main_tab();
+tab.goto("about:blank").await?;
+
+let persona = Persona::from_browser(tab).await?;
+println!("{:?}", persona.webgl);
+<span class="boring">}</span></code></pre></pre>
+<h3 id="seedfrom_system--machine-stable-seed"><a class="header" href="#seedfrom_system--machine-stable-seed"><code>Seed::from_system()</code> — machine-stable seed</a></h3>
+<p>Produces the same seed on every run on the same machine (derived from the
+platform machine ID + hostname). Useful when you want a consistent identity
+per machine without a <code>user_data_dir</code>.</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::{Browser, Persona, Seed};
+
+let persona = Persona::builder()
+    .seed(Seed::from_system())
+    .build();
+<span class="boring">}</span></code></pre></pre>
+<h3 id="pool--generative-sources-zendriver-fingerprints"><a class="header" href="#pool--generative-sources-zendriver-fingerprints">Pool + generative sources (<code>zendriver-fingerprints</code>)</a></h3>
+<p>For real-device personas drawn from a dataset or a Bayesian network, add
+the optional <code>zendriver-fingerprints</code> crate and enable the <code>pool</code> or
+<code>generative</code> feature:</p>
+<pre><code class="language-toml">[dependencies]
+zendriver-fingerprints = { version = "0.1", features = ["pool"] }
+</code></pre>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver_fingerprints::pool::PoolSet;
+use zendriver_stealth::Seed;
+
+// Build from a local JSON array (or load with load_or_download(url)).
+let pool = PoolSet::from_json(include_str!("pool.json"))?;
+let persona = pool.sample(Seed::from_u64(42));
+
+// Pass to Browser::builder() in the zendriver crate.
+<span class="boring">}</span></code></pre></pre>
+<h2 id="per-surface-strategy-overrides"><a class="header" href="#per-surface-strategy-overrides">Per-surface strategy overrides</a></h2>
+<p>Override any surface's render strategy on top of the persona:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::{Browser, Persona, Seed, Strategy, Surface};
+
+let browser = Browser::builder()
+    .persona(Persona::builder().seed(Seed::from_u64(42)).build())
+    .surface(Surface::Webrtc, Strategy::Native)  // allow real IP
+    .surface(Surface::Canvas, Strategy::Random)  // max entropy
+    .launch().await?;
+<span class="boring">}</span></code></pre></pre>
+<h2 id="json-persona-try_from_json"><a class="header" href="#json-persona-try_from_json">JSON persona (<code>try_from_json</code>)</a></h2>
+<p>Any <code>Persona</code> can be expressed as a JSON object and round-trips cleanly.
+Fields are snake_case; all fields are optional. Useful for configuration files
+or environment variables:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::Persona;
+
+let persona: Persona = Persona::try_from_json(r#"{
+  "timezone": "Europe/Berlin",
+  "device_memory_gb": 8,
+  "seed": 12345,
+  "webgl": {
+    "unmasked_vendor":   "Google Inc. (NVIDIA)",
+    "unmasked_renderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)"
+  },
+  "webrtc": { "strategy": "Block" }
+}"#).unwrap();
+<span class="boring">}</span></code></pre></pre>
+<p>You can also parse via <code>FromStr</code>:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::Persona;
+
+let persona: Persona = r#"{"seed": 99, "timezone": "UTC"}"#.parse().unwrap();
+<span class="boring">}</span></code></pre></pre>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="multi-tab"><a class="header" href="#multi-tab">Multi-tab</a></h1>
 <p>Chrome opens with one tab. zendriver-rs treats every additional tab as a
 first-class <a href="https://docs.rs/zendriver/latest/zendriver/struct.Tab.html"><code>Tab</code></a> handle — the same type as the main tab, with the
