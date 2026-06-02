@@ -50,3 +50,8 @@ pub use fingerprint::{Brand, Fingerprint, UserAgentMetadata};
 pub use input_profile::InputProfile;
 pub use observer::StealthObserver;
 pub use profile::{Platform, ProfileKind, StealthProfile};
+
+pub use persona::seed::Seed;
+pub use persona::specs::{FontSpec, HardwareSpec, SurfaceCfg, UaSpec, WebglSpec, WebrtcSpec};
+pub use persona::surface::{Strategy, Surface, SurfaceKind};
+pub use persona::{Persona, PersonaBuilder};

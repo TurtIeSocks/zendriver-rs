@@ -58,13 +58,14 @@ impl Surface {
             None => return self.default_strategy(),
             Some(s) => s,
         };
-        let ok = match (self.kind(), req) {
-            (_, Strategy::Native) | (_, Strategy::Block) => true,
-            (SurfaceKind::Noise, Strategy::Seeded | Strategy::Random) => true,
-            (SurfaceKind::Value, Strategy::Value) => true,
-            (SurfaceKind::Policy, Strategy::Value) => true,
-            _ => false,
-        };
+        let ok = matches!(
+            (self.kind(), req),
+            (_, Strategy::Native)
+                | (_, Strategy::Block)
+                | (SurfaceKind::Noise, Strategy::Seeded | Strategy::Random)
+                | (SurfaceKind::Value, Strategy::Value)
+                | (SurfaceKind::Policy, Strategy::Value)
+        );
         if ok {
             req
         } else {
