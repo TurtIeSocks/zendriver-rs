@@ -3248,7 +3248,7 @@ dependencies = [
 
 [[package]]
 name = "zendriver"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "async-trait",
  "base64",
@@ -3366,7 +3366,7 @@ dependencies = [
 
 [[package]]
 name = "zendriver-mcp"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "async-trait",
  "axum",
