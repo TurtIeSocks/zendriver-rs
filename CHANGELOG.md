@@ -39,6 +39,14 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SEMVER.md].
     filtered cookie persistence (`save_to_file_matching` /
     `load_from_file_matching`); reconnection v1 — typed
     `ZendriverError::Disconnected` + manual `Browser::reconnect`.
+  - **Convenience sweep (P-E) — literal method-for-method parity:**
+    `Tab::js_dumps`, `get_all_urls` / `get_all_linked_sources`,
+    `wait_for_ready_state`, `download_file`, `mouse_drag`,
+    `search_frame_resources`; `Element::set_text`, `flash` /
+    `highlight_overlay`, `mouse_drag`, and `bounding_box_page` (absolute
+    page coordinates). With this, zendriver-rs covers the full
+    nodriver / zendriver-py user-facing surface (remaining upstream items
+    are deliberate non-goals — see below).
 - `zendriver-mcp` — Model Context Protocol server crate exposing
   zendriver-rs through 49 MCP tools over stdio + streamable HTTP. See
   the [MCP chapter](https://turtiesocks.github.io/zendriver-rs/mcp.html).
