@@ -1,0 +1,126 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (zendriver_mcp::state::MonitorEvent)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: MonitorEvent
+description: "A serde + JSON-Schema mirror of `zendriver::NetworkEvent` for the MCP wire.\n\nOne variant per observed network event. HTTP bodies are captured at\nobserve-time by the drain task (before Chrome evicts them) when the monitor\nwas started with `capture_bodies` — so `body` / `body_base64` are present\nonly on `http` events from a body-capturing monitor."
+oneOf:
+  - description: A completed HTTP request/response pair (or a failed request).
+    type: object
+    properties:
+      body:
+        description: "UTF-8–lossy decode of the captured response body. Present only when\nthe monitor captured bodies and the fetch succeeded."
+        type:
+          - string
+          - "null"
+      body_base64:
+        description: "Base64 of the captured raw response body bytes. Present only when\nthe monitor captured bodies and the fetch succeeded."
+        type:
+          - string
+          - "null"
+      error:
+        description: "Network-level error text, if the request failed."
+        type:
+          - string
+          - "null"
+      kind:
+        type: string
+        const: http
+      method:
+        description: "HTTP method (e.g. `\"GET\"`, `\"POST\"`)."
+        type: string
+      status:
+        description: "Response status code, if a response was received before the request\nfinished (`None` for a network-level failure)."
+        type:
+          - integer
+          - "null"
+        format: uint16
+        maximum: 65535
+        minimum: 0
+      url:
+        description: Request URL.
+        type: string
+    required:
+      - kind
+      - url
+      - method
+  - description: A new WebSocket connection was opened.
+    type: object
+    properties:
+      kind:
+        type: string
+        const: web_socket_open
+      request_id:
+        description: CDP request ID for this WebSocket connection.
+        type: string
+      url:
+        description: The WebSocket URL.
+        type: string
+    required:
+      - kind
+      - request_id
+      - url
+  - description: A WebSocket frame was sent or received.
+    type: object
+    properties:
+      direction:
+        description: "`\"sent\"` (page → server) or `\"received\"` (server → page)."
+        type: string
+      kind:
+        type: string
+        const: web_socket_frame
+      opcode:
+        description: "WebSocket opcode (1 = text, 2 = binary, 8 = close, …)."
+        type: integer
+        format: uint8
+        maximum: 255
+        minimum: 0
+      payload:
+        description: Frame payload (text frames as UTF-8; binary frames as base64).
+        type: string
+      request_id:
+        description: CDP request ID for the owning WebSocket connection.
+        type: string
+    required:
+      - kind
+      - request_id
+      - direction
+      - opcode
+      - payload
+  - description: A WebSocket connection was closed.
+    type: object
+    properties:
+      kind:
+        type: string
+        const: web_socket_close
+      request_id:
+        description: CDP request ID for the closed WebSocket connection.
+        type: string
+    required:
+      - kind
+      - request_id
+  - description: "An SSE `EventSource` message was received."
+    type: object
+    properties:
+      data:
+        description: "The SSE `data:` payload."
+        type: string
+      event_id:
+        description: "The SSE `id:` field (empty string if omitted)."
+        type: string
+      event_name:
+        description: "The SSE `event:` field (empty string if omitted)."
+        type: string
+      kind:
+        type: string
+        const: event_source_message
+      request_id:
+        description: "CDP request ID for the `EventSource` stream."
+        type: string
+    required:
+      - kind
+      - request_id
+      - event_name
+      - event_id
+      - data

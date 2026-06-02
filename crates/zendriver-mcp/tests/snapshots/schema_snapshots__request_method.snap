@@ -1,0 +1,15 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::request::HttpMethod)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: HttpMethod
+description: "HTTP method for `browser_request`."
+type: string
+enum:
+  - GET
+  - POST
+  - PUT
+  - DELETE
+  - HEAD
+  - PATCH

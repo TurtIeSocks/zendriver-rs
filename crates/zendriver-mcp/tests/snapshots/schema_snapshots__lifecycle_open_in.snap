@@ -11,6 +11,14 @@ properties:
     description: "Run Chrome with `--headless=new` (default: `true`)."
     type: boolean
     default: true
+  persona:
+    description: "A fingerprint Persona JSON (as produced by `browser_fingerprint_generate`\nor hand-built). Parsed via `Persona::try_from_json`. Opaque on the wire."
+  preferences:
+    description: "Chrome profile preferences merged into `Default/Preferences` at launch\n(dotted keys → nested objects). See `BrowserBuilder::preference`."
+    type:
+      - object
+      - "null"
+    additionalProperties: true
   stealth_profile:
     description: "Override the session's default stealth profile for this launch.\nWhen `None`, the session-wide default (set via CLI / construct time)\nis used."
     anyOf:

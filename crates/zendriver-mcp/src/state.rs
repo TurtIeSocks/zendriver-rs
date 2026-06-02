@@ -3,7 +3,7 @@
 //! Wrapped in `Arc<tokio::sync::Mutex<_>>` and shared across tool handlers.
 //! In stdio mode there is one global instance; in HTTP mode one per session.
 
-#[cfg(any(feature = "expect", feature = "interception"))]
+#[cfg(any(feature = "expect", feature = "interception", feature = "monitor"))]
 use std::collections::HashMap;
 
 use schemars::JsonSchema;
@@ -17,6 +17,20 @@ pub type ExpectationId = String;
 /// Opaque registration id for [`SessionState::rules`].
 #[cfg(feature = "interception")]
 pub type RuleId = String;
+
+/// Opaque handle id for a running monitor in [`SessionState::monitors`].
+#[cfg(feature = "monitor")]
+pub type MonitorId = String;
+
+/// Bounded capacity of each monitor's in-memory event ring.
+///
+/// Once a monitor's drain task has buffered this many unread events, the
+/// oldest is evicted on each new push and [`MonitorBuffer::dropped`] is
+/// incremented — so a slow `browser_monitor_read` caller bounds memory rather
+/// than growing it without limit. The next `read` surfaces the running
+/// `dropped` count so callers know events were lost.
+#[cfg(feature = "monitor")]
+pub const MONITOR_BUFFER_CAP: usize = 4096;
 
 /// Stealth profile choice carried over the MCP wire.
 ///
@@ -106,6 +120,9 @@ pub struct SessionState {
 
     #[cfg(feature = "interception")]
     pub rules: HashMap<RuleId, InterceptRuleHandle>,
+
+    #[cfg(feature = "monitor")]
+    pub monitors: HashMap<MonitorId, std::sync::Arc<tokio::sync::Mutex<MonitorState>>>,
 }
 
 /// Live handle to a pending `expect_*` expectation.
@@ -141,6 +158,124 @@ pub struct InterceptRuleHandle {
     pub _handle: zendriver::InterceptHandle,
 }
 
+/// A serde + JSON-Schema mirror of `zendriver::NetworkEvent` for the MCP wire.
+///
+/// One variant per observed network event. HTTP bodies are captured at
+/// observe-time by the drain task (before Chrome evicts them) when the monitor
+/// was started with `capture_bodies` — so `body` / `body_base64` are present
+/// only on `http` events from a body-capturing monitor.
+#[cfg(feature = "monitor")]
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MonitorEvent {
+    /// A completed HTTP request/response pair (or a failed request).
+    Http {
+        /// Request URL.
+        url: String,
+        /// HTTP method (e.g. `"GET"`, `"POST"`).
+        method: String,
+        /// Response status code, if a response was received before the request
+        /// finished (`None` for a network-level failure).
+        status: Option<u16>,
+        /// Network-level error text, if the request failed.
+        error: Option<String>,
+        /// UTF-8–lossy decode of the captured response body. Present only when
+        /// the monitor captured bodies and the fetch succeeded.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        body: Option<String>,
+        /// Base64 of the captured raw response body bytes. Present only when
+        /// the monitor captured bodies and the fetch succeeded.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        body_base64: Option<String>,
+    },
+    /// A new WebSocket connection was opened.
+    WebSocketOpen {
+        /// CDP request ID for this WebSocket connection.
+        request_id: String,
+        /// The WebSocket URL.
+        url: String,
+    },
+    /// A WebSocket frame was sent or received.
+    WebSocketFrame {
+        /// CDP request ID for the owning WebSocket connection.
+        request_id: String,
+        /// `"sent"` (page → server) or `"received"` (server → page).
+        direction: String,
+        /// WebSocket opcode (1 = text, 2 = binary, 8 = close, …).
+        opcode: u8,
+        /// Frame payload (text frames as UTF-8; binary frames as base64).
+        payload: String,
+    },
+    /// A WebSocket connection was closed.
+    WebSocketClose {
+        /// CDP request ID for the closed WebSocket connection.
+        request_id: String,
+    },
+    /// An SSE `EventSource` message was received.
+    EventSourceMessage {
+        /// CDP request ID for the `EventSource` stream.
+        request_id: String,
+        /// The SSE `event:` field (empty string if omitted).
+        event_name: String,
+        /// The SSE `id:` field (empty string if omitted).
+        event_id: String,
+        /// The SSE `data:` payload.
+        data: String,
+    },
+}
+
+/// The bounded event ring shared between a monitor's drain task and its
+/// `read` handler.
+///
+/// Holding this behind its own `Arc<Mutex<_>>` (separate from [`MonitorState`])
+/// is what lets the drain task be spawned *before* [`MonitorState`] is
+/// constructed: the task captures a clone of the buffer `Arc`, and the real
+/// `JoinHandle` then goes into [`MonitorState`] with no placeholder spawn and
+/// no self-referential cycle.
+#[cfg(feature = "monitor")]
+#[derive(Debug, Default)]
+pub struct MonitorBuffer {
+    /// Bounded ring of buffered, not-yet-read events.
+    pub events: std::collections::VecDeque<MonitorEvent>,
+    /// Count of events evicted because the buffer was full since the last
+    /// `read`. Reset to 0 by `read`.
+    pub dropped: usize,
+}
+
+/// Live state for one running monitor.
+///
+/// A drain task (spawned by `browser_monitor_start`) owns the lib-side
+/// `NetworkMonitor` stream and pushes each converted [`MonitorEvent`] into the
+/// shared [`Self::buffer`] — a bounded ring capped at [`MONITOR_BUFFER_CAP`].
+/// When the buffer is full the oldest event is evicted and `dropped` is bumped.
+/// `browser_monitor_read` drains the buffer; `browser_monitor_stop` cancels the
+/// task via [`Self::cancel`] and aborts [`Self::task`].
+///
+/// Each mutex is held only briefly — the drain task locks the buffer per event,
+/// `read` locks it per drain, neither across an `.await` that waits on the
+/// other — so the drain/read pair cannot deadlock.
+#[cfg(feature = "monitor")]
+pub struct MonitorState {
+    /// Shared bounded ring (also held by the drain task).
+    pub buffer: std::sync::Arc<tokio::sync::Mutex<MonitorBuffer>>,
+    /// Cancels the drain task cooperatively (checked in its `select!`).
+    pub cancel: tokio_util::sync::CancellationToken,
+    /// The drain task's join handle, aborted on `stop`.
+    pub task: tokio::task::JoinHandle<()>,
+}
+
+#[cfg(feature = "monitor")]
+impl Drop for MonitorState {
+    /// Stop the drain task on drop (session teardown / `browser_close` /
+    /// map eviction). Dropping the `JoinHandle` alone detaches the task — it
+    /// holds its own `CancellationToken` clone and the live stream — so we
+    /// cancel (breaks the task's `select!`) and abort here.
+    fn drop(&mut self) {
+        self.cancel.cancel();
+        self.task.abort();
+    }
+}
+
 impl SessionState {
     /// Construct an empty session — no browser, no tabs, default profile.
     pub fn new() -> Self {
@@ -153,6 +288,8 @@ impl SessionState {
             expectations: HashMap::new(),
             #[cfg(feature = "interception")]
             rules: HashMap::new(),
+            #[cfg(feature = "monitor")]
+            monitors: HashMap::new(),
         }
     }
 }
@@ -177,5 +314,7 @@ mod tests {
         assert!(s.expectations.is_empty());
         #[cfg(feature = "interception")]
         assert!(s.rules.is_empty());
+        #[cfg(feature = "monitor")]
+        assert!(s.monitors.is_empty());
     }
 }

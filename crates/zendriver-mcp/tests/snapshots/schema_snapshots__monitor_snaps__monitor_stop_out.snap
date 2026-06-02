@@ -1,0 +1,14 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::monitor::StopOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: StopOutput
+description: "Output of `browser_monitor_stop`."
+type: object
+properties:
+  stopped:
+    description: "`true` if a live monitor was found and stopped; `false` if the handle\nwas unknown (already stopped, or never started)."
+    type: boolean
+required:
+  - stopped

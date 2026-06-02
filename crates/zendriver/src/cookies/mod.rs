@@ -708,4 +708,17 @@ mod tests {
         assert_eq!(cookie.source_port, None);
         assert_eq!(cookie.partition_key, None);
     }
+
+    /// A future Chrome version may add new CDP cookie fields rs doesn't model
+    /// yet. Deserialization must succeed (unknown fields ignored, no panic) —
+    /// this is the forward-compat contract guarding against future regressions.
+    #[test]
+    fn cookie_read_ignores_unknown_future_field() {
+        let cdp: CdpCookie = serde_json::from_value(json!({
+            "name": "sid", "value": "xyz", "domain": ".example.com", "path": "/",
+            "someChrome147Field": { "nested": true }, "anotherNewThing": 42
+        }))
+        .expect("unknown fields must be ignored, not rejected");
+        assert_eq!(cdp.name, "sid");
+    }
 }

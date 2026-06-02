@@ -33,6 +33,14 @@ pub struct OpenInput {
     /// is used.
     #[serde(default)]
     pub stealth_profile: Option<StealthProfileChoice>,
+    /// Chrome profile preferences merged into `Default/Preferences` at launch
+    /// (dotted keys → nested objects). See `BrowserBuilder::preference`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferences: Option<std::collections::HashMap<String, serde_json::Value>>,
+    /// A fingerprint Persona JSON (as produced by `browser_fingerprint_generate`
+    /// or hand-built). Parsed via `Persona::try_from_json`. Opaque on the wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona: Option<serde_json::Value>,
 }
 
 const fn default_true() -> bool {
@@ -66,9 +74,18 @@ pub async fn open(
     }
     let profile = input.stealth_profile.unwrap_or(s.stealth_profile_choice);
     let stealth = apply_overrides(stealth_profile_for(profile), &s.stealth_overrides);
-    let browser = Browser::builder()
-        .headless(input.headless)
-        .stealth(stealth)
+    let mut builder = Browser::builder().headless(input.headless).stealth(stealth);
+    if let Some(prefs) = &input.preferences {
+        for (k, v) in prefs {
+            builder = builder.preference(k.clone(), v.clone());
+        }
+    }
+    if let Some(p) = &input.persona {
+        let persona = zendriver::Persona::try_from_json(&p.to_string())
+            .map_err(|e| ErrorData::invalid_params(format!("invalid persona JSON: {e}"), None))?;
+        builder = builder.persona(persona);
+    }
+    let browser = builder
         .launch()
         .await
         .map_err(|e| map_error(McpServerError::from(e)))?;
@@ -193,6 +210,15 @@ pub async fn close(
         // gives each `Fetch.disable` a live transport to land on; doing
         // it after would race a closed connection.
         s.rules.clear();
+    }
+
+    #[cfg(feature = "monitor")]
+    {
+        // Stop every running monitor before closing. `MonitorState::Drop`
+        // cancels each drain task (and the lib's `NetworkMonitor` correlator);
+        // doing it before `Browser::close` lets the cancels land on a live
+        // session, mirroring the interception-rules teardown above.
+        s.monitors.clear();
     }
 
     if let Some(b) = s.browser.take() {

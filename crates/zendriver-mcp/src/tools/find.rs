@@ -32,12 +32,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use zendriver::query::FindAllBuilder;
-use zendriver::{AriaRole, Element, FindBuilder, Frame, Tab, ZendriverError};
+use zendriver::{AriaRole, Element, FindBuilder, Tab};
 
 use crate::errors::{McpServerError, map_error};
-use crate::selectors::Selector;
+use crate::selectors::{AttrOp, Selector};
 use crate::state::SessionState;
-use crate::tools::common::current_tab;
+use crate::tools::common::{current_tab, lookup_frame};
 
 // ---------- Selector → FindBuilder bridge --------------------------------
 
@@ -46,7 +46,7 @@ use crate::tools::common::current_tab;
 /// Validates the selector, configures a [`FindBuilder`] with the chosen
 /// selector kind + modifiers (`nth`, `visible_only`, `timeout`,
 /// `in_frame`), then awaits `.one()`. Surfaces
-/// [`ZendriverError::ElementNotFound`] to the caller — tools that want to
+/// [`zendriver::ZendriverError::ElementNotFound`] to the caller — tools that want to
 /// swallow it (e.g. `browser_find` returning `found: false`) must do so
 /// themselves; the helper does NOT call `one_or_none` for them.
 pub async fn resolve(tab: &Tab, sel: &Selector) -> Result<Element, ErrorData> {
@@ -110,94 +110,98 @@ pub async fn resolve_all(
     Ok(all)
 }
 
-/// Look up a `Frame` on `tab` by id. Maps the missing-frame case to
-/// `ZendriverError::FrameNotFound` (which the standard error pipeline
-/// renders with a `browser_frame_list` suggestion).
-async fn lookup_frame(tab: &Tab, frame_id: &str) -> Result<Frame, ErrorData> {
-    let frames = tab
-        .frames()
-        .await
-        .map_err(|e| map_error(McpServerError::from(e)))?;
-    frames
-        .into_iter()
-        .find(|f| f.id() == frame_id)
-        .ok_or_else(|| {
-            map_error(McpServerError::from(ZendriverError::FrameNotFound(
-                frame_id.to_string(),
-            )))
-        })
+/// Apply a [`Selector`]'s chosen kind onto a query builder, returning the
+/// configured builder (or an `invalid_params` `ErrorData`).
+///
+/// Generated once per builder type ([`FindBuilder`] for single-match,
+/// [`FindAllBuilder`] for multi-match) because the lib exposes the two as
+/// distinct concrete types with no shared trait — but they expose the
+/// *identical* selector/predicate method surface, so a single macro body
+/// covers both and a new selector kind only has to be added here once.
+///
+/// Two modes (mutually exclusive — enforced by [`Selector::validate`]):
+/// - **single-selector** (`css`/`xpath`/`text`/`text_exact`/`text_regex`/`role`)
+///   — exactly one is applied.
+/// - **predicate** (`tag` and/or `attrs`, plus optional `text*` post-filters,
+///   all AND-ed) — applies `.tag()`, the `.attr*()` / `.has_attr()` /
+///   `.attr_regex()` family, and `.containing_text()` / `.text_equals()` /
+///   `.text_matches()`.
+macro_rules! apply_selector_to {
+    ($builder:expr, $sel:expr) => {{
+        let mut builder = $builder;
+        let sel = $sel;
+        // Predicate mode: tag/attrs present; text* are optional AND-ed
+        // post-filters. Single-selector kinds (css/xpath/role) are absent
+        // here (validate() enforces the mutual exclusion).
+        if sel.tag.is_some() || !sel.attrs.is_empty() {
+            if let Some(tag) = sel.tag.as_deref() {
+                builder = builder.tag(tag);
+            }
+            for ap in &sel.attrs {
+                let name = ap.name.as_str();
+                let value = ap.value.as_deref().unwrap_or(""); // Has has no value
+                builder = match ap.op {
+                    AttrOp::Eq => builder.attr(name, value),
+                    AttrOp::Contains => builder.attr_contains(name, value),
+                    AttrOp::StartsWith => builder.attr_starts_with(name, value),
+                    AttrOp::EndsWith => builder.attr_ends_with(name, value),
+                    AttrOp::Has => builder.has_attr(name),
+                    AttrOp::Regex => builder.attr_regex(name, value),
+                };
+            }
+            if let Some(t) = sel.text.as_deref() {
+                builder = builder.containing_text(t);
+            }
+            if let Some(t) = sel.text_exact.as_deref() {
+                builder = builder.text_equals(t);
+            }
+            if let Some(pat) = sel.text_regex.as_deref() {
+                builder = builder.text_matches(pat);
+            }
+            Ok(builder)
+        } else if let Some(css) = sel.css.as_deref() {
+            Ok(builder.css(css))
+        } else if let Some(xp) = sel.xpath.as_deref() {
+            Ok(builder.xpath(xp))
+        } else if let Some(t) = sel.text.as_deref() {
+            Ok(builder.text(t))
+        } else if let Some(t) = sel.text_exact.as_deref() {
+            Ok(builder.text_exact(t))
+        } else if let Some(pat) = sel.text_regex.as_deref() {
+            let re = compile_regex(pat)?;
+            Ok(builder.text_regex(re))
+        } else if let Some(role_str) = sel.role.as_deref() {
+            let role = parse_role(role_str)?;
+            Ok(match sel.role_name.as_deref() {
+                Some(name) => builder.role_named(role, name),
+                None => builder.role(role),
+            })
+        } else {
+            // `validate()` already enforces exactly-one-of, so this branch is
+            // unreachable in practice — return invalid_params just in case.
+            Err(ErrorData::invalid_params(
+                "Selector has no selector kind set (validate() should have caught this)"
+                    .to_string(),
+                None,
+            ))
+        }
+    }};
 }
 
-/// Apply the Selector's one-of selector kind to a single-match
-/// [`FindBuilder`]. Errors when the role string is unknown or the regex
-/// fails to compile.
+/// Apply the Selector's chosen kind to a single-match [`FindBuilder`].
 fn apply_selector<'a>(
     builder: FindBuilder<'a>,
     sel: &Selector,
 ) -> Result<FindBuilder<'a>, ErrorData> {
-    if let Some(css) = sel.css.as_deref() {
-        return Ok(builder.css(css));
-    }
-    if let Some(xp) = sel.xpath.as_deref() {
-        return Ok(builder.xpath(xp));
-    }
-    if let Some(t) = sel.text.as_deref() {
-        return Ok(builder.text(t));
-    }
-    if let Some(t) = sel.text_exact.as_deref() {
-        return Ok(builder.text_exact(t));
-    }
-    if let Some(pat) = sel.text_regex.as_deref() {
-        let re = compile_regex(pat)?;
-        return Ok(builder.text_regex(re));
-    }
-    if let Some(role_str) = sel.role.as_deref() {
-        let role = parse_role(role_str)?;
-        return Ok(match sel.role_name.as_deref() {
-            Some(name) => builder.role_named(role, name),
-            None => builder.role(role),
-        });
-    }
-    // `validate()` already enforces exactly-one-of, so this branch is
-    // unreachable in practice — return invalid_params just in case.
-    Err(ErrorData::invalid_params(
-        "Selector has no selector kind set (validate() should have caught this)".to_string(),
-        None,
-    ))
+    apply_selector_to!(builder, sel)
 }
 
-/// Apply the Selector's one-of selector kind to a [`FindAllBuilder`].
+/// Apply the Selector's chosen kind to a [`FindAllBuilder`].
 fn apply_selector_all<'a>(
     builder: FindAllBuilder<'a>,
     sel: &Selector,
 ) -> Result<FindAllBuilder<'a>, ErrorData> {
-    if let Some(css) = sel.css.as_deref() {
-        return Ok(builder.css(css));
-    }
-    if let Some(xp) = sel.xpath.as_deref() {
-        return Ok(builder.xpath(xp));
-    }
-    if let Some(t) = sel.text.as_deref() {
-        return Ok(builder.text(t));
-    }
-    if let Some(t) = sel.text_exact.as_deref() {
-        return Ok(builder.text_exact(t));
-    }
-    if let Some(pat) = sel.text_regex.as_deref() {
-        let re = compile_regex(pat)?;
-        return Ok(builder.text_regex(re));
-    }
-    if let Some(role_str) = sel.role.as_deref() {
-        let role = parse_role(role_str)?;
-        return Ok(match sel.role_name.as_deref() {
-            Some(name) => builder.role_named(role, name),
-            None => builder.role(role),
-        });
-    }
-    Err(ErrorData::invalid_params(
-        "Selector has no selector kind set (validate() should have caught this)".to_string(),
-        None,
-    ))
+    apply_selector_to!(builder, sel)
 }
 
 fn apply_modifiers<'a>(mut builder: FindBuilder<'a>, sel: &Selector) -> FindBuilder<'a> {
@@ -411,7 +415,7 @@ pub async fn find(
 }
 
 /// `true` when the `ErrorData` was produced by mapping an
-/// [`ZendriverError::ElementNotFound`]. We rely on the
+/// [`zendriver::ZendriverError::ElementNotFound`]. We rely on the
 /// `_meta.suggested_next == "browser_snapshot"` marker that `map_error`
 /// attaches to that variant — checking the message would be brittle
 /// across translation tweaks.
@@ -483,6 +487,8 @@ mod tests {
             text_regex: None,
             role: None,
             role_name: None,
+            tag: None,
+            attrs: vec![],
             nth: None,
             visible_only: true,
             timeout_ms: 5000,

@@ -1,0 +1,332 @@
+# MCP Coverage Ledger — zendriver public API vs zendriver-mcp tools
+#
+# Every public `zendriver` API item that was added in #24–#30 must have an
+# entry here: either `covered = "<tool-name>"` (the MCP tool that exposes it)
+# or `excluded = "<reason>"` (why it needs no MCP tool).
+#
+# The `tests/public_api.rs` test (feature `public-api-check`) diffs the
+# current `zendriver` public API against `public-api-baseline.txt` and fails
+# if any NEW item is absent from this ledger.
+#
+# Format:
+#   [[entry]]
+#   api      = "<path as it appears in cargo-public-api output>"
+#   covered  = "<mcp-tool-name>"   # mutually exclusive with `excluded`
+#   excluded = "<reason>"           # mutually exclusive with `covered`
+
+# ── #30 BrowserBuilder::preference ──────────────────────────────────────────
+[[entry]]
+api = "zendriver::browser::BrowserBuilder::preference"
+covered = "browser_open.preferences"
+
+# ── #24 Persona / Seed / Surface / Strategy / BrowserBuilder persona API ────
+[[entry]]
+api = "zendriver::Persona"
+covered = "browser_open.persona / browser_fingerprint_generate"
+
+[[entry]]
+api = "zendriver::PersonaBuilder"
+excluded = "internal builder for Persona; surfaced via browser_fingerprint_generate output + browser_open.persona"
+
+[[entry]]
+api = "zendriver::Seed"
+covered = "browser_fingerprint_generate.seed"
+
+[[entry]]
+api = "zendriver::Strategy"
+excluded = "internal fingerprint strategy type; surfaced opaquely via Persona JSON in browser_open.persona"
+
+[[entry]]
+api = "zendriver::Surface"
+excluded = "internal fingerprint surface type; surfaced opaquely via Persona JSON in browser_open.persona"
+
+[[entry]]
+api = "zendriver::stealth::Persona"
+covered = "browser_open.persona / browser_fingerprint_generate"
+
+[[entry]]
+api = "zendriver::stealth::PersonaBuilder"
+excluded = "internal builder for Persona; surfaced via browser_fingerprint_generate output + browser_open.persona"
+
+[[entry]]
+api = "zendriver::stealth::Seed"
+covered = "browser_fingerprint_generate.seed"
+
+[[entry]]
+api = "zendriver::stealth::Strategy"
+excluded = "internal fingerprint strategy type; surfaced opaquely via Persona JSON in browser_open.persona"
+
+[[entry]]
+api = "zendriver::stealth::Surface"
+excluded = "internal fingerprint surface type; surfaced opaquely via Persona JSON in browser_open.persona"
+
+[[entry]]
+api = "zendriver::browser::BrowserBuilder::persona"
+covered = "browser_open.persona"
+
+[[entry]]
+api = "zendriver::browser::BrowserBuilder::persona_overlay"
+excluded = "advanced compositing of multiple personas; surfaced via browser_open.persona (opaque JSON)"
+
+[[entry]]
+api = "zendriver::browser::BrowserBuilder::resolved_persona"
+excluded = "read accessor for the composed persona; internal to launch flow, not needed as an MCP tool"
+
+[[entry]]
+api = "zendriver::browser::BrowserBuilder::surface"
+excluded = "lower-level alternative to persona (supply surface+strategy separately); browser_open.persona covers the higher-level path"
+
+# ── #28 FindBuilder / FindAllBuilder predicate methods ──────────────────────
+[[entry]]
+api = "zendriver::query::FindBuilder"
+covered = "browser_find"
+
+[[entry]]
+api = "zendriver::query::FindBuilder::attr"
+covered = "browser_find (Selector.attrs with op=exact)"
+
+[[entry]]
+api = "zendriver::query::FindBuilder::attr_contains"
+covered = "browser_find (Selector.attrs with op=contains)"
+
+[[entry]]
+api = "zendriver::query::FindBuilder::attr_ends_with"
+covered = "browser_find (Selector.attrs with op=ends_with)"
+
+[[entry]]
+api = "zendriver::query::FindBuilder::attr_starts_with"
+covered = "browser_find (Selector.attrs with op=starts_with)"
+
+[[entry]]
+api = "zendriver::query::FindBuilder::attr_regex"
+covered = "browser_find (Selector.attrs with op=regex)"
+
+[[entry]]
+api = "zendriver::query::FindBuilder::has_attr"
+covered = "browser_find (Selector.attrs with op=present)"
+
+[[entry]]
+api = "zendriver::query::FindBuilder::tag"
+covered = "browser_find (Selector.tag)"
+
+[[entry]]
+api = "zendriver::query::FindAllBuilder::attr"
+covered = "browser_find_all (Selector.attrs with op=exact)"
+
+[[entry]]
+api = "zendriver::query::FindAllBuilder::attr_contains"
+covered = "browser_find_all (Selector.attrs with op=contains)"
+
+[[entry]]
+api = "zendriver::query::FindAllBuilder::attr_ends_with"
+covered = "browser_find_all (Selector.attrs with op=ends_with)"
+
+[[entry]]
+api = "zendriver::query::FindAllBuilder::attr_starts_with"
+covered = "browser_find_all (Selector.attrs with op=starts_with)"
+
+[[entry]]
+api = "zendriver::query::FindAllBuilder::attr_regex"
+covered = "browser_find_all (Selector.attrs with op=regex)"
+
+[[entry]]
+api = "zendriver::query::FindAllBuilder::has_attr"
+covered = "browser_find_all (Selector.attrs with op=present)"
+
+[[entry]]
+api = "zendriver::query::FindAllBuilder::tag"
+covered = "browser_find_all (Selector.tag)"
+
+# ── #28 select / select_all (Tab, Frame, Element) ───────────────────────────
+[[entry]]
+api = "zendriver::tab::Tab::select"
+excluded = "redundant with browser_find css"
+
+[[entry]]
+api = "zendriver::tab::Tab::select_all"
+excluded = "redundant with browser_find_all css"
+
+[[entry]]
+api = "zendriver::frame::Frame::select"
+excluded = "redundant with browser_find css (with in_frame)"
+
+[[entry]]
+api = "zendriver::frame::Frame::select_all"
+excluded = "redundant with browser_find_all css (with in_frame)"
+
+[[entry]]
+api = "zendriver::element::Element::select"
+excluded = "redundant with browser_find css; element-scoped find not yet in MCP (low demand)"
+
+[[entry]]
+api = "zendriver::element::Element::select_all"
+excluded = "redundant with browser_find_all css; element-scoped find not yet in MCP (low demand)"
+
+# ── #28 Element.find / find_all (element-scoped FindBuilder) ────────────────
+[[entry]]
+api = "zendriver::element::Element::find"
+excluded = "element-scoped find builder; browser_find covers the tab-scoped path; element-scoped find not yet exposed (low demand)"
+
+# ── #28 Element.attr / attrs (attribute read methods) ───────────────────────
+[[entry]]
+api = "zendriver::element::Element::attr"
+excluded = "single-attribute read on an element; covered transitively by browser_find returning element descriptors with attributes"
+
+[[entry]]
+api = "zendriver::element::Element::attrs"
+excluded = "all-attributes read on an element; covered transitively by browser_find returning element descriptors with attributes"
+
+# ── #29 Tab::request / RequestBuilder / Response ────────────────────────────
+[[entry]]
+api = "zendriver::tab::Tab::request"
+covered = "browser_request"
+
+[[entry]]
+api = "zendriver::request::RequestBuilder"
+covered = "browser_request"
+
+[[entry]]
+api = "zendriver::request::RequestBuilder::body"
+covered = "browser_request.body"
+
+[[entry]]
+api = "zendriver::request::RequestBuilder::bypass_cors"
+covered = "browser_request.bypass_cors"
+
+[[entry]]
+api = "zendriver::request::RequestBuilder::delete"
+covered = "browser_request (method=DELETE)"
+
+[[entry]]
+api = "zendriver::request::RequestBuilder::get"
+covered = "browser_request (method=GET)"
+
+[[entry]]
+api = "zendriver::request::RequestBuilder::head"
+covered = "browser_request (method=HEAD)"
+
+[[entry]]
+api = "zendriver::request::RequestBuilder::header"
+covered = "browser_request.headers"
+
+[[entry]]
+api = "zendriver::request::RequestBuilder::json"
+covered = "browser_request.json"
+
+[[entry]]
+api = "zendriver::request::RequestBuilder::patch"
+covered = "browser_request (method=PATCH)"
+
+[[entry]]
+api = "zendriver::request::RequestBuilder::post"
+covered = "browser_request (method=POST)"
+
+[[entry]]
+api = "zendriver::request::RequestBuilder::put"
+covered = "browser_request (method=PUT)"
+
+[[entry]]
+api = "zendriver::request::RequestBuilder::send"
+covered = "browser_request (called internally)"
+
+[[entry]]
+api = "zendriver::request::Response"
+covered = "browser_request (output: status/headers/body/body_base64)"
+
+[[entry]]
+api = "zendriver::request::Response::bytes"
+covered = "browser_request.body_base64"
+
+[[entry]]
+api = "zendriver::request::Response::headers"
+covered = "browser_request.headers"
+
+[[entry]]
+api = "zendriver::request::Response::json"
+excluded = "typed JSON deserialize on Response; browser_request returns body as string + body_base64; callers parse JSON themselves"
+
+[[entry]]
+api = "zendriver::request::Response::status"
+covered = "browser_request.status"
+
+[[entry]]
+api = "zendriver::request::Response::text"
+covered = "browser_request.body"
+
+# ── #29 Tab::monitor / MonitorBuilder / NetworkMonitor / NetworkEvent / etc. ─
+[[entry]]
+api = "zendriver::tab::Tab::monitor"
+covered = "browser_monitor_start"
+
+[[entry]]
+api = "zendriver::monitor::MonitorBuilder"
+covered = "browser_monitor_start"
+
+[[entry]]
+api = "zendriver::monitor::MonitorBuilder::start"
+covered = "browser_monitor_start"
+
+[[entry]]
+api = "zendriver::monitor::NetworkEvent"
+covered = "browser_monitor_read (events array)"
+
+[[entry]]
+api = "zendriver::monitor::NetworkEvent::EventSourceMessage"
+covered = "browser_monitor_read"
+
+[[entry]]
+api = "zendriver::monitor::NetworkEvent::Http"
+covered = "browser_monitor_read"
+
+[[entry]]
+api = "zendriver::monitor::NetworkEvent::WebSocketClose"
+covered = "browser_monitor_read"
+
+[[entry]]
+api = "zendriver::monitor::NetworkEvent::WebSocketFrame"
+covered = "browser_monitor_read"
+
+[[entry]]
+api = "zendriver::monitor::NetworkEvent::WebSocketOpen"
+covered = "browser_monitor_read"
+
+[[entry]]
+api = "zendriver::monitor::NetworkExchange"
+covered = "browser_monitor_read (Http events)"
+
+[[entry]]
+api = "zendriver::monitor::NetworkExchange::body"
+covered = "browser_monitor_start.capture_bodies / browser_monitor_read.body_base64"
+
+[[entry]]
+api = "zendriver::monitor::NetworkExchange::error"
+covered = "browser_monitor_read (Http.error)"
+
+[[entry]]
+api = "zendriver::monitor::NetworkExchange::is_success"
+excluded = "convenience accessor; status field covers it in the wire output"
+
+[[entry]]
+api = "zendriver::monitor::NetworkExchange::status"
+covered = "browser_monitor_read (Http.status)"
+
+[[entry]]
+api = "zendriver::monitor::NetworkExchange::text"
+excluded = "text decode of body; browser_monitor_read already emits body (utf8-lossy) + body_base64 directly"
+
+[[entry]]
+api = "zendriver::monitor::FrameDirection"
+covered = "browser_monitor_read (WebSocketFrame.direction)"
+
+[[entry]]
+api = "zendriver::monitor::NetworkMonitor"
+covered = "browser_monitor_start (handle wraps the monitor)"
+
+# ── re-exports at crate root ──────────────────────────────────────────────────
+[[entry]]
+api = "zendriver::MonitorBuilder"
+covered = "browser_monitor_start"
+
+[[entry]]
+api = "zendriver::NetworkEvent"
+covered = "browser_monitor_read"

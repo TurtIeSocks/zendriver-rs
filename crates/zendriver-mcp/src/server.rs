@@ -35,13 +35,17 @@ use crate::tools::common::EmptyInput;
 use crate::tools::expect;
 #[cfg(feature = "fetcher")]
 use crate::tools::fetcher;
+#[cfg(feature = "fingerprints")]
+use crate::tools::fingerprints;
 #[cfg(feature = "imperva")]
 use crate::tools::imperva;
 #[cfg(feature = "interception")]
 use crate::tools::intercept;
+#[cfg(feature = "monitor")]
+use crate::tools::monitor;
 use crate::tools::{
     actions, cookies, download, eval, find, frames, lifecycle, mouse, navigation, pdf, reads,
-    scroll, snapshot, stealth, storage, tabs, window,
+    request, scroll, snapshot, stealth, storage, tabs, window,
 };
 
 /// rmcp handler carrying the per-session [`SessionState`].
@@ -285,7 +289,7 @@ impl ZendriverServer {
     /// Resolve a Selector to one element and return its descriptor.
     #[tool(
         name = "browser_find",
-        description = "Resolve a Selector to a single element on the current tab. Returns `{ found: false, element: null }` when no element matches within the selector's timeout (instead of an error) — agents can branch on existence without try/catch."
+        description = "Resolve a Selector to a single element on the current tab. Selector supports single-selector mode (css/xpath/text/text_exact/text_regex/role) or predicate mode (tag + attrs + text* combinable AND-ed filters). Returns `{ found: false, element: null }` when no element matches within the selector's timeout (instead of an error) — agents can branch on existence without try/catch."
     )]
     pub async fn browser_find(
         &self,
@@ -297,7 +301,7 @@ impl ZendriverServer {
     /// Resolve a Selector to ALL matches (up to `limit`).
     #[tool(
         name = "browser_find_all",
-        description = "Resolve a Selector to ALL matching elements on the current tab (up to `limit`, default 50). `{ elements: [] }` is returned when nothing matches — never an error."
+        description = "Resolve a Selector to ALL matching elements on the current tab (up to `limit`, default 50). Selector supports single-selector mode (css/xpath/text/text_exact/text_regex/role) or predicate mode (tag + attrs + text* combinable AND-ed filters). `{ elements: [] }` is returned when nothing matches — never an error."
     )]
     pub async fn browser_find_all(
         &self,
@@ -602,6 +606,20 @@ impl ZendriverServer {
         cookies::cookies_persist(self.state.clone(), input)
             .await
             .map(Json)
+    }
+
+    // ---------- request --------------------------------------------------
+
+    /// Make an HTTP request from the browser context.
+    #[tool(
+        name = "browser_request",
+        description = "Make an HTTP request FROM the browser context — inherits the page's cookies/session and (by default) respects CORS like an in-page `fetch`. `method` + `url` required; optional `headers`, and one of `body` (string) or `json` (object → sets body + Content-Type). `bypass_cors: true` routes via the browser's privileged network stack (ignores CORS, GET only). A non-2xx `status` is returned normally (not an error). Returns `{ status, headers, body (utf8-lossy), body_base64 }`. Needs a loaded page; navigate to the target origin first for same-origin calls."
+    )]
+    pub async fn browser_request(
+        &self,
+        Parameters(input): Parameters<request::RequestInput>,
+    ) -> Result<Json<request::RequestOutput>, ErrorData> {
+        request::request(self.state.clone(), input).await.map(Json)
     }
 
     // ---------- storage --------------------------------------------------
@@ -999,6 +1017,72 @@ impl ZendriverServer {
     }
 }
 
+// ---------- fingerprints (gated) ----------------------------------------
+//
+// Same split pattern as the other gated blocks. Not in `default` — must be
+// opted into explicitly with `--features fingerprints`.
+
+#[cfg(feature = "fingerprints")]
+#[tool_router(router = fingerprints_tool_router, vis = "pub")]
+impl ZendriverServer {
+    /// Generate a fingerprint Persona from a pool or generative source.
+    #[tool(
+        name = "browser_fingerprint_generate",
+        description = "Generate a realistic fingerprint Persona JSON from a real-device `source`. `generative` synthesizes a coherent persona from the embedded Bayesian network and works offline; `pool` samples a downloaded real-device set (requires the published pool asset — see issue #25; returns an error until the dataset is hosted). Optional `seed` (u64) for reproducibility — omit for a random persona. Returns `{ persona }` — pass it to `browser_open`'s `persona` field (inspect / tweak the JSON first if desired)."
+    )]
+    pub async fn browser_fingerprint_generate(
+        &self,
+        Parameters(input): Parameters<fingerprints::GenerateInput>,
+    ) -> Result<Json<fingerprints::GenerateOutput>, ErrorData> {
+        fingerprints::generate(input).await.map(Json)
+    }
+}
+
+// ---------- monitor (gated) ---------------------------------------------
+//
+// Same split pattern as the other gated blocks. In `default`, so these are
+// present in a normal build; drop them with `--no-default-features`.
+
+#[cfg(feature = "monitor")]
+#[tool_router(router = monitor_tool_router, vis = "pub")]
+impl ZendriverServer {
+    /// Start a network monitor over the current tab.
+    #[tool(
+        name = "browser_monitor_start",
+        description = "Start a passive network monitor over the current tab and begin buffering observed events (HTTP exchanges, WebSocket open/frame/close, EventSource messages) into a bounded ring. Optional `url_pattern` keeps only events whose URL contains that substring. `capture_bodies: true` fetches each HTTP response body at observe-time (one extra CDP round-trip per exchange) and inlines it — Chrome retains bodies only briefly, so capture-at-observe is the only reliable way to get them. Returns `{ handle }`; poll with `browser_monitor_read` and tear down with `browser_monitor_stop`. The ring holds the most recent events — a slow reader sees a non-zero `dropped` count rather than unbounded memory growth."
+    )]
+    pub async fn browser_monitor_start(
+        &self,
+        Parameters(input): Parameters<monitor::StartInput>,
+    ) -> Result<Json<monitor::StartOutput>, ErrorData> {
+        monitor::start(self.state.clone(), input).await.map(Json)
+    }
+
+    /// Drain buffered events from a running monitor.
+    #[tool(
+        name = "browser_monitor_read",
+        description = "Drain buffered events from a running monitor (started via `browser_monitor_start`). `handle` identifies the monitor; optional `max` caps how many events this call returns (omit to drain all buffered). Returns `{ events, dropped }`: `events` are oldest-first and are removed from the buffer (the next read sees only newer ones); `dropped` is the count of events evicted because the ring filled since the previous read (reset to 0 each read) — a non-zero value means read more often. An unknown `handle` is an error."
+    )]
+    pub async fn browser_monitor_read(
+        &self,
+        Parameters(input): Parameters<monitor::ReadInput>,
+    ) -> Result<Json<monitor::ReadOutput>, ErrorData> {
+        monitor::read(self.state.clone(), input).await.map(Json)
+    }
+
+    /// Stop a running monitor and drop its buffer.
+    #[tool(
+        name = "browser_monitor_stop",
+        description = "Stop a running monitor: cancel its background drain task, drop its buffer, and remove the handle. `handle` identifies the monitor. Returns `{ stopped }` — `true` if a live monitor was found and stopped, `false` if the handle was unknown (already stopped or never started); stopping is idempotent and never errors. Any events left unread when you stop are discarded — call `browser_monitor_read` first if you need them."
+    )]
+    pub async fn browser_monitor_stop(
+        &self,
+        Parameters(input): Parameters<monitor::StopInput>,
+    ) -> Result<Json<monitor::StopOutput>, ErrorData> {
+        monitor::stop(self.state.clone(), input).await.map(Json)
+    }
+}
+
 // ---------- combined router + ServerHandler -----------------------------
 
 impl ZendriverServer {
@@ -1019,6 +1103,10 @@ impl ZendriverServer {
         let router = router + Self::imperva_tool_router();
         #[cfg(feature = "fetcher")]
         let router = router + Self::fetcher_tool_router();
+        #[cfg(feature = "fingerprints")]
+        let router = router + Self::fingerprints_tool_router();
+        #[cfg(feature = "monitor")]
+        let router = router + Self::monitor_tool_router();
         router
     }
 }

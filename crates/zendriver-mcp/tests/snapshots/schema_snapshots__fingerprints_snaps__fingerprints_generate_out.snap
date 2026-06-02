@@ -1,0 +1,13 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::fingerprints::GenerateOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: GenerateOutput
+description: "Output for `browser_fingerprint_generate`."
+type: object
+properties:
+  persona:
+    description: "A Persona JSON — pass to `browser_open`'s `persona` field (inspect /\ntweak the JSON first if desired)."
+required:
+  - persona

@@ -187,6 +187,41 @@ schema_snap!(storage_delete_out, tools::storage::StorageDeleteOutput);
 schema_snap!(storage_clear_in, tools::storage::StorageClearInput);
 schema_snap!(storage_clear_out, tools::storage::StorageClearOutput);
 
+// ---------- request --------------------------------------------------------
+
+schema_snap!(request_method, tools::request::HttpMethod);
+schema_snap!(request_in, tools::request::RequestInput);
+schema_snap!(request_out, tools::request::RequestOutput);
+
+// ---------- fingerprints (feature-gated) ----------------------------------
+
+#[cfg(feature = "fingerprints")]
+mod fingerprints_snaps {
+    use super::*;
+
+    schema_snap!(fingerprints_source, tools::fingerprints::FpSource);
+    schema_snap!(fingerprints_generate_in, tools::fingerprints::GenerateInput);
+    schema_snap!(
+        fingerprints_generate_out,
+        tools::fingerprints::GenerateOutput
+    );
+}
+
+// ---------- monitor (feature-gated) ---------------------------------------
+
+#[cfg(feature = "monitor")]
+mod monitor_snaps {
+    use super::*;
+
+    schema_snap!(monitor_event, zendriver_mcp::state::MonitorEvent);
+    schema_snap!(monitor_start_in, tools::monitor::StartInput);
+    schema_snap!(monitor_start_out, tools::monitor::StartOutput);
+    schema_snap!(monitor_read_in, tools::monitor::ReadInput);
+    schema_snap!(monitor_read_out, tools::monitor::ReadOutput);
+    schema_snap!(monitor_stop_in, tools::monitor::StopInput);
+    schema_snap!(monitor_stop_out, tools::monitor::StopOutput);
+}
+
 // ---------- interception (feature-gated) ----------------------------------
 
 #[cfg(feature = "interception")]

@@ -86,8 +86,8 @@ use crate::error::StealthError;
 
 /// Default Chrome version used when `chrome --version` probe fails.
 /// Bump on each release of zendriver-rs.
-const FALLBACK_CHROME_FULL: &str = "120.0.6099.234";
-const FALLBACK_CHROME_MAJOR: u32 = 120;
+const FALLBACK_CHROME_FULL: &str = "148.0.7778.181";
+const FALLBACK_CHROME_MAJOR: u32 = 148;
 
 /// Probed system + Chrome facts used to compose stealth values.
 #[derive(Debug, Clone, Serialize)]
@@ -316,5 +316,17 @@ mod fingerprint_tests {
         fp.recompose();
         assert!(fp.ua_string.contains("Windows NT 10.0"));
         assert!(fp.ua_string.contains("Chrome/120.0.6099.234"));
+    }
+
+    #[test]
+    fn fallback_chrome_is_not_ancient() {
+        // Tripwire: forces a conscious bump when Chrome moves well past this floor.
+        // Floor is 4 majors below the probed version (148) at the time of writing.
+        const {
+            assert!(
+                FALLBACK_CHROME_MAJOR >= 144,
+                "FALLBACK_CHROME_MAJOR is stale; bump it (and this floor) to current stable"
+            )
+        };
     }
 }

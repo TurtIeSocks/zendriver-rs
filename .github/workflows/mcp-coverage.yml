@@ -1,0 +1,60 @@
+name: MCP Coverage Check
+
+# Runs nightly to catch any new public `zendriver` API items that have not
+# been given an MCP coverage decision (covered by a tool, or explicitly
+# excluded with a reason) in `crates/zendriver-mcp/mcp-coverage-ledger.toml`.
+#
+# Required tool: cargo-public-api v0.52.0 (needs nightly rustdoc JSON).
+# Pinned so that rustdoc JSON format changes don't silently break the check.
+#
+# To update the pin:
+#   1. Change the version below.
+#   2. Regenerate the baseline locally:
+#        cargo +nightly public-api -p zendriver --all-features \
+#            > crates/zendriver-mcp/public-api-baseline.txt
+#   3. Commit the new baseline + updated version.
+
+on:
+  schedule:
+    - cron: '0 5 * * *'   # 05:00 UTC daily
+  push:
+    branches: [main]
+    paths:
+      - 'crates/zendriver/**'
+      - 'crates/zendriver-mcp/mcp-coverage-ledger.toml'
+      - 'crates/zendriver-mcp/public-api-baseline.txt'
+      - 'crates/zendriver-mcp/tests/public_api.rs'
+      - '.github/workflows/mcp-coverage.yml'
+  pull_request:
+    paths:
+      - 'crates/zendriver/**'
+      - 'crates/zendriver-mcp/mcp-coverage-ledger.toml'
+      - 'crates/zendriver-mcp/public-api-baseline.txt'
+      - 'crates/zendriver-mcp/tests/public_api.rs'
+      - '.github/workflows/mcp-coverage.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  mcp-coverage:
+    name: MCP API Coverage Ledger
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-public-api (pinned v0.52.0)
+        run: cargo install cargo-public-api --locked --version 0.52.0
+
+      - name: Run MCP coverage check
+        run: |
+          cargo +nightly test \
+            -p zendriver-mcp \
+            --features public-api-check \
+            --test public_api \
+            --locked

@@ -27,10 +27,55 @@ properties:
     default: true
 additionalProperties: false
 $defs:
-  Selector:
-    description: "Selector arg struct on every find / action tool.\n\nCaller supplies exactly one of `css`, `xpath`, `text`, `text_exact`,\n`text_regex`, or `role`. `role_name` is an optional modifier on `role`.\nOther fields are tuning knobs with defaults that match the lib's\n`FindBuilder` defaults."
+  AttrOp:
+    description: "Attribute-value comparison operator used in [`AttrPredicate`].\n\nDetermines how the actual element attribute value is compared against\nthe `value` field. When `op` is [`AttrOp::Has`], `value` is ignored."
+    oneOf:
+      - description: "`[name=\"value\"]` — exact match."
+        type: string
+        const: eq
+      - description: "`[name*=\"value\"]` — contains substring."
+        type: string
+        const: contains
+      - description: "`[name^=\"value\"]` — starts with."
+        type: string
+        const: starts_with
+      - description: "`[name$=\"value\"]` — ends with."
+        type: string
+        const: ends_with
+      - description: "`[name]` — attribute is present regardless of value."
+        type: string
+        const: has
+      - description: JS regex test on the attribute value (post-filter).
+        type: string
+        const: regex
+  AttrPredicate:
+    description: "One attribute predicate in a predicate-mode [`Selector`].\n\nCombine multiple predicates via `attrs: [...]`; they are AND-ed.\n`value` is required for every `op` except [`AttrOp::Has`]."
     type: object
     properties:
+      name:
+        description: "Attribute name (e.g. `\"data-role\"`, `\"class\"`, `\"href\"`)."
+        type: string
+      op:
+        description: Comparison operator.
+        $ref: "#/$defs/AttrOp"
+      value:
+        description: "Comparison value. Required for all operators except `has`."
+        type:
+          - string
+          - "null"
+    additionalProperties: false
+    required:
+      - name
+      - op
+  Selector:
+    description: "Selector arg struct on every find / action tool.\n\nCaller supplies **exactly one** of the following selector kinds:\n- single-selector mode: `css`, `xpath`, `text`, `text_exact`, `text_regex`, or `role`\n- predicate mode: any combination of `tag`, `attrs`, `text`, `text_exact`, `text_regex`\n\nIn predicate mode, `tag` and `attrs` are combinable with each other and\nwith `text`/`text_exact`/`text_regex` (AND-ed). They are mutually exclusive\nwith `css`, `xpath`, and `role`.\n\n`role_name` is an optional modifier on `role`.\nOther fields are tuning knobs with defaults that match the lib's\n`FindBuilder` defaults."
+    type: object
+    properties:
+      attrs:
+        description: Attribute predicates (AND-ed). Predicate mode only.
+        type: array
+        items:
+          $ref: "#/$defs/AttrPredicate"
       css:
         type:
           - string
@@ -50,6 +95,11 @@ $defs:
           - string
           - "null"
       role_name:
+        type:
+          - string
+          - "null"
+      tag:
+        description: "HTML tag name filter (e.g. `\"button\"`, `\"a\"`). Predicate mode only."
         type:
           - string
           - "null"

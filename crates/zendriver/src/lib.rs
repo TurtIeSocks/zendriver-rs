@@ -85,6 +85,7 @@ pub(crate) mod isolated_world;
 pub mod monitor;
 pub mod network_idle;
 pub mod pdf;
+pub(crate) mod preferences;
 pub mod query;
 pub mod request;
 pub mod screenshot;
