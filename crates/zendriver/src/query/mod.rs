@@ -799,6 +799,9 @@ pub struct FindAllBuilder<'scope> {
     /// [`FindAllBuilder::new_for_frame`].
     pub(crate) frame: Option<&'scope Frame>,
     pub(crate) selector: Option<SelectorKind>,
+    /// Accumulated bs4-like predicates. Mutually exclusive with `selector`
+    /// (enforced at the terminal — see `many`/`many_or_empty`).
+    pub(crate) predicates: PredicateSet,
     pub(crate) timeout: Duration,
     pub(crate) visible_only: bool,
     /// Frame override populated by [`FindAllBuilder::in_frame`]. See
@@ -816,12 +819,15 @@ pub struct FindAllBuilder<'scope> {
 }
 
 impl<'scope> FindAllBuilder<'scope> {
+    predicate_methods! {}
+
     pub(crate) fn new_for_tab(tab: &'scope Tab) -> Self {
         Self {
             tab: Some(tab),
             element: None,
             frame: None,
             selector: None,
+            predicates: Default::default(),
             timeout: DEFAULT_TIMEOUT,
             visible_only: false,
             in_frame: None,
@@ -840,6 +846,7 @@ impl<'scope> FindAllBuilder<'scope> {
             element: Some(element),
             frame: None,
             selector: None,
+            predicates: Default::default(),
             timeout: DEFAULT_TIMEOUT,
             visible_only: false,
             in_frame: None,
@@ -857,6 +864,7 @@ impl<'scope> FindAllBuilder<'scope> {
             element: None,
             frame: Some(frame),
             selector: None,
+            predicates: Default::default(),
             timeout: DEFAULT_TIMEOUT,
             visible_only: false,
             in_frame: None,
@@ -961,6 +969,7 @@ impl<'scope> FindAllBuilder<'scope> {
             element: self.element,
             frame: self.frame,
             selector: self.selector,
+            predicates: self.predicates,
             timeout: self.timeout,
             visible_only: self.visible_only,
             in_frame: Some(frame),
@@ -2033,8 +2042,7 @@ mod tests {
     /// main scope returns an empty array, then the single registered frame's
     /// session resolves one node — `.one()` must return it, dispatching the
     /// frame query on the frame's own session.
-    // --- T4/T5: predicate builder accumulation -----------------------
-
+    // --- T4/T5: predicate builder accumulation (separate nested mod) ---
     #[cfg(test)]
     mod predicate_builder_tests {
         use super::super::*;
@@ -2072,6 +2080,29 @@ mod tests {
             assert_eq!(b.predicates.texts.len(), 3);
             assert!(matches!(b.predicates.attrs[0], AttrPred::Exact(_, _)));
             assert!(matches!(b.predicates.texts[2], TextPred::Matches(_)));
+        }
+
+        fn bare_all() -> FindAllBuilder<'static> {
+            FindAllBuilder {
+                tab: None,
+                element: None,
+                frame: None,
+                selector: None,
+                predicates: Default::default(),
+                timeout: DEFAULT_TIMEOUT,
+                visible_only: false,
+                in_frame: None,
+                include_frames: false,
+                best_match: false,
+            }
+        }
+
+        #[test]
+        fn find_all_predicates_accumulate() {
+            let b = bare_all().tag("a").has_attr("href").containing_text("Next");
+            assert_eq!(b.predicates.tag.as_deref(), Some("a"));
+            assert_eq!(b.predicates.attrs.len(), 1);
+            assert_eq!(b.predicates.texts.len(), 1);
         }
     }
 
