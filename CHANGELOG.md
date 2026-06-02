@@ -76,6 +76,35 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SEMVER.md].
   (reese84, legacy Incapsula, CAPTCHA surfaces). Opt-in Fetch-domain
   fast-path and opt-in CAPTCHA solver callback. `Tab::imperva()`
   convenience method gated by the `imperva` cargo feature.
+- **Group D — DataDome bypass + WebGPU coherence (#20):**
+  - `zendriver-datadome` crate: passive bypass for DataDome-protected sites.
+    Detects device-check / captcha / block surfaces via a single
+    `window.dd`-reading probe, polls until the `datadome` clearance cookie
+    lands, and escalates a CAPTCHA surface to a caller-supplied async solver
+    (returns the `datadome` cookie, not a form-field token). Opt-in
+    Fetch-domain fast-path. `Tab::datadome()` convenience method gated by
+    the `datadome` cargo feature. MCP tool `browser_solve_datadome` added
+    with `cleared / challenge_gone / already_clear / blocked / timeout`
+    outcomes.
+  - `Surface::Webgpu` in `zendriver-stealth`: coherence patch for
+    `navigator.gpu.requestAdapter()`. Derives `GPUAdapterInfo`
+    (`vendor` / `architecture` / `description`) from the spoofed WebGL
+    renderer string and overrides `requestAdapter` so the WebGPU adapter
+    info agrees with WebGL. Closes the `navigator.gpu` fingerprint leak
+    from issue #20. Included in `StealthProfile::spoofed()` with no
+    extra configuration.
+
+- **Breaking (imperva + cloudflare):** Flow-terminal conditions
+  `Timeout`, `NoChallenge`, and `ClearanceTimeout` have moved from
+  `Error` variants to `ClearanceOutcome` variants, unifying the result
+  model across all three anti-bot crates (cloudflare, imperva,
+  datadome). `ImpervaError::Timeout` is removed; the new variant is
+  `ImpervaClearanceOutcome::TimedOut { last_surface }`.
+  `CloudflareError::NoChallenge` and `CloudflareError::ClearanceTimeout`
+  are removed; the new variant is `ClearanceOutcome::TimedOut {
+  saw_challenge }`. Callers who matched on `Err(ImpervaError::Timeout
+  { .. })` or `Err(CloudflareError::ClearanceTimeout)` must update to
+  match on `Ok(ClearanceOutcome::TimedOut { .. })`.
 
 ### Changed
 
