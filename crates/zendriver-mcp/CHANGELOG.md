@@ -3,6 +3,27 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.3.0] - 2026-06-02
+
+### Added
+
+- AttrOp/AttrPredicate types + predicate-mode Selector
+- Thread AttrOp/AttrPredicate predicates through resolve bridge
+- Browser_open preferences + persona
+- Browser_request tool
+- Browser_fingerprint_generate (fingerprints feature)
+- Monitor feature + SessionState monitor handles
+- Browser_monitor_start/read/stop tools
+
+### Changed
+
+- Collapse find.rs selector-bridge duplication
+
+### Fixed
+
+- Stop monitors on browser_close + RAII MonitorState Drop
+
+
 ## [0.2.4] - 2026-06-02
 
 
