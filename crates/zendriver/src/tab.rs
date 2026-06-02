@@ -562,6 +562,30 @@ impl Tab {
         crate::monitor::MonitorBuilder::new(self.session().clone())
     }
 
+    /// Make an HTTP request from the browser context (inherits cookies/CORS).
+    ///
+    /// Returns a [`RequestBuilder`][crate::request::RequestBuilder] that lets
+    /// you set the method, URL, headers, and body. Call
+    /// [`send()`][crate::request::RequestBuilder::send] to execute via
+    /// in-page `fetch`, or chain
+    /// [`bypass_cors()`][crate::request::RequestBuilder::bypass_cors] first to
+    /// use the privileged `Network.loadNetworkResource` path (GET only).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// let resp = tab.request().get("https://example.com/api/data").send().await?;
+    /// println!("{}", resp.status());
+    /// # Ok(()) }
+    /// ```
+    pub fn request(&self) -> crate::request::RequestBuilder<'_> {
+        crate::request::RequestBuilder::new(self)
+    }
+
     /// The top-level [`Frame`] for this tab.
     ///
     /// First call dispatches `Page.getFrameTree` on the tab's session,
