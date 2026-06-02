@@ -28,8 +28,12 @@ monitor       = ["zendriver/monitor", "dep:uuid", "dep:futures"]
 cloudflare    = ["zendriver/cloudflare"]
 imperva       = ["zendriver/imperva"]
 fetcher       = ["zendriver/fetcher"]
-fingerprints  = ["dep:zendriver-fingerprints"]
+fingerprints      = ["dep:zendriver-fingerprints"]
 integration-tests = []
+# Gate the public-api coverage check so it ONLY runs in the dedicated nightly
+# CI job. `cargo test -p zendriver-mcp` (default, stable) must NOT compile or
+# run this test.
+public-api-check  = []
 
 [dependencies]
 zendriver           = { workspace = true }
@@ -56,6 +60,8 @@ zendriver-fingerprints  = { workspace = true, optional = true, features = ["pool
 tokio-test = { workspace = true }
 tempfile   = { workspace = true }
 insta      = { workspace = true }
+# `toml` is used by the `public-api-check` test to parse `mcp-coverage-ledger.toml`.
+toml       = { version = "0.8", default-features = false, features = ["parse"] }
 # rmcp client features for end-to-end smoke tests — child-process for stdio,
 # streamable-http-client-reqwest for HTTP.
 rmcp       = { workspace = true, features = ["client", "transport-child-process", "transport-streamable-http-client", "transport-streamable-http-client-reqwest"] }
