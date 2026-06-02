@@ -18,13 +18,14 @@
   const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
   HTMLCanvasElement.prototype.toDataURL = function (...args) {
     const ctx = this.getContext('2d');
-    if (ctx) {
-      const w = this.width, h = this.height;
-      if (w > 0 && h > 0) {
-        const img = origGetImageData.call(ctx, 0, 0, w, h);
-        farble(img.data);
-        ctx.putImageData(img, 0, 0);
-      }
+    if (ctx && this.width > 0 && this.height > 0) {
+      const orig = origGetImageData.call(ctx, 0, 0, this.width, this.height);
+      const copy = new ImageData(new Uint8ClampedArray(orig.data), this.width, this.height);
+      farble(copy.data);
+      ctx.putImageData(copy, 0, 0);
+      const url = origToDataURL.apply(this, args);
+      ctx.putImageData(orig, 0, 0);
+      return url;
     }
     return origToDataURL.apply(this, args);
   };

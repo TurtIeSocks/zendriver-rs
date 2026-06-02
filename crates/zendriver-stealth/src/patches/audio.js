@@ -1,4 +1,5 @@
 (function (seed) {
+  if (typeof AnalyserNode === 'undefined') return;
   const rng = __zdRng(seed);
   const orig = AnalyserNode.prototype.getFloatFrequencyData;
   AnalyserNode.prototype.getFloatFrequencyData = function (array) {
