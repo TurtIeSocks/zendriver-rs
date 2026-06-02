@@ -58,6 +58,7 @@
 //! | Flag | Crate | Purpose |
 //! |------|-------|---------|
 //! | `expect` | in-tree | `expect_request` / `expect_response` / `expect_dialog` / `expect_download` |
+//! | `monitor` | in-tree | `tab.monitor()` persistent `Stream<NetworkEvent>` (HTTP / WebSocket / EventSource) |
 //! | `interception` | `zendriver-interception` | `Fetch.*`-backed request rewriting / abort |
 //! | `cloudflare` | `zendriver-cloudflare` | Cloudflare Turnstile bypass |
 //! | `imperva` | `zendriver-imperva` | Imperva WAF / Incapsula bypass |

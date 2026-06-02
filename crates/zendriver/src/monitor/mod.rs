@@ -29,7 +29,7 @@ const CHANNEL_CAP: usize = 1024;
 
 /// Upper bound on the in-flight `requestId → url` correlation maps. A
 /// pathological page that opens requests it never finishes must not let the
-/// maps grow without limit; past this size the oldest entry is evicted.
+/// maps grow without limit; past this size one entry is evicted.
 const MAX_TRACKED: usize = 10_000;
 
 /// One observed network event emitted by a running `NetworkMonitor`.
@@ -391,7 +391,7 @@ async fn run_monitor(
                         };
                         urls.insert(p.request_id.clone(), p.request.url.clone());
                         if urls.len() > MAX_TRACKED {
-                            evict_oldest(&mut urls, &mut partial);
+                            evict_one(&mut urls, &mut partial);
                         }
                         let req = MonitoredRequest {
                             url: p.request.url,
@@ -460,7 +460,7 @@ async fn run_monitor(
                         };
                         urls.insert(p.request_id.clone(), p.url.clone());
                         if urls.len() > MAX_TRACKED {
-                            evict_oldest(&mut urls, &mut partial);
+                            evict_one(&mut urls, &mut partial);
                         }
                         if filter_allows(filter.as_ref(), Some(&p.url))
                             && tx
@@ -548,20 +548,22 @@ fn filter_allows(filter: Option<&UrlMatcher>, url: Option<&str>) -> bool {
     }
 }
 
-/// Evict an arbitrary entry from both correlation maps once they exceed
-/// [`MAX_TRACKED`]. Bounds memory against a pathological page that opens
-/// requests it never finishes; the dropped exchange simply goes unreported.
-fn evict_oldest(
-    urls: &mut HashMap<String, String>,
-    partial: &mut HashMap<String, PartialExchange>,
-) {
+/// Evict one entry from the correlation maps once they exceed [`MAX_TRACKED`].
+/// Bounds memory against a pathological page that opens requests it never
+/// finishes; the dropped exchange simply goes unreported.
+///
+/// The victim is an arbitrary key (`HashMap` has no insertion order, so this
+/// is not strictly the oldest entry). Preferring a `partial` key when one
+/// exists keeps stuck HTTP exchanges — the dominant leak source — from
+/// accumulating, and removes its mirrored `urls` entry in the same pass.
+fn evict_one(urls: &mut HashMap<String, String>, partial: &mut HashMap<String, PartialExchange>) {
     if let Some(k) = partial.keys().next().cloned() {
         partial.remove(&k);
         urls.remove(&k);
     } else if let Some(k) = urls.keys().next().cloned() {
         urls.remove(&k);
     }
-    warn!("network monitor correlation map exceeded {MAX_TRACKED}; evicting oldest entry");
+    warn!("network monitor correlation map exceeded {MAX_TRACKED}; evicting an entry");
 }
 
 #[cfg(test)]
@@ -981,5 +983,59 @@ mod tests {
         let s = format!("{ev:?}");
         assert!(s.contains("WebSocketOpen"));
         assert!(s.contains("wss://echo.example.com"));
+    }
+
+    fn partial_entry(url: &str) -> PartialExchange {
+        (
+            MonitoredRequest {
+                url: url.into(),
+                method: "GET".into(),
+                headers: HashMap::new(),
+                post_data: None,
+            },
+            None,
+        )
+    }
+
+    #[test]
+    fn evict_one_prefers_partial_and_drops_mirrored_url() {
+        // An in-flight HTTP exchange has a key in BOTH maps (mirrored on the
+        // `requestWillBeSent` path). Evicting must remove it from both so the
+        // bound actually shrinks the live correlation state.
+        let mut partial: HashMap<String, PartialExchange> = HashMap::new();
+        let mut urls: HashMap<String, String> = HashMap::new();
+        partial.insert("req1".into(), partial_entry("https://example.com/a"));
+        urls.insert("req1".into(), "https://example.com/a".into());
+
+        evict_one(&mut urls, &mut partial);
+
+        assert!(partial.is_empty(), "partial entry must be evicted");
+        assert!(
+            urls.is_empty(),
+            "the partial entry's mirrored url must be evicted too"
+        );
+    }
+
+    #[test]
+    fn evict_one_falls_back_to_urls_when_partial_empty() {
+        // A WebSocket / completed-handshake entry lives only in `urls` (no
+        // `partial` row). With `partial` empty, eviction must still drop a
+        // `urls` entry rather than no-op and leave the map over the bound.
+        let mut partial: HashMap<String, PartialExchange> = HashMap::new();
+        let mut urls: HashMap<String, String> = HashMap::new();
+        urls.insert("ws1".into(), "wss://echo.example.com".into());
+
+        evict_one(&mut urls, &mut partial);
+
+        assert!(urls.is_empty(), "urls-only entry must be evicted");
+    }
+
+    #[test]
+    fn evict_one_on_empty_maps_is_a_noop() {
+        // Defensive: never panic when called against empty maps.
+        let mut partial: HashMap<String, PartialExchange> = HashMap::new();
+        let mut urls: HashMap<String, String> = HashMap::new();
+        evict_one(&mut urls, &mut partial);
+        assert!(partial.is_empty() && urls.is_empty());
     }
 }
