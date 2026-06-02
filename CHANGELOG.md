@@ -7,6 +7,11 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SEMVER.md].
 
 ### Added
 
+- bs4-like combinable predicate finders on `find()`/`find_all()`: `tag`,
+  `attr`, `attr_contains`, `attr_starts_with`, `attr_ends_with`, `has_attr`,
+  `attr_regex`, `containing_text`, `text_equals`, `text_matches` (#55).
+- `select`/`select_all` CSS convenience aliases on `Tab`/`Frame`/`Element`.
+- Verified `include_frames()` finds elements in nested iframes (#239).
 - **Parity with nodriver / zendriver-py (phases P-A…P-D).** A large additive
   surface closing the feature gap with upstream while preserving every rs-only
   strength (3-tier stealth, single-socket flat transport, actionability,

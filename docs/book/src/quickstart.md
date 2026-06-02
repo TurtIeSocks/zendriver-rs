@@ -97,6 +97,12 @@ chain encodes both the selector and any modifiers:
 - `.xpath("//div[@id='main']")` — XPath escape hatch.
 - `.role(AriaRole::Button)` — ARIA-role + accessible-name match
   (Playwright-style).
+- `.tag("button").attr_contains("class", "primary").containing_text("Buy")`
+  — bs4-like combinable *predicate* finders (`tag`, `attr`, `attr_contains`,
+  `attr_starts_with`, `attr_ends_with`, `has_attr`, `attr_regex`,
+  `containing_text`, `text_equals`, `text_matches`), all AND-ed together.
+  Predicate methods can't be mixed with the single-selector methods above on
+  one query (doing so errors with `ConflictingSelectors`).
 - `.nth(2)` — pick the 2nd match.
 - `.visible_only()` — skip `display:none` / zero-bbox elements.
 - `.timeout(Duration::from_secs(5))` — override the default 30s wait.
@@ -105,6 +111,11 @@ A terminal method (`one`, `first`, `many`, `many_or_empty`, `count`,
 `exists`) consumes the builder and dispatches. `.one()` waits for
 exactly one match — errors with `ElementNotUnique` if there are zero or
 more than one — making it perfect for queries that should be deterministic.
+
+For the common CSS case, `tab.select("h1")` / `tab.select_all("nav a")` are
+Python-parity convenience aliases for `find().css(...).one()` /
+`find_all().css(...).many()`. The same pair exists on `Frame` and `Element`
+(`Element::select` scopes to that element's subtree).
 
 [`Tab::find()`]: https://docs.rs/zendriver/latest/zendriver/struct.Tab.html#method.find
 [`FindBuilder`]: https://docs.rs/zendriver/latest/zendriver/struct.FindBuilder.html

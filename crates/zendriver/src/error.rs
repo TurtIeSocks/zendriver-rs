@@ -72,6 +72,14 @@ pub enum ZendriverError {
         selector: String,
     },
 
+    /// A predicate method (`.tag`/`.attr`/`.containing_text`/…) was combined
+    /// with a single-selector method (`.css`/`.xpath`/`.text`/`.role`) on one
+    /// query. Use one selector style per query.
+    #[error(
+        "predicate methods (.tag/.attr/…) cannot be combined with .css()/.xpath()/.text()/.role(); use one selector style per query"
+    )]
+    ConflictingSelectors,
+
     /// Generic operation timeout.
     #[error("timed out after {0:?}")]
     Timeout(Duration),
@@ -450,6 +458,13 @@ mod tests {
     fn display_history_navigation() {
         let e = ZendriverError::HistoryNavigation("no back history".into());
         assert_eq!(e.to_string(), "history navigation failed: no back history");
+    }
+
+    #[test]
+    fn conflicting_selectors_message() {
+        let e = ZendriverError::ConflictingSelectors;
+        assert!(e.to_string().contains("predicate"));
+        assert!(e.to_string().contains("css"));
     }
 
     #[test]

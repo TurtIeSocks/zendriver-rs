@@ -110,6 +110,52 @@ impl Element {
         crate::query::FindAllBuilder::new_for_element(self)
     }
 
+    /// Find one descendant element by CSS selector. Python-parity convenience
+    /// for `find().css(sel).one()`. Scoped to this element's subtree.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::ZendriverError::ElementNotFound`] if no element
+    /// matches.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let card = tab.find().css(".card").one().await?;
+    /// let title = card.select("h2").await?;
+    /// # let _ = title;
+    /// # Ok(()) }
+    /// ```
+    pub async fn select(&self, css: &str) -> crate::error::Result<crate::Element> {
+        self.find().css(css).one().await
+    }
+
+    /// Find all descendant elements by CSS selector. Python-parity convenience
+    /// for `find_all().css(sel).many()`. Scoped to this element's subtree.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::ZendriverError::ElementNotFound`] if no elements
+    /// match.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let list = tab.find().css("ul").one().await?;
+    /// let items = list.select_all("li").await?;
+    /// println!("{} items", items.len());
+    /// # Ok(()) }
+    /// ```
+    pub async fn select_all(&self, css: &str) -> crate::error::Result<Vec<crate::Element>> {
+        self.find_all().css(css).many().await
+    }
+
     /// Return this element's child elements as a `Vec<Element>`.
     ///
     /// HTMLCollection is materialized via `Array.from`. The returned
