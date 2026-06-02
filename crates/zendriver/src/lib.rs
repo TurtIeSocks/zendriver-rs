@@ -98,7 +98,7 @@ pub use error::{BrowserError, Result, ZendriverError};
 pub use frame::Frame;
 pub use input::{Key, KeyModifiers, KeySequence, MouseButton, SpecialKey};
 pub use pdf::PdfBuilder;
-pub use query::{AriaRole, BoundingBox, FindBuilder};
+pub use query::{AriaRole, BoundingBox, FindBuilder, PageBox};
 pub use screenshot::{Format, ScreenshotBuilder};
 pub use storage::Storage;
 pub use tab::{FrameResourceMatch, ReadyState, ReloadOptions, ScrollOptions, Tab, UserAgentOverride};
@@ -235,6 +235,7 @@ mod auto_trait_assertions {
         assert_send_sync::<Cookie>();
         assert_send_sync::<SameSite>();
         assert_send_sync::<BoundingBox>();
+        assert_send_sync::<PageBox>();
         assert_send_sync::<AriaRole>();
         assert_send_sync::<Format>();
         assert_send_sync::<MouseButton>();

@@ -52,6 +52,52 @@ pub struct BoundingBox {
     pub height: f64,
 }
 
+/// Page-absolute element geometry: a viewport-relative [`BoundingBox`] plus
+/// the page scroll offset, so callers can compute coordinates relative to the
+/// top-left of the *document* rather than the *viewport*.
+///
+/// Returned by [`crate::Element::bounding_box_page`]. Ports nodriver's
+/// `Position.abs_x` / `abs_y` (element.py:504), which are the element
+/// *center* offset by `window.scrollX` / `scrollY`. The viewport box and the
+/// scroll offset are both retained so the page-absolute origin
+/// ([`PageBox::abs_origin`]) and center ([`PageBox::abs_center`]) can both be
+/// derived.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PageBox {
+    /// The viewport-relative box (same as [`crate::Element::bounding_box`]).
+    pub viewport: BoundingBox,
+    /// `window.scrollX` at the time of measurement (CSS px the document is
+    /// scrolled horizontally).
+    pub scroll_x: f64,
+    /// `window.scrollY` at the time of measurement (CSS px the document is
+    /// scrolled vertically).
+    pub scroll_y: f64,
+}
+
+impl PageBox {
+    /// Page-absolute top-left of the box (`viewport.x + scroll_x`,
+    /// `viewport.y + scroll_y`).
+    ///
+    /// This is nodriver's viewport `Position.x` / `.y` lifted into document
+    /// coordinates.
+    #[must_use]
+    pub fn abs_origin(&self) -> (f64, f64) {
+        (self.viewport.x + self.scroll_x, self.viewport.y + self.scroll_y)
+    }
+
+    /// Page-absolute center of the box (origin + half the box size + scroll).
+    ///
+    /// Faithful to nodriver's `Position.abs_x` / `abs_y`, which are the
+    /// element center offset by the scroll position.
+    #[must_use]
+    pub fn abs_center(&self) -> (f64, f64) {
+        (
+            self.viewport.x + self.viewport.width / 2.0 + self.scroll_x,
+            self.viewport.y + self.viewport.height / 2.0 + self.scroll_y,
+        )
+    }
+}
+
 use tokio::time::Instant;
 
 use crate::element::Element;
