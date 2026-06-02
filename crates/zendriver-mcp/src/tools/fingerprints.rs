@@ -42,6 +42,15 @@ pub struct GenerateOutput {
 const POOL_URL: &str =
     "https://github.com/TurtIeSocks/zendriver-rs/releases/latest/download/fingerprint-pool.json";
 
+/// Produce a [`GenerateOutput`] carrying a Persona JSON from the chosen
+/// [`FpSource`].
+///
+/// `generative` synthesizes a persona from the embedded Bayesian network
+/// (offline, no download). `pool` samples the published real-device dataset,
+/// which is downloaded on first use — and, until the pool asset is hosted
+/// (issue #25), surfaces an `internal_error` explaining the gap. An optional
+/// `seed` makes either source reproducible. Takes no `SessionState` — fingerprint
+/// generation is browser-independent.
 pub async fn generate(input: GenerateInput) -> Result<GenerateOutput, ErrorData> {
     use zendriver::Seed;
     let seed = input.seed.map_or_else(Seed::random, Seed::from_u64);

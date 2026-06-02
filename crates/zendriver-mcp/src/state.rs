@@ -25,7 +25,7 @@ pub type MonitorId = String;
 /// Bounded capacity of each monitor's in-memory event ring.
 ///
 /// Once a monitor's drain task has buffered this many unread events, the
-/// oldest is evicted on each new push and [`MonitorState::dropped`] is
+/// oldest is evicted on each new push and [`MonitorBuffer::dropped`] is
 /// incremented — so a slow `browser_monitor_read` caller bounds memory rather
 /// than growing it without limit. The next `read` surfaces the running
 /// `dropped` count so callers know events were lost.

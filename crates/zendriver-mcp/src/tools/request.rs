@@ -78,7 +78,7 @@ pub async fn request(
     let tab = current_tab(&s).await?;
     drop(s);
 
-    let rb = match input.method {
+    let mut rb = match input.method {
         HttpMethod::Get => tab.request().get(&input.url),
         HttpMethod::Post => tab.request().post(&input.url),
         HttpMethod::Put => tab.request().put(&input.url),
@@ -86,7 +86,6 @@ pub async fn request(
         HttpMethod::Head => tab.request().head(&input.url),
         HttpMethod::Patch => tab.request().patch(&input.url),
     };
-    let mut rb = rb;
     for (k, v) in input.headers.iter().flatten() {
         rb = rb.header(k, v);
     }
