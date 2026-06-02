@@ -31,6 +31,19 @@ pub struct Persona {
 }
 
 impl Persona {
+    pub fn try_from_json(s: &str) -> Result<Persona, serde_json::Error> {
+        serde_json::from_str(s)
+    }
+}
+
+impl std::str::FromStr for Persona {
+    type Err = serde_json::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_str(s)
+    }
+}
+
+impl Persona {
     /// Field-wise merge: `Some` in `over` wins, `None` inherits from `self`.
     pub fn overlay(self, over: Persona) -> Persona {
         Persona {
@@ -71,6 +84,15 @@ mod persona_tests {
         let back: Persona = serde_json::from_str(&s).unwrap();
         assert_eq!(back.seed, Some(Seed::from_u64(5)));
         assert_eq!(back.timezone.as_deref(), Some("America/New_York"));
+    }
+
+    #[test]
+    fn from_json_and_fromstr_parse() {
+        let json = r#"{"timezone":"Europe/Paris","seed":99}"#;
+        let a = Persona::try_from_json(json).unwrap();
+        assert_eq!(a.timezone.as_deref(), Some("Europe/Paris"));
+        let b: Persona = json.parse().unwrap();
+        assert_eq!(b.seed, Some(Seed::from_u64(99)));
     }
 
     #[test]
