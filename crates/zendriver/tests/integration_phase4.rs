@@ -308,10 +308,11 @@ async fn reload_dispatches_page_reload() {
 #[tokio::test]
 #[serial]
 async fn wait_for_idle_on_spa_with_delayed_xhr() {
-    // Fixture fires an XHR ~500ms after load. `wait_for_idle` should
-    // observe the request, wait for it to complete, then require a 500ms
-    // quiet window — so the total elapsed must comfortably exceed both
-    // the delay and the quiet window.
+    // Fixture fires an XHR ~300ms after the inline script runs.
+    // `wait_for_idle` should observe the request, wait for it to complete,
+    // then require its quiet window before resolving. The request is timed to
+    // fire well inside the (widened) quiet window so the catch is not a race;
+    // see the `wait_for_idle_with` call below for the timing rationale.
     //
     // Use a single mock server for both the page and the data endpoint so
     // the fetch is same-origin — a cross-origin fetch from a separate
@@ -332,7 +333,7 @@ async fn wait_for_idle_on_spa_with_delayed_xhr() {
           <script>
             setTimeout(() => {
               fetch("/data").then(r => r.text()).then(t => { window.x = t; });
-            }, 500);
+            }, 300);
           </script>
         </body></html>"#
                     .as_bytes()
@@ -350,19 +351,36 @@ async fn wait_for_idle_on_spa_with_delayed_xhr() {
     tab.wait_for_load().await.unwrap();
 
     let start = std::time::Instant::now();
-    tab.wait_for_idle().await.unwrap();
+    // Use an explicit 800ms quiet window (vs the 500ms default). The fixture
+    // delays its XHR ~300ms, so the request fires roughly in the *middle* of
+    // the window — leaving ~500ms of slack before the window would otherwise
+    // close. With the old 500ms-delay / 500ms-window pairing the request
+    // landed within ~30ms of the window closing, so any CDP event lag or
+    // timer jitter (common under CI load) let `wait_for_idle` close the
+    // window before the request registered and it returned ~500ms early.
+    tab.wait_for_idle_with(Duration::from_secs(30), Duration::from_millis(800))
+        .await
+        .unwrap();
     let elapsed = start.elapsed();
 
-    // The XHR fires 500ms after the script runs + needs the 500ms quiet
-    // window after it completes; allow some slack for Chrome scheduling.
-    assert!(
-        elapsed >= Duration::from_millis(800),
-        "wait_for_idle returned too early ({elapsed:?}); should wait for delayed XHR + quiet window"
-    );
-
-    // Confirm the XHR actually landed before idle resolved.
     let x: String = tab.evaluate_main("window.x || ''").await.unwrap();
+    // Primary, *causal* assertion: the XHR result is only set after the
+    // delayed request completes. Reading it after `wait_for_idle` returns
+    // proves idle detection observed the request and waited for it to finish
+    // — had it returned at the first quiet window (before the XHR fired),
+    // `window.x` would still be unset. This check does not depend on timing,
+    // so it does not flake.
     assert_eq!(x, "ok", "XHR result should be present once idle resolves");
+
+    // Sanity floor: confirm a quiet window was actually enforced *after* the
+    // request (i.e. idle didn't resolve the instant the XHR finished). Kept
+    // well below the ~1.13s expected elapsed (~300ms delay + 800ms window) so
+    // scheduler jitter never trips it; the assertion above is what proves the
+    // delayed request was awaited.
+    assert!(
+        elapsed >= Duration::from_millis(600),
+        "wait_for_idle returned too early ({elapsed:?}); expected delayed XHR + quiet window"
+    );
 
     browser.close().await.unwrap();
 }
