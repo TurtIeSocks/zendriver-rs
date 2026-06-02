@@ -13,6 +13,13 @@ pub(crate) struct GpuAdapterInfo {
 
 /// Map a WebGL `UNMASKED_RENDERER` string to a coherent adapter. Falls back to
 /// a stable Intel integrated-GPU adapter for unrecognized renderers.
+// NOTE: `vendor` is the load-bearing coherence field for the #20 fix (it must
+// agree with the WebGL renderer's vendor). The `architecture` tokens
+// (ada-lovelace / ampere / turing / rdna-3 / gen-12lp / common-3) are
+// best-effort, dataset-style values; their exact match to what Chrome's Dawn
+// backend reports is validated by the nightly `webgpu_adapter_coheres_with_webgl_renderer`
+// integration test (Phase 9) and may be refined in a fast-follow. They are
+// never randomized — a random value reads as an unknown device to a WAF.
 pub(crate) fn adapter_for_renderer(renderer: &str) -> GpuAdapterInfo {
     let r = renderer.to_ascii_lowercase();
     // Order matters: check discrete vendors before the Intel fallback.

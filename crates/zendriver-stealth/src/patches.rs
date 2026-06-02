@@ -645,7 +645,7 @@ mod tests {
         };
         let s = bootstrap_script(&p, &mock_identity());
         assert!(
-            s.contains("requestAdapter"),
+            s.contains("GPUAdapter.prototype"),
             "webgpu patch emitted by default (Value)"
         );
         assert!(
@@ -668,6 +668,10 @@ mod tests {
         };
         let s = bootstrap_script(&p, &mock_identity());
         assert!(s.contains("\"block\""), "block mode token substituted");
+        assert!(
+            s.contains("navigator, 'gpu'"),
+            "block mode shadows navigator.gpu"
+        );
     }
 
     #[test]
@@ -682,7 +686,7 @@ mod tests {
         // Native → no webgpu patch emitted at all.
         assert!(!s.contains("WEBGPU_VENDOR"), "no unsubstituted token");
         assert!(
-            !s.contains("requestAdapter"),
+            !s.contains("GPUAdapter.prototype"),
             "Native webgpu omits the patch"
         );
     }
