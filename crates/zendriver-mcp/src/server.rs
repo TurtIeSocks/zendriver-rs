@@ -41,7 +41,7 @@ use crate::tools::imperva;
 use crate::tools::intercept;
 use crate::tools::{
     actions, cookies, download, eval, find, frames, lifecycle, mouse, navigation, pdf, reads,
-    scroll, snapshot, stealth, storage, tabs, window,
+    request, scroll, snapshot, stealth, storage, tabs, window,
 };
 
 /// rmcp handler carrying the per-session [`SessionState`].
@@ -602,6 +602,20 @@ impl ZendriverServer {
         cookies::cookies_persist(self.state.clone(), input)
             .await
             .map(Json)
+    }
+
+    // ---------- request --------------------------------------------------
+
+    /// Make an HTTP request from the browser context.
+    #[tool(
+        name = "browser_request",
+        description = "Make an HTTP request FROM the browser context — inherits the page's cookies/session and (by default) respects CORS like an in-page `fetch`. `method` + `url` required; optional `headers`, and one of `body` (string) or `json` (object → sets body + Content-Type). `bypass_cors: true` routes via the browser's privileged network stack (ignores CORS, GET only). A non-2xx `status` is returned normally (not an error). Returns `{ status, headers, body (utf8-lossy), body_base64 }`. Needs a loaded page; navigate to the target origin first for same-origin calls."
+    )]
+    pub async fn browser_request(
+        &self,
+        Parameters(input): Parameters<request::RequestInput>,
+    ) -> Result<Json<request::RequestOutput>, ErrorData> {
+        request::request(self.state.clone(), input).await.map(Json)
     }
 
     // ---------- storage --------------------------------------------------

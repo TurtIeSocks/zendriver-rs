@@ -1,0 +1,48 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::request::RequestInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: RequestInput
+description: "Input for `browser_request`."
+type: object
+properties:
+  body:
+    description: "Raw string body. Mutually exclusive with `json`."
+    type:
+      - string
+      - "null"
+  bypass_cors:
+    description: "Use the privileged `Network.loadNetworkResource` path (bypasses CORS;\nGET only in v1)."
+    type: boolean
+    default: false
+  headers:
+    description: Additional request headers.
+    type:
+      - object
+      - "null"
+    additionalProperties:
+      type: string
+  json:
+    description: "JSON body (sets `Content-Type: application/json`). Mutually exclusive\nwith `body`."
+  method:
+    description: HTTP method.
+    $ref: "#/$defs/HttpMethod"
+  url:
+    description: Request URL.
+    type: string
+additionalProperties: false
+required:
+  - method
+  - url
+$defs:
+  HttpMethod:
+    description: "HTTP method for `browser_request`."
+    type: string
+    enum:
+      - GET
+      - POST
+      - PUT
+      - DELETE
+      - HEAD
+      - PATCH

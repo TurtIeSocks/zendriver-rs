@@ -1,0 +1,31 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::request::RequestOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: RequestOutput
+description: "Output of `browser_request`."
+type: object
+properties:
+  body:
+    description: UTF-8–lossy decode of the body (for the common text/JSON case).
+    type: string
+  body_base64:
+    description: Base64 of the raw body bytes (full fidelity / binary).
+    type: string
+  headers:
+    description: Response headers.
+    type: object
+    additionalProperties:
+      type: string
+  status:
+    description: "HTTP status code (a non-2xx is a normal result, not an error)."
+    type: integer
+    format: uint16
+    maximum: 65535
+    minimum: 0
+required:
+  - status
+  - headers
+  - body
+  - body_base64

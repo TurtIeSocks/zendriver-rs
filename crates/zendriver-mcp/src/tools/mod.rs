@@ -30,6 +30,7 @@ pub mod mouse;
 pub mod navigation;
 pub mod pdf;
 pub mod reads;
+pub mod request;
 pub mod scroll;
 pub mod snapshot;
 pub mod stealth;

@@ -187,6 +187,12 @@ schema_snap!(storage_delete_out, tools::storage::StorageDeleteOutput);
 schema_snap!(storage_clear_in, tools::storage::StorageClearInput);
 schema_snap!(storage_clear_out, tools::storage::StorageClearOutput);
 
+// ---------- request --------------------------------------------------------
+
+schema_snap!(request_method, tools::request::HttpMethod);
+schema_snap!(request_in, tools::request::RequestInput);
+schema_snap!(request_out, tools::request::RequestOutput);
+
 // ---------- interception (feature-gated) ----------------------------------
 
 #[cfg(feature = "interception")]
