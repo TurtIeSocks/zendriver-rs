@@ -106,6 +106,15 @@ impl Persona {
         }
     }
 
+    /// Effective `navigator.platform` JS string for patch templating.
+    /// Falls back to host platform when unset.
+    pub fn resolved_platform_js(&self) -> String {
+        let plat = self.platform.unwrap_or_else(|| {
+            Persona::system().platform.unwrap_or(crate::Platform::LinuxX86_64)
+        });
+        plat.js_string().to_string()
+    }
+
     /// Host-probed persona (sysinfo). Cached: first call probes, rest clone.
     /// Runtime — NOT a build-script const (build host != run host).
     pub fn system() -> Persona {
@@ -147,6 +156,12 @@ mod persona_tests {
         let back: Persona = serde_json::from_str(&s).unwrap();
         assert_eq!(back.seed, Some(Seed::from_u64(5)));
         assert_eq!(back.timezone.as_deref(), Some("America/New_York"));
+    }
+
+    #[test]
+    fn persona_exposes_resolved_platform_for_patches() {
+        let p = Persona::system();
+        assert!(!p.resolved_platform_js().is_empty());
     }
 
     #[test]
