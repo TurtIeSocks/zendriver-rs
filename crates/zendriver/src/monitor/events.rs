@@ -4,8 +4,6 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
-// All structs are consumed by the correlator task added in T4.
-#[allow(dead_code)] // consumed in T4 (correlator task)
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RequestWillBeSent {
@@ -13,7 +11,6 @@ pub(crate) struct RequestWillBeSent {
     pub request: CdpRequest,
 }
 
-#[allow(dead_code)] // consumed in T4 (correlator task)
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CdpRequest {
@@ -25,7 +22,6 @@ pub(crate) struct CdpRequest {
     pub post_data: Option<String>,
 }
 
-#[allow(dead_code)] // consumed in T4 (correlator task)
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ResponseReceived {
@@ -33,7 +29,6 @@ pub(crate) struct ResponseReceived {
     pub response: CdpResponse,
 }
 
-#[allow(dead_code)] // consumed in T4 (correlator task)
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CdpResponse {
@@ -46,14 +41,12 @@ pub(crate) struct CdpResponse {
     pub mime_type: String,
 }
 
-#[allow(dead_code)] // consumed in T4 (correlator task)
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RequestIdOnly {
     pub request_id: String,
 }
 
-#[allow(dead_code)] // consumed in T4 (correlator task)
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct LoadingFailed {
@@ -62,7 +55,6 @@ pub(crate) struct LoadingFailed {
     pub error_text: String,
 }
 
-#[allow(dead_code)] // consumed in T4 (correlator task)
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WebSocketCreated {
@@ -70,7 +62,6 @@ pub(crate) struct WebSocketCreated {
     pub url: String,
 }
 
-#[allow(dead_code)] // consumed in T4 (correlator task)
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WebSocketFrameEvent {
@@ -78,7 +69,6 @@ pub(crate) struct WebSocketFrameEvent {
     pub response: WsFrame,
 }
 
-#[allow(dead_code)] // consumed in T4 (correlator task)
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WsFrame {
@@ -87,7 +77,6 @@ pub(crate) struct WsFrame {
     pub payload_data: String,
 }
 
-#[allow(dead_code)] // consumed in T4 (correlator task)
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct EventSourceMessage {

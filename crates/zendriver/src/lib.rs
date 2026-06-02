@@ -164,7 +164,8 @@ pub use url_matcher::UrlMatcher;
 /// Gated by the `monitor` cargo feature. Drive via [`Tab::monitor`].
 #[cfg(feature = "monitor")]
 pub use monitor::{
-    FrameDirection, MonitoredRequest, MonitoredResponse, NetworkEvent, NetworkExchange,
+    FrameDirection, MonitorBuilder, MonitoredRequest, MonitoredResponse, NetworkEvent,
+    NetworkExchange, NetworkMonitor,
 };
 
 /// `expect_request` API re-exports.
@@ -294,6 +295,18 @@ mod auto_trait_assertions {
         assert_send_sync::<DownloadExpectation>();
         assert_send_sync::<DownloadState>();
         assert_send_sync::<DownloadProgressState>();
+    }
+
+    #[cfg(feature = "monitor")]
+    #[test]
+    fn monitor_surface_is_send_sync() {
+        assert_send_sync::<NetworkEvent>();
+        assert_send_sync::<NetworkExchange>();
+        assert_send_sync::<MonitoredRequest>();
+        assert_send_sync::<MonitoredResponse>();
+        assert_send_sync::<FrameDirection>();
+        assert_send_sync::<MonitorBuilder>();
+        assert_send_sync::<NetworkMonitor>();
     }
 
     #[cfg(feature = "interception")]
