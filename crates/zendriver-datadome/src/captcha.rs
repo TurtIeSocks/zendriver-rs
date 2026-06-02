@@ -90,6 +90,12 @@ pub(crate) async fn build_challenge(
         .unwrap_or("")
         .to_string();
 
+    if site_url.is_empty() || user_agent.is_empty() {
+        tracing::warn!(
+            "datadome: build_challenge read empty url/ua — solver may receive an incomplete challenge"
+        );
+    }
+
     Ok(DataDomeChallenge {
         captcha_url: snap.captcha_url.clone().unwrap_or_default(),
         site_url,

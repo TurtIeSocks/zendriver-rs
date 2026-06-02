@@ -129,7 +129,15 @@ impl<'tab> DataDomeBypass<'tab> {
     pub async fn wait_for_clearance(self) -> Result<ClearanceOutcome, DataDomeError> {
         let deadline = Instant::now() + self.timeout;
 
-        let snapshot = self.probe(deadline).await?;
+        let snapshot = match tokio::time::timeout_at(
+            deadline,
+            crate::detection::detect_snapshot(self.session),
+        )
+        .await
+        {
+            Ok(res) => res?,
+            Err(_) => return Ok(ClearanceOutcome::TimedOut { last_surface: None }),
+        };
 
         match snapshot.surface {
             DataDomeSurface::None if snapshot.body_clean => {
@@ -156,12 +164,6 @@ impl<'tab> DataDomeBypass<'tab> {
 
         // Interception fast-path is wired in Task 4.1.
         self.poll_loop(deadline, Some(snapshot)).await
-    }
-
-    /// One detect probe. The pre-loop probe is a single fast `detect.js` eval;
-    /// the loop's own deadline check + `sleep_until` arm bound total time.
-    async fn probe(&self, _deadline: Instant) -> Result<DetectionSnapshot, DataDomeError> {
-        crate::detection::detect_snapshot(self.session).await
     }
 
     pub(crate) async fn poll_loop(
@@ -423,6 +425,28 @@ mod tests {
         match fut.await.unwrap().unwrap() {
             ClearanceOutcome::Cleared { datadome } => assert_eq!(datadome, "FROM_SOLVER"),
             other => panic!("expected Cleared, got {other:?}"),
+        }
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn pre_loop_probe_respects_timeout() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move {
+                DataDomeBypass::new(&s)
+                    .timeout(Duration::from_millis(30))
+                    .wait_for_clearance()
+                    .await
+            }
+        });
+        // Receive the probe command but NEVER reply → the timeout must fire.
+        let _id = mock.expect_cmd("Runtime.evaluate").await;
+        match fut.await.unwrap().unwrap() {
+            ClearanceOutcome::TimedOut { last_surface } => assert_eq!(last_surface, None),
+            other => panic!("expected TimedOut, got {other:?}"),
         }
         conn.shutdown();
     }
