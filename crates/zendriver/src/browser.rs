@@ -30,7 +30,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
-use zendriver_stealth::{Persona, StealthObserver, StealthProfile, Strategy, Surface};
+use zendriver_stealth::{Persona, Seed, StealthObserver, StealthProfile, Strategy, Surface};
 use zendriver_transport::{
     Connection, ObserverError, PausedSession, SessionHandle, TargetObserver,
 };
@@ -281,6 +281,28 @@ pub(crate) fn parse_devtools_line(line: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// Load (or first-time generate + persist) the fingerprint [`Seed`] bound to a
+/// `user_data_dir`.
+///
+/// Stored as a single base-10 `u64` in `<dir>/.zd_persona_seed`. On reuse the
+/// file is read and parsed; on first use (or any read/parse failure) a fresh
+/// [`Seed::random`] is generated and written, giving a stable per-profile
+/// fingerprint across runs. All filesystem errors are swallowed (best-effort):
+/// a dir that can't be written simply yields a fresh random seed each launch
+/// rather than failing the build.
+fn persisted_seed(dir: &Path) -> Seed {
+    let path = dir.join(".zd_persona_seed");
+    if let Ok(contents) = std::fs::read_to_string(&path) {
+        if let Ok(value) = contents.trim().parse::<u64>() {
+            return Seed::from_u64(value);
+        }
+    }
+    let seed = Seed::random();
+    let _ = std::fs::create_dir_all(dir);
+    let _ = std::fs::write(&path, seed.value().to_string());
+    seed
 }
 
 /// Fluent builder for a [`Browser`] launch.
@@ -836,6 +858,16 @@ impl BrowserBuilder {
     /// Callable before launch — it does not require a live browser.
     #[must_use]
     pub fn resolved_persona(&self) -> Persona {
+        // Did the caller pin a seed explicitly (via `.persona` or
+        // `.persona_overlay`)? Capture this BEFORE the `system()` fallback,
+        // which injects a fresh random seed of its own — an explicit seed must
+        // win over the `user_data_dir`-persisted one below.
+        let explicit_seed = self
+            .persona
+            .as_ref()
+            .and_then(|p| p.seed)
+            .or_else(|| self.persona_overlay.as_ref().and_then(|p| p.seed));
+
         let mut persona = self.persona.clone().unwrap_or_else(Persona::system);
         if let Some(overlay) = &self.persona_overlay {
             persona = persona.overlay(overlay.clone());
@@ -843,6 +875,19 @@ impl BrowserBuilder {
         for (surface, strategy) in &self.surface_overrides {
             persona.apply_surface_override(*surface, *strategy);
         }
+
+        // Seed persistence: when the caller did not pin a seed but a
+        // `user_data_dir` is set, the seed is read from (or written to) a file
+        // inside that dir so the same profile yields a stable fingerprint
+        // across runs. This overrides the ephemeral random seed that
+        // `Persona::system()` injects. Without a `user_data_dir`, the random
+        // seed stands (fresh identity per launch).
+        if explicit_seed.is_none() {
+            if let Some(dir) = &self.user_data_dir {
+                persona.seed = Some(persisted_seed(dir));
+            }
+        }
+
         persona
     }
 
@@ -2895,6 +2940,40 @@ mod tests {
             Some(Strategy::Native),
             "surface override must set the WebRTC strategy"
         );
+    }
+
+    #[test]
+    fn seed_persists_in_user_data_dir() {
+        // Two builders pointed at the same profile dir (no explicit seed) must
+        // resolve to the SAME seed: the first writes `.zd_persona_seed`, the
+        // second reads it back.
+        let dir = tempfile::tempdir().unwrap();
+        let s1 = Browser::builder()
+            .user_data_dir(dir.path())
+            .resolved_persona()
+            .seed
+            .unwrap();
+        let s2 = Browser::builder()
+            .user_data_dir(dir.path())
+            .resolved_persona()
+            .seed
+            .unwrap();
+        assert_eq!(s1, s2, "same profile dir → same seed across builders");
+    }
+
+    #[test]
+    fn explicit_seed_overrides_user_data_dir_persistence() {
+        // An explicitly-pinned seed must win over the persisted one.
+        let dir = tempfile::tempdir().unwrap();
+        let pinned = Browser::builder()
+            .persona(Persona::builder().seed(Seed::from_u64(777)).build())
+            .user_data_dir(dir.path())
+            .resolved_persona()
+            .seed
+            .unwrap();
+        assert_eq!(pinned, Seed::from_u64(777));
+        // And the persistence file is NOT consulted/created for the pinned seed.
+        assert!(!dir.path().join(".zd_persona_seed").exists());
     }
 
     #[test]
