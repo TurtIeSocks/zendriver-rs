@@ -26,4 +26,8 @@
 //!
 //! [`BrowserBuilder::stealth`]: https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.stealth
 
-// Modules land in later tasks.
+pub mod error;
+
+pub use error::DataDomeError;
+
+// Additional modules land in later tasks.
