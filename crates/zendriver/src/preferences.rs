@@ -3,11 +3,13 @@
 //! suppression is written only for a port-owned (temp) profile; a
 //! user-supplied profile is left untouched unless explicit prefs are given.
 
+use std::path::Path;
+
 use serde_json::{Value, json};
 
 /// The default popup-suppression preference set (password manager + autofill).
 /// Written for port-owned profiles. Dotted keys expand to nested objects.
-pub(crate) fn default_suppression() -> Vec<(String, Value)> {
+fn default_suppression() -> Vec<(String, Value)> {
     vec![
         ("credentials_enable_service".into(), json!(false)),
         ("profile.password_manager_enabled".into(), json!(false)),
@@ -23,7 +25,7 @@ pub(crate) fn default_suppression() -> Vec<(String, Value)> {
 /// Merge `prefs` (dotted keys, last-wins) into `base` (a JSON object, or `{}`
 /// if not an object). Returns the merged object. Existing unrelated keys are
 /// preserved.
-pub(crate) fn merge_preferences(mut base: Value, prefs: &[(String, Value)]) -> Value {
+fn merge_preferences(mut base: Value, prefs: &[(String, Value)]) -> Value {
     if !base.is_object() {
         base = json!({});
     }
@@ -33,6 +35,11 @@ pub(crate) fn merge_preferences(mut base: Value, prefs: &[(String, Value)]) -> V
     base
 }
 
+/// Insert `val` at the dotted path `dotted` within `root`, creating
+/// intermediate objects as needed. A `.`-separated key like `a.b.c` nests as
+/// `{"a":{"b":{"c": val}}}`. Any intermediate node that is not a JSON object
+/// (e.g. a pre-existing scalar) is overwritten with `{}` so the descent can
+/// continue — last write wins. A non-dotted key sets a top-level entry.
 fn set_dotted(root: &mut Value, dotted: &str, val: Value) {
     let parts: Vec<&str> = dotted.split('.').collect();
     let mut cur = root;
@@ -52,8 +59,6 @@ fn set_dotted(root: &mut Value, dotted: &str, val: Value) {
         obj.insert((*last).to_string(), val);
     }
 }
-
-use std::path::Path;
 
 /// Write the resolved prefs into `<user_data_dir>/Default/Preferences`,
 /// merging with any existing file. `owned` = the port created this profile
@@ -134,6 +139,20 @@ mod tests {
         let base = json!({ "profile": 5 }); // "profile" is not an object
         let out = merge_preferences(base, &[("profile.x".into(), json!(true))]);
         assert_eq!(out["profile"]["x"], json!(true));
+    }
+
+    #[test]
+    fn deeply_nested_key_expands() {
+        // 3+ segments must build the full chain of intermediate objects.
+        let out = merge_preferences(json!({}), &[("a.b.c".into(), json!("deep"))]);
+        assert_eq!(out["a"]["b"]["c"], json!("deep"));
+    }
+
+    #[test]
+    fn empty_prefs_is_identity() {
+        // No prefs → the (object-coerced) base is returned untouched.
+        let out = merge_preferences(json!({ "keep": 1 }), &[]);
+        assert_eq!(out, json!({ "keep": 1 }));
     }
 }
 
