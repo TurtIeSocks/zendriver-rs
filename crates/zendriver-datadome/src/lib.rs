@@ -26,8 +26,8 @@
 //!
 //! [`BrowserBuilder::stealth`]: https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.stealth
 
+pub mod detection;
 pub mod error;
 
+pub use detection::{DataDomeSurface, DdConfig, DetectionSnapshot, detect_surface};
 pub use error::DataDomeError;
-
-// Additional modules land in later tasks.

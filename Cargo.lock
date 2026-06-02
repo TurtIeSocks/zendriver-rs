@@ -3347,6 +3347,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "zendriver-datadome"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tokio-util",
+ "tracing",
+ "zendriver-interception",
+ "zendriver-transport",
+]
+
+[[package]]
 name = "zendriver-fetcher"
 version = "0.1.2"
 dependencies = [
