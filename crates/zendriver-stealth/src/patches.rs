@@ -42,6 +42,7 @@ const CLIENT_RECTS: &str = include_str!("patches/client_rects.js");
 const FONTS: &str = include_str!("patches/fonts.js");
 const WEBRTC: &str = include_str!("patches/webrtc.js");
 const HARDWARE: &str = include_str!("patches/hardware.js");
+const WEBGPU: &str = include_str!("patches/webgpu.js");
 
 /// Build the bootstrap script for the spoofed profile.
 ///
@@ -88,6 +89,7 @@ pub fn bootstrap_script(persona: &Persona, identity: &Fingerprint) -> String {
     );
 
     push_webgl(&mut out, persona.webgl.as_ref());
+    push_webgpu(&mut out, persona.webgpu.as_ref(), persona.webgl.as_ref());
     push_fonts(&mut out, persona.fonts.as_ref(), seed);
     push_hardware(&mut out, persona.hardware.as_ref());
     push_webrtc(&mut out, persona.webrtc.as_ref());
@@ -186,6 +188,47 @@ fn push_webgl(out: &mut String, spec: Option<&WebglSpec>) {
         &WEBGL
             .replace("WEBGL_VENDOR", &vendor)
             .replace("WEBGL_RENDERER", &renderer),
+    );
+}
+
+/// Append the WebGPU coherence patch. The adapter info is derived from the
+/// persona's WebGL renderer (or the hardcoded Intel default the webgl block
+/// falls back to), so navigator.gpu agrees with WebGL. Omitted under `Native`.
+fn push_webgpu(out: &mut String, cfg: Option<&SurfaceCfg>, webgl: Option<&WebglSpec>) {
+    use crate::persona::webgpu_adapter::adapter_for_renderer;
+    let strat = Surface::Webgpu.resolve_strategy(cfg.and_then(|c| c.strategy));
+    if strat == Strategy::Native {
+        return; // leave the real navigator.gpu untouched
+    }
+    // Default coherent renderer must match webgl.js's hardcoded fallback.
+    const DEFAULT_RENDERER: &str =
+        "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)";
+    let renderer = webgl
+        .and_then(|w| w.unmasked_renderer.as_deref())
+        .unwrap_or(DEFAULT_RENDERER);
+    let adapter = adapter_for_renderer(renderer);
+    let (vendor, arch, desc, mode) = if strat == Strategy::Block {
+        (
+            "null".to_string(),
+            "null".to_string(),
+            "null".to_string(),
+            "\"block\"".to_string(),
+        )
+    } else {
+        (
+            serde_json::to_string(&adapter.vendor).unwrap_or_else(|_| "null".into()),
+            serde_json::to_string(&adapter.architecture).unwrap_or_else(|_| "null".into()),
+            serde_json::to_string(&adapter.description).unwrap_or_else(|_| "null".into()),
+            "\"value\"".to_string(),
+        )
+    };
+    out.push('\n');
+    out.push_str(
+        &WEBGPU
+            .replace("WEBGPU_VENDOR", &vendor)
+            .replace("WEBGPU_ARCHITECTURE", &arch)
+            .replace("WEBGPU_DESCRIPTION", &desc)
+            .replace("WEBGPU_MODE", &mode),
     );
 }
 
@@ -588,6 +631,63 @@ mod tests {
     }
 
     #[test]
+    fn webgpu_value_substitutes_coherent_adapter_from_renderer() {
+        let p = Persona {
+            webgl: Some(WebglSpec {
+                strategy: Some(Strategy::Value),
+                unmasked_vendor: Some("Google Inc. (NVIDIA)".into()),
+                unmasked_renderer: Some(
+                    "ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 Direct3D11 vs_5_0 ps_5_0, D3D11)"
+                        .into(),
+                ),
+            }),
+            ..Persona::default()
+        };
+        let s = bootstrap_script(&p, &mock_identity());
+        assert!(
+            s.contains("requestAdapter"),
+            "webgpu patch emitted by default (Value)"
+        );
+        assert!(
+            s.contains("\"nvidia\""),
+            "coherent vendor derived from renderer"
+        );
+        assert!(
+            s.contains("ada-lovelace"),
+            "coherent architecture derived from renderer"
+        );
+    }
+
+    #[test]
+    fn webgpu_block_deletes_navigator_gpu() {
+        let p = Persona {
+            webgpu: Some(SurfaceCfg {
+                strategy: Some(Strategy::Block),
+            }),
+            ..Persona::default()
+        };
+        let s = bootstrap_script(&p, &mock_identity());
+        assert!(s.contains("\"block\""), "block mode token substituted");
+    }
+
+    #[test]
+    fn webgpu_native_passes_null_vendor() {
+        let p = Persona {
+            webgpu: Some(SurfaceCfg {
+                strategy: Some(Strategy::Native),
+            }),
+            ..Persona::default()
+        };
+        let s = bootstrap_script(&p, &mock_identity());
+        // Native → no webgpu patch emitted at all.
+        assert!(!s.contains("WEBGPU_VENDOR"), "no unsubstituted token");
+        assert!(
+            !s.contains("requestAdapter"),
+            "Native webgpu omits the patch"
+        );
+    }
+
+    #[test]
     fn no_unsubstituted_tokens_remain() {
         // Exercise every surface so all token-bearing patches are emitted.
         let p = Persona {
@@ -619,6 +719,9 @@ mod tests {
                 media_devices: Some(2),
                 speech_voices: Some(vec!["A".into()]),
             }),
+            webgpu: Some(SurfaceCfg {
+                strategy: Some(Strategy::Value),
+            }),
             seed: Some(Seed::from_u64(9)),
             ..Persona::default()
         };
@@ -633,6 +736,10 @@ mod tests {
             "HW_BATTERY",
             "HW_MEDIA_DEVICES",
             "HW_VOICES",
+            "WEBGPU_VENDOR",
+            "WEBGPU_ARCHITECTURE",
+            "WEBGPU_DESCRIPTION",
+            "WEBGPU_MODE",
         ] {
             assert!(
                 !script.contains(tok),
