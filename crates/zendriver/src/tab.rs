@@ -1859,6 +1859,87 @@ pointer-events:none;opacity:0.85;'; \
         Ok(())
     }
 
+    /// Drag the mouse from `from` to `to` with the left button held, moving in
+    /// `steps` interpolated hops.
+    ///
+    /// Ports nodriver's `Tab.mouse_drag`: emits a `mousePressed` (left button)
+    /// at `from`, then a sequence of `mouseMoved` events linearly interpolated
+    /// toward `to`, then a `mouseReleased` (left) at `to`. A larger `steps`
+    /// makes the drag look smoother / more human (nodriver suggests 50–100 for
+    /// "very smooth"); `steps` of 0 or 1 collapses to a single move straight to
+    /// `to`.
+    ///
+    /// This is the raw-coordinate, linearly-interpolated drag (faithful to
+    /// nodriver) — it does **not** use the realistic Bezier path that
+    /// [`Tab::mouse_move`] / [`crate::Element::click`] do, and it dispatches
+    /// directly rather than advancing the per-Tab cursor state.
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`ZendriverError::Transport`] / `Cdp` from the underlying
+    /// `Input.dispatchMouseEvent` calls.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// // Drag a slider handle 200px to the right over 40 smooth steps.
+    /// tab.mouse_drag((120.0, 300.0), (320.0, 300.0), 40).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn mouse_drag(&self, from: (f64, f64), to: (f64, f64), steps: usize) -> Result<()> {
+        // Press the left button at the source point.
+        self.call(
+            "Input.dispatchMouseEvent",
+            json!({
+                "type": "mousePressed",
+                "x": from.0, "y": from.1,
+                "button": "left",
+                "clickCount": 1,
+            }),
+        )
+        .await?;
+
+        // Interpolate the move. nodriver walks i in 0..=steps (steps+1 points,
+        // the first coinciding with `from`); steps <= 1 collapses to a single
+        // hop straight to `to`.
+        let steps = steps.max(1);
+        if steps == 1 {
+            self.call(
+                "Input.dispatchMouseEvent",
+                json!({ "type": "mouseMoved", "x": to.0, "y": to.1 }),
+            )
+            .await?;
+        } else {
+            let step_x = (to.0 - from.0) / steps as f64;
+            let step_y = (to.1 - from.1) / steps as f64;
+            for i in 0..=steps {
+                let x = from.0 + step_x * i as f64;
+                let y = from.1 + step_y * i as f64;
+                self.call(
+                    "Input.dispatchMouseEvent",
+                    json!({ "type": "mouseMoved", "x": x, "y": y }),
+                )
+                .await?;
+            }
+        }
+
+        // Release at the destination.
+        self.call(
+            "Input.dispatchMouseEvent",
+            json!({
+                "type": "mouseReleased",
+                "x": to.0, "y": to.1,
+                "button": "left",
+                "clickCount": 1,
+            }),
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Bring this tab's page to the front of its browser window.
     ///
     /// Dispatches `Page.bringToFront` on this tab's session. Distinct from
@@ -4351,6 +4432,65 @@ mod tests {
             .await;
 
         fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    // --- E5: mouse_drag ------------------------------------------------
+
+    #[tokio::test]
+    async fn mouse_drag_emits_pressed_moves_released_in_order() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.mouse_drag((10.0, 20.0), (110.0, 20.0), 4).await }
+        });
+
+        // Drain every dispatch: expect mousePressed(left) first, then ≥1
+        // mouseMoved, then mouseReleased(left) last.
+        let mut kinds: Vec<String> = Vec::new();
+        let mut first_button = String::new();
+        let mut last_button = String::new();
+        loop {
+            let next = tokio::time::timeout(
+                Duration::from_millis(500),
+                mock.expect_cmd("Input.dispatchMouseEvent"),
+            )
+            .await;
+            match next {
+                Ok(id) => {
+                    let sent = mock.last_sent();
+                    let kind = sent["params"]["type"].as_str().unwrap_or("").to_string();
+                    if kind == "mousePressed" {
+                        first_button = sent["params"]["button"].as_str().unwrap_or("").to_string();
+                        // Press at the source point.
+                        assert_eq!(sent["params"]["x"], 10.0);
+                        assert_eq!(sent["params"]["y"], 20.0);
+                    }
+                    if kind == "mouseReleased" {
+                        last_button = sent["params"]["button"].as_str().unwrap_or("").to_string();
+                        // Release at the destination point.
+                        assert_eq!(sent["params"]["x"], 110.0);
+                        assert_eq!(sent["params"]["y"], 20.0);
+                    }
+                    kinds.push(kind);
+                    mock.reply(id, json!({})).await;
+                }
+                Err(_) => break,
+            }
+        }
+
+        fut.await.unwrap().unwrap();
+        assert_eq!(kinds.first().map(String::as_str), Some("mousePressed"));
+        assert_eq!(kinds.last().map(String::as_str), Some("mouseReleased"));
+        assert!(
+            kinds.iter().any(|k| k == "mouseMoved"),
+            "expected at least one mouseMoved between press and release"
+        );
+        assert_eq!(first_button, "left", "drag presses the left button");
+        assert_eq!(last_button, "left", "drag releases the left button");
         conn.shutdown();
     }
 }
