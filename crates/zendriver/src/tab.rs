@@ -523,6 +523,81 @@ impl Tab {
         &self.inner.session
     }
 
+    /// Start a persistent network monitor over this tab's session.
+    ///
+    /// Returns a [`crate::monitor::MonitorBuilder`]; configure an optional URL
+    /// filter via [`MonitorBuilder::url_pattern`](crate::monitor::MonitorBuilder::url_pattern)
+    /// then call
+    /// [`start()`](crate::monitor::MonitorBuilder::start) to obtain a
+    /// [`crate::monitor::NetworkMonitor`] — a
+    /// [`Stream`](futures::Stream)`<Item = `[`NetworkEvent`](crate::monitor::NetworkEvent)`>`
+    /// over HTTP exchanges, WebSocket frames, and EventSource messages. The
+    /// monitor is passive (CDP `Network` domain) — read-only; use the
+    /// `interception` feature to modify requests.
+    ///
+    /// Dropping the returned monitor (or calling
+    /// [`stop()`](crate::monitor::NetworkMonitor::stop)) cancels its background
+    /// task.
+    ///
+    /// Gated by the `monitor` cargo feature.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use futures::StreamExt;
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let mut monitor = tab.monitor().url_pattern("/api/").start().await?;
+    /// tab.goto("https://example.com").await?;
+    /// while let Some(event) = monitor.next().await {
+    ///     if let zendriver::NetworkEvent::Http(exchange) = event {
+    ///         println!("{} -> {:?}", exchange.request.url, exchange.status());
+    ///     }
+    /// }
+    /// # Ok(()) }
+    /// ```
+    #[cfg(feature = "monitor")]
+    pub fn monitor(&self) -> crate::monitor::MonitorBuilder {
+        crate::monitor::MonitorBuilder::new(self.session().clone())
+    }
+
+    /// Make an HTTP request from the browser context (inherits cookies/CORS).
+    ///
+    /// Returns a [`RequestBuilder`][crate::request::RequestBuilder] that lets
+    /// you set the method, URL, headers, and body. Call
+    /// [`send()`][crate::request::RequestBuilder::send] to execute via
+    /// in-page `fetch`, or chain
+    /// [`bypass_cors()`][crate::request::RequestBuilder::bypass_cors] first to
+    /// use the privileged `Network.loadNetworkResource` path (GET only).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use serde_json::json;
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    ///
+    /// // Simple GET
+    /// let resp = tab.request().get("https://example.com/api/data").send().await?;
+    /// println!("status={} body={}", resp.status(), resp.text()?);
+    ///
+    /// // POST with a JSON body
+    /// let resp = tab
+    ///     .request()
+    ///     .post("https://example.com/api/echo")
+    ///     .json(&json!({"key": "value"}))?
+    ///     .send()
+    ///     .await?;
+    /// println!("status={} body={}", resp.status(), resp.text()?);
+    /// # Ok(()) }
+    /// ```
+    pub fn request(&self) -> crate::request::RequestBuilder<'_> {
+        crate::request::RequestBuilder::new(self)
+    }
+
     /// The top-level [`Frame`] for this tab.
     ///
     /// First call dispatches `Page.getFrameTree` on the tab's session,

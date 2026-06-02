@@ -157,6 +157,14 @@ pub enum ZendriverError {
     #[cfg(feature = "fetcher")]
     #[error("fetcher: {0}")]
     Fetcher(Box<zendriver_fetcher::FetcherError>),
+
+    /// Network monitor error (setup, task failure, CDP subscription problem).
+    #[error("network monitor: {0}")]
+    NetworkMonitor(String),
+
+    /// Browser-context HTTP request error.
+    #[error("browser request: {0}")]
+    Request(String),
 }
 
 impl From<zendriver_transport::TransportError> for ZendriverError {
@@ -389,6 +397,20 @@ mod tests {
         assert_eq!(
             ZendriverError::Disconnected.to_string(),
             "connection to chrome lost unexpectedly"
+        );
+    }
+
+    #[test]
+    fn network_monitor_and_request_errors_render() {
+        assert!(
+            ZendriverError::NetworkMonitor("x".into())
+                .to_string()
+                .contains("monitor")
+        );
+        assert!(
+            ZendriverError::Request("y".into())
+                .to_string()
+                .contains("request")
         );
     }
 

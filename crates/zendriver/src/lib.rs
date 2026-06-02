@@ -58,6 +58,7 @@
 //! | Flag | Crate | Purpose |
 //! |------|-------|---------|
 //! | `expect` | in-tree | `expect_request` / `expect_response` / `expect_dialog` / `expect_download` |
+//! | `monitor` | in-tree | `tab.monitor()` persistent `Stream<NetworkEvent>` (HTTP / WebSocket / EventSource) |
 //! | `interception` | `zendriver-interception` | `Fetch.*`-backed request rewriting / abort |
 //! | `cloudflare` | `zendriver-cloudflare` | Cloudflare Turnstile bypass |
 //! | `imperva` | `zendriver-imperva` | Imperva WAF / Incapsula bypass |
@@ -80,13 +81,17 @@ pub(crate) mod expert;
 pub mod frame;
 pub mod input;
 pub(crate) mod isolated_world;
+#[cfg(feature = "monitor")]
+pub mod monitor;
 pub mod network_idle;
 pub mod pdf;
 pub mod query;
+pub mod request;
 pub mod screenshot;
 pub mod storage;
 pub mod tab;
 pub mod traits;
+pub(crate) mod url_matcher;
 pub mod window;
 
 pub use browser::{Browser, BrowserBuilder, Channel, PermissionType};
@@ -99,6 +104,7 @@ pub use frame::Frame;
 pub use input::{Key, KeyModifiers, KeySequence, MouseButton, SpecialKey};
 pub use pdf::PdfBuilder;
 pub use query::{AriaRole, BoundingBox, FindBuilder, PageBox};
+pub use request::{RequestBuilder, Response};
 pub use screenshot::{Format, ScreenshotBuilder};
 pub use storage::Storage;
 pub use tab::{
@@ -153,9 +159,17 @@ pub use zendriver_imperva::{
 #[cfg(feature = "imperva")]
 pub use zendriver_imperva::ClearanceOutcome as ImpervaClearanceOutcome;
 
-/// Re-export the shared `UrlMatcher` used by the `expect_*` helpers.
-#[cfg(feature = "expect")]
-pub use expect::UrlMatcher;
+/// Re-export the shared `UrlMatcher` used by `expect_*` and `monitor`.
+pub use url_matcher::UrlMatcher;
+
+/// Network monitor public types re-exports.
+///
+/// Gated by the `monitor` cargo feature. Drive via [`Tab::monitor`].
+#[cfg(feature = "monitor")]
+pub use monitor::{
+    FrameDirection, MonitorBuilder, MonitoredRequest, MonitoredResponse, NetworkEvent,
+    NetworkExchange, NetworkMonitor,
+};
 
 /// `expect_request` API re-exports.
 #[cfg(feature = "expect")]
@@ -265,10 +279,14 @@ mod auto_trait_assertions {
         assert_send_sync::<BrowserError>();
     }
 
+    #[test]
+    fn url_matcher_is_send_sync() {
+        assert_send_sync::<UrlMatcher>();
+    }
+
     #[cfg(feature = "expect")]
     #[test]
     fn expect_surface_is_send_sync() {
-        assert_send_sync::<UrlMatcher>();
         assert_send_sync::<MatchedRequest>();
         assert_send_sync::<RequestExpectation>();
         assert_send_sync::<MatchedResponse>();
@@ -280,6 +298,18 @@ mod auto_trait_assertions {
         assert_send_sync::<DownloadExpectation>();
         assert_send_sync::<DownloadState>();
         assert_send_sync::<DownloadProgressState>();
+    }
+
+    #[cfg(feature = "monitor")]
+    #[test]
+    fn monitor_surface_is_send_sync() {
+        assert_send_sync::<NetworkEvent>();
+        assert_send_sync::<NetworkExchange>();
+        assert_send_sync::<MonitoredRequest>();
+        assert_send_sync::<MonitoredResponse>();
+        assert_send_sync::<FrameDirection>();
+        assert_send_sync::<MonitorBuilder>();
+        assert_send_sync::<NetworkMonitor>();
     }
 
     #[cfg(feature = "interception")]

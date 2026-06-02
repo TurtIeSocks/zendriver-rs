@@ -23,7 +23,7 @@ workspace = true
 [features]
 default = []
 # Enables real-Chrome integration tests (requires Chrome installed on $PATH).
-integration-tests = ["dep:wiremock", "dep:serial_test", "interception", "expect", "cloudflare", "imperva"]
+integration-tests = ["dep:wiremock", "dep:serial_test", "interception", "expect", "cloudflare", "imperva", "monitor"]
 # Nightly stealth tests against external sites (sannysoft, areyouheadless).
 # Separate from integration-tests because external sites flake.
 stealth-tests = ["integration-tests"]
@@ -46,6 +46,8 @@ imperva-tests = ["imperva", "integration-tests"]
 fetcher = ["dep:zendriver-fetcher"]
 # Network-touching fetcher tests (CfT manifest, real downloads).
 fetcher-network-tests = ["fetcher"]
+# Persistent network monitor (tab.monitor()).
+monitor = []
 
 [dependencies]
 zendriver-transport.workspace = true
@@ -168,4 +170,12 @@ required-features = ["fetcher"]
 
 [[example]]
 name = "persona_basic"
+required-features = []
+
+[[example]]
+name = "network_monitor"
+required-features = ["monitor"]
+
+[[example]]
+name = "browser_request"
 required-features = []
