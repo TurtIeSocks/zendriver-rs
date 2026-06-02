@@ -100,7 +100,10 @@ async fn random_canvas_differs_across_reads() {
     // With `Random` each call gets a fresh PRNG seed; the overwhelming
     // majority of the time the two data URLs will differ. (Probability of
     // accidental equality is astronomically small for a 50×20 RGBA canvas.)
-    assert_ne!(a, b, "Random canvas strategy must produce different outputs per read");
+    assert_ne!(
+        a, b,
+        "Random canvas strategy must produce different outputs per read"
+    );
 
     browser.close().await.unwrap();
 }
