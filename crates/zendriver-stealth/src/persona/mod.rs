@@ -7,9 +7,13 @@ pub mod surface;
 pub use seed::Seed;
 pub use specs::{FontSpec, HardwareSpec, SurfaceCfg, UaSpec, WebglSpec, WebrtcSpec};
 
+use std::sync::OnceLock;
+
 use serde::{Deserialize, Serialize};
 
 use crate::Platform;
+
+static SYSTEM: OnceLock<Persona> = OnceLock::new();
 
 /// Unified fingerprint configuration. Every field optional → overlay semantics.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -101,6 +105,27 @@ impl Persona {
             seed: over.seed.or(self.seed),
         }
     }
+
+    /// Host-probed persona (sysinfo). Cached: first call probes, rest clone.
+    /// Runtime — NOT a build-script const (build host != run host).
+    pub fn system() -> Persona {
+        SYSTEM.get_or_init(Persona::probe_system).clone()
+    }
+
+    fn probe_system() -> Persona {
+        let platform = crate::fingerprint::detect_platform();
+        let cpu = crate::fingerprint::clamp_cpu_count(num_cpus::get() as u32);
+        let mem = crate::fingerprint::detect_memory_gb().unwrap_or(8);
+        Persona {
+            platform: Some(platform),
+            hardware_concurrency: Some(cpu),
+            device_memory_gb: Some(mem),
+            timezone: None,
+            locale: None,
+            seed: Some(Seed::random()),
+            ..Persona::default()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -122,6 +147,18 @@ mod persona_tests {
         let back: Persona = serde_json::from_str(&s).unwrap();
         assert_eq!(back.seed, Some(Seed::from_u64(5)));
         assert_eq!(back.timezone.as_deref(), Some("America/New_York"));
+    }
+
+    #[test]
+    fn system_persona_is_populated_and_cached() {
+        let a = Persona::system();
+        // Host probe fills platform + cpu + memory.
+        assert!(a.platform.is_some());
+        assert!(a.hardware_concurrency.is_some());
+        assert!(a.device_memory_gb.is_some());
+        let b = Persona::system();
+        // Cached → same values.
+        assert_eq!(a.device_memory_gb, b.device_memory_gb);
     }
 
     #[test]

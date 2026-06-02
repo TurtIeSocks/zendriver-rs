@@ -140,7 +140,7 @@ impl Fingerprint {
     }
 }
 
-fn detect_platform() -> Platform {
+pub(crate) fn detect_platform() -> Platform {
     #[cfg(target_os = "windows")]
     {
         Platform::Win32
@@ -166,7 +166,7 @@ fn detect_platform() -> Platform {
 }
 
 #[allow(clippy::result_large_err)]
-fn probe_chrome_version(exe: &Path) -> Result<(u32, String), StealthError> {
+pub(crate) fn probe_chrome_version(exe: &Path) -> Result<(u32, String), StealthError> {
     let output = Command::new(exe)
         .arg("--version")
         .output()
@@ -192,14 +192,14 @@ fn probe_chrome_version(exe: &Path) -> Result<(u32, String), StealthError> {
     Ok((major, full))
 }
 
-fn clamp_cpu_count(n: u32) -> u32 {
+pub(crate) fn clamp_cpu_count(n: u32) -> u32 {
     n.clamp(2, 32)
 }
 
 /// Detect total RAM in GB, clamped to the spec-compliant values
 /// for `navigator.deviceMemory` (capped at 8 per W3C; floor at 4 for plausibility).
 #[allow(clippy::result_large_err)]
-fn detect_memory_gb() -> Result<u32, StealthError> {
+pub(crate) fn detect_memory_gb() -> Result<u32, StealthError> {
     let mut sys = sysinfo::System::new();
     sys.refresh_memory();
     // sysinfo 0.32: total_memory() returns BYTES, not KiB. Verified against
