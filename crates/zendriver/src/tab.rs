@@ -161,7 +161,6 @@ pub struct UserAgentOverride {
     pub platform: Option<String>,
 }
 
-/// Handle to a single CDP target session — one open page in Chrome.
 ///
 /// `Tab` is `Clone` (cheap — wraps an `Arc`) and `Send + Sync`, so the same
 /// handle can be passed across `tokio::spawn` boundaries freely. Dropping
@@ -3889,6 +3888,93 @@ mod tests {
 
         let val = fut.await.unwrap().unwrap();
         assert_eq!(val, json!({ "a": 1, "b": [2, 3] }));
+        conn.shutdown();
+    }
+
+    // --- E2: get_all_urls + get_all_linked_sources ---------------------
+
+    #[tokio::test]
+    async fn get_all_urls_evaluates_collector_reading_href_and_src() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.get_all_urls(true).await }
+        });
+
+        // Single main-world collector walks [href], [src]; the JS must read
+        // both attribute kinds and (absolute=true) the resolved DOM props.
+        let id = mock.expect_cmd("Runtime.evaluate").await;
+        let expr = mock.last_sent()["params"]["expression"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        assert!(
+            expr.contains("href") && expr.contains("src"),
+            "collector must read both href and src, got: {expr}"
+        );
+        assert!(
+            expr.contains("querySelectorAll"),
+            "collector must query the DOM, got: {expr}"
+        );
+        mock.reply(
+            id,
+            json!({ "result": { "type": "object", "value": ["https://x.test/a", "https://x.test/b.png"] } }),
+        )
+        .await;
+
+        let urls = fut.await.unwrap().unwrap();
+        assert_eq!(urls, vec!["https://x.test/a", "https://x.test/b.png"]);
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn get_all_linked_sources_routes_through_find_all_css() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.get_all_linked_sources().await }
+        });
+
+        // find_all().css("[src], [href]") resolves via a querySelectorAll
+        // Runtime.evaluate carrying that exact selector, then getProperties,
+        // then a describeNode per node. Return one node so `many()` resolves
+        // on the first poll (an empty result would re-poll until the 10s
+        // default timeout — see `many_or_empty_returns_empty_vec_on_timeout`).
+        let id = mock.expect_cmd("Runtime.evaluate").await;
+        let expr = mock.last_sent()["params"]["expression"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        assert!(
+            expr.contains("querySelectorAll") && expr.contains("[src], [href]"),
+            "must route through find_all css with the linked-source selector, got: {expr}"
+        );
+        mock.reply(
+            id,
+            json!({ "result": { "objectId": "RArr", "type": "object", "subtype": "array" } }),
+        )
+        .await;
+        let id_p = mock.expect_cmd("Runtime.getProperties").await;
+        mock.reply(
+            id_p,
+            json!({ "result": [
+                { "name": "0", "value": { "objectId": "R0", "type": "object", "subtype": "node" } },
+                { "name": "length", "value": { "value": 1, "type": "number" } }
+            ] }),
+        )
+        .await;
+        let id_d = mock.expect_cmd("DOM.describeNode").await;
+        mock.reply(id_d, json!({ "node": { "backendNodeId": 20 } }))
+            .await;
+
+        let els = fut.await.unwrap().unwrap();
+        assert_eq!(els.len(), 1, "should return the one linked-source element");
         conn.shutdown();
     }
 }
