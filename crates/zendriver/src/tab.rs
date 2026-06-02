@@ -2838,6 +2838,7 @@ mod tests {
                 secure: false,
                 same_site: None,
                 url: None,
+                ..Default::default()
             })
             .await
         });
