@@ -224,6 +224,34 @@ impl ReadyState {
     }
 }
 
+/// A single resource within a frame whose content matched a
+/// [`Tab::search_frame_resources`] query.
+///
+/// `url` is the resource's request URL (the document, a script, a stylesheet,
+/// …) and `frame_id` is the CDP `frameId` of the frame that owns it. Returned
+/// only for resources whose body produced at least one match for the query.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn ex() -> zendriver::Result<()> {
+/// # let browser = zendriver::Browser::builder().launch().await?;
+/// # let tab = browser.main_tab();
+/// tab.goto("https://example.com").await?;
+/// for m in tab.search_frame_resources("apiKey").await? {
+///     println!("match in {} (frame {})", m.url, m.frame_id);
+/// }
+/// # Ok(()) }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameResourceMatch {
+    /// Request URL of the matched resource.
+    pub url: String,
+    /// CDP `frameId` of the frame that owns the resource.
+    pub frame_id: String,
+}
+
+/// Handle to a single CDP target session — one open page in Chrome.
 ///
 /// `Tab` is `Clone` (cheap — wraps an `Arc`) and `Send + Sync`, so the same
 /// handle can be passed across `tokio::spawn` boundaries freely. Dropping
@@ -1938,6 +1966,87 @@ pointer-events:none;opacity:0.85;'; \
         )
         .await?;
         Ok(())
+    }
+
+    /// Search the text content of every loaded frame resource for `query`,
+    /// returning the resources that contain at least one match.
+    ///
+    /// Ports nodriver's `search_frame_resources`. Fetches the page's resource
+    /// tree (`Page.getResourceTree`), walks every frame and its resources
+    /// (recursing into child frames), and for each resource runs
+    /// `Page.searchInResource { frameId, url, query }`. Resources whose search
+    /// returns a non-empty match list are collected into the result as
+    /// [`FrameResourceMatch`] records (resource URL + owning frame id).
+    ///
+    /// `query` is treated as a plain substring by Chrome (the underlying
+    /// `searchInResource` defaults to non-regex, case-sensitive matching).
+    /// Resources that error on search (e.g. a body Chrome no longer retains)
+    /// are skipped rather than failing the whole call.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Navigation`] if `Page.getResourceTree`'s
+    /// response is missing the frame tree; transport errors from
+    /// `getResourceTree` itself propagate.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// let hits = tab.search_frame_resources("__INITIAL_STATE__").await?;
+    /// println!("{} resources matched", hits.len());
+    /// # Ok(()) }
+    /// ```
+    pub async fn search_frame_resources(&self, query: &str) -> Result<Vec<FrameResourceMatch>> {
+        let tree = self.call("Page.getResourceTree", json!({})).await?;
+        let root = tree.get("frameTree").ok_or_else(|| {
+            ZendriverError::Navigation("Page.getResourceTree missing frameTree".into())
+        })?;
+
+        // Flatten the tree into (frame_id, resource_url) pairs. The frame node
+        // carries its id under `frame.id`; resources live in `resources[]`
+        // (each with a `url`), and nested frames in `childFrames[]` (each a
+        // FrameResourceTree of the same shape).
+        let mut pairs: Vec<(String, String)> = Vec::new();
+        let mut stack = vec![root];
+        while let Some(node) = stack.pop() {
+            let frame_id = node["frame"]["id"].as_str().unwrap_or("").to_string();
+            if let Some(resources) = node.get("resources").and_then(Value::as_array) {
+                for res in resources {
+                    if let Some(url) = res.get("url").and_then(Value::as_str) {
+                        pairs.push((frame_id.clone(), url.to_string()));
+                    }
+                }
+            }
+            if let Some(children) = node.get("childFrames").and_then(Value::as_array) {
+                stack.extend(children.iter());
+            }
+        }
+
+        // Search each resource; collect the ones with a non-empty match list.
+        let mut matches = Vec::new();
+        for (frame_id, url) in pairs {
+            let res = self
+                .call(
+                    "Page.searchInResource",
+                    json!({ "frameId": frame_id, "url": url, "query": query }),
+                )
+                .await;
+            // Skip resources Chrome can't search (stale body, unsupported
+            // type) rather than aborting the whole sweep.
+            let Ok(res) = res else { continue };
+            let has_match = res
+                .get("result")
+                .and_then(Value::as_array)
+                .is_some_and(|m| !m.is_empty());
+            if has_match {
+                matches.push(FrameResourceMatch { url, frame_id });
+            }
+        }
+        Ok(matches)
     }
 
     /// Bring this tab's page to the front of its browser window.
@@ -4491,6 +4600,65 @@ mod tests {
         );
         assert_eq!(first_button, "left", "drag presses the left button");
         assert_eq!(last_button, "left", "drag releases the left button");
+        conn.shutdown();
+    }
+
+    // --- E6: search_frame_resources ------------------------------------
+
+    #[tokio::test]
+    async fn search_frame_resources_walks_tree_then_searches_each_resource() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.search_frame_resources("needle").await }
+        });
+
+        // 1. Page.getResourceTree → one frame with two resources.
+        let id_tree = mock.expect_cmd("Page.getResourceTree").await;
+        mock.reply(
+            id_tree,
+            json!({
+                "frameTree": {
+                    "frame": { "id": "FRAME_A" },
+                    "resources": [
+                        { "url": "https://x.test/app.js", "type": "Script" },
+                        { "url": "https://x.test/style.css", "type": "Stylesheet" },
+                    ],
+                }
+            }),
+        )
+        .await;
+
+        // 2. Page.searchInResource for resource #1 → a match.
+        let id_s1 = mock.expect_cmd("Page.searchInResource").await;
+        let s1 = mock.last_sent();
+        assert_eq!(s1["params"]["frameId"], "FRAME_A");
+        assert_eq!(s1["params"]["query"], "needle");
+        let first_url = s1["params"]["url"].as_str().unwrap_or("").to_string();
+        mock.reply(
+            id_s1,
+            json!({ "result": [ { "lineNumber": 3, "lineContent": "var x = needle" } ] }),
+        )
+        .await;
+
+        // 3. searchInResource for resource #2 → no match (empty result).
+        let id_s2 = mock.expect_cmd("Page.searchInResource").await;
+        let second_url = mock.last_sent()["params"]["url"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        mock.reply(id_s2, json!({ "result": [] })).await;
+
+        let matches = fut.await.unwrap().unwrap();
+        // Only the first resource matched.
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].frame_id, "FRAME_A");
+        assert_eq!(matches[0].url, first_url);
+        // Sanity: both resources were searched (the two URLs differ).
+        assert_ne!(first_url, second_url);
         conn.shutdown();
     }
 }

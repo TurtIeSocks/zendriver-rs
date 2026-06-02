@@ -101,7 +101,7 @@ pub use pdf::PdfBuilder;
 pub use query::{AriaRole, BoundingBox, FindBuilder};
 pub use screenshot::{Format, ScreenshotBuilder};
 pub use storage::Storage;
-pub use tab::{ReadyState, ReloadOptions, ScrollOptions, Tab, UserAgentOverride};
+pub use tab::{FrameResourceMatch, ReadyState, ReloadOptions, ScrollOptions, Tab, UserAgentOverride};
 pub use traits::{Evaluable, Queryable};
 pub use window::{WindowBounds, WindowState};
 
@@ -246,6 +246,7 @@ mod auto_trait_assertions {
         assert_send_sync::<ScrollOptions>();
         assert_send_sync::<UserAgentOverride>();
         assert_send_sync::<ReadyState>();
+        assert_send_sync::<FrameResourceMatch>();
         assert_send_sync::<WindowBounds>();
         assert_send_sync::<WindowState>();
         assert_send_sync::<ZendriverError>();
