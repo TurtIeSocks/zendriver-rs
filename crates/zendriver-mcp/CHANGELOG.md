@@ -3,6 +3,18 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.3.1] - 2026-06-02
+
+### Added
+
+- Browser_solve_datadome tool + ledger + schema snapshot
+
+### Changed
+
+- TimedOut is an Outcome, not an Error (unify result model)
+- TimedOut is an Outcome, not an Error (unify result model)
+
+
 ## [0.3.0] - 2026-06-02
 
 ### Added

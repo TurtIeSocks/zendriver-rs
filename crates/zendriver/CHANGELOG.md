@@ -5,6 +5,18 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-06-02
+
+### Added
+
+- Wire Tab::datadome() + re-exports + error mapping behind the datadome feature
+
+### Changed
+
+- TimedOut is an Outcome, not an Error (unify result model)
+- TimedOut is an Outcome, not an Error (unify result model)
+
+
 ## [0.2.6] - 2026-06-02
 
 
