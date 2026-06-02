@@ -1,6 +1,6 @@
 //! [`Element`] actions: `click` / `hover` / `focus` / `scroll_into_view` /
-//! `set_value` / `set_text` / `clear` / `upload_files` / `flash` /
-//! `highlight_overlay`.
+//! `set_value` / `set_text` / `clear` / `upload_files` / `mouse_drag` /
+//! `flash` / `highlight_overlay`.
 //!
 //! Each action wraps its CDP dispatch sequence in an internal "refresh on
 //! stale" wrapper so a stale handle (post-navigation, post-React-rerender)
@@ -739,6 +739,54 @@ z-index:2147483647;pointer-events:none;opacity:0.85;'; \
         })
         .await
     }
+
+    /// Drag this element's bbox center to the viewport point `to`, holding
+    /// the left button, over `steps` interpolated hops.
+    ///
+    /// Scrolls the element into view, computes its bbox center, then drives
+    /// the drag via [`crate::Tab::mouse_drag`] (press at the center → linearly
+    /// interpolated `mouseMoved` frames → release at `to`). A larger `steps`
+    /// makes the drag look smoother / more human (nodriver suggests 50–100 for
+    /// "very smooth"); `0` or `1` collapses to a single hop straight to `to`.
+    ///
+    /// Ports nodriver's `Element.mouse_drag` (element.py:596): nodriver takes
+    /// the element's center, resolves the destination (another element's
+    /// center or a coordinate, optionally relative), and forwards to
+    /// `Tab.mouse_drag`. This is the coordinate-destination form; the source
+    /// is always this element's center.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Navigation`] when the element has no bounding
+    /// box (nothing to drag from); propagates transport / CDP errors from the
+    /// underlying dispatches.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// // Drag a slider handle to (320, 300) over 40 smooth steps.
+    /// let handle = tab.find().css(".slider-handle").one().await?;
+    /// handle.mouse_drag((320.0, 300.0), 40).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn mouse_drag(&self, to: (f64, f64), steps: usize) -> Result<()> {
+        self.with_refresh(|| async move {
+            self.scroll_into_view().await?;
+            let bbox = self
+                .bounding_box()
+                .await?
+                .ok_or_else(|| ZendriverError::Navigation("element has no bounding box".into()))?;
+            let cx = bbox.x + bbox.width / 2.0;
+            let cy = bbox.y + bbox.height / 2.0;
+            // Reuse the Tab's drag primitive (don't duplicate the
+            // press/move/release dispatch sequence).
+            self.inner.tab.mouse_drag((cx, cy), to, steps).await
+        })
+        .await
+    }
 }
 
 #[cfg(test)]
@@ -1319,6 +1367,88 @@ mod tests {
         mock.reply(id, json!({})).await;
 
         fut.await.unwrap().unwrap();
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn mouse_drag_resolves_bbox_then_drives_drag_from_center() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+        let el = Element::from_jsret(tab, 42, "R1".to_string());
+
+        let fut = tokio::spawn({
+            let e = el.clone();
+            async move { e.mouse_drag((300.0, 200.0), 4).await }
+        });
+
+        // Step 1: scroll_into_view → Runtime.callFunctionOn.
+        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        assert!(
+            mock.last_sent()["params"]["functionDeclaration"]
+                .as_str()
+                .unwrap()
+                .contains("scrollIntoView")
+        );
+        mock.reply(id, json!({ "result": { "type": "undefined" } }))
+            .await;
+
+        // Step 2: bounding_box → DOM.getBoxModel. Box top-left (10,20), 100x50
+        // ⇒ center (60, 45) = the drag source.
+        let id = mock.expect_cmd("DOM.getBoxModel").await;
+        mock.reply(
+            id,
+            json!({
+                "model": {
+                    "content": [10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0],
+                    "padding": [10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0],
+                    "border":  [10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0],
+                    "margin":  [10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0],
+                    "width":  100,
+                    "height": 50
+                }
+            }),
+        )
+        .await;
+
+        // Step 3: Tab::mouse_drag dispatch sequence — mousePressed(left) at the
+        // center (60,45), ≥1 mouseMoved, then mouseReleased(left) at the
+        // destination (300,200). Drain all and assert ordering + endpoints.
+        let mut kinds: Vec<String> = Vec::new();
+        loop {
+            let next = tokio::time::timeout(
+                Duration::from_millis(500),
+                mock.expect_cmd("Input.dispatchMouseEvent"),
+            )
+            .await;
+            match next {
+                Ok(id) => {
+                    let sent = mock.last_sent();
+                    let kind = sent["params"]["type"].as_str().unwrap_or("").to_string();
+                    if kind == "mousePressed" {
+                        assert_eq!(sent["params"]["button"], "left");
+                        assert_eq!(sent["params"]["x"], 60.0, "press at bbox center x");
+                        assert_eq!(sent["params"]["y"], 45.0, "press at bbox center y");
+                    }
+                    if kind == "mouseReleased" {
+                        assert_eq!(sent["params"]["button"], "left");
+                        assert_eq!(sent["params"]["x"], 300.0, "release at destination x");
+                        assert_eq!(sent["params"]["y"], 200.0, "release at destination y");
+                    }
+                    kinds.push(kind);
+                    mock.reply(id, json!({})).await;
+                }
+                Err(_) => break,
+            }
+        }
+
+        fut.await.unwrap().unwrap();
+        assert_eq!(kinds.first().map(String::as_str), Some("mousePressed"));
+        assert_eq!(kinds.last().map(String::as_str), Some("mouseReleased"));
+        assert!(
+            kinds.iter().any(|k| k == "mouseMoved"),
+            "expected at least one mouseMoved between press and release"
+        );
         conn.shutdown();
     }
 }
