@@ -267,6 +267,7 @@ pub fn zendriver::browser::BrowserBuilder::executable(self, impl core::convert::
 pub fn zendriver::browser::BrowserBuilder::expert(self, bool) -> Self
 pub fn zendriver::browser::BrowserBuilder::extensions(self, impl core::iter::traits::collect::IntoIterator<Item = std::path::PathBuf>) -> Self
 pub fn zendriver::browser::BrowserBuilder::force_open_shadow_roots(self, bool) -> Self
+pub fn zendriver::browser::BrowserBuilder::geo_locale(self, impl core::convert::TryInto<zendriver_stealth::geo::Country>) -> Self
 pub fn zendriver::browser::BrowserBuilder::headless(self, bool) -> Self
 pub fn zendriver::browser::BrowserBuilder::lang(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::browser::BrowserBuilder::new() -> Self
@@ -5521,6 +5522,7 @@ pub fn zendriver::browser::BrowserBuilder::executable(self, impl core::convert::
 pub fn zendriver::browser::BrowserBuilder::expert(self, bool) -> Self
 pub fn zendriver::browser::BrowserBuilder::extensions(self, impl core::iter::traits::collect::IntoIterator<Item = std::path::PathBuf>) -> Self
 pub fn zendriver::browser::BrowserBuilder::force_open_shadow_roots(self, bool) -> Self
+pub fn zendriver::browser::BrowserBuilder::geo_locale(self, impl core::convert::TryInto<zendriver_stealth::geo::Country>) -> Self
 pub fn zendriver::browser::BrowserBuilder::headless(self, bool) -> Self
 pub fn zendriver::browser::BrowserBuilder::lang(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::browser::BrowserBuilder::new() -> Self

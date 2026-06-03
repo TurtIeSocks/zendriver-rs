@@ -83,15 +83,16 @@ impl TargetObserver for StealthObserver {
         // UA override — Emulation.setUserAgentOverride carries the Client-Hints
         // metadata too, so we don't have to send Network.setUserAgentOverride
         // separately.
+        let accept_language = {
+            let langs = crate::lang::resolve_languages(&Persona::default(), &self.fingerprint);
+            crate::lang::accept_language(&langs)
+        };
         session
             .call(
                 "Emulation.setUserAgentOverride",
                 json!({
                     "userAgent": &self.fingerprint.ua_string,
-                    "acceptLanguage": self.fingerprint
-                        .locale
-                        .as_deref()
-                        .unwrap_or("en-US,en;q=0.9"),
+                    "acceptLanguage": accept_language,
                     "platform": self.fingerprint.platform.ch_platform(),
                     "userAgentMetadata": &self.fingerprint.ua_metadata,
                 }),
@@ -188,6 +189,7 @@ mod tests {
             ),
             timezone: None,
             locale: None,
+            languages: None,
         };
         let profile = StealthProfile::spoofed();
         let observer = std::sync::Arc::new(StealthObserver::new(profile, fp));
@@ -248,6 +250,7 @@ mod tests {
             ),
             timezone: None,
             locale: None,
+            languages: None,
         };
         let observer = std::sync::Arc::new(StealthObserver::new(StealthProfile::off(), fp));
         let (mut mock, conn) = MockConnection::pair_with_observers(vec![observer]);

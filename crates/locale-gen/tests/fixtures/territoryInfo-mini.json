@@ -1,0 +1,17 @@
+{
+  "supplemental": {
+    "territoryInfo": {
+      "US": { "languagePopulation": {
+        "en": { "_populationPercent": "96", "_officialStatus": "official" },
+        "es": { "_populationPercent": "9.6" }
+      }},
+      "CH": { "languagePopulation": {
+        "de": { "_populationPercent": "63", "_officialStatus": "official" },
+        "fr": { "_populationPercent": "23", "_officialStatus": "official" },
+        "it": { "_populationPercent": "8", "_officialStatus": "official_regional" },
+        "en": { "_populationPercent": "45" }
+      }},
+      "001": { "languagePopulation": { "en": { "_populationPercent": "100" } } }
+    }
+  }
+}

@@ -9,6 +9,7 @@ expression: p
   "device_memory_gb": 8,
   "timezone": "UTC",
   "locale": null,
+  "languages": null,
   "webgl": null,
   "webgpu": null,
   "canvas": null,

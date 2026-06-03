@@ -11,6 +11,7 @@ members = [
     "crates/zendriver-imperva",
     "crates/zendriver-datadome",
     "crates/zendriver-fingerprints",
+    "crates/locale-gen",
 ]
 
 [workspace.package]

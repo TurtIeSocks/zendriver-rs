@@ -122,6 +122,14 @@ impl Generator {
         mapping::persona_from_assignment(&assigned)
     }
 
+    /// Generate a persona, then overlay a coherent locale/languages for
+    /// `country`. The geo overlay wins over the (locale-free) generated base.
+    #[cfg(feature = "geo")]
+    pub fn generate_geo(&self, seed: Seed, country: zendriver_stealth::geo::Country) -> Persona {
+        self.generate(seed)
+            .overlay(zendriver_stealth::geo::persona(country))
+    }
+
     /// Nodes in parents-before-children order (stable sort by parent count;
     /// ties keep JSON array order — keeps [`generate`](Self::generate)
     /// deterministic).
@@ -302,6 +310,17 @@ mod tests {
     fn from_zip_bytes_loads_fixture() {
         let g = Generator::from_zip_bytes(TEST_NETWORK_ZIP).expect("zip loads");
         assert!(g.generate(Seed::from_u64(3)).platform.is_some());
+    }
+
+    #[cfg(feature = "geo")]
+    #[test]
+    fn generate_geo_overlays_locale() {
+        let generator = Generator::from_network_json(include_str!("fixtures/mini-network.json"))
+            .expect("load mini network");
+        let country = zendriver_stealth::geo::Country::try_from("DE").unwrap();
+        let p = generator.generate_geo(Seed::from_u64(1), country);
+        assert_eq!(p.locale.as_deref(), Some("de-DE"));
+        assert_eq!(p.languages.unwrap(), vec!["de-DE", "de"]);
     }
 
     #[tokio::test]

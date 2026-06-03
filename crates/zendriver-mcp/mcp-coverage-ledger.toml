@@ -379,3 +379,8 @@ covered = "browser_solve_datadome"
 [[entry]]
 api = "zendriver::error::ZendriverError::from"
 excluded = "blanket From<DataDomeError> conversion into the unified error enum; the resulting variant is covered above and surfaced via browser_solve_datadome errors"
+
+# ── #39 geo-IP-derived locale ────────────────────────────────────────────────
+[[entry]]
+api = "zendriver::browser::BrowserBuilder::geo_locale"
+covered = "browser_set_stealth_profile.geo_country"
