@@ -1,2 +1,2 @@
-window.ALL_CRATES = ["zendriver","zendriver_cloudflare","zendriver_datadome","zendriver_fetcher","zendriver_fingerprints","zendriver_imperva","zendriver_interception","zendriver_mcp","zendriver_stealth","zendriver_transport"];
-//{"start":21,"fragment_lengths":[11,23,21,20,25,20,25,16,20,22]}
+window.ALL_CRATES = ["locale_gen","zendriver","zendriver_cloudflare","zendriver_datadome","zendriver_fetcher","zendriver_fingerprints","zendriver_imperva","zendriver_interception","zendriver_mcp","zendriver_stealth","zendriver_transport"];
+//{"start":21,"fragment_lengths":[12,12,23,21,20,25,20,25,16,20,22]}
