@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-02
+
+### Changed
+
+- TimedOut is an Outcome, not an Error (unify result model)
+
+
 ## [0.1.4] - 2026-06-02
 
 

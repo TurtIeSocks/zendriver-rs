@@ -3,6 +3,21 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.3.0] - 2026-06-02
+
+### Added
+
+- Add Surface::Webgpu (Value kind) + Persona.webgpu plumbing
+- Renderer->GPUAdapter coherence map for WebGPU
+- WebGPU coherence patch (navigator.gpu adapter from WebGL renderer)
+- Validated WebGPU arch tokens from Dawn gpu_info.json (nvidia/amd/intel/apple model->uarch map)
+
+### Fixed
+
+- WebGPU patches GPUAdapter.prototype getter (no own-property/toString tell)
+- WebGPU adapter validated against real Chrome (Apple metal-3, mask device/description)
+
+
 ## [0.2.1] - 2026-06-02
 
 
