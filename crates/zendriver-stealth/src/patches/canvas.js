@@ -10,23 +10,22 @@
     return data;
   }
   const origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
-  CanvasRenderingContext2D.prototype.getImageData = function (...args) {
-    const img = origGetImageData.apply(this, args);
+  __zdReplace(CanvasRenderingContext2D.prototype, 'getImageData', (orig) => function (...args) {
+    const img = orig.apply(this, args);
     farble(img.data);
     return img;
-  };
-  const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
-  HTMLCanvasElement.prototype.toDataURL = function (...args) {
+  });
+  __zdReplace(HTMLCanvasElement.prototype, 'toDataURL', (orig) => function (...args) {
     const ctx = this.getContext('2d');
     if (ctx && this.width > 0 && this.height > 0) {
-      const orig = origGetImageData.call(ctx, 0, 0, this.width, this.height);
-      const copy = new ImageData(new Uint8ClampedArray(orig.data), this.width, this.height);
+      const imgData = origGetImageData.call(ctx, 0, 0, this.width, this.height);
+      const copy = new ImageData(new Uint8ClampedArray(imgData.data), this.width, this.height);
       farble(copy.data);
       ctx.putImageData(copy, 0, 0);
-      const url = origToDataURL.apply(this, args);
-      ctx.putImageData(orig, 0, 0);
+      const url = orig.apply(this, args);
+      ctx.putImageData(imgData, 0, 0);
       return url;
     }
-    return origToDataURL.apply(this, args);
-  };
+    return orig.apply(this, args);
+  });
 })(SEED);
