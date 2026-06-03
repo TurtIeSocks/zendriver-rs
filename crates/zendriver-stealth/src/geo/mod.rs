@@ -7,6 +7,10 @@
 
 mod table;
 
+use std::fmt;
+
+use crate::Persona;
+
 /// Ranked language subtags for a country, or `None` if absent from the table.
 pub(crate) fn languages_for(cc: &str) -> Option<&'static [&'static str]> {
     table::COUNTRIES
@@ -15,7 +19,39 @@ pub(crate) fn languages_for(cc: &str) -> Option<&'static [&'static str]> {
         .map(|i| table::COUNTRIES[i].1)
 }
 
-use std::fmt;
+/// Build a [`Persona`] overlay carrying a coherent `locale` + `languages` for
+/// `country`. Default policy: the country's dominant language only, formed as
+/// `lang-COUNTRY` with its base subtag (e.g. `CH` -> `de-CH` + `["de-CH","de"]`).
+/// An unknown country yields an empty overlay and a warning — never locks a value.
+pub fn persona(country: Country) -> Persona {
+    let cc = country.as_str();
+    match languages_for(cc) {
+        Some([primary, ..]) => {
+            let locale = format!("{primary}-{cc}");
+            Persona {
+                locale: Some(locale.clone()),
+                languages: Some(vec![locale, (*primary).to_string()]),
+                ..Default::default()
+            }
+        }
+        _ => {
+            tracing::warn!("geo: no locale mapping for country {cc}; leaving locale unset");
+            Persona::default()
+        }
+    }
+}
+
+/// Resolve a [`Country`] from ambient context (e.g. the exit IP behind a
+/// proxy). The auto-resolving implementation (`IpApiResolver` + structured
+/// proxy URL + outbound probe) lands in a follow-up PR; this seam exists now so
+/// callers and the `BrowserBuilder` API are forward-compatible. Both the
+/// caller-supplied path (`geo_locale("US")`) and a future resolver terminate in
+/// the same [`persona`] mapping.
+#[async_trait::async_trait]
+pub trait GeoResolver: Send + Sync {
+    /// Resolve the apparent country, or `None` if it cannot be determined.
+    async fn country(&self) -> Option<Country>;
+}
 
 /// An ISO 3166-1 alpha-2 country code (uppercase, validated).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -83,5 +119,52 @@ mod tests {
         assert!(Country::try_from("u").is_err());
         assert!(Country::try_from("u1").is_err());
         assert!("ch".parse::<Country>().is_ok());
+    }
+
+    #[test]
+    fn persona_derives_locale_and_languages() {
+        let p = persona(Country::try_from("US").unwrap());
+        assert_eq!(p.locale.as_deref(), Some("en-US"));
+        assert_eq!(p.languages.unwrap(), vec!["en-US", "en"]);
+
+        let p = persona(Country::try_from("DE").unwrap());
+        assert_eq!(p.locale.as_deref(), Some("de-DE"));
+
+        // multilingual country -> single dominant language by default
+        let ch = persona(Country::try_from("CH").unwrap());
+        assert_eq!(ch.locale.as_deref(), Some("de-CH"));
+        assert_eq!(ch.languages.unwrap(), vec!["de-CH", "de"]);
+
+        // unknown country -> empty overlay, no panic
+        let empty = persona(Country::try_from("ZZ").unwrap());
+        assert!(empty.locale.is_none() && empty.languages.is_none());
+    }
+
+    #[test]
+    fn cldr_table_invariants() {
+        let rows = table::COUNTRIES;
+        assert!(
+            (100..=1000).contains(&rows.len()),
+            "row count {} out of [100,1000]",
+            rows.len()
+        );
+        // sorted + unique (binary_search correctness)
+        assert!(
+            rows.windows(2).all(|w| w[0].0 < w[1].0),
+            "COUNTRIES must be strictly sorted by code"
+        );
+        for (cc, langs) in rows {
+            assert_eq!(cc.len(), 2, "{cc} not 2 chars");
+            assert!(cc.bytes().all(|b| b.is_ascii_uppercase()), "{cc} not uppercase");
+            assert!(!langs.is_empty(), "{cc} has no languages");
+            for l in *langs {
+                assert!(
+                    l.len() >= 2 && l.bytes().all(|b| b.is_ascii_lowercase()),
+                    "{cc}: bad lang subtag {l:?}"
+                );
+            }
+            let _ = format!("{}-{}", langs[0], cc); // forms a BCP-47 primary locale
+        }
+        assert!(!table::CLDR_VERSION.is_empty());
     }
 }
