@@ -764,6 +764,41 @@ mod tests {
     }
 
     #[test]
+    fn surface_patches_route_through_masking_helpers() {
+        let p = Persona {
+            webgl: Some(WebglSpec {
+                strategy: Some(Strategy::Value),
+                unmasked_vendor: Some("Google Inc. (NVIDIA)".into()),
+                unmasked_renderer: Some("ANGLE (NVIDIA GeForce RTX 4090)".into()),
+            }),
+            canvas: Some(SurfaceCfg {
+                strategy: Some(Strategy::Seeded),
+            }),
+            webgpu: Some(SurfaceCfg {
+                strategy: Some(Strategy::Value),
+            }),
+            seed: Some(Seed::from_u64(1)),
+            ..Persona::default()
+        };
+        let s = bootstrap_script(&p, &mock_identity());
+        assert!(
+            s.contains("__zdReplace(WebGLRenderingContext.prototype, 'getParameter'")
+                || s.contains("__zdReplace(proto, 'getParameter'"),
+            "webgl routed"
+        );
+        assert!(s.contains("__zdReplace"), "canvas/getImageData routed");
+        assert!(
+            s.contains("__zdGetter(GPUAdapter.prototype, 'info'"),
+            "webgpu info getter routed"
+        );
+        // tokens still substituted, not left raw:
+        assert!(
+            !s.contains("SEED") && !s.contains("WEBGL_VENDOR"),
+            "tokens substituted"
+        );
+    }
+
+    #[test]
     fn no_unsubstituted_tokens_remain() {
         // Exercise every surface so all token-bearing patches are emitted.
         let p = Persona {
