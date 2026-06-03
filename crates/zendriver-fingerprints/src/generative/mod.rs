@@ -1,103 +1,186 @@
-//! Generative source (C3): a Bayesian-network persona generator.
+//! Generative source (C3): a browserforge/apify Bayesian-network persona generator.
 //!
-//! Ports the browserforge conditional-probability-table (CPT) form: each node is
-//! a fingerprint attribute whose distribution is conditioned on its parents'
-//! sampled values. Sampling is **deterministic** in the [`Seed`] and yields an
-//! internally **coherent** [`Persona`] (e.g. a `MacIntel` platform pairs with a
-//! Mac-plausible WebGL renderer, because the renderer node is conditioned on
-//! `platform`).
+//! Ports the canonical conditional-probability-table form: each node's
+//! distribution is conditioned on its parents' sampled values, walked through a
+//! nested `conditionalProbabilities` `deeper`/`skip` tree. Sampling is
+//! **deterministic** in the [`Seed`] (a seeded Mulberry32 stream) and yields an
+//! internally **coherent**, **desktop** [`Persona`]: the single root `userAgent`
+//! node is restricted to non-mobile UAs, and every other attribute is sampled
+//! conditioned on it.
 //!
-//! The embedded [`network.json`] is intentionally small; expanding it from the
-//! full upstream browserforge dataset is tracked as a follow-up (spec §14). The
-//! loader and sampler are complete and correct regardless of network size.
+//! The network is fetched on first use and cached (see [`Generator::load_or_download`]).
+//! Determinism holds for a fixed cached network version; a cache refresh (the
+//! upstream file is regenerated ~monthly) may change per-seed output.
 
+mod download;
 mod mapping;
 
 use std::collections::HashMap;
+use std::io::Read;
+use std::sync::Arc;
 
 use serde::Deserialize;
-use zendriver_stealth::{Persona, Platform, Seed, WebglSpec};
+use serde_json::Value;
+use zendriver_stealth::{Persona, Seed};
 
-/// A Bayesian network of conditional fingerprint attributes (browserforge form).
+/// Upstream fingerprint network (apify/fingerprint-suite, Apache-2.0, regenerated
+/// ~monthly). Overridable per call via [`Generator::load_or_download`] or the
+/// `ZENDRIVER_FP_NETWORK_URL` env var (see [`Generator::load_or_download_default`]).
+pub const DEFAULT_NETWORK_URL: &str = "https://raw.githubusercontent.com/apify/fingerprint-suite/master/packages/fingerprint-generator/src/data_files/fingerprint-network-definition.zip";
+
+/// Test-support: bytes of the tiny embedded network zip, for downstream hermetic
+/// tests (e.g. `zendriver-mcp`). Not part of the supported API.
+#[doc(hidden)]
+pub const TEST_NETWORK_ZIP: &[u8] = include_bytes!("fixtures/mini-network.zip");
+
+/// Errors from loading or decompressing the network.
+#[derive(Debug, thiserror::Error)]
+pub enum GenError {
+    #[error("http error: {0}")]
+    Http(#[from] reqwest::Error),
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("zip error: {0}")]
+    Zip(#[from] zip::result::ZipError),
+    #[error("json error: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("empty network archive")]
+    EmptyArchive,
+}
+
 #[derive(Debug, Clone, Deserialize)]
-pub struct Generator {
+struct RawNetwork {
     nodes: Vec<Node>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 struct Node {
     name: String,
-    parents: Vec<String>,
-    /// Conditional distributions keyed by the parents' sampled values joined by
-    /// `|` (empty string for a root node). Each entry maps the key to a weighted
-    /// `(value, weight)` distribution.
-    cpt: HashMap<String, Vec<(String, f64)>>,
+    #[serde(default, rename = "parentNames")]
+    parent_names: Vec<String>,
+    /// Canonical nested CPT, walked dynamically by depth = `parent_names.len()`.
+    #[serde(rename = "conditionalProbabilities")]
+    cpt: Value,
+}
+
+/// A Bayesian network of conditional fingerprint attributes (browserforge form).
+#[derive(Debug, Clone)]
+pub struct Generator {
+    nodes: Arc<Vec<Node>>,
 }
 
 impl Generator {
-    /// Load the embedded, trimmed network.
-    pub fn embedded() -> Self {
-        serde_json::from_str(include_str!("network.json")).expect("valid embedded BN")
+    /// Build from the inner network JSON (seam for fast unit tests).
+    pub fn from_network_json(json: &str) -> Result<Self, GenError> {
+        let raw: RawNetwork = serde_json::from_str(json)?;
+        Ok(Self {
+            nodes: Arc::new(raw.nodes),
+        })
     }
 
-    /// Sample a coherent persona deterministically from `seed`.
-    ///
-    /// Determinism is guaranteed by walking nodes in a stable topological order
-    /// (a vector, never a `HashMap`) and driving every pick from a single
-    /// [`Mulberry32`] stream seeded by `seed`. The same seed therefore always
-    /// produces byte-identical assignments and thus an identical [`Persona`].
+    /// Build from raw ZIP bytes (decompress the first entry, then parse).
+    pub fn from_zip_bytes(bytes: &[u8]) -> Result<Self, GenError> {
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))?;
+        if archive.is_empty() {
+            return Err(GenError::EmptyArchive);
+        }
+        let mut entry = archive.by_index(0)?;
+        let mut json = String::new();
+        entry.read_to_string(&mut json)?;
+        Self::from_network_json(&json)
+    }
+
+    /// Fetch (or read cached) the network ZIP from `url`, then build.
+    pub async fn load_or_download(url: &str) -> Result<Self, GenError> {
+        let cache = download::cache_path();
+        let bytes = download::fetch_or_cached_bytes(url, &cache).await?;
+        Self::from_zip_bytes(&bytes)
+    }
+
+    /// Ergonomic [`load_or_download`](Self::load_or_download): uses
+    /// `ZENDRIVER_FP_NETWORK_URL` if set, else [`DEFAULT_NETWORK_URL`].
+    pub async fn load_or_download_default() -> Result<Self, GenError> {
+        let url = std::env::var("ZENDRIVER_FP_NETWORK_URL")
+            .unwrap_or_else(|_| DEFAULT_NETWORK_URL.to_string());
+        Self::load_or_download(&url).await
+    }
+
+    /// Sample a coherent **desktop** persona deterministically from `seed`.
     pub fn generate(&self, seed: Seed) -> Persona {
         let mut rng = Mulberry32::new(seed.value() as u32);
         let mut assigned: HashMap<String, String> = HashMap::new();
         for node in self.topo_order() {
-            // Build the conditioning key from already-assigned parents, joined
-            // by `|`. For a root node this is the empty string, matching the
-            // `""` CPT entry.
-            //
-            // A parent must always be assigned before a child reads it; the topo
-            // order guarantees this for the embedded network. If a parent is
-            // somehow missing (a malformed network), fall back to its empty key
-            // so sampling stays panic-free rather than producing a silently
-            // mismatched conditioning key.
-            debug_assert!(
-                node.parents.iter().all(|p| assigned.contains_key(p)),
-                "node `{}` sampled before parent assignment (bad topo order)",
-                node.name
-            );
-            let key = node
-                .parents
-                .iter()
-                .map(|p| assigned.get(p).cloned().unwrap_or_default())
-                .collect::<Vec<_>>()
-                .join("|");
-            // Prefer the conditioned distribution; fall back to the
-            // unconditioned (`""`) entry if the exact key is absent.
-            let Some(dist) = node.cpt.get(&key).or_else(|| node.cpt.get("")) else {
-                // No usable distribution for this node — skip it rather than
-                // panic. Downstream mapping treats absent attributes as `None`.
+            let leaf = walk_cpt(&node.cpt, &node.parent_names, &assigned);
+            // Restrict the single root `userAgent` node to desktop UAs so the
+            // whole persona is desktop-coherent without backtracking.
+            let dist = leaf_distribution(leaf, node.name == "userAgent");
+            if dist.is_empty() {
                 continue;
-            };
-            assigned.insert(node.name.clone(), weighted_pick(dist, rng.next_f64()));
+            }
+            assigned.insert(node.name.clone(), weighted_pick(&dist, rng.next_f64()));
         }
-        persona_from_assignment(&assigned)
+        mapping::persona_from_assignment(&assigned)
     }
 
-    /// Nodes in parents-before-children order.
-    ///
-    /// Sorting by parent count is a defensive heuristic that is exact for the
-    /// shallow embedded network (roots have 0 parents, children have 1). The
-    /// sort is **stable**, so ties keep their `network.json` order — this keeps
-    /// [`generate`](Self::generate) deterministic regardless of `HashMap`
-    /// iteration order.
+    /// Nodes in parents-before-children order (stable sort by parent count;
+    /// ties keep JSON array order — keeps [`generate`](Self::generate)
+    /// deterministic).
     fn topo_order(&self) -> Vec<&Node> {
-        let mut order = self.nodes.iter().collect::<Vec<_>>();
-        order.sort_by_key(|n| n.parents.len());
+        let mut order: Vec<&Node> = self.nodes.iter().collect();
+        order.sort_by_key(|n| n.parent_names.len());
         order
     }
 }
 
-/// Mulberry32 PRNG — tiny, fast, deterministic. Matches the JS reference used
-/// upstream so seeds are portable across the Rust and JS farble paths.
+/// Walk the nested CPT to the leaf for the parents' sampled values. For each
+/// parent, descend `deeper[value]` if present, else `skip`. After
+/// `parents.len()` steps the result is the leaf `{ value: probability }` object
+/// (or `Null` for a missing/`null` `skip`).
+fn walk_cpt<'a>(cpt: &'a Value, parents: &[String], assigned: &HashMap<String, String>) -> &'a Value {
+    const NULL: Value = Value::Null;
+    let mut cur = cpt;
+    for parent in parents {
+        let pv = assigned.get(parent).map(String::as_str).unwrap_or_default();
+        // Descend `deeper[parent_value]` when present, else the `skip` branch
+        // (absent / `null` -> empty leaf). Plain match avoids any borrow ambiguity.
+        cur = match cur.get("deeper").and_then(|d| d.get(pv)) {
+            Some(next) => next,
+            None => cur.get("skip").unwrap_or(&NULL),
+        };
+    }
+    cur
+}
+
+/// Flatten a leaf object into a `(value, weight)` distribution. When
+/// `desktop_only`, keep only desktop-UA keys (used for the root node).
+fn leaf_distribution(leaf: &Value, desktop_only: bool) -> Vec<(String, f64)> {
+    let Some(obj) = leaf.as_object() else {
+        return Vec::new();
+    };
+    obj.iter()
+        .filter(|(k, _)| !desktop_only || mapping::is_desktop_ua(k))
+        .filter_map(|(k, v)| v.as_f64().map(|w| (k.clone(), w)))
+        .collect()
+}
+
+/// Weighted pick from a (value, weight) distribution given a uniform `r` in
+/// `[0, 1)`. Weights need not be normalized.
+fn weighted_pick(dist: &[(String, f64)], r: f64) -> String {
+    let total: f64 = dist.iter().map(|(_, w)| w).sum();
+    if total <= 0.0 {
+        return dist.first().map(|(v, _)| v.clone()).unwrap_or_default();
+    }
+    let mut acc = 0.0;
+    for (v, w) in dist {
+        acc += w / total;
+        if r <= acc {
+            return v.clone();
+        }
+    }
+    dist.last().map(|(v, _)| v.clone()).unwrap_or_default()
+}
+
+/// Mulberry32 PRNG — tiny, fast, deterministic.
 struct Mulberry32(u32);
 
 impl Mulberry32 {
@@ -115,122 +198,93 @@ impl Mulberry32 {
     }
 }
 
-/// Pick a value from a weighted distribution given a uniform draw `r` in
-/// `[0, 1)`. Weights need not be normalized.
-fn weighted_pick(dist: &[(String, f64)], r: f64) -> String {
-    let total: f64 = dist.iter().map(|(_, w)| w).sum();
-    if total <= 0.0 {
-        return dist.first().map(|(v, _)| v.clone()).unwrap_or_default();
-    }
-    let mut acc = 0.0;
-    for (v, w) in dist {
-        acc += w / total;
-        if r <= acc {
-            return v.clone();
-        }
-    }
-    // Floating-point slack: return the last value if `r` rounded past `acc`.
-    dist.last().map(|(v, _)| v.clone()).unwrap_or_default()
-}
-
-/// Map a sampled attribute assignment onto a [`Persona`]. Keys mirror the
-/// `network.json` node names (`platform`, `webglRenderer`, `deviceMemory`, …).
-/// Absent attributes leave the corresponding `Persona` field at its default.
-fn persona_from_assignment(a: &HashMap<String, String>) -> Persona {
-    let mut p = Persona::default();
-    if let Some(plat) = a.get("platform") {
-        p.platform = Some(match plat.as_str() {
-            "Win32" => Platform::Win32,
-            "MacIntel" => Platform::MacIntel,
-            _ => Platform::LinuxX86_64,
-        });
-    }
-    if let Some(r) = a.get("webglRenderer") {
-        p.webgl = Some(WebglSpec {
-            unmasked_renderer: Some(r.clone()),
-            ..Default::default()
-        });
-    }
-    if let Some(m) = a.get("deviceMemory") {
-        p.device_memory_gb = m.parse().ok();
-    }
-    p
-}
-
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use zendriver_stealth::Platform;
 
-    #[test]
-    fn generate_is_deterministic_and_coherent() {
-        let g = Generator::embedded();
-        let a = g.generate(Seed::from_u64(7));
-        let b = g.generate(Seed::from_u64(7));
-        // same seed → same persona
-        assert_eq!(a.platform, b.platform);
-        assert_eq!(
-            a.webgl
-                .as_ref()
-                .and_then(|w| w.unmasked_renderer.as_deref()),
-            b.webgl
-                .as_ref()
-                .and_then(|w| w.unmasked_renderer.as_deref())
-        );
-        assert_eq!(a.device_memory_gb, b.device_memory_gb);
-        // coherence: a populated persona
-        assert!(a.platform.is_some());
-        assert!(a.webgl.is_some());
+    const FIXTURE: &str = include_str!("fixtures/mini-network.json");
+
+    fn make_gen() -> Generator {
+        Generator::from_network_json(FIXTURE).expect("fixture parses")
     }
 
     #[test]
-    fn webgl_renderer_is_coherent_with_platform() {
-        // The renderer node is conditioned on `platform`, so a sampled persona
-        // must never pair a platform with a renderer from another platform.
-        let g = Generator::embedded();
+    fn parses_fixture_with_root_user_agent() {
+        let g = make_gen();
+        assert_eq!(g.nodes.len(), 6);
+        let roots: Vec<_> = g.nodes.iter().filter(|n| n.parent_names.is_empty()).collect();
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].name, "userAgent");
+    }
+
+    #[test]
+    fn generate_is_deterministic() {
+        let g = make_gen();
         for s in 0..64u64 {
+            let a = g.generate(Seed::from_u64(s));
+            let b = g.generate(Seed::from_u64(s));
+            assert_eq!(serde_json::to_value(&a).unwrap(), serde_json::to_value(&b).unwrap());
+        }
+    }
+
+    #[test]
+    fn personas_are_desktop_coherent() {
+        let g = make_gen();
+        for s in 0..256u64 {
             let p = g.generate(Seed::from_u64(s));
-            let plat = p.platform.expect("platform always assigned");
-            let renderer = p
-                .webgl
-                .as_ref()
-                .and_then(|w| w.unmasked_renderer.as_deref())
-                .expect("renderer always assigned");
+            let plat = p.platform.expect("platform assigned");
+            assert!(
+                matches!(plat, Platform::Win32 | Platform::MacIntel | Platform::LinuxX86_64),
+                "non-desktop platform sampled: {plat:?}"
+            );
+            let w = p.webgl.as_ref().expect("webgl assigned");
+            let renderer = w.unmasked_renderer.as_deref().expect("renderer assigned");
+            assert!(w.unmasked_vendor.is_some(), "vendor assigned");
             match plat {
-                Platform::MacIntel => assert!(
-                    renderer.contains("Apple"),
-                    "MacIntel paired with non-Apple renderer: {renderer}"
-                ),
-                Platform::Win32 => assert!(
-                    renderer.contains("Direct3D11"),
-                    "Win32 paired with non-D3D renderer: {renderer}"
-                ),
-                Platform::LinuxX86_64 => assert!(
-                    renderer.contains("Mesa"),
-                    "Linux paired with non-Mesa renderer: {renderer}"
-                ),
+                Platform::Win32 => assert!(renderer.contains("D3D11"), "win renderer: {renderer}"),
+                Platform::MacIntel => {
+                    assert!(renderer.contains("Apple") || renderer.contains("Metal"), "mac renderer: {renderer}")
+                }
+                Platform::LinuxX86_64 => assert!(renderer.contains("Mesa"), "linux renderer: {renderer}"),
             }
         }
     }
 
     #[test]
-    fn different_seeds_can_differ() {
-        // Guard against a constant generator: across a handful of fixed seeds
-        // the sampled platforms must not all be identical.
-        let g = Generator::embedded();
-        let platforms: Vec<_> = (0..32u64)
-            .map(|s| g.generate(Seed::from_u64(s)).platform)
-            .collect();
-        let first = platforms[0];
-        assert!(
-            platforms.iter().any(|p| *p != first),
-            "generator produced the same platform for every seed"
-        );
+    fn fields_populated() {
+        let g = make_gen();
+        let p = g.generate(Seed::from_u64(1));
+        assert!(p.device_memory_gb.is_some());
+        assert!(p.hardware_concurrency.is_some());
+        assert!(p.fonts.as_ref().and_then(|f| f.available.as_ref()).is_some());
     }
 
     #[test]
-    fn embedded_network_parses() {
-        // Loading the bundled network must not panic.
-        let g = Generator::embedded();
-        assert!(!g.nodes.is_empty());
+    fn different_seeds_can_differ() {
+        let g = make_gen();
+        let plats: Vec<_> = (0..64u64).map(|s| g.generate(Seed::from_u64(s)).platform).collect();
+        let first = plats[0];
+        assert!(plats.iter().any(|p| *p != first), "every seed gave same platform");
+    }
+
+    #[test]
+    fn from_zip_bytes_loads_fixture() {
+        let g = Generator::from_zip_bytes(TEST_NETWORK_ZIP).expect("zip loads");
+        assert!(g.generate(Seed::from_u64(3)).platform.is_some());
+    }
+
+    #[tokio::test]
+    async fn load_or_download_builds_from_mock() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(TEST_NETWORK_ZIP))
+            .mount(&server)
+            .await;
+        let g = Generator::load_or_download(&server.uri()).await.expect("load");
+        assert!(g.generate(Seed::from_u64(5)).platform.is_some());
     }
 }
