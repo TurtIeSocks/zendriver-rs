@@ -68,6 +68,7 @@ pub(crate) struct PerFieldOverride {
     pub platform: Option<Platform>,
     pub timezone: Option<String>,
     pub locale: Option<String>,
+    pub languages: Option<Vec<String>>,
     pub ua_string: Option<String>,
 }
 
@@ -219,6 +220,14 @@ impl StealthProfile {
         self.per_field.locale = Some(l.into());
         self
     }
+    /// Override the reported language list (drives `navigator.languages` +
+    /// q-weighted `Accept-Language`). When unset, derived from
+    /// [`locale`](Self::locale).
+    #[must_use]
+    pub fn languages(mut self, langs: impl IntoIterator<Item = String>) -> Self {
+        self.per_field.languages = Some(langs.into_iter().collect());
+        self
+    }
     /// Override the reported timezone via `Emulation.setTimezoneOverride`
     /// (IANA name, e.g. `"America/Los_Angeles"`).
     #[must_use]
@@ -324,6 +333,9 @@ impl StealthProfile {
         }
         if let Some(ref locale) = self.per_field.locale {
             fp.locale = Some(locale.clone());
+        }
+        if let Some(ref langs) = self.per_field.languages {
+            fp.languages = Some(langs.clone());
         }
         Ok(fp)
     }
@@ -471,6 +483,7 @@ mod profile_tests {
             ua_metadata: UserAgentMetadata::realistic(Platform::Win32, 120, "120.0.6099.234"),
             timezone: None,
             locale: None,
+            languages: None,
         };
         let p = StealthProfile::native()
             .fingerprint(fp.clone())
@@ -480,5 +493,27 @@ mod profile_tests {
             .resolve_fingerprint(std::path::Path::new("/nonexistent"))
             .unwrap();
         assert_eq!(resolved.platform, Platform::MacIntel); // per-field override applied
+    }
+
+    #[test]
+    fn profile_languages_resolve_into_fingerprint() {
+        let profile = StealthProfile::native().languages(["fr-FR".into(), "fr".into()]);
+        let fp = Fingerprint {
+            platform: Platform::Win32,
+            chrome_major: 120,
+            chrome_full: "120.0.6099.234".into(),
+            cpu_count: 8,
+            memory_gb: 8,
+            ua_string: String::new(),
+            ua_metadata: UserAgentMetadata::realistic(Platform::Win32, 120, "120.0.6099.234"),
+            timezone: None,
+            locale: None,
+            languages: None,
+        };
+        let profile = profile.fingerprint(fp);
+        let resolved = profile
+            .resolve_fingerprint(std::path::Path::new("/nonexistent-chrome"))
+            .expect("resolve ok");
+        assert_eq!(resolved.languages.unwrap(), vec!["fr-FR", "fr"]);
     }
 }

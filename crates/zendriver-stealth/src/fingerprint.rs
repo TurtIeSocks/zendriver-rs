@@ -101,6 +101,7 @@ pub struct Fingerprint {
     pub ua_metadata: UserAgentMetadata,
     pub timezone: Option<String>,
     pub locale: Option<String>,
+    pub languages: Option<Vec<String>>,
 }
 
 impl Fingerprint {
@@ -129,6 +130,7 @@ impl Fingerprint {
             ua_metadata,
             timezone: None,
             locale: None,
+            languages: None,
         })
     }
 
@@ -312,6 +314,7 @@ mod fingerprint_tests {
             ua_metadata: UserAgentMetadata::realistic(Platform::Win32, 120, "120.0.6099.234"),
             timezone: None,
             locale: None,
+            languages: None,
         };
         fp.recompose();
         assert!(fp.ua_string.contains("Windows NT 10.0"));

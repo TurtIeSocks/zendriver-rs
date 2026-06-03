@@ -322,6 +322,7 @@ mod tests {
             ua_metadata: UserAgentMetadata::realistic(Platform::MacIntel, 120, "120.0.6099.234"),
             timezone: None,
             locale: Some("en-US".into()),
+            languages: None,
         }
     }
 

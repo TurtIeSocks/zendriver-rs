@@ -188,6 +188,7 @@ mod tests {
             ),
             timezone: None,
             locale: None,
+            languages: None,
         };
         let profile = StealthProfile::spoofed();
         let observer = std::sync::Arc::new(StealthObserver::new(profile, fp));
@@ -248,6 +249,7 @@ mod tests {
             ),
             timezone: None,
             locale: None,
+            languages: None,
         };
         let observer = std::sync::Arc::new(StealthObserver::new(StealthProfile::off(), fp));
         let (mut mock, conn) = MockConnection::pair_with_observers(vec![observer]);
