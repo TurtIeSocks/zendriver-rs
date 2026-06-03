@@ -41,6 +41,31 @@ pub struct OpenInput {
     /// or hand-built). Parsed via `Persona::try_from_json`. Opaque on the wire.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persona: Option<serde_json::Value>,
+    /// Enable the bundled curated tracker/fingerprinter blocklist (passive
+    /// third-party fingerprinters + cross-site trackers; excludes anti-bot
+    /// challenge vendors). Off by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_trackers: Option<bool>,
+    /// Custom tracker-blocklist source (url | file | inline domains). Supplying
+    /// this implicitly enables blocking; combine with `block_trackers: true`
+    /// to also include the bundled list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracker_blocklist: Option<TrackerBlocklist>,
+}
+
+/// A custom tracker-blocklist source for `browser_open`.
+///
+/// One of: a remote `url` (fetched+cached at launch), a local `file` path, or
+/// inline `domains`. Supplying any source implicitly enables blocking.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(tag = "source", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TrackerBlocklist {
+    /// Fetch + cache a newline-delimited host list from this URL.
+    Url { url: String },
+    /// Read a newline-delimited host list from this local file path.
+    File { path: String },
+    /// Block these hostnames directly.
+    Domains { domains: Vec<String> },
 }
 
 const fn default_true() -> bool {
@@ -84,6 +109,30 @@ pub async fn open(
         let persona = zendriver::Persona::try_from_json(&p.to_string())
             .map_err(|e| ErrorData::invalid_params(format!("invalid persona JSON: {e}"), None))?;
         builder = builder.persona(persona);
+    }
+    #[cfg(feature = "tracker-blocking")]
+    {
+        if input.block_trackers.unwrap_or(false) {
+            builder = builder.block_trackers(true);
+        }
+        if let Some(bl) = &input.tracker_blocklist {
+            builder = match bl {
+                TrackerBlocklist::Url { url } => builder.tracker_blocklist_url(url.clone()),
+                TrackerBlocklist::File { path } => {
+                    builder.tracker_blocklist_file(std::path::PathBuf::from(path))
+                }
+                TrackerBlocklist::Domains { domains } => {
+                    builder.tracker_blocklist_add(domains.clone())
+                }
+            };
+        }
+    }
+    #[cfg(not(feature = "tracker-blocking"))]
+    if input.block_trackers.unwrap_or(false) || input.tracker_blocklist.is_some() {
+        return Err(ErrorData::invalid_params(
+            "tracker blocking requested but this server was built without the `tracker-blocking` feature".to_string(),
+            None,
+        ));
     }
     let browser = builder
         .launch()
