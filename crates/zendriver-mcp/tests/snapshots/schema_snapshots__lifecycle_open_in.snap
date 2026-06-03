@@ -7,6 +7,11 @@ title: OpenInput
 description: "Input for `browser_open`."
 type: object
 properties:
+  block_trackers:
+    description: "Enable the bundled curated tracker/fingerprinter blocklist (passive\nthird-party fingerprinters + cross-site trackers; excludes anti-bot\nchallenge vendors). Off by default."
+    type:
+      - boolean
+      - "null"
   headless:
     description: "Run Chrome with `--headless=new` (default: `true`)."
     type: boolean
@@ -25,6 +30,11 @@ properties:
       - $ref: "#/$defs/StealthProfileChoice"
       - type: "null"
     default: ~
+  tracker_blocklist:
+    description: "Custom tracker-blocklist source (url | file | inline domains). Supplying\nthis implicitly enables blocking; combine with `block_trackers: true`\nto also include the bundled list."
+    anyOf:
+      - $ref: "#/$defs/TrackerBlocklist"
+      - type: "null"
 additionalProperties: false
 $defs:
   StealthProfileChoice:
@@ -45,3 +55,44 @@ $defs:
       - description: Spoof a Windows fingerprint regardless of host platform.
         type: string
         const: spoof_windows
+  TrackerBlocklist:
+    description: "A custom tracker-blocklist source for `browser_open`.\n\nOne of: a remote `url` (fetched+cached at launch), a local `file` path, or\ninline `domains`. Supplying any source implicitly enables blocking."
+    oneOf:
+      - description: Fetch + cache a newline-delimited host list from this URL.
+        type: object
+        properties:
+          source:
+            type: string
+            const: url
+          url:
+            type: string
+        additionalProperties: false
+        required:
+          - source
+          - url
+      - description: Read a newline-delimited host list from this local file path.
+        type: object
+        properties:
+          path:
+            type: string
+          source:
+            type: string
+            const: file
+        additionalProperties: false
+        required:
+          - source
+          - path
+      - description: Block these hostnames directly.
+        type: object
+        properties:
+          domains:
+            type: array
+            items:
+              type: string
+          source:
+            type: string
+            const: domains
+        additionalProperties: false
+        required:
+          - source
+          - domains

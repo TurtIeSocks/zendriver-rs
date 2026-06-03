@@ -37,6 +37,7 @@
 pub mod actor;
 pub mod builder;
 pub mod error;
+pub mod host_matcher;
 pub mod paused;
 pub mod rule;
 pub mod types;
@@ -45,6 +46,7 @@ pub mod url_pattern;
 pub use actor::InterceptHandle;
 pub use builder::{InterceptBuilder, RequestPattern};
 pub use error::InterceptionError;
+pub use host_matcher::{HostMatcher, host_of};
 pub use paused::PausedRequest;
 pub use rule::Rule;
 pub use types::{

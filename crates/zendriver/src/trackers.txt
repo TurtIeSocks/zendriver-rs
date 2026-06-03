@@ -1,0 +1,110 @@
+# zendriver-rs bundled tracker/fingerprinter blocklist
+#
+# Curation principle (spec §4.4): third-party PASSIVE fingerprinters and
+# cross-site trackers ONLY. We DELIBERATELY EXCLUDE active anti-bot challenge
+# providers (DataDome, Cloudflare challenge, PerimeterX/HUMAN, Imperva/
+# Incapsula, Akamai Bot Manager, Kasada, Arkose/FunCaptcha, hCaptcha,
+# reCAPTCHA) — blocking those breaks access to the very sites we want to reach.
+#
+# Authored by the zendriver-rs project (no third-party list vendored), so the
+# bundle carries no upstream license. Point `tracker_blocklist_url` at an
+# external list under your own acceptance of its terms for broader coverage.
+#
+# Format: one host per line; `#` comments and blank lines ignored. Matching is
+# host-only, case-insensitive, suffix-on-dot (a listed `evil.com` also blocks
+# `*.evil.com`).
+
+# -- Device fingerprinting / fraud-device services (passive) --------------
+fingerprintjs.com
+fpjs.io
+fpcdn.io
+api.fpjs.io
+online-metrix.net
+iesnare.com
+iovation.com
+sift.com
+cdn.sift.com
+seon.io
+augur.io
+deviceatlas.com
+device.maxmind.com
+
+# -- Web analytics (cross-site) -------------------------------------------
+google-analytics.com
+ssl.google-analytics.com
+analytics.google.com
+googletagmanager.com
+app-measurement.com
+mc.yandex.ru
+scorecardresearch.com
+quantserve.com
+quantcount.com
+chartbeat.com
+chartbeat.net
+heapanalytics.com
+mixpanel.com
+cdn.mxpnl.com
+segment.com
+segment.io
+cdn.segment.com
+amplitude.com
+api.amplitude.com
+api2.amplitude.com
+cdn.amplitude.com
+kissmetrics.io
+kissmetrics.com
+woopra.com
+statcounter.com
+
+# -- Session-replay / behavior fingerprinting -----------------------------
+hotjar.com
+hotjar.io
+fullstory.com
+mouseflow.com
+crazyegg.com
+inspectlet.com
+smartlook.com
+logrocket.io
+logrocket.com
+clarity.ms
+luckyorange.com
+luckyorange.net
+
+# -- Cross-site ad / RTB / DMP trackers -----------------------------------
+doubleclick.net
+stats.g.doubleclick.net
+googlesyndication.com
+googleadservices.com
+adnxs.com
+criteo.com
+criteo.net
+taboola.com
+outbrain.com
+pubmatic.com
+rubiconproject.com
+openx.net
+adsrvr.org
+casalemedia.com
+33across.com
+bluekai.com
+demdex.net
+everesttech.net
+omtrdc.net
+2o7.net
+rlcdn.com
+crwdcntrl.net
+agkn.com
+addthis.com
+sharethis.com
+
+# -- Social pixels (cross-site) -------------------------------------------
+connect.facebook.net
+bat.bing.com
+sc-static.net
+tr.snapchat.com
+analytics.tiktok.com
+ct.pinterest.com
+static.ads-twitter.com
+analytics.twitter.com
+snap.licdn.com
+px.ads.linkedin.com
