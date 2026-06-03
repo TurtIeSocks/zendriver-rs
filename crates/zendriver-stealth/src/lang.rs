@@ -1,6 +1,8 @@
 //! Locale list -> header/JS derivations. Always available (no feature gate);
 //! the observer formats `Accept-Language` from these.
 
+use crate::{Fingerprint, Persona};
+
 /// Format an ordered language list as an `Accept-Language` header value.
 ///
 /// Index 0 carries implicit `q=1.0`; each later entry gets
@@ -24,12 +26,87 @@ pub fn accept_language(langs: &[String]) -> String {
         .join(",")
 }
 
+/// Resolve the effective language list at apply time.
+///
+/// Precedence: `persona.languages` -> `fingerprint.languages` ->
+/// derive from the primary locale -> `["en-US", "en"]`. Deriving from a
+/// region locale yields `[locale, base_lang]` where `base_lang` is the
+/// subtag before `-` (e.g. `"fr-FR"` -> `["fr-FR", "fr"]`); a bare locale
+/// (no `-`) yields a single entry.
+#[allow(dead_code)]
+pub(crate) fn resolve_languages(persona: &Persona, fp: &Fingerprint) -> Vec<String> {
+    if let Some(langs) = persona.languages.as_ref().filter(|v| !v.is_empty()) {
+        return langs.clone();
+    }
+    if let Some(langs) = fp.languages.as_ref().filter(|v| !v.is_empty()) {
+        return langs.clone();
+    }
+    let locale = persona.locale.clone().or_else(|| fp.locale.clone());
+    match locale {
+        Some(loc) => {
+            let base = loc.split('-').next().unwrap_or(&loc).to_string();
+            if base != loc {
+                vec![loc, base]
+            } else {
+                vec![loc]
+            }
+        }
+        None => vec!["en-US".to_string(), "en".to_string()],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn v(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
+    }
+
+    pub(crate) fn bare_fingerprint() -> crate::Fingerprint {
+        use crate::{Platform, UserAgentMetadata};
+        crate::Fingerprint {
+            platform: Platform::MacIntel,
+            chrome_major: 120,
+            chrome_full: "120.0.6099.234".into(),
+            cpu_count: 8,
+            memory_gb: 8,
+            ua_string: String::new(),
+            ua_metadata: UserAgentMetadata::realistic(Platform::MacIntel, 120, "120.0.6099.234"),
+            timezone: None,
+            locale: None,
+            languages: None,
+        }
+    }
+
+    #[test]
+    fn resolve_precedence() {
+        let fp = bare_fingerprint();
+
+        // persona.languages wins
+        let p = crate::Persona {
+            languages: Some(vec!["es-ES".into(), "es".into()]),
+            ..Default::default()
+        };
+        assert_eq!(super::resolve_languages(&p, &fp), vec!["es-ES", "es"]);
+
+        // derive from locale: the fr-FR regression (was hardcoded "en")
+        let p = crate::Persona {
+            locale: Some("fr-FR".into()),
+            ..Default::default()
+        };
+        assert_eq!(super::resolve_languages(&p, &fp), vec!["fr-FR", "fr"]);
+
+        // bare locale -> single entry
+        let p = crate::Persona {
+            locale: Some("en".into()),
+            ..Default::default()
+        };
+        assert_eq!(super::resolve_languages(&p, &fp), vec!["en"]);
+
+        // nothing set -> default
+        let p = crate::Persona::default();
+        assert_eq!(super::resolve_languages(&p, &fp), vec!["en-US", "en"]);
     }
 
     #[test]
