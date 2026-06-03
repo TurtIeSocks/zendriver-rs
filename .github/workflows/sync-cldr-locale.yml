@@ -1,0 +1,78 @@
+name: sync-cldr-locale
+
+# Weekly resync of the vendored CLDR country -> locale table
+# (crates/zendriver-stealth/src/geo/table.rs) from the pinned CLDR release.
+# Opens an auto-merging PR gated on a sanity guard; no-ops when upstream is
+# unchanged. CLDR ships ~twice a year, so most runs do nothing.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Record committed country count
+        id: before
+        run: |
+          # Count country codes ("XX" uppercase 2-letter). Robust to rustfmt
+          # line-wrapping of long multi-language rows; lang subtags are
+          # lowercase so they do not match.
+          before=$(grep -coE '"[A-Z][A-Z]"' crates/zendriver-stealth/src/geo/table.rs || echo 0)
+          echo "count=$before" >> "$GITHUB_OUTPUT"
+          echo "committed countries: $before"
+
+      - name: Regenerate table
+        run: |
+          cargo run -p locale-gen
+          cargo fmt -p zendriver-stealth
+
+      - name: Delta guard (>20% country drop fails)
+        env:
+          BEFORE: ${{ steps.before.outputs.count }}
+        run: |
+          after=$(grep -coE '"[A-Z][A-Z]"' crates/zendriver-stealth/src/geo/table.rs || echo 0)
+          echo "before=$BEFORE after=$after"
+          if [ "$BEFORE" -gt 0 ] && [ "$after" -lt "$(( BEFORE * 80 / 100 ))" ]; then
+            echo "::error::country count dropped >20% ($BEFORE -> $after); refusing to sync"
+            exit 1
+          fi
+
+      - name: Sanity-guard test
+        run: cargo test -p zendriver-stealth --features geo cldr_table_invariants --locked
+
+      - name: Create PR
+        id: cpr
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore: sync CLDR locale table"
+          title: "chore: sync CLDR locale table"
+          body: |
+            Automated weekly CLDR sync (`cargo run -p locale-gen && cargo fmt -p zendriver-stealth`).
+            Version + per-country changes are visible in
+            `crates/zendriver-stealth/src/geo/table.rs`.
+
+            Auto-merges once CI + the table sanity guard pass. If the guard or CI
+            fails (e.g. a CLDR shape change), the PR stays open for review.
+
+            > Requires repo branch protection with required status checks and
+            > "Allow auto-merge" enabled for the auto-merge step to take effect.
+          branch: chore/sync-cldr-locale
+          delete-branch: true
+
+      - name: Enable auto-merge
+        if: steps.cpr.outputs.pull-request-operation == 'created'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.cpr.outputs.pull-request-number }}
+        run: gh pr merge --auto --squash "$PR_NUMBER"
