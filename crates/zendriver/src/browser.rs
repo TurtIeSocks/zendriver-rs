@@ -2124,8 +2124,7 @@ impl BrowserBuilder {
         #[cfg(feature = "interception")]
         {
             let main_session = inner.main_tab.session().clone();
-            let mut builder =
-                zendriver_interception::InterceptBuilder::new(&main_session);
+            let mut builder = zendriver_interception::InterceptBuilder::new(&main_session);
             let mut needs_actor = false;
             if let Some((user, pass)) = self.proxy_auth.clone() {
                 builder = builder.handle_auth(user, pass);
@@ -4762,7 +4761,11 @@ mod tests {
         let b = Browser::builder()
             .tracker_blocklist_add(["custom-tracker.test".to_string()])
             .tracker_blocklist_add(["another.test".to_string()]);
-        let matcher = b.build_tracker_matcher().await.unwrap().expect("matcher built");
+        let matcher = b
+            .build_tracker_matcher()
+            .await
+            .unwrap()
+            .expect("matcher built");
         assert!(matcher.is_blocked("custom-tracker.test"));
         assert!(matcher.is_blocked("sub.another.test"));
         assert!(!matcher.is_blocked("not-listed.test"));

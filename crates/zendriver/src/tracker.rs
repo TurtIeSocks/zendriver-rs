@@ -30,7 +30,12 @@ pub(crate) fn parse_blocklist(text: &str) -> Vec<String> {
     text.lines()
         .map(|line| line.split('#').next().unwrap_or("").trim())
         .filter(|line| !line.is_empty())
-        .map(|line| line.split_whitespace().last().unwrap_or(line).to_ascii_lowercase())
+        .map(|line| {
+            line.split_whitespace()
+                .last()
+                .unwrap_or(line)
+                .to_ascii_lowercase()
+        })
         .collect()
 }
 
@@ -120,7 +125,12 @@ mod tests {
         assert!(hosts.iter().any(|h| h == "fingerprintjs.com"));
         assert!(hosts.iter().any(|h| h == "doubleclick.net"));
         // Curation principle: no active anti-bot challenge vendors.
-        for banned in ["datadome.co", "hcaptcha.com", "perimeterx.net", "imperva.com"] {
+        for banned in [
+            "datadome.co",
+            "hcaptcha.com",
+            "perimeterx.net",
+            "imperva.com",
+        ] {
             assert!(
                 !hosts.iter().any(|h| h == banned),
                 "anti-bot vendor {banned} must NOT be in the bundled list"

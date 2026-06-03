@@ -91,11 +91,11 @@ pub mod request;
 pub mod screenshot;
 pub mod storage;
 pub mod tab;
+#[cfg(feature = "tracker-blocking")]
+mod tracker;
 pub mod traits;
 pub(crate) mod url_matcher;
 pub mod window;
-#[cfg(feature = "tracker-blocking")]
-mod tracker;
 
 pub use browser::{Browser, BrowserBuilder, Channel, PermissionType};
 pub use browser_context::BrowserContext;

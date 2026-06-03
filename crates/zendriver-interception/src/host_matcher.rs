@@ -87,7 +87,7 @@ pub fn host_of(url: &str) -> Option<&str> {
     // Find scheme-authority boundary.
     let after_scheme = url.split_once("://")?.1;
     // Authority ends at the first `/`, `?`, or `#`.
-    let authority = match after_scheme.find(|c| c == '/' || c == '?' || c == '#') {
+    let authority = match after_scheme.find(['/', '?', '#']) {
         Some(pos) => &after_scheme[..pos],
         None => after_scheme,
     };
@@ -121,20 +121,20 @@ mod tests {
 
     #[test]
     fn exact_match_blocked() {
-        let m = HostMatcher::new(["evil.com".to_string()].into_iter());
+        let m = HostMatcher::new(["evil.com".to_string()]);
         assert!(m.is_blocked("evil.com"));
     }
 
     #[test]
     fn subdomain_of_listed_domain_is_blocked() {
-        let m = HostMatcher::new(["evil.com".to_string()].into_iter());
+        let m = HostMatcher::new(["evil.com".to_string()]);
         assert!(m.is_blocked("tracker.evil.com"));
         assert!(m.is_blocked("a.b.tracker.evil.com"));
     }
 
     #[test]
     fn unrelated_host_not_blocked() {
-        let m = HostMatcher::new(["evil.com".to_string()].into_iter());
+        let m = HostMatcher::new(["evil.com".to_string()]);
         assert!(!m.is_blocked("good.com"));
         assert!(!m.is_blocked("notevil.com"));
         // suffix match must be on a dot boundary
@@ -144,14 +144,14 @@ mod tests {
     #[test]
     fn bare_root_in_set_blocks_all_subdomains() {
         // if someone lists a TLD or bare root (unusual but valid)
-        let m = HostMatcher::new(["example.com".to_string()].into_iter());
+        let m = HostMatcher::new(["example.com".to_string()]);
         assert!(m.is_blocked("example.com"));
         assert!(m.is_blocked("sub.example.com"));
     }
 
     #[test]
     fn case_insensitive_match() {
-        let m = HostMatcher::new(["Evil.Com".to_string()].into_iter());
+        let m = HostMatcher::new(["Evil.Com".to_string()]);
         assert!(m.is_blocked("EVIL.COM"));
         assert!(m.is_blocked("Tracker.Evil.Com"));
     }
@@ -171,7 +171,7 @@ mod tests {
             "tracker.example.com".to_string(),
             "# another comment".to_string(),
         ];
-        let m = HostMatcher::new(lines.into_iter());
+        let m = HostMatcher::new(lines);
         assert!(m.is_blocked("tracker.example.com"));
         assert!(!m.is_blocked("example.com")); // only the exact entry, not parent
     }
@@ -179,7 +179,7 @@ mod tests {
     #[test]
     fn single_label_host_no_infinite_loop() {
         // A host with no dot should not match and must not loop forever.
-        let m = HostMatcher::new(["localhost".to_string()].into_iter());
+        let m = HostMatcher::new(["localhost".to_string()]);
         assert!(m.is_blocked("localhost"));
         // A different single-label host misses cleanly.
         assert!(!m.is_blocked("otherhost"));
@@ -194,10 +194,7 @@ mod tests {
 
     #[test]
     fn host_of_with_port() {
-        assert_eq!(
-            host_of("http://example.com:8080/path"),
-            Some("example.com")
-        );
+        assert_eq!(host_of("http://example.com:8080/path"), Some("example.com"));
     }
 
     #[test]
@@ -207,10 +204,7 @@ mod tests {
 
     #[test]
     fn host_of_with_query() {
-        assert_eq!(
-            host_of("https://example.com?foo=bar"),
-            Some("example.com")
-        );
+        assert_eq!(host_of("https://example.com?foo=bar"), Some("example.com"));
     }
 
     #[test]
@@ -225,10 +219,7 @@ mod tests {
 
     #[test]
     fn host_of_ipv6() {
-        assert_eq!(
-            host_of("https://[::1]:443/path"),
-            Some("[::1]")
-        );
+        assert_eq!(host_of("https://[::1]:443/path"), Some("[::1]"));
     }
 
     #[test]
@@ -243,7 +234,7 @@ mod tests {
 
     #[test]
     fn is_blocked_using_host_of() {
-        let m = HostMatcher::new(["fingerprinter.io".to_string()].into_iter());
+        let m = HostMatcher::new(["fingerprinter.io".to_string()]);
         let url = "https://cdn.fingerprinter.io/track.js?v=1";
         let host = host_of(url).expect("host_of returned None");
         assert!(m.is_blocked(host));
