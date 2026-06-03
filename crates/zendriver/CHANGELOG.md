@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.12] - 2026-06-03
+
+### Added
+
+- Native-function toString masking (full + cross-realm) ([#49](https://github.com/TurtIeSocks/zendriver-rs/pull/49))
+
+
 ## [0.2.11] - 2026-06-03
 
 ### Added
