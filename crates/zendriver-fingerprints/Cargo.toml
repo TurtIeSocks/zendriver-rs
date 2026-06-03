@@ -15,6 +15,8 @@ workspace = true
 default = []
 pool = ["dep:reqwest", "dep:dirs"]
 generative = ["dep:reqwest", "dep:dirs", "dep:zip"]
+# Overlay a coherent country locale onto a generated persona.
+geo = ["zendriver-stealth/geo"]
 
 [dependencies]
 zendriver-stealth.workspace = true
