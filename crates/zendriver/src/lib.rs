@@ -94,6 +94,8 @@ pub mod tab;
 pub mod traits;
 pub(crate) mod url_matcher;
 pub mod window;
+#[cfg(feature = "tracker-blocking")]
+mod tracker;
 
 pub use browser::{Browser, BrowserBuilder, Channel, PermissionType};
 pub use browser_context::BrowserContext;
@@ -131,8 +133,8 @@ pub use zendriver_transport::{CallError, Connection, SessionHandle, TransportErr
 /// reach the types without depending on the sub-crate directly.
 #[cfg(feature = "interception")]
 pub use zendriver_interception::{
-    AbortReason, InterceptBuilder, InterceptHandle, InterceptionError, PausedRequest, RequestInfo,
-    RequestOverrides, RequestStage, ResourceType, ResponseInfo, ResponseOverrides,
+    AbortReason, HostMatcher, InterceptBuilder, InterceptHandle, InterceptionError, PausedRequest,
+    RequestInfo, RequestOverrides, RequestStage, ResourceType, ResponseInfo, ResponseOverrides,
 };
 
 /// Cloudflare Turnstile bypass re-exports.

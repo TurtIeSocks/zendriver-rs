@@ -374,6 +374,18 @@ pub struct BrowserBuilder {
     /// that auto-replies to `Fetch.authRequired`. See cdpdriver/zendriver#208.
     #[cfg(feature = "interception")]
     pub(crate) proxy_auth: Option<(String, String)>,
+    /// Enable the bundled curated tracker/fingerprinter blocklist.
+    #[cfg(feature = "tracker-blocking")]
+    pub(crate) block_trackers: bool,
+    /// Extra hostnames to block (inline), accumulated across calls.
+    #[cfg(feature = "tracker-blocking")]
+    pub(crate) tracker_blocklist_domains: Vec<String>,
+    /// Local files (newline host lists) to block, accumulated across calls.
+    #[cfg(feature = "tracker-blocking")]
+    pub(crate) tracker_blocklist_files: Vec<std::path::PathBuf>,
+    /// Remote URLs (newline host lists, fetched+cached at launch).
+    #[cfg(feature = "tracker-blocking")]
+    pub(crate) tracker_blocklist_urls: Vec<String>,
 }
 
 // Hand-rolled `Debug` because `Vec<Arc<dyn TargetObserver>>` doesn't derive
@@ -412,6 +424,11 @@ impl std::fmt::Debug for BrowserBuilder {
                 .map(|(u, _)| format!("Some({u:?}, <redacted>)"))
                 .unwrap_or_else(|| "None".into()),
         );
+        #[cfg(feature = "tracker-blocking")]
+        s.field("block_trackers", &self.block_trackers)
+            .field("tracker_blocklist_domains", &self.tracker_blocklist_domains)
+            .field("tracker_blocklist_files", &self.tracker_blocklist_files)
+            .field("tracker_blocklist_urls", &self.tracker_blocklist_urls);
         s.finish()
     }
 }
@@ -516,6 +533,57 @@ impl BrowserBuilder {
     #[must_use]
     pub fn proxy_auth(mut self, user: impl Into<String>, pass: impl Into<String>) -> Self {
         self.proxy_auth = Some((user.into(), pass.into()));
+        self
+    }
+
+    /// Enable the bundled curated tracker/fingerprinter blocklist for this
+    /// browser. Blocks third-party passive fingerprinters and cross-site
+    /// trackers (host-only, suffix-on-dot) by failing their requests with
+    /// `net::ERR_BLOCKED_BY_CLIENT` — the same error a real adblocker raises.
+    ///
+    /// Opt-in (off by default — least-opinionated). Combine with
+    /// [`tracker_blocklist_add`](Self::tracker_blocklist_add) /
+    /// [`tracker_blocklist_file`](Self::tracker_blocklist_file) /
+    /// [`tracker_blocklist_url`](Self::tracker_blocklist_url) for custom hosts.
+    #[cfg(feature = "tracker-blocking")]
+    #[must_use]
+    pub fn block_trackers(mut self, enable: bool) -> Self {
+        self.block_trackers = enable;
+        self
+    }
+
+    /// Add inline hostnames to the tracker blocklist. Supplying any custom
+    /// source implicitly enables blocking (you do not also need
+    /// [`block_trackers(true)`](Self::block_trackers) unless you also want the
+    /// bundled list). Repeatable.
+    #[cfg(feature = "tracker-blocking")]
+    #[must_use]
+    pub fn tracker_blocklist_add(mut self, domains: impl IntoIterator<Item = String>) -> Self {
+        self.tracker_blocklist_domains.extend(domains);
+        self
+    }
+
+    /// Add a local file (newline-delimited host list; `#` comments and
+    /// hosts-file `0.0.0.0 host` lines tolerated) to the tracker blocklist.
+    /// Implicitly enables blocking. Read at launch. Repeatable.
+    #[cfg(feature = "tracker-blocking")]
+    #[must_use]
+    pub fn tracker_blocklist_file(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.tracker_blocklist_files.push(path.into());
+        self
+    }
+
+    /// Add a remote URL (newline-delimited host list) to the tracker
+    /// blocklist. Fetched once at launch and cached on disk
+    /// (download-on-first-use). Implicitly enables blocking. Repeatable.
+    ///
+    /// Use this to point at an external list (uBlock, Peter Lowe's, …) under
+    /// your own acceptance of that list's license — the bundle ships only our
+    /// own clean list.
+    #[cfg(feature = "tracker-blocking")]
+    #[must_use]
+    pub fn tracker_blocklist_url(mut self, url: impl Into<String>) -> Self {
+        self.tracker_blocklist_urls.push(url.into());
         self
     }
 
@@ -1060,6 +1128,31 @@ impl BrowserBuilder {
             v.push("about:blank".to_string());
         }
         v
+    }
+
+    /// Build the combined [`HostMatcher`] from all configured sources, or
+    /// `None` if nothing was requested. Called once at launch.
+    #[cfg(feature = "tracker-blocking")]
+    async fn build_tracker_matcher(
+        &self,
+    ) -> Result<Option<std::sync::Arc<crate::HostMatcher>>, ZendriverError> {
+        let mut domains: Vec<String> = Vec::new();
+        if self.block_trackers {
+            domains.extend(crate::tracker::bundled_hosts());
+        }
+        domains.extend(self.tracker_blocklist_domains.iter().cloned());
+        for path in &self.tracker_blocklist_files {
+            let text = std::fs::read_to_string(path)?; // -> ZendriverError::Io
+            domains.extend(crate::tracker::parse_blocklist(&text));
+        }
+        for url in &self.tracker_blocklist_urls {
+            let hosts = crate::tracker::load_or_download_blocklist(url).await?; // -> Io
+            domains.extend(hosts);
+        }
+        if domains.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(std::sync::Arc::new(crate::HostMatcher::new(domains))))
     }
 }
 
@@ -4551,5 +4644,30 @@ mod tests {
             .preference("c", serde_json::json!(1));
         assert_eq!(b.preferences.len(), 2);
         assert_eq!(b.preferences[0].0, "a.b");
+    }
+
+    #[cfg(feature = "tracker-blocking")]
+    #[tokio::test]
+    async fn tracker_sources_accumulate_and_build_a_matcher() {
+        let b = Browser::builder()
+            .tracker_blocklist_add(["custom-tracker.test".to_string()])
+            .tracker_blocklist_add(["another.test".to_string()]);
+        let matcher = b.build_tracker_matcher().await.unwrap().expect("matcher built");
+        assert!(matcher.is_blocked("custom-tracker.test"));
+        assert!(matcher.is_blocked("sub.another.test"));
+        assert!(!matcher.is_blocked("not-listed.test"));
+
+        // No sources, no bundled toggle -> None (blocking stays off).
+        let none = Browser::builder().build_tracker_matcher().await.unwrap();
+        assert!(none.is_none());
+
+        // Bundled toggle alone builds a matcher containing a known entry.
+        let bundled = Browser::builder()
+            .block_trackers(true)
+            .build_tracker_matcher()
+            .await
+            .unwrap()
+            .expect("bundled matcher");
+        assert!(bundled.is_blocked("doubleclick.net"));
     }
 }
