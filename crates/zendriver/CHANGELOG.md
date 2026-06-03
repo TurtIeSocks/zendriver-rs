@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.10] - 2026-06-03
+
+### Added
+
+- BrowserBuilder::geo_locale (geo feature)
+
+
 ## [0.2.9] - 2026-06-03
 
 ### Added
