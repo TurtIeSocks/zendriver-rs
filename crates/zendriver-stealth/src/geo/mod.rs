@@ -5,6 +5,16 @@
 //! coherent `locale` + `languages` for the given [`Country`]. Everything stays
 //! overridable; an unknown country leaves the persona untouched.
 
+mod table;
+
+/// Ranked language subtags for a country, or `None` if absent from the table.
+pub(crate) fn languages_for(cc: &str) -> Option<&'static [&'static str]> {
+    table::COUNTRIES
+        .binary_search_by(|(c, _)| (*c).cmp(cc))
+        .ok()
+        .map(|i| table::COUNTRIES[i].1)
+}
+
 use std::fmt;
 
 /// An ISO 3166-1 alpha-2 country code (uppercase, validated).
@@ -17,7 +27,11 @@ pub struct InvalidCountry(pub String);
 
 impl fmt::Display for InvalidCountry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "invalid country code: {:?} (want 2 ASCII letters)", self.0)
+        write!(
+            f,
+            "invalid country code: {:?} (want 2 ASCII letters)",
+            self.0
+        )
     }
 }
 impl std::error::Error for InvalidCountry {}
@@ -34,7 +48,10 @@ impl TryFrom<&str> for Country {
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         let b = s.as_bytes();
         if b.len() == 2 && b.iter().all(u8::is_ascii_alphabetic) {
-            Ok(Country([b[0].to_ascii_uppercase(), b[1].to_ascii_uppercase()]))
+            Ok(Country([
+                b[0].to_ascii_uppercase(),
+                b[1].to_ascii_uppercase(),
+            ]))
         } else {
             Err(InvalidCountry(s.to_string()))
         }
@@ -51,6 +68,12 @@ impl std::str::FromStr for Country {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn languages_for_known_and_unknown() {
+        assert_eq!(languages_for("US"), Some(["en", "es", "haw"].as_slice()));
+        assert!(languages_for("ZZ").is_none());
+    }
 
     #[test]
     fn country_parse() {
