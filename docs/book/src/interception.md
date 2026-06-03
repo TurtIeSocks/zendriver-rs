@@ -138,6 +138,43 @@ arrives. If your stream consumer panics mid-flow, the actor's `Drop`
 will dispatch `Fetch.disable` — every still-paused request fails with
 `net::ERR_BLOCKED_BY_CLIENT`, which is unpleasant but not silent.
 
+## Tracker / fingerprinter blocklist
+
+The `tracker-blocking` feature builds a ready-made host-blocking rule on top
+of interception, so you can block third-party trackers and fingerprinters
+without writing patterns. Enable it on the builder and it installs on the main
+tab and every new tab automatically.
+
+```toml
+[dependencies]
+zendriver = { version = "0.1", features = ["tracker-blocking"] }
+```
+
+```rust,no_run
+use zendriver::Browser;
+
+let browser = Browser::builder()
+    .block_trackers(true)                        // curated bundled list
+    .tracker_blocklist_add(["ads.example.com"])  // + your own hosts
+    .launch().await?;
+```
+
+| Method | Effect |
+|--------|--------|
+| [`block_trackers(true)`] | Enable blocking with the curated bundled list (`include_str!`-embedded — only adds binary size when the feature is on) |
+| [`tracker_blocklist_add`] | Add extra hosts (repeatable; implicitly enables blocking) |
+| [`tracker_blocklist_file`] | Add hosts from a local file (one host per line; `0.0.0.0 host` hosts-file lines tolerated) |
+| [`tracker_blocklist_url`] | Add hosts fetched from a URL at launch |
+
+Matching is host-based: a blocked host also blocks its subdomains. The bundle
+ships only our own clean list — point `tracker_blocklist_url` at a third-party
+list only if you accept that list's license.
+
+[`block_trackers(true)`]: https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.block_trackers
+[`tracker_blocklist_add`]: https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.tracker_blocklist_add
+[`tracker_blocklist_file`]: https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.tracker_blocklist_file
+[`tracker_blocklist_url`]: https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.tracker_blocklist_url
+
 ## Pattern + stage filters
 
 By default the builder pauses on every request at the `Request` stage.
