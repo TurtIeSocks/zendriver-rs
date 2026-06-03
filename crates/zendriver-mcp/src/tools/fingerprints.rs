@@ -64,16 +64,21 @@ pub async fn generate(input: GenerateInput) -> Result<GenerateOutput, ErrorData>
 }
 
 /// Inner generator with an injectable generative network URL (test seam).
-async fn generate_from(input: GenerateInput, network_url: &str) -> Result<GenerateOutput, ErrorData> {
+async fn generate_from(
+    input: GenerateInput,
+    network_url: &str,
+) -> Result<GenerateOutput, ErrorData> {
     use zendriver::Seed;
     let seed = input.seed.map_or_else(Seed::random, Seed::from_u64);
     let persona = match input.source {
-        FpSource::Generative => zendriver_fingerprints::generative::Generator::load_or_download(network_url)
-            .await
-            .map_err(|e| {
-                ErrorData::internal_error(format!("generative network load failed: {e}"), None)
-            })?
-            .generate(seed),
+        FpSource::Generative => {
+            zendriver_fingerprints::generative::Generator::load_or_download(network_url)
+                .await
+                .map_err(|e| {
+                    ErrorData::internal_error(format!("generative network load failed: {e}"), None)
+                })?
+                .generate(seed)
+        }
         FpSource::Pool => {
             // NOTE: The pool release asset does not exist yet (tracked in issue
             // #25). This fails at runtime with a clear error until it is hosted.
@@ -113,14 +118,26 @@ mod tests {
             .mount(&server)
             .await;
 
-        let a = generate_from(GenerateInput { source: FpSource::Generative, seed: Some(7) }, &server.uri())
-            .await
-            .expect("a");
+        let a = generate_from(
+            GenerateInput {
+                source: FpSource::Generative,
+                seed: Some(7),
+            },
+            &server.uri(),
+        )
+        .await
+        .expect("a");
         assert!(a.persona.is_object());
 
-        let b = generate_from(GenerateInput { source: FpSource::Generative, seed: Some(7) }, &server.uri())
-            .await
-            .expect("b");
+        let b = generate_from(
+            GenerateInput {
+                source: FpSource::Generative,
+                seed: Some(7),
+            },
+            &server.uri(),
+        )
+        .await
+        .expect("b");
         assert_eq!(a.persona, b.persona);
     }
 }

@@ -52,7 +52,10 @@ pub(super) fn persona_from_assignment(a: &HashMap<String, String>) -> Persona {
     if let Some(v) = a.get("videoCard") {
         if let Some(obj) = destringify_json(v) {
             let vendor = obj.get("vendor").and_then(Value::as_str).map(String::from);
-            let renderer = obj.get("renderer").and_then(Value::as_str).map(String::from);
+            let renderer = obj
+                .get("renderer")
+                .and_then(Value::as_str)
+                .map(String::from);
             if vendor.is_some() || renderer.is_some() {
                 p.webgl = Some(WebglSpec {
                     unmasked_vendor: vendor,
@@ -101,8 +104,12 @@ mod tests {
 
     #[test]
     fn is_desktop_ua_filters_mobile() {
-        assert!(is_desktop_ua("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/143"));
-        assert!(!is_desktop_ua("Mozilla/5.0 (Linux; Android 13) Mobile Safari"));
+        assert!(is_desktop_ua(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/143"
+        ));
+        assert!(!is_desktop_ua(
+            "Mozilla/5.0 (Linux; Android 13) Mobile Safari"
+        ));
         assert!(!is_desktop_ua("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0)"));
     }
 
@@ -125,7 +132,10 @@ mod tests {
             "videoCard".into(),
             "*STRINGIFIED*{\"renderer\":\"ANGLE (Apple, Apple M2)\",\"vendor\":\"Google Inc. (Apple)\"}".into(),
         );
-        a.insert("fonts".into(), "*STRINGIFIED*[\"Menlo\",\"Gill Sans\"]".into());
+        a.insert(
+            "fonts".into(),
+            "*STRINGIFIED*[\"Menlo\",\"Gill Sans\"]".into(),
+        );
         let p = persona_from_assignment(&a);
         assert_eq!(p.platform, Some(Platform::MacIntel));
         assert_eq!(p.device_memory_gb, Some(16));

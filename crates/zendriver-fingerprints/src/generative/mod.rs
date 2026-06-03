@@ -136,7 +136,11 @@ impl Generator {
 /// parent, descend `deeper[value]` if present, else `skip`. After
 /// `parents.len()` steps the result is the leaf `{ value: probability }` object
 /// (or `Null` for a missing/`null` `skip`).
-fn walk_cpt<'a>(cpt: &'a Value, parents: &[String], assigned: &HashMap<String, String>) -> &'a Value {
+fn walk_cpt<'a>(
+    cpt: &'a Value,
+    parents: &[String],
+    assigned: &HashMap<String, String>,
+) -> &'a Value {
     const NULL: Value = Value::Null;
     let mut cur = cpt;
     for parent in parents {
@@ -214,7 +218,11 @@ mod tests {
     fn parses_fixture_with_root_user_agent() {
         let g = make_gen();
         assert_eq!(g.nodes.len(), 6);
-        let roots: Vec<_> = g.nodes.iter().filter(|n| n.parent_names.is_empty()).collect();
+        let roots: Vec<_> = g
+            .nodes
+            .iter()
+            .filter(|n| n.parent_names.is_empty())
+            .collect();
         assert_eq!(roots.len(), 1);
         assert_eq!(roots[0].name, "userAgent");
     }
@@ -225,7 +233,10 @@ mod tests {
         for s in 0..64u64 {
             let a = g.generate(Seed::from_u64(s));
             let b = g.generate(Seed::from_u64(s));
-            assert_eq!(serde_json::to_value(&a).unwrap(), serde_json::to_value(&b).unwrap());
+            assert_eq!(
+                serde_json::to_value(&a).unwrap(),
+                serde_json::to_value(&b).unwrap()
+            );
         }
     }
 
@@ -236,7 +247,10 @@ mod tests {
             let p = g.generate(Seed::from_u64(s));
             let plat = p.platform.expect("platform assigned");
             assert!(
-                matches!(plat, Platform::Win32 | Platform::MacIntel | Platform::LinuxX86_64),
+                matches!(
+                    plat,
+                    Platform::Win32 | Platform::MacIntel | Platform::LinuxX86_64
+                ),
                 "non-desktop platform sampled: {plat:?}"
             );
             let w = p.webgl.as_ref().expect("webgl assigned");
@@ -245,9 +259,14 @@ mod tests {
             match plat {
                 Platform::Win32 => assert!(renderer.contains("D3D11"), "win renderer: {renderer}"),
                 Platform::MacIntel => {
-                    assert!(renderer.contains("Apple") || renderer.contains("Metal"), "mac renderer: {renderer}")
+                    assert!(
+                        renderer.contains("Apple") || renderer.contains("Metal"),
+                        "mac renderer: {renderer}"
+                    )
                 }
-                Platform::LinuxX86_64 => assert!(renderer.contains("Mesa"), "linux renderer: {renderer}"),
+                Platform::LinuxX86_64 => {
+                    assert!(renderer.contains("Mesa"), "linux renderer: {renderer}")
+                }
             }
         }
     }
@@ -258,15 +277,25 @@ mod tests {
         let p = g.generate(Seed::from_u64(1));
         assert!(p.device_memory_gb.is_some());
         assert!(p.hardware_concurrency.is_some());
-        assert!(p.fonts.as_ref().and_then(|f| f.available.as_ref()).is_some());
+        assert!(
+            p.fonts
+                .as_ref()
+                .and_then(|f| f.available.as_ref())
+                .is_some()
+        );
     }
 
     #[test]
     fn different_seeds_can_differ() {
         let g = make_gen();
-        let plats: Vec<_> = (0..64u64).map(|s| g.generate(Seed::from_u64(s)).platform).collect();
+        let plats: Vec<_> = (0..64u64)
+            .map(|s| g.generate(Seed::from_u64(s)).platform)
+            .collect();
         let first = plats[0];
-        assert!(plats.iter().any(|p| *p != first), "every seed gave same platform");
+        assert!(
+            plats.iter().any(|p| *p != first),
+            "every seed gave same platform"
+        );
     }
 
     #[test]
@@ -284,7 +313,9 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_bytes(TEST_NETWORK_ZIP))
             .mount(&server)
             .await;
-        let g = Generator::load_or_download(&server.uri()).await.expect("load");
+        let g = Generator::load_or_download(&server.uri())
+            .await
+            .expect("load");
         assert!(g.generate(Seed::from_u64(5)).platform.is_some());
     }
 }
