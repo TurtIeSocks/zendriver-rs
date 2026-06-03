@@ -7,6 +7,14 @@ title: IdleInput
 description: "Arg block for `browser_wait_for_idle`."
 type: object
 properties:
+  max_inflight_age_ms:
+    description: "Ignore requests in flight longer than this many milliseconds when\njudging idle — treat them as stuck/background (a hung beacon, long-poll,\nSSE stream, …) so idle can resolve even while one is still open. Omit to\nwait for every request to complete (the default)."
+    type:
+      - integer
+      - "null"
+    format: uint64
+    default: ~
+    minimum: 0
   timeout_ms:
     description: "Outer timeout in milliseconds (default: 5000)."
     type: integer

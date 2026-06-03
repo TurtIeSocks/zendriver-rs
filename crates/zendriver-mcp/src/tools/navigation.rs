@@ -13,7 +13,7 @@ use rmcp::ErrorData;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use zendriver::{ReadyState, ReloadOptions};
+use zendriver::{IdleOptions, ReadyState, ReloadOptions};
 
 use crate::errors::{McpServerError, map_error};
 use crate::snapshot::html_trim;
@@ -280,6 +280,12 @@ pub struct IdleInput {
     /// Outer timeout in milliseconds (default: 5000).
     #[serde(default = "default_idle_timeout")]
     pub timeout_ms: u64,
+    /// Ignore requests in flight longer than this many milliseconds when
+    /// judging idle — treat them as stuck/background (a hung beacon, long-poll,
+    /// SSE stream, …) so idle can resolve even while one is still open. Omit to
+    /// wait for every request to complete (the default).
+    #[serde(default)]
+    pub max_inflight_age_ms: Option<u64>,
 }
 
 const fn default_idle_timeout() -> u64 {
@@ -290,6 +296,7 @@ impl Default for IdleInput {
     fn default() -> Self {
         Self {
             timeout_ms: default_idle_timeout(),
+            max_inflight_age_ms: None,
         }
     }
 }
@@ -304,16 +311,19 @@ pub struct IdleOutput {
 /// Wait until the current tab's network has been idle for ~500ms.
 ///
 /// Quiet window is fixed at 500ms; `timeout_ms` is the outer bound.
+/// `max_inflight_age_ms`, when set, lets idle resolve even while a stuck /
+/// background request is still open.
 pub async fn wait_for_idle(
     state: Arc<Mutex<SessionState>>,
     input: IdleInput,
 ) -> Result<IdleOutput, ErrorData> {
     let s = state.lock().await;
     let tab = current_tab(&s).await?;
-    tab.wait_for_idle_with(
-        Duration::from_millis(input.timeout_ms),
-        Duration::from_millis(500),
-    )
+    tab.wait_for_idle_opts(IdleOptions {
+        timeout: Duration::from_millis(input.timeout_ms),
+        quiet_window: Duration::from_millis(500),
+        max_inflight_age: input.max_inflight_age_ms.map(Duration::from_millis),
+    })
     .await
     .map_err(|e| map_error(McpServerError::from(e)))?;
     Ok(IdleOutput { idle: true })

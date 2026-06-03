@@ -1040,6 +1040,25 @@ impl BrowserBuilder {
             v.push("--no-sandbox".to_string());
         }
         v.extend(self.extra_args.iter().cloned());
+        // Start the initial tab on `about:blank` instead of Chrome's default
+        // New Tab Page. The NTP (`chrome://new-tab-page`) issues its own
+        // network requests — realbox icons plus, on a fresh user-data-dir,
+        // external Google fetches (logo/doodle, OneGoogle, suggest, background
+        // collections). Those land on the *main tab's* CDP session, so they
+        // pollute the in-flight set that [`Tab::wait_for_idle`] watches; on a
+        // network-restricted host (e.g. CI with no outbound egress) they never
+        // complete, and the first `wait_for_idle` after launch hangs until its
+        // timeout. A blank start page issues zero requests, so idle detection
+        // sees only the caller's own navigation traffic. Every mainstream
+        // driver (Puppeteer, Playwright, nodriver) starts on `about:blank` for
+        // the same reason.
+        //
+        // Emitted as the final positional argument (a bare URL, not a flag),
+        // and skipped when the caller already supplied their own positional
+        // start URL via `.arg`/`.args` — an explicit start page still wins.
+        if !self.extra_args.iter().any(|a| !a.starts_with('-')) {
+            v.push("about:blank".to_string());
+        }
         v
     }
 }
@@ -3142,6 +3161,42 @@ mod tests {
             .unwrap();
         let lang = flags.iter().position(|f| f == "--lang=en-US").unwrap();
         assert!(proxy < lang);
+    }
+
+    #[test]
+    fn build_flags_appends_about_blank_start_page() {
+        // Default launch must open the initial tab on about:blank (the final
+        // positional argument), not Chrome's New Tab Page — the NTP's own
+        // requests would otherwise pollute `wait_for_idle`'s in-flight set.
+        let flags = BrowserBuilder::new().build_flags(Path::new("/tmp/x"));
+        assert_eq!(
+            flags.last().map(String::as_str),
+            Some("about:blank"),
+            "about:blank must be the final positional arg in {flags:?}"
+        );
+        assert_eq!(
+            flags.iter().filter(|f| f.as_str() == "about:blank").count(),
+            1,
+            "exactly one start page expected in {flags:?}"
+        );
+    }
+
+    #[test]
+    fn build_flags_user_positional_url_suppresses_about_blank() {
+        // A caller-supplied positional start URL wins; we must not also append
+        // about:blank (which would open a second, blank tab).
+        let flags = BrowserBuilder::new()
+            .arg("https://example.com")
+            .build_flags(Path::new("/tmp/x"));
+        assert!(
+            !flags.contains(&"about:blank".to_string()),
+            "explicit positional URL should suppress about:blank in {flags:?}"
+        );
+        assert_eq!(
+            flags.last().map(String::as_str),
+            Some("https://example.com"),
+            "explicit start URL should remain the final arg in {flags:?}"
+        );
     }
 
     // ----- C4: lang / user_agent / sandbox / channel ---------------------

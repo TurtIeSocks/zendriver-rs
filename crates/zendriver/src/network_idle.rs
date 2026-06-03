@@ -28,7 +28,7 @@
 //! finishes. Tracking continuously lets us answer "has the count been 0 for
 //! N ms?" without losing events that fired before the call.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures::StreamExt;
@@ -45,10 +45,13 @@ use zendriver_transport::SessionHandle;
 /// the current count and wait on `notifier` for change events.
 #[derive(Debug)]
 pub(crate) struct InFlightTracker {
-    /// Currently-pending request IDs. Inserted on `Network.requestWillBeSent`,
-    /// removed on terminal events (`responseReceived` / `loadingFailed` /
-    /// `loadingFinished`).
-    pub(crate) in_flight: Mutex<HashSet<String>>,
+    /// Currently-pending requests, mapping `requestId` to the instant it was
+    /// inserted (on `Network.requestWillBeSent`). Entries are removed on
+    /// terminal events (`responseReceived` / `loadingFailed` /
+    /// `loadingFinished`). The insertion instant lets `wait_for_idle_opts`
+    /// ignore requests that have been in flight longer than
+    /// [`crate::IdleOptions::max_inflight_age`] (stuck / background requests).
+    pub(crate) in_flight: Mutex<HashMap<String, tokio::time::Instant>>,
     /// Notified on every membership change. `wait_for_idle` selects on this
     /// alongside a 50ms tick to wake immediately when the count moves.
     pub(crate) notifier: Notify,
@@ -69,7 +72,7 @@ impl InFlightTracker {
     /// task without an extra wrapper layer.
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
-            in_flight: Mutex::new(HashSet::new()),
+            in_flight: Mutex::new(HashMap::new()),
             notifier: Notify::new(),
         })
     }
@@ -145,7 +148,7 @@ impl InFlightTracker {
                         "Network.requestWillBeSent" => {
                             let Ok(parsed) = serde_json::from_value::<RequestEvent>(ev.params) else { continue };
                             let mut set = self.in_flight.lock().await;
-                            set.insert(parsed.request_id);
+                            set.insert(parsed.request_id, tokio::time::Instant::now());
                             true
                         }
                         "Network.responseReceived"
@@ -217,7 +220,7 @@ mod tests {
         {
             let set = tracker.in_flight.lock().await;
             assert_eq!(set.len(), 1, "expected exactly one in-flight request");
-            assert!(set.contains("R1"));
+            assert!(set.contains_key("R1"));
         }
 
         // Remove via responseReceived.

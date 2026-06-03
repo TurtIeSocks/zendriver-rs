@@ -370,6 +370,48 @@ impl Drop for TabInner {
     }
 }
 
+/// Tunables for [`Tab::wait_for_idle_opts`].
+///
+/// Construct from [`IdleOptions::default`] and override the fields you care
+/// about:
+///
+/// ```no_run
+/// # use std::time::Duration;
+/// # use zendriver::IdleOptions;
+/// let opts = IdleOptions {
+///     max_inflight_age: Some(Duration::from_secs(5)),
+///     ..Default::default()
+/// };
+/// ```
+#[derive(Debug, Clone)]
+pub struct IdleOptions {
+    /// Outer bound on the whole wait. [`Tab::wait_for_idle_opts`] returns
+    /// [`ZendriverError::Timeout`] once it elapses. Default: 30 s.
+    pub timeout: Duration,
+    /// The in-flight set must stay empty for this long to count as idle.
+    /// Default: 500 ms.
+    pub quiet_window: Duration,
+    /// Requests that have been in flight *longer than* this are ignored when
+    /// judging idleness — they are treated as stuck/background (a hung beacon,
+    /// long-poll, SSE stream, …) rather than active page loading. This lets
+    /// idle resolve even while such a request is still technically open.
+    ///
+    /// `None` (the default) waits for **every** request to terminate, which is
+    /// the historical behavior: a single never-completing request keeps the
+    /// tab non-idle until `timeout`.
+    pub max_inflight_age: Option<Duration>,
+}
+
+impl Default for IdleOptions {
+    fn default() -> Self {
+        Self {
+            timeout: Duration::from_secs(30),
+            quiet_window: Duration::from_millis(500),
+            max_inflight_age: None,
+        }
+    }
+}
+
 impl Tab {
     pub(crate) fn new(
         session: SessionHandle,
@@ -1671,23 +1713,13 @@ impl Tab {
     /// # Ok(()) }
     /// ```
     pub async fn wait_for_idle(&self) -> Result<()> {
-        self.wait_for_idle_with(Duration::from_secs(30), Duration::from_millis(500))
-            .await
+        self.wait_for_idle_opts(IdleOptions::default()).await
     }
 
     /// Wait until the tab's network has been idle for `quiet_window`,
-    /// bounded by `timeout`.
-    ///
-    /// Algorithm: poll the in-flight set with a `Notify`-driven wake (or a
-    /// 50ms fallback tick). Track `quiet_start = Some(now)` on the first
-    /// observation of an empty set; reset to `None` on any observation
-    /// where the set is non-empty. Return once `now - quiet_start
-    /// >= quiet_window`.
-    ///
-    /// The 50ms tick is a safety net for the case where the tracker is
-    /// already at 0 in-flight requests and no further events fire to wake
-    /// the notifier. Worst-case latency to detect "stayed idle long enough"
-    /// is `quiet_window + 50ms`.
+    /// bounded by `timeout`. Convenience wrapper over
+    /// [`Tab::wait_for_idle_opts`] with no stuck-request eviction
+    /// (`max_inflight_age: None`).
     ///
     /// # Errors
     ///
@@ -1713,6 +1745,59 @@ impl Tab {
         timeout: Duration,
         quiet_window: Duration,
     ) -> Result<()> {
+        self.wait_for_idle_opts(IdleOptions {
+            timeout,
+            quiet_window,
+            max_inflight_age: None,
+        })
+        .await
+    }
+
+    /// Wait for network idle with full control over the policy via
+    /// [`IdleOptions`].
+    ///
+    /// Algorithm: poll the in-flight set with a `Notify`-driven wake (or a
+    /// 50ms fallback tick). Each iteration computes the number of *active*
+    /// requests — every in-flight request when
+    /// [`IdleOptions::max_inflight_age`] is `None`, otherwise only those in
+    /// flight for less than that age (older ones are treated as stuck /
+    /// background and ignored). Track `quiet_start = Some(now)` on the first
+    /// observation of zero active requests; reset to `None` whenever the active
+    /// count is non-zero or a membership change fires. Return once
+    /// `now - quiet_start >= quiet_window`.
+    ///
+    /// The 50ms tick bounds latency both for the already-idle case (no further
+    /// events fire) and for an age-out crossing (which emits no CDP event), so
+    /// worst-case latency to detect "stayed idle long enough" is
+    /// `quiet_window + 50ms`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Timeout`] (carrying [`IdleOptions::timeout`])
+    /// once the outer deadline elapses.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use std::time::Duration;
+    /// # use zendriver::IdleOptions;
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.goto("https://example.com").await?;
+    /// // Resolve even if a beacon / long-poll stays open past 5s.
+    /// tab.wait_for_idle_opts(IdleOptions {
+    ///     max_inflight_age: Some(Duration::from_secs(5)),
+    ///     ..Default::default()
+    /// }).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn wait_for_idle_opts(&self, opts: IdleOptions) -> Result<()> {
+        let IdleOptions {
+            timeout,
+            quiet_window,
+            max_inflight_age,
+        } = opts;
         let tracker = self.inner.network_tracker.clone();
         let deadline = tokio::time::Instant::now() + timeout;
         let mut quiet_start: Option<tokio::time::Instant> = None;
@@ -1728,8 +1813,23 @@ impl Tab {
             tokio::pin!(notif);
             notif.as_mut().enable();
 
-            let in_flight_count = tracker.in_flight.lock().await.len();
-            if in_flight_count == 0 {
+            // "Active" = requests that still count toward busy-ness. With
+            // `max_inflight_age` set, a request in flight longer than that age
+            // is treated as stuck/background and excluded, so a never-
+            // terminating request can no longer pin the tab non-idle forever.
+            let active_count = {
+                let set = tracker.in_flight.lock().await;
+                match max_inflight_age {
+                    None => set.len(),
+                    Some(age) => {
+                        let now = tokio::time::Instant::now();
+                        set.values()
+                            .filter(|inserted| now.duration_since(**inserted) < age)
+                            .count()
+                    }
+                }
+            };
+            if active_count == 0 {
                 let now = tokio::time::Instant::now();
                 match quiet_start {
                     None => quiet_start = Some(now),
@@ -3864,7 +3964,7 @@ mod tests {
                 .in_flight
                 .lock()
                 .await
-                .contains("R2")
+                .contains_key("R2")
             {
                 break;
             }
@@ -3876,7 +3976,7 @@ mod tests {
                 .in_flight
                 .lock()
                 .await
-                .contains("R2"),
+                .contains_key("R2"),
             "R2 did not register inside quiet window",
         );
 
@@ -3984,6 +4084,76 @@ mod tests {
             elapsed >= Duration::from_millis(355),
             "wait_for_idle resolved too early ({elapsed:?}); 0→1→0 burst inside \
              quiet window must reset quiet_start",
+        );
+
+        conn.shutdown();
+    }
+
+    /// A request that never receives a terminal CDP event (a hung beacon /
+    /// long-poll / stuck XHR) must not pin `wait_for_idle` forever when the
+    /// caller sets [`IdleOptions::max_inflight_age`]: once it has been in
+    /// flight longer than that age it stops counting toward "active network",
+    /// so the quiet window can elapse and the call resolves.
+    #[tokio::test]
+    async fn wait_for_idle_opts_evicts_stuck_request_past_max_inflight_age() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let id_enable =
+            tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Network.enable"))
+                .await
+                .expect("tracker did not send Network.enable within 2s");
+        mock.reply(id_enable, json!({})).await;
+
+        // Insert a request and NEVER emit a terminal event for it.
+        mock.emit_event_for_session(
+            "Network.requestWillBeSent",
+            json!({ "requestId": "STUCK" }),
+            "S1",
+        )
+        .await;
+        for _ in 0..50 {
+            if tab.inner.network_tracker.in_flight.lock().await.len() == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            tab.inner.network_tracker.in_flight.lock().await.len(),
+            1,
+            "stuck request did not register before wait_for_idle starts",
+        );
+
+        // age 300ms + 200ms window ⇒ resolves ~500ms even though the request
+        // never completes. The 5s inner timeout is never reached on success;
+        // the 3s outer timeout below fails the test if eviction is missing
+        // (the stub hangs to the inner timeout instead of resolving).
+        let start = tokio::time::Instant::now();
+        let res = tokio::time::timeout(
+            Duration::from_secs(3),
+            tab.wait_for_idle_opts(IdleOptions {
+                timeout: Duration::from_secs(5),
+                quiet_window: Duration::from_millis(200),
+                max_inflight_age: Some(Duration::from_millis(300)),
+            }),
+        )
+        .await
+        .expect("wait_for_idle_opts did not resolve despite max_inflight_age eviction");
+        res.unwrap();
+        let elapsed = start.elapsed();
+
+        // Must clear the eviction age (300ms) + quiet window (200ms).
+        assert!(
+            elapsed >= Duration::from_millis(450),
+            "resolved too early ({elapsed:?}); eviction age + quiet window not enforced",
+        );
+        // Eviction is a counting filter, not a removal: the never-terminated id
+        // still lingers in the map (so a `None` waiter would still block on it).
+        assert_eq!(
+            tab.inner.network_tracker.in_flight.lock().await.len(),
+            1,
+            "stuck id should remain in the map (age filter, not prune)",
         );
 
         conn.shutdown();

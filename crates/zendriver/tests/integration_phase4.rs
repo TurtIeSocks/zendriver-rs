@@ -308,32 +308,49 @@ async fn reload_dispatches_page_reload() {
 #[tokio::test]
 #[serial]
 async fn wait_for_idle_on_spa_with_delayed_xhr() {
-    // Fixture fires an XHR ~300ms after the inline script runs.
-    // `wait_for_idle` should observe the request, wait for it to complete,
-    // then require its quiet window before resolving. The request is timed to
-    // fire well inside the (widened) quiet window so the catch is not a race;
-    // see the `wait_for_idle_with` call below for the timing rationale.
+    // Regression coverage: `wait_for_idle` must block on a request that is
+    // still in flight when it is called, and only resolve once that request
+    // completes and the quiet window elapses.
     //
-    // Use a single mock server for both the page and the data endpoint so
-    // the fetch is same-origin — a cross-origin fetch from a separate
-    // wiremock instance would be CORS-blocked and `window.x` would never
-    // be set, failing the read-back assertion below for an unrelated
-    // reason.
+    // Design that makes this deterministic (no dependence on host load):
+    //   * The page fires `fetch("/data")` immediately on parse.
+    //   * The server holds that response open for `DATA_DELAY` before replying.
+    //   * A `fetch` is NOT a document subresource, so the `load` event — and
+    //     therefore `wait_for_load` — fires while the request is still pending.
+    // So at the instant `wait_for_idle` starts, the `/data` request is
+    // guaranteed in flight; idle detection MUST observe it and wait. (The
+    // earlier version delayed the XHR with a client-side `setTimeout`, whose
+    // firing time relative to the measurement start drifted under CI load, and
+    // — separately — relied on the browser reaching a *global* network-idle
+    // state that Chrome's New Tab Page startup requests could prevent. The
+    // initial tab now launches on `about:blank`, so the only traffic is this
+    // fixture's own.)
+    //
+    // Page and data endpoint share one origin so the fetch is same-origin (a
+    // cross-origin fetch would be CORS-blocked and never set `window.x`).
+    const DATA_DELAY: Duration = Duration::from_millis(1500);
+    const QUIET_WINDOW: Duration = Duration::from_millis(500);
+
     let mock = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/data"))
-        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("ok")
+                .set_delay(DATA_DELAY),
+        )
         .mount(&mock)
         .await;
     Mock::given(method("GET"))
         .and(path("/"))
         .respond_with(
             ResponseTemplate::new(200).set_body_raw(
-                r#"<!doctype html><html><body>
+                // `<link rel="icon" href="data:,">` suppresses the implicit
+                // /favicon.ico request, leaving the document + the XHR as the
+                // only network traffic the tab generates.
+                r#"<!doctype html><html><head><link rel="icon" href="data:,"></head><body>
           <script>
-            setTimeout(() => {
-              fetch("/data").then(r => r.text()).then(t => { window.x = t; });
-            }, 300);
+            fetch("/data").then(r => r.text()).then(t => { window.x = t; });
           </script>
         </body></html>"#
                     .as_bytes()
@@ -343,43 +360,107 @@ async fn wait_for_idle_on_spa_with_delayed_xhr() {
         )
         .mount(&mock)
         .await;
-    let mock_page = mock;
 
     let browser = Browser::builder().headless(true).launch().await.unwrap();
     let tab = browser.main_tab();
-    tab.goto(&mock_page.uri()).await.unwrap();
+    tab.goto(&mock.uri()).await.unwrap();
     tab.wait_for_load().await.unwrap();
 
     let start = std::time::Instant::now();
-    // Use an explicit 800ms quiet window (vs the 500ms default). The fixture
-    // delays its XHR ~300ms, so the request fires roughly in the *middle* of
-    // the window — leaving ~500ms of slack before the window would otherwise
-    // close. With the old 500ms-delay / 500ms-window pairing the request
-    // landed within ~30ms of the window closing, so any CDP event lag or
-    // timer jitter (common under CI load) let `wait_for_idle` close the
-    // window before the request registered and it returned ~500ms early.
-    tab.wait_for_idle_with(Duration::from_secs(30), Duration::from_millis(800))
+    // Outer timeout is a generous multiple of the ~2s happy path (DATA_DELAY +
+    // QUIET_WINDOW) so a genuinely-stuck request fails fast instead of hanging
+    // the suite for 30s, while normal CI jitter never trips it.
+    tab.wait_for_idle_with(Duration::from_secs(10), QUIET_WINDOW)
         .await
         .unwrap();
     let elapsed = start.elapsed();
 
+    // Primary, *causal* assertion: `window.x` is only set when the delayed
+    // `/data` response arrives at +DATA_DELAY. Had `wait_for_idle` ignored the
+    // in-flight request, it would have resolved at the first quiet window
+    // (~QUIET_WINDOW) with `window.x` still empty. Independent of wall-clock
+    // timing, so it cannot flake.
     let x: String = tab.evaluate_main("window.x || ''").await.unwrap();
-    // Primary, *causal* assertion: the XHR result is only set after the
-    // delayed request completes. Reading it after `wait_for_idle` returns
-    // proves idle detection observed the request and waited for it to finish
-    // — had it returned at the first quiet window (before the XHR fired),
-    // `window.x` would still be unset. This check does not depend on timing,
-    // so it does not flake.
-    assert_eq!(x, "ok", "XHR result should be present once idle resolves");
+    assert_eq!(x, "ok", "XHR result must be present once idle resolves");
 
-    // Sanity floor: confirm a quiet window was actually enforced *after* the
-    // request (i.e. idle didn't resolve the instant the XHR finished). Kept
-    // well below the ~1.13s expected elapsed (~300ms delay + 800ms window) so
-    // scheduler jitter never trips it; the assertion above is what proves the
-    // delayed request was awaited.
+    // Secondary: idle cannot resolve until the response is delivered, so the
+    // elapsed time must clear the server delay. The floor sits far above the
+    // ~QUIET_WINDOW an oblivious wait would take and well below the ~2s
+    // expected, so scheduler jitter never trips it either way.
     assert!(
-        elapsed >= Duration::from_millis(600),
-        "wait_for_idle returned too early ({elapsed:?}); expected delayed XHR + quiet window"
+        elapsed >= Duration::from_millis(1200),
+        "wait_for_idle returned too early ({elapsed:?}); the in-flight XHR \
+         (held {DATA_DELAY:?} server-side) should have kept the tab non-idle"
+    );
+
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+#[serial]
+async fn wait_for_idle_opts_resolves_despite_stuck_request() {
+    // A request that never completes within the test (server holds it open far
+    // longer than the wait) must NOT pin `wait_for_idle_opts` to its outer
+    // timeout when `max_inflight_age` is set: once the request has been in
+    // flight past that age it is ignored, so idle resolves on the quiet window.
+    //
+    // Single origin + suppressed favicon so the held `/hang` fetch is the only
+    // thing keeping the tab busy.
+    const HANG_DELAY: Duration = Duration::from_secs(5); // ≫ the ~0.6s we wait
+    const MAX_AGE: Duration = Duration::from_millis(400);
+    const QUIET_WINDOW: Duration = Duration::from_millis(200);
+
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/hang"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("late")
+                .set_delay(HANG_DELAY),
+        )
+        .mount(&mock)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(
+                r#"<!doctype html><html><head><link rel="icon" href="data:,"></head><body>
+          <script>fetch("/hang");</script>
+        </body></html>"#
+                    .as_bytes()
+                    .to_vec(),
+                "text/html",
+            ),
+        )
+        .mount(&mock)
+        .await;
+
+    let browser = Browser::builder().headless(true).launch().await.unwrap();
+    let tab = browser.main_tab();
+    tab.goto(&mock.uri()).await.unwrap();
+    tab.wait_for_load().await.unwrap();
+
+    let start = std::time::Instant::now();
+    tab.wait_for_idle_opts(zendriver::IdleOptions {
+        timeout: Duration::from_secs(10),
+        quiet_window: QUIET_WINDOW,
+        max_inflight_age: Some(MAX_AGE),
+    })
+    .await
+    .unwrap();
+    let elapsed = start.elapsed();
+
+    // Resolved by eviction, not by the request finishing (it can't — held 5s)
+    // and not by the 10s outer timeout. So elapsed clears MAX_AGE + window but
+    // stays far below HANG_DELAY.
+    assert!(
+        elapsed >= Duration::from_millis(500),
+        "resolved too early ({elapsed:?}); eviction age + quiet window not enforced"
+    );
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "resolved too late ({elapsed:?}); the stuck /hang request should have been \
+         evicted at {MAX_AGE:?}, not awaited"
     );
 
     browser.close().await.unwrap();
