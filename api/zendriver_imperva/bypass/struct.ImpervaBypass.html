@@ -22,7 +22,7 @@ CAPTCHA surface returns <a href="../error/enum.ImpervaError.html#variant.Captcha
     .wait_for_clearance()
     .<span class="kw">await</span><span class="question-mark">?</span>;
 <span class="macro">println!</span>(<span class="string">"{outcome:?}"</span>);</code></pre></div></div></details><details class="toggle method-toggle" open><summary><section id="method.with_interception" class="method"><a class="src rightside" href="../../src/zendriver_imperva/bypass.rs.html#166-169">Source</a><h4 class="code-header">pub fn <a href="#method.with_interception" class="fn">with_interception</a>(self) -&gt; Self</h4></section></summary><div class="docblock"><p>Enable the Fetch-domain escape hatch: the bypass driver spins up
-its own <a href="zendriver_interception::InterceptBuilder::subscribe"><code>InterceptBuilder::subscribe</code></a> hook against this session,
+its own <a href="../../zendriver_interception/builder/struct.InterceptBuilder.html#method.subscribe" title="method zendriver_interception::builder::InterceptBuilder::subscribe"><code>InterceptBuilder::subscribe</code></a> hook against this session,
 listening for <code>Reese.js</code> / <code>_Incapsula_Resource</code> 2xx responses to
 signal clearance faster than polling alone.</p>
 

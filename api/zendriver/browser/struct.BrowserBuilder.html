@@ -213,7 +213,7 @@ order they were registered.</p>
 <ol>
 <li>Resolves a <a href="../stealth/struct.Fingerprint.html" title="struct zendriver::stealth::Fingerprint"><code>zendriver_stealth::Fingerprint</code></a> from the resolved
 Chrome executable.</li>
-<li>Prepends the profile’s <a href="../../zendriver_stealth/observer/struct.StealthObserver.html" title="struct zendriver_stealth::observer::StealthObserver"><code>StealthObserver</code></a> to the observer chain.</li>
+<li>Prepends the profile’s [<code>StealthObserver</code>] to the observer chain.</li>
 <li>Appends the profile’s stealth flags to the launch argv.</li>
 <li>Sends <code>Target.setAutoAttach { waitForDebuggerOnStart: true }</code> at
 browser scope so the actor can route pauses through observers
