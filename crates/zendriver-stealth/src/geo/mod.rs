@@ -19,6 +19,14 @@ pub(crate) fn languages_for(cc: &str) -> Option<&'static [&'static str]> {
         .map(|i| table::COUNTRIES[i].1)
 }
 
+/// The Unicode CLDR release the vendored locale table was generated from
+/// (e.g. `"46.0.0"`). Exposed for provenance/introspection; also keeps the
+/// generated `CLDR_VERSION` a live (non-dead) symbol so the generated
+/// `table.rs` needs no hand-added `#[allow]` that a resync would clobber.
+pub fn cldr_version() -> &'static str {
+    table::CLDR_VERSION
+}
+
 /// Build a [`Persona`] overlay carrying a coherent `locale` + `languages` for
 /// `country`. Default policy: the country's dominant language only, formed as
 /// `lang-COUNTRY` with its base subtag (e.g. `CH` -> `de-CH` + `["de-CH","de"]`).
@@ -155,7 +163,10 @@ mod tests {
         );
         for (cc, langs) in rows {
             assert_eq!(cc.len(), 2, "{cc} not 2 chars");
-            assert!(cc.bytes().all(|b| b.is_ascii_uppercase()), "{cc} not uppercase");
+            assert!(
+                cc.bytes().all(|b| b.is_ascii_uppercase()),
+                "{cc} not uppercase"
+            );
             assert!(!langs.is_empty(), "{cc} has no languages");
             for l in *langs {
                 assert!(

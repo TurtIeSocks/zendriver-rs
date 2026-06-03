@@ -686,14 +686,20 @@ mod tests {
 
     #[test]
     fn navigator_languages_derives_base_lang_not_en() {
-        let persona = Persona { locale: Some("fr-FR".into()), ..Default::default() };
+        let persona = Persona {
+            locale: Some("fr-FR".into()),
+            ..Default::default()
+        };
         let identity = mock_identity(); // existing helper in this test module
         let script = bootstrap_script(&persona, &identity);
         assert!(
             script.contains(r#"["fr-FR","fr"]"#) || script.contains(r#"["fr-FR", "fr"]"#),
             "languages should derive base lang, not hardcode en: {script}"
         );
-        assert!(!script.contains(r#"["fr-FR","en"]"#), "must not hardcode en");
+        assert!(
+            !script.contains(r#"["fr-FR","en"]"#),
+            "must not hardcode en"
+        );
     }
 
     #[test]
