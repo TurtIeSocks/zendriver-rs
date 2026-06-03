@@ -416,7 +416,7 @@ pub async fn find(
 
 /// `true` when the `ErrorData` was produced by mapping an
 /// [`zendriver::ZendriverError::ElementNotFound`]. We rely on the
-/// `_meta.suggested_next == "browser_snapshot"` marker that `map_error`
+/// `_meta.suggested_next == "browser_html"` marker that `map_error`
 /// attaches to that variant — checking the message would be brittle
 /// across translation tweaks.
 fn is_not_found(err: &ErrorData) -> bool {
@@ -424,7 +424,7 @@ fn is_not_found(err: &ErrorData) -> bool {
         .as_ref()
         .and_then(|v| v.get("suggested_next"))
         .and_then(|v| v.as_str())
-        == Some("browser_snapshot")
+        == Some("browser_html")
         && err.message.contains("No element matched")
 }
 

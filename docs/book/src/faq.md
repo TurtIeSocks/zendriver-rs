@@ -224,6 +224,33 @@ the specific event you care about.
 
 [`ZendriverError::Navigation`]: https://docs.rs/zendriver/latest/zendriver/enum.ZendriverError.html#variant.Navigation
 
+## `wait_for_idle` never returns on a page with a long-poll, SSE, or analytics-beacon request
+
+By default `wait_for_idle` waits for *every* in-flight request to
+terminate, so a single never-completing request (a Server-Sent Events
+stream, a long-poll, a hung analytics beacon) keeps the tab non-idle
+until `timeout`. Use `Tab::wait_for_idle_opts` with an
+`IdleOptions::max_inflight_age` — any request older than that age is
+treated as background, letting idle resolve while it stays open:
+
+```rust,no_run
+# async fn ex() -> zendriver::Result<()> {
+# let browser = zendriver::Browser::builder().launch().await?;
+# let tab = browser.main_tab();
+use std::time::Duration;
+use zendriver::IdleOptions;
+
+tab.wait_for_idle_opts(IdleOptions {
+    max_inflight_age: Some(Duration::from_secs(5)),
+    ..Default::default()
+})
+.await?;
+# Ok(()) }
+```
+
+`max_inflight_age` defaults to `None` (the historical
+wait-for-everything behavior).
+
 ## Where do I find the full list of errors?
 
 [Error Reference](./error-reference.md) — every public variant of

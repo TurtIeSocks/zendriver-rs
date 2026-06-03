@@ -1,7 +1,8 @@
 # MCP server (`zendriver-mcp`)
 
 `zendriver-mcp` is a [Model Context Protocol](https://modelcontextprotocol.io/)
-server that exposes zendriver-rs through 65 MCP tools, so any
+server that exposes zendriver-rs through 70 MCP tools (71 with the
+optional `fingerprints` feature), so any
 MCP-compatible client (Claude Desktop, Claude Code, custom agents) can
 drive a real, stealth-by-default Chrome browser.
 
@@ -11,8 +12,10 @@ drive a real, stealth-by-default Chrome browser.
 cargo install zendriver-mcp
 ```
 
-The default build enables all gated features (`interception`, `expect`,
-`cloudflare`, `imperva`, `fetcher`). For a lean build:
+The default build enables `interception`, `expect`, `cloudflare`,
+`imperva`, `datadome`, `monitor`, `fetcher`, and `tracker-blocking`. The
+`fingerprints` and `geo` features are opt-in (add
+`--features fingerprints,geo`). For a lean build:
 
 ```bash
 cargo install zendriver-mcp --no-default-features
@@ -59,7 +62,8 @@ OPTIONS:
 
 ## Tool surface
 
-65 tools across these categories:
+70 tools across these categories (71 with the optional `fingerprints`
+feature):
 
 | Category               | Tools                                                                                                                       | Count |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------- | ----: |
@@ -72,6 +76,7 @@ OPTIONS:
 | Reads                  | `browser_element_state / _get_links / _search_resources`                                                                    |     3 |
 | Snapshots / Export     | `browser_html / _screenshot / _pdf / _save_mhtml`                                                                           |     4 |
 | Eval                   | `browser_evaluate / _evaluate_main`                                                                                         |     2 |
+| Network                | `browser_request`                                                                                                           |     1 |
 | Cookies                | `browser_cookies_get / _set / _delete / _clear / _persist`                                                                  |     5 |
 | Storage                | `browser_storage_get / _set / _delete / _clear`                                                                             |     4 |
 | Downloads              | `browser_download / _set_download_path`                                                                                     |     2 |
@@ -81,7 +86,10 @@ OPTIONS:
 | Expect (gated)         | `browser_expect_register / _await / _cancel`                                                                                |     3 |
 | Cloudflare (gated)     | `browser_solve_turnstile`                                                                                                   |     1 |
 | Imperva (gated)        | `browser_solve_imperva`                                                                                                     |     1 |
+| DataDome (gated)       | `browser_solve_datadome`                                                                                                   |     1 |
 | Fetcher (gated)        | `browser_install_chrome`                                                                                                    |     1 |
+| Monitor (gated)        | `browser_monitor_start / _read / _stop`                                                                                    |     3 |
+| Fingerprint (gated)    | `browser_fingerprint_generate`                                                                                             |     1 |
 
 All find / action tools share a `Selector` arg — one-of `css | xpath |
 text | text_exact | text_regex | role`, with modifiers `nth /
@@ -89,13 +97,27 @@ visible_only / timeout_ms / frame_id`. State-changing tools accept
 `return_snapshot: bool` for one-call action + observe. `browser_pdf` /
 `_save_mhtml` / `_download` return a binary-output shape (`{ byte_len,
 saved_path? , base64? }`): bytes go to `save_path` on the MCP host when
-given, else base64-inline (capped at 5 MiB). The default build adds
-`imperva` to the gated feature set alongside `interception` / `expect` /
-`cloudflare` / `fetcher`.
+given, else base64-inline (capped at 5 MiB). The default build enables
+`interception` / `expect` / `cloudflare` / `imperva` / `datadome` /
+`monitor` / `fetcher` / `tracker-blocking`; `fingerprints` and `geo` are
+opt-in.
 
 Full JSON Schema for every tool's input + output is captured in
 `crates/zendriver-mcp/tests/snapshots/` and changes there require an
 explicit `cargo insta accept` — the wire shape is reviewed.
+
+## `browser_open` options
+
+`browser_open` accepts opt-in third-party tracker / fingerprinter blocking:
+
+- `block_trackers: bool` — enable blocking with the curated bundled list.
+- `tracker_blocklist` — one of `{ "url": "..." }`, `{ "path": "..." }`, or
+  `{ "domains": ["..."] }` to add custom hosts (implicitly enables blocking).
+  Requires the default `tracker-blocking` feature.
+
+The stealth-profile override accepts `geo_country` (ISO 3166-1 alpha-2, e.g.
+`"DE"`) to derive a coherent `locale` + `Accept-Language`. The field is always
+present in the schema but only takes effect when the `geo` feature is enabled.
 
 ## Stealth
 

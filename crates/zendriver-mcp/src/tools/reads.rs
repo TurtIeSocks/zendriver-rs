@@ -312,7 +312,7 @@ fn is_not_found(err: &ErrorData) -> bool {
         .as_ref()
         .and_then(|v| v.get("suggested_next"))
         .and_then(|v| v.as_str())
-        == Some("browser_snapshot")
+        == Some("browser_html")
         && err.message.contains("No element matched")
 }
 

@@ -24,8 +24,8 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 - Re-stage / amend after the fixes so the pushed commit is already clean.
 
 CI clippy runs on **default features**; if you touched feature-gated code
-(`interception` / `expect` / `monitor` / `cloudflare` / `imperva` / `fetcher` /
-`fingerprints`), also run
+(`interception` / `expect` / `monitor` / `cloudflare` / `imperva` / `datadome` /
+`fetcher` / `geo` / `tracker-blocking` / `fingerprints`), also run
 `cargo clippy -p zendriver-mcp --all-features --all-targets -- -D warnings`.
 
 ## Schema snapshots (zendriver-mcp)
@@ -78,6 +78,30 @@ If you intentionally changed the public API, regenerate the baseline:
 cargo +nightly public-api -p zendriver --all-features > crates/zendriver-mcp/public-api-baseline.txt
 ```
 
+## Documentation sync (REQUIRED before finishing a PR)
+
+Three doc surfaces must stay in sync with the public API. Any PR that adds or
+changes a user-facing capability MUST update **all three** (or consciously note
+why a surface doesn't apply) before it is finished:
+
+1. **READMEs** (`README.md` + `crates/zendriver-mcp/README.md`) — feature
+   matrix, install examples, the MCP tool count, and the "what agents get"
+   bullets. The tool count appears verbatim in several places — grep for the
+   old number and replace every hit.
+2. **Rustdocs** — doc comments on every new/changed public item (`BrowserBuilder`
+   option, `Tab`/`Frame`/`Element` method, new type, feature flag). These render
+   on docs.rs, so keep examples `no_run`-compilable.
+3. **The mdBook** (`docs/book/src/`) — add or extend the relevant chapter
+   (a new `BrowserBuilder` option → its feature's chapter; a new MCP tool →
+   `mcp.md`, including the tool count + category table). Confirm it still builds:
+   `mdbook build docs/book`.
+
+The published MCP tool count = tools compiled with the default features
+(`cargo install zendriver-mcp`); `--all-features` adds the opt-in
+`fingerprints` / `geo` tools. Treat a shipped behavior change with a stale
+README / rustdoc / book as an incomplete PR — same bar as the MCP coverage
+check above.
+
 ## Workspace layout
 
 9-crate workspace (`edition = 2024`, MSRV 1.85). Roles:
@@ -95,5 +119,6 @@ cargo +nightly public-api -p zendriver --all-features > crates/zendriver-mcp/pub
 | `zendriver-mcp` | MCP server exposing the `zendriver` surface as agent tools (see MCP coverage above). |
 
 Capability crates are wired into `zendriver` behind features (`interception` /
-`cloudflare` / `imperva` / `fetcher` / `expect` / `monitor`), which
-`zendriver-mcp` re-exposes behind matching MCP features.
+`cloudflare` / `imperva` / `datadome` / `fetcher` / `expect` / `monitor` /
+`geo` / `tracker-blocking`), which `zendriver-mcp` re-exposes behind matching
+MCP features (plus `fingerprints`).

@@ -145,6 +145,30 @@ let browser = Browser::builder()
     .launch().await?;
 ```
 
+## Country → locale overlay (`geo_locale`)
+
+The optional `geo` feature adds [`BrowserBuilder::geo_locale`], which maps an
+ISO 3166-1 alpha-2 country code (e.g. `"US"`, `"de"`) to a coherent `locale` +
+`languages` (Accept-Language) set drawn from a bundled CLDR-derived table. It
+is layered as a **persona overlay**, so it composes with `.persona(..)` and is
+overridden by an explicit `.persona_overlay(..)` locale. An invalid / unknown
+country code is ignored (logged) — the value is never locked.
+
+```toml
+[dependencies]
+zendriver = { version = "0.1", features = ["geo"] }
+```
+
+```rust,no_run
+use zendriver::Browser;
+
+let browser = Browser::builder()
+    .geo_locale("DE")   // de-DE locale + matching Accept-Language
+    .launch().await?;
+```
+
+[`BrowserBuilder::geo_locale`]: https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.geo_locale
+
 ## JSON persona (`try_from_json`)
 
 Any `Persona` can be expressed as a JSON object and round-trips cleanly.
