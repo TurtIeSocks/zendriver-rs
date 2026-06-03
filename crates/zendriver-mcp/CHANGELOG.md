@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.6.1] - 2026-06-03
+
+### Fixed
+
+- Point element-not-found hints at browser_html
+
+
 ## [0.6.0] - 2026-06-03
 
 ### Added
