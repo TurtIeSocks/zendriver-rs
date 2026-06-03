@@ -2,10 +2,9 @@
 // Real Chrome: Notification.permission === 'default' AND
 //   navigator.permissions.query({name:'notifications'}).state === 'prompt'
 // Headless: mismatch — Notification.permission is 'denied' but query says 'prompt'.
-const origQuery = navigator.permissions.query.bind(navigator.permissions);
-navigator.permissions.query = function(p) {
+__zdReplace(navigator.permissions, 'query', (orig) => function(p) {
     if (p && p.name === 'notifications') {
         return Promise.resolve({ state: Notification.permission, onchange: null });
     }
-    return origQuery(p);
-};
+    return orig.call(navigator.permissions, p);
+});

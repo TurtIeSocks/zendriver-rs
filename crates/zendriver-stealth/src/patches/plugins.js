@@ -1,7 +1,6 @@
 // Defeats: bot.sannysoft.com `Plugins Length (Old)` row.
 // Fakes 3 plugins matching Chrome's modern stub layout.
-Object.defineProperty(Navigator.prototype, 'plugins', {
-    get: function() {
+__zdGetter(Navigator.prototype, 'plugins', function() {
         const make = (name, filename, description) => {
             const p = Object.create(Plugin.prototype);
             Object.defineProperties(p, {
@@ -19,7 +18,4 @@ Object.defineProperty(Navigator.prototype, 'plugins', {
         ];
         Object.setPrototypeOf(arr, PluginArray.prototype);
         return arr;
-    },
-    configurable: true,
-    enumerable: true,
-});
+    }, { enumerable: true });

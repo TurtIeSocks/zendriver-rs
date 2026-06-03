@@ -1,11 +1,10 @@
 // navigator.userAgentData stub — many headless detectors check this.
 // Mirrors what Emulation.setUserAgentOverride sends, but JS-readable.
-Object.defineProperty(Navigator.prototype, 'userAgentData', {
-    get: () => ({
+__zdGetter(Navigator.prototype, 'userAgentData', () => ({
         brands: fp.brands,
         mobile: false,
         platform: fp.chPlatform,
-        getHighEntropyValues: function(hints) {
+        getHighEntropyValues: __zdMark(function getHighEntropyValues(hints) {
             return Promise.resolve({
                 architecture: fp.architecture,
                 bitness: fp.bitness,
@@ -17,10 +16,8 @@ Object.defineProperty(Navigator.prototype, 'userAgentData', {
                 platformVersion: fp.platformVersion,
                 wow64: false,
             });
-        },
-        toJSON: function() {
+        }, 'getHighEntropyValues', 1),
+        toJSON: __zdMark(function toJSON() {
             return { brands: fp.brands, mobile: false, platform: fp.chPlatform };
-        }
-    }),
-    configurable: true, enumerable: true,
-});
+        }, 'toJSON', 0),
+    }), { enumerable: true });

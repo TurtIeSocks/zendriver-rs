@@ -16,7 +16,7 @@
 (function (vendor, architecture, mode) {
   if (!('gpu' in navigator)) return;
   if (mode === 'block') {
-    try { Object.defineProperty(navigator, 'gpu', { get: function () { return undefined; }, configurable: true }); } catch (e) {}
+    try { __zdGetter(navigator, 'gpu', function () { return undefined; }, { enumerable: false }); } catch (e) {}
     return;
   }
   if (vendor === null) return;
@@ -25,11 +25,7 @@
   try {
     var d = Object.getOwnPropertyDescriptor(GPUAdapter.prototype, 'info');
     if (d && typeof d.get === 'function') {
-      Object.defineProperty(GPUAdapter.prototype, 'info', {
-        get: function () { return info; },
-        configurable: true,
-        enumerable: d.enumerable,
-      });
+      __zdGetter(GPUAdapter.prototype, 'info', function () { return info; }, { enumerable: d.enumerable });
     }
   } catch (e) {}
 })(WEBGPU_VENDOR, WEBGPU_ARCHITECTURE, WEBGPU_MODE);
