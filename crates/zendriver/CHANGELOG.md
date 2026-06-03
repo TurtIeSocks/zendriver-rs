@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.13] - 2026-06-03
+
+### Added
+
+- Opt-in tracker/fingerprinter blocklist ([#51](https://github.com/TurtIeSocks/zendriver-rs/pull/51))
+
+
 ## [0.2.12] - 2026-06-03
 
 ### Added
