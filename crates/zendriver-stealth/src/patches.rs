@@ -14,6 +14,9 @@ use crate::persona::surface::{Strategy, Surface};
 use crate::persona::{FontSpec, HardwareSpec, SurfaceCfg, WebglSpec, WebrtcSpec};
 use crate::{Fingerprint, Persona, Seed, UserAgentMetadata};
 
+// --- Native-function masking prelude (runs first, wraps everything) ------
+const NATIVE: &str = include_str!("patches/_native.js");
+
 // --- Identity patches (run inside the fp IIFE) ---------------------------
 const WEBDRIVER: &str = include_str!("patches/webdriver.js");
 const PLUGINS: &str = include_str!("patches/plugins.js");
@@ -56,45 +59,51 @@ const WEBGPU: &str = include_str!("patches/webgpu.js");
 /// last), then the PRNG definition, then each persona surface.
 #[must_use]
 pub fn bootstrap_script(persona: &Persona, identity: &Fingerprint) -> String {
-    let mut out = identity_iife(persona, identity);
+    // Prelude first: installs the toString override + closure-local helpers
+    // that every patch below routes through.
+    let mut body = String::from(NATIVE);
+    body.push('\n');
+    body.push_str(&identity_iife(persona, identity));
 
     let seed = persona.seed.unwrap_or_else(Seed::random).value();
 
     // PRNG must be defined once, before any noise/font patch that references
     // `__zdRng`. Emit it unconditionally — cheap, and harmless if every
     // surface is Native (it just defines an unused function).
-    out.push('\n');
-    out.push_str(PRNG);
+    body.push('\n');
+    body.push_str(PRNG);
 
     push_noise(
-        &mut out,
+        &mut body,
         Surface::Canvas,
         persona.canvas.as_ref(),
         CANVAS,
         seed,
     );
     push_noise(
-        &mut out,
+        &mut body,
         Surface::Audio,
         persona.audio.as_ref(),
         AUDIO,
         seed,
     );
     push_noise(
-        &mut out,
+        &mut body,
         Surface::ClientRects,
         persona.client_rects.as_ref(),
         CLIENT_RECTS,
         seed,
     );
 
-    push_webgl(&mut out, persona.webgl.as_ref());
-    push_webgpu(&mut out, persona.webgpu.as_ref(), persona.webgl.as_ref());
-    push_fonts(&mut out, persona.fonts.as_ref(), seed);
-    push_hardware(&mut out, persona.hardware.as_ref());
-    push_webrtc(&mut out, persona.webrtc.as_ref());
+    push_webgl(&mut body, persona.webgl.as_ref());
+    push_webgpu(&mut body, persona.webgpu.as_ref(), persona.webgl.as_ref());
+    push_fonts(&mut body, persona.fonts.as_ref(), seed);
+    push_hardware(&mut body, persona.hardware.as_ref());
+    push_webrtc(&mut body, persona.webrtc.as_ref());
 
-    out
+    // Single outer IIFE: helpers stay closure-local (no globalThis leak); the
+    // Function.prototype.toString override inside still persists globally.
+    format!("(function(){{\n{body}\n}})();")
 }
 
 /// Emit the 9 identity patches wrapped in `(function(fp){ ... })(fpJson)`.
@@ -351,8 +360,31 @@ mod tests {
     #[test]
     fn bootstrap_is_an_iife_taking_fp() {
         let s = bootstrap_script(&Persona::default(), &mock_identity());
-        assert!(s.starts_with("(function(fp){"));
+        // The identity patches still run inside `(function(fp){…})({…})`, now
+        // nested within the outer masking IIFE.
+        assert!(s.contains("(function(fp){"));
         assert!(s.contains("})({"), "fp arg JSON should follow");
+    }
+
+    #[test]
+    fn bootstrap_installs_native_masking_prelude() {
+        let s = bootstrap_script(&Persona::default(), &mock_identity());
+        assert!(s.contains("__zdReplace"), "replace helper missing");
+        assert!(s.contains("__zdGetter"), "getter helper missing");
+        assert!(s.contains("__zdMark"), "mark helper missing");
+        assert!(
+            s.contains("Function.prototype, \"toString\""),
+            "toString override missing"
+        );
+    }
+
+    #[test]
+    fn bootstrap_wraps_everything_in_outer_masking_iife() {
+        let s = bootstrap_script(&Persona::default(), &mock_identity());
+        assert!(s.starts_with("(function(){"), "outer masking IIFE must be first");
+        // identity IIFE is now nested inside the outer one.
+        assert!(s.contains("(function(fp){"), "identity IIFE still present (nested)");
+        assert!(s.trim_end().ends_with("})();"), "outer IIFE is invoked");
     }
 
     #[test]
