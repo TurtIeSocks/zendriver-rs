@@ -105,7 +105,10 @@ pub struct StealthOverrides {
     pub bypass_csp: Option<bool>,
     /// Derive a coherent `locale` + `languages` from a country code
     /// (ISO 3166-1 alpha-2, e.g. `"US"`). Overridden by an explicit `locale`.
-    #[cfg(feature = "geo")]
+    ///
+    /// Always present in the schema so the wire shape is feature-stable; it
+    /// only takes effect when the server is built with the `geo` feature
+    /// (otherwise the field is accepted and ignored).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geo_country: Option<String>,
 }

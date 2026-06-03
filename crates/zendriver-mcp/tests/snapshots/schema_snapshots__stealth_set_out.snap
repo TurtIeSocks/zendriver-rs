@@ -45,7 +45,7 @@ $defs:
         format: uint32
         minimum: 0
       geo_country:
-        description: "Derive a coherent `locale` + `languages` from a country code\n(ISO 3166-1 alpha-2, e.g. `\"US\"`). Overridden by an explicit `locale`."
+        description: "Derive a coherent `locale` + `languages` from a country code\n(ISO 3166-1 alpha-2, e.g. `\"US\"`). Overridden by an explicit `locale`.\n\nAlways present in the schema so the wire shape is feature-stable; it\nonly takes effect when the server is built with the `geo` feature\n(otherwise the field is accepted and ignored)."
         type:
           - string
           - "null"
