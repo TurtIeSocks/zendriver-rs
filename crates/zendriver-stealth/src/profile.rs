@@ -282,6 +282,9 @@ impl StealthProfile {
             Some(fp) => fp.clone(),
             None => Fingerprint::auto_detect(chrome_exe)?,
         };
+        // The Accept-Encoding the *real* binary advertises, captured before the
+        // claimed-major override below (used only to warn on an uncorrectable skew).
+        let binary_major = fp.chrome_major;
         if let Some(p) = self.per_field.platform {
             fp.platform = p;
         }
@@ -324,6 +327,24 @@ impl StealthProfile {
         }
         if let Some(ref locale) = self.per_field.locale {
             fp.locale = Some(locale.clone());
+        }
+        // Accept-Encoding coherence is observable but NOT correctable over CDP:
+        // Chrome's network service owns the header and ignores
+        // `Network.setExtraHTTPHeaders` for it (verified, Chrome 148). When a
+        // pinned `chrome_version` straddles the `zstd`/Chrome-123 boundary vs the
+        // launched binary, the request advertises the binary's encodings — an
+        // Accept-Encoding vs User-Agent mismatch we can only warn about.
+        if let Some(coherent) = crate::headers::accept_encoding_skew(binary_major, fp.chrome_major)
+        {
+            tracing::warn!(
+                claimed_major = fp.chrome_major,
+                binary_major,
+                coherent_accept_encoding = coherent,
+                "stealth: claimed Chrome major advertises a different Accept-Encoding \
+                 than the launched binary; Chrome controls this header and CDP cannot \
+                 override it, so requests will leak the binary's encodings — pin \
+                 chrome_version to the binary's major to stay coherent",
+            );
         }
         Ok(fp)
     }
