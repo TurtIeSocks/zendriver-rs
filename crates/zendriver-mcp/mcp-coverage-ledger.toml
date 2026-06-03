@@ -384,3 +384,24 @@ excluded = "blanket From<DataDomeError> conversion into the unified error enum; 
 [[entry]]
 api = "zendriver::browser::BrowserBuilder::geo_locale"
 covered = "browser_set_stealth_profile.geo_country"
+
+# ── #2 Tracker/fingerprinter blocklist ──────────────────────────────────────
+[[entry]]
+api = "zendriver::browser::BrowserBuilder::block_trackers"
+covered = "browser_open.block_trackers"
+
+[[entry]]
+api = "zendriver::browser::BrowserBuilder::tracker_blocklist_add"
+covered = "browser_open.tracker_blocklist (source=domains)"
+
+[[entry]]
+api = "zendriver::browser::BrowserBuilder::tracker_blocklist_file"
+covered = "browser_open.tracker_blocklist (source=file)"
+
+[[entry]]
+api = "zendriver::browser::BrowserBuilder::tracker_blocklist_url"
+covered = "browser_open.tracker_blocklist (source=url)"
+
+[[entry]]
+api = "zendriver::HostMatcher"
+excluded = "internal matching mechanism; reached via BrowserBuilder::block_trackers / browser_open, not directly"

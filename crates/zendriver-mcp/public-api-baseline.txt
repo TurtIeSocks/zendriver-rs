@@ -21,6 +21,7 @@ pub use zendriver::FetcherChannel
 pub use zendriver::FetcherError
 pub use zendriver::FetcherPhase
 pub use zendriver::FetcherProgress
+pub use zendriver::HostMatcher
 pub use zendriver::ImpervaBypass
 pub use zendriver::ImpervaClearanceOutcome
 pub use zendriver::ImpervaError
@@ -261,6 +262,7 @@ impl zendriver::browser::BrowserBuilder
 pub fn zendriver::browser::BrowserBuilder::add_extension(self, impl core::convert::Into<std::path::PathBuf>) -> Self
 pub fn zendriver::browser::BrowserBuilder::arg(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::browser::BrowserBuilder::args(self, impl core::iter::traits::collect::IntoIterator<Item = alloc::string::String>) -> Self
+pub fn zendriver::browser::BrowserBuilder::block_trackers(self, bool) -> Self
 pub fn zendriver::browser::BrowserBuilder::channel(self, zendriver::browser::Channel) -> Self
 pub fn zendriver::browser::BrowserBuilder::downloads_dir(self, impl core::convert::Into<std::path::PathBuf>) -> Self
 pub fn zendriver::browser::BrowserBuilder::executable(self, impl core::convert::Into<std::path::PathBuf>) -> Self
@@ -280,6 +282,9 @@ pub fn zendriver::browser::BrowserBuilder::resolved_persona(&self) -> zendriver_
 pub fn zendriver::browser::BrowserBuilder::sandbox(self, bool) -> Self
 pub fn zendriver::browser::BrowserBuilder::stealth(self, zendriver_stealth::profile::StealthProfile) -> Self
 pub fn zendriver::browser::BrowserBuilder::surface(self, zendriver_stealth::persona::surface::Surface, zendriver_stealth::persona::surface::Strategy) -> Self
+pub fn zendriver::browser::BrowserBuilder::tracker_blocklist_add(self, impl core::iter::traits::collect::IntoIterator<Item = alloc::string::String>) -> Self
+pub fn zendriver::browser::BrowserBuilder::tracker_blocklist_file(self, impl core::convert::Into<std::path::PathBuf>) -> Self
+pub fn zendriver::browser::BrowserBuilder::tracker_blocklist_url(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::browser::BrowserBuilder::user_agent(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::browser::BrowserBuilder::user_data_dir(self, impl core::convert::Into<std::path::PathBuf>) -> Self
 impl zendriver::browser::BrowserBuilder
@@ -5565,6 +5570,7 @@ impl zendriver::browser::BrowserBuilder
 pub fn zendriver::browser::BrowserBuilder::add_extension(self, impl core::convert::Into<std::path::PathBuf>) -> Self
 pub fn zendriver::browser::BrowserBuilder::arg(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::browser::BrowserBuilder::args(self, impl core::iter::traits::collect::IntoIterator<Item = alloc::string::String>) -> Self
+pub fn zendriver::browser::BrowserBuilder::block_trackers(self, bool) -> Self
 pub fn zendriver::browser::BrowserBuilder::channel(self, zendriver::browser::Channel) -> Self
 pub fn zendriver::browser::BrowserBuilder::downloads_dir(self, impl core::convert::Into<std::path::PathBuf>) -> Self
 pub fn zendriver::browser::BrowserBuilder::executable(self, impl core::convert::Into<std::path::PathBuf>) -> Self
@@ -5584,6 +5590,9 @@ pub fn zendriver::browser::BrowserBuilder::resolved_persona(&self) -> zendriver_
 pub fn zendriver::browser::BrowserBuilder::sandbox(self, bool) -> Self
 pub fn zendriver::browser::BrowserBuilder::stealth(self, zendriver_stealth::profile::StealthProfile) -> Self
 pub fn zendriver::browser::BrowserBuilder::surface(self, zendriver_stealth::persona::surface::Surface, zendriver_stealth::persona::surface::Strategy) -> Self
+pub fn zendriver::browser::BrowserBuilder::tracker_blocklist_add(self, impl core::iter::traits::collect::IntoIterator<Item = alloc::string::String>) -> Self
+pub fn zendriver::browser::BrowserBuilder::tracker_blocklist_file(self, impl core::convert::Into<std::path::PathBuf>) -> Self
+pub fn zendriver::browser::BrowserBuilder::tracker_blocklist_url(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::browser::BrowserBuilder::user_agent(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::browser::BrowserBuilder::user_data_dir(self, impl core::convert::Into<std::path::PathBuf>) -> Self
 impl zendriver::browser::BrowserBuilder
