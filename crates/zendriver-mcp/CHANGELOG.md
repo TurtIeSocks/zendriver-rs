@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.5.0] - 2026-06-03
+
+### Added
+
+- Opt-in stuck-request eviction for wait_for_idle (max_inflight_age)
+
+
 ## [0.4.0] - 2026-06-03
 
 ### Added

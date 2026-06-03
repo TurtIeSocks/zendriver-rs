@@ -5,6 +5,17 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.11] - 2026-06-03
+
+### Added
+
+- Opt-in stuck-request eviction for wait_for_idle (max_inflight_age)
+
+### Fixed
+
+- Start initial tab on about:blank to fix flaky wait_for_idle
+
+
 ## [0.2.10] - 2026-06-03
 
 ### Added
