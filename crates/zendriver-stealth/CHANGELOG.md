@@ -3,6 +3,14 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.3.1] - 2026-06-03
+
+### Added
+
+- Accept_encoding_for(major) coherence rule
+- Warn when a pinned Chrome major leaks Accept-Encoding
+
+
 ## [0.3.0] - 2026-06-02
 
 ### Added
