@@ -20,6 +20,11 @@ rustdoc-args = ["--cfg", "docsrs"]
 [lints]
 workspace = true
 
+[features]
+default = []
+# Country -> locale derivation from a vendored CLDR table.
+geo = []
+
 [dependencies]
 zendriver-transport.workspace = true
 chromiumoxide_cdp.workspace   = true

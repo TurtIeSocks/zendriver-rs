@@ -39,6 +39,8 @@ pub mod fingerprint;
 pub mod flags;
 pub mod input_profile;
 pub mod lang;
+#[cfg(feature = "geo")]
+pub mod geo;
 pub mod observer;
 pub mod patches;
 pub mod persona;
