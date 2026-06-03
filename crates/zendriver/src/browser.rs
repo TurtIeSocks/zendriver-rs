@@ -1651,19 +1651,6 @@ pub(crate) async fn finish_connect(
         .await
         .insert(session_id_for_registry, inner.main_tab.clone());
 
-    // Install tracker blocking on the main tab's session (the main tab
-    // attached before the registrar weak-ref existed, so the registrar skipped
-    // it — install explicitly here, mirroring the proxy-auth wiring).
-    #[cfg(feature = "tracker-blocking")]
-    if let Some(matcher) = inner.tracker_matcher.clone() {
-        let session = inner.main_tab.session().clone();
-        let sid = session.session_id().to_string();
-        let handle = zendriver_interception::InterceptBuilder::new(&session)
-            .block_hosts(matcher)
-            .start();
-        inner.tracker_handles.lock().await.insert(sid, handle);
-    }
-
     Ok(inner)
 }
 
@@ -2127,19 +2114,32 @@ impl BrowserBuilder {
                 .await?;
         }
 
-        // 14. If proxy_auth was set, spawn an interception actor on the main
-        // tab session that auto-answers Fetch.authRequired challenges with
-        // the stored credentials. The InterceptHandle is parked on
-        // BrowserInner so the actor lives as long as the Browser does;
-        // dropping BrowserInner drops the handle which cancels the actor.
-        // See cdpdriver/zendriver#208.
+        // 14. Spawn a single main-session interception actor carrying BOTH
+        // proxy-auth (handle_auth) and tracker blocking (block_hosts), so they
+        // don't double-resolve the same Fetch.requestPaused. New tabs get their
+        // own tracker-only actor via the TabRegistrar (proxy auth is
+        // main-tab-only). The InterceptHandle is parked on BrowserInner so the
+        // actor lives as long as the Browser does; dropping BrowserInner drops
+        // the handle which cancels the actor. See cdpdriver/zendriver#208.
         #[cfg(feature = "interception")]
-        if let Some((user, pass)) = self.proxy_auth.clone() {
+        {
             let main_session = inner.main_tab.session().clone();
-            let handle = zendriver_interception::InterceptBuilder::new(&main_session)
-                .handle_auth(user, pass)
-                .start();
-            let _ = inner.proxy_auth_handle.set(handle);
+            let mut builder =
+                zendriver_interception::InterceptBuilder::new(&main_session);
+            let mut needs_actor = false;
+            if let Some((user, pass)) = self.proxy_auth.clone() {
+                builder = builder.handle_auth(user, pass);
+                needs_actor = true;
+            }
+            #[cfg(feature = "tracker-blocking")]
+            if let Some(matcher) = inner.tracker_matcher.clone() {
+                builder = builder.block_hosts(matcher);
+                needs_actor = true;
+            }
+            if needs_actor {
+                let handle = builder.start();
+                let _ = inner.proxy_auth_handle.set(handle);
+            }
         }
 
         Ok(Browser { inner })
