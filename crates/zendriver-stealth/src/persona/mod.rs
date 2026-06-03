@@ -25,6 +25,10 @@ pub struct Persona {
     pub device_memory_gb: Option<u32>,
     pub timezone: Option<String>,
     pub locale: Option<String>,
+    /// Ordered language list (e.g. `["de-DE", "de"]`). Drives
+    /// `navigator.languages` and the q-weighted `Accept-Language`. When unset,
+    /// derived from [`locale`](Self::locale).
+    pub languages: Option<Vec<String>>,
     pub webgl: Option<WebglSpec>,
     pub webgpu: Option<SurfaceCfg>,
     pub canvas: Option<SurfaceCfg>,
@@ -63,6 +67,10 @@ impl PersonaBuilder {
         self.0.locale = Some(l.into());
         self
     }
+    pub fn languages(mut self, langs: impl IntoIterator<Item = String>) -> Self {
+        self.0.languages = Some(langs.into_iter().collect());
+        self
+    }
     pub fn device_memory_gb(mut self, gb: u32) -> Self {
         self.0.device_memory_gb = Some(gb);
         self
@@ -97,6 +105,7 @@ impl Persona {
             device_memory_gb: over.device_memory_gb.or(self.device_memory_gb),
             timezone: over.timezone.or(self.timezone),
             locale: over.locale.or(self.locale),
+            languages: over.languages.or(self.languages),
             webgl: over.webgl.or(self.webgl),
             webgpu: over.webgpu.or(self.webgpu),
             canvas: over.canvas.or(self.canvas),
@@ -428,6 +437,26 @@ mod persona_tests {
             p.webgpu.as_ref().and_then(|c| c.strategy),
             Some(Strategy::Block)
         );
+    }
+
+    #[test]
+    fn languages_overlay_and_builder() {
+        let base = Persona::builder()
+            .languages(["en-US".to_string(), "en".to_string()])
+            .build();
+        assert_eq!(
+            base.languages.as_deref(),
+            Some(["en-US".to_string(), "en".to_string()].as_slice())
+        );
+        // `Some` in the overlay wins; `None` inherits.
+        let over = Persona {
+            languages: Some(vec!["de-DE".into(), "de".into()]),
+            ..Default::default()
+        };
+        let merged = base.clone().overlay(over);
+        assert_eq!(merged.languages.unwrap(), vec!["de-DE", "de"]);
+        let merged2 = base.overlay(Persona::default());
+        assert_eq!(merged2.languages.unwrap(), vec!["en-US", "en"]);
     }
 
     #[test]
