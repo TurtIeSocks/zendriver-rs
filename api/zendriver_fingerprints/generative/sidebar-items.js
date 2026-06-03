@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["Generator"]};
+window.SIDEBAR_ITEMS = {"constant":["DEFAULT_NETWORK_URL"],"enum":["GenError"],"struct":["Generator"]};
