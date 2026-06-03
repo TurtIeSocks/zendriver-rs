@@ -68,21 +68,21 @@ fn map_zendriver(err: &ZendriverError) -> (String, Option<&'static str>) {
     match err {
         ZendriverError::ElementNotFound { selector } => (
             format!(
-                "No element matched `{selector}`. Try `browser_snapshot` or `browser_html` to inspect current page."
+                "No element matched `{selector}`. Try `browser_html` to inspect current page."
             ),
-            Some("browser_snapshot"),
+            Some("browser_html"),
         ),
         ZendriverError::Timeout(d) => (
             format!(
-                "Operation timed out after {d:?}. Retry with a larger `timeout_ms` or inspect with `browser_snapshot`."
+                "Operation timed out after {d:?}. Retry with a larger `timeout_ms` or inspect with `browser_html`."
             ),
-            Some("browser_snapshot"),
+            Some("browser_html"),
         ),
         ZendriverError::NotActionable(_, reason) => (
             format!(
-                "Element not actionable: {reason}. Inspect with `browser_snapshot` or wait for the page to settle."
+                "Element not actionable: {reason}. Inspect with `browser_html` or wait for the page to settle."
             ),
-            Some("browser_snapshot"),
+            Some("browser_html"),
         ),
         ZendriverError::TabNotFound(id) => (
             format!("Tab `{id}` not found. Use `browser_tab_list` to enumerate live tabs."),
@@ -130,14 +130,14 @@ mod tests {
     }
 
     #[test]
-    fn element_not_found_suggests_snapshot() {
+    fn element_not_found_suggests_html() {
         let inner = ZendriverError::ElementNotFound {
             selector: "css(button.primary)".into(),
         };
         let e = map_error(McpServerError::from(inner));
         assert!(e.message.contains("`css(button.primary)`"));
         let data = e.data.as_ref().expect("data populated");
-        assert_eq!(data["suggested_next"], "browser_snapshot");
+        assert_eq!(data["suggested_next"], "browser_html");
     }
 
     #[test]
