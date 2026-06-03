@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["close","open","status"],"struct":["CloseOutput","OpenInput","OpenOutput","StatusOutput","TabSummary"]};
+window.SIDEBAR_ITEMS = {"enum":["TrackerBlocklist"],"fn":["close","open","status"],"struct":["CloseOutput","OpenInput","OpenOutput","StatusOutput","TabSummary"]};

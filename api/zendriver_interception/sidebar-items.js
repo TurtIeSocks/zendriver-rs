@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["actor","builder","error","paused","rule","types","url_pattern"]};
+window.SIDEBAR_ITEMS = {"mod":["actor","builder","error","host_matcher","paused","rule","types","url_pattern"]};
