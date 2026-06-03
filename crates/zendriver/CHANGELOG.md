@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-06-03
+
+### Added
+
+- Warn when a pinned Chrome major leaks Accept-Encoding
+
+
 ## [0.2.8] - 2026-06-03
 
 
