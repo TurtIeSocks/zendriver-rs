@@ -860,6 +860,27 @@ impl BrowserBuilder {
         self
     }
 
+    /// Set a coherent `locale` + `languages` derived from a country code
+    /// (ISO 3166-1 alpha-2, e.g. `"US"`, `"de"`). Layered as a persona overlay,
+    /// so it composes with `.persona(..)` and is overridden by an explicit
+    /// `.persona_overlay(..)` locale. An invalid/unknown country is ignored
+    /// (logged) — never locks a value.
+    #[cfg(feature = "geo")]
+    #[must_use]
+    pub fn geo_locale(mut self, country: impl TryInto<zendriver_stealth::geo::Country>) -> Self {
+        match country.try_into() {
+            Ok(c) => {
+                let derived = zendriver_stealth::geo::persona(c);
+                self.persona_overlay = Some(match self.persona_overlay.take() {
+                    Some(existing) => existing.overlay(derived),
+                    None => derived,
+                });
+            }
+            Err(_) => tracing::warn!("geo_locale: invalid country code; ignoring"),
+        }
+        self
+    }
+
     /// Override a single fingerprint [`Surface`]'s render [`Strategy`].
     ///
     /// Applied last, on top of the resolved persona + overlay. Repeatable —
@@ -3014,6 +3035,14 @@ mod tests {
         assert_eq!(pinned, Seed::from_u64(777));
         // And the persistence file is NOT consulted/created for the pinned seed.
         assert!(!dir.path().join(".zd_persona_seed").exists());
+    }
+
+    #[cfg(feature = "geo")]
+    #[test]
+    fn geo_locale_sets_overlay() {
+        let builder = Browser::builder().geo_locale("US");
+        let p = builder.resolved_persona();
+        assert_eq!(p.locale.as_deref(), Some("en-US"));
     }
 
     #[test]

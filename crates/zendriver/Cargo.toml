@@ -46,6 +46,8 @@ imperva-tests = ["imperva", "integration-tests"]
 datadome = ["interception", "dep:zendriver-datadome"]
 # Network-touching DataDome nightly tests (real protected sites).
 datadome-tests = ["datadome", "integration-tests"]
+# Country -> coherent locale/languages (BrowserBuilder::geo_locale).
+geo = ["zendriver-stealth/geo"]
 # Chrome for Testing binary downloader.
 fetcher = ["dep:zendriver-fetcher"]
 # Network-touching fetcher tests (CfT manifest, real downloads).
