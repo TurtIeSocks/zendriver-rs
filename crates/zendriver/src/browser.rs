@@ -1234,6 +1234,19 @@ pub(crate) struct BrowserInner {
     #[cfg(feature = "interception")]
     #[allow(dead_code)]
     pub(crate) proxy_auth_handle: std::sync::OnceLock<zendriver_interception::InterceptHandle>,
+    /// Combined tracker/fingerprinter [`HostMatcher`] (bundled + custom),
+    /// built once at launch. `None` when blocking is not configured. Read by
+    /// the [`TabRegistrar`] to install a `BlockHosts` interception on each new
+    /// page tab.
+    #[cfg(feature = "tracker-blocking")]
+    pub(crate) tracker_matcher: Option<std::sync::Arc<crate::HostMatcher>>,
+    /// Live tracker-blocking interception handles keyed by `sessionId`
+    /// (main tab + each page tab). Inserted on attach, removed on detach;
+    /// dropping a handle stops that tab's actor. Held here so the actors live
+    /// as long as the browser.
+    #[cfg(feature = "tracker-blocking")]
+    pub(crate) tracker_handles:
+        tokio::sync::Mutex<HashMap<String, zendriver_interception::InterceptHandle>>,
 }
 
 impl BrowserInner {
@@ -1301,6 +1314,10 @@ pub(crate) fn test_only_inner_from_conn(conn: Connection) -> Arc<BrowserInner> {
             tabs_changed: tokio::sync::Notify::new(),
             #[cfg(feature = "interception")]
             proxy_auth_handle: std::sync::OnceLock::new(),
+            #[cfg(feature = "tracker-blocking")]
+            tracker_matcher: None,
+            #[cfg(feature = "tracker-blocking")]
+            tracker_handles: tokio::sync::Mutex::new(HashMap::new()),
         }
     })
 }
@@ -1397,6 +1414,10 @@ impl TargetObserver for TabRegistrar {
                 }
                 let conn = session.connection().clone();
                 let new_session = SessionHandle::new(conn, session.session_id.to_string());
+                // Clone the session before it is moved into Tab::new so the
+                // tracker-blocking install can use it afterwards.
+                #[cfg(feature = "tracker-blocking")]
+                let new_session_for_tracker = new_session.clone();
                 let input = InputController::new(self.input_profile.clone());
                 let weak_inner = Arc::downgrade(&browser);
                 let tab = Tab::new(
@@ -1417,6 +1438,23 @@ impl TargetObserver for TabRegistrar {
                 drop(tabs);
                 // Wake any `new_tab_at` callers waiting on this insert.
                 browser.tabs_changed.notify_waiters();
+
+                // Tracker blocking: if configured, install a BlockHosts
+                // interception on this new page tab's session and park the
+                // handle (keyed by sessionId) so it lives with the browser.
+                #[cfg(feature = "tracker-blocking")]
+                if let Some(matcher) = browser.tracker_matcher.clone() {
+                    let handle =
+                        zendriver_interception::InterceptBuilder::new(&new_session_for_tracker)
+                            .block_hosts(matcher)
+                            .start();
+                    browser
+                        .tracker_handles
+                        .lock()
+                        .await
+                        .insert(new_session_for_tracker.session_id().to_string(), handle);
+                }
+
                 Ok(())
             }
             _ => {
@@ -1445,6 +1483,11 @@ impl TargetObserver for TabRegistrar {
             browser.tabs_changed.notify_waiters();
         } else {
             let _ = crate::frame::oopif::deregister_oopif_frame(&browser, session_id).await;
+        }
+        // Drop any tracker-blocking handle for this session (stops its actor).
+        #[cfg(feature = "tracker-blocking")]
+        {
+            browser.tracker_handles.lock().await.remove(session_id);
         }
     }
 }
@@ -1482,6 +1525,11 @@ pub(crate) struct FinishConnect {
     pub(crate) ws_url: Option<String>,
     /// Whether the resulting handle owns (and must terminate) the process.
     pub(crate) owns_process: bool,
+    /// Combined tracker matcher built by `launch` (`None` for `connect` and
+    /// when blocking is unconfigured). Stored on `BrowserInner` and installed
+    /// on the main tab + future tabs.
+    #[cfg(feature = "tracker-blocking")]
+    pub(crate) tracker_matcher: Option<std::sync::Arc<crate::HostMatcher>>,
 }
 
 /// Run the post-connect CDP handshake and assemble [`BrowserInner`].
@@ -1508,6 +1556,8 @@ pub(crate) async fn finish_connect(
         debug_host_port,
         ws_url,
         owns_process,
+        #[cfg(feature = "tracker-blocking")]
+        tracker_matcher,
     } = args;
 
     // Enable auto-attach with debugger-pause BEFORE attaching to the initial
@@ -1585,6 +1635,10 @@ pub(crate) async fn finish_connect(
             tabs_changed: tokio::sync::Notify::new(),
             #[cfg(feature = "interception")]
             proxy_auth_handle: std::sync::OnceLock::new(),
+            #[cfg(feature = "tracker-blocking")]
+            tracker_matcher,
+            #[cfg(feature = "tracker-blocking")]
+            tracker_handles: tokio::sync::Mutex::new(HashMap::new()),
         }
     });
 
@@ -1596,6 +1650,19 @@ pub(crate) async fn finish_connect(
         .write()
         .await
         .insert(session_id_for_registry, inner.main_tab.clone());
+
+    // Install tracker blocking on the main tab's session (the main tab
+    // attached before the registrar weak-ref existed, so the registrar skipped
+    // it — install explicitly here, mirroring the proxy-auth wiring).
+    #[cfg(feature = "tracker-blocking")]
+    if let Some(matcher) = inner.tracker_matcher.clone() {
+        let session = inner.main_tab.session().clone();
+        let sid = session.session_id().to_string();
+        let handle = zendriver_interception::InterceptBuilder::new(&session)
+            .block_hosts(matcher)
+            .start();
+        inner.tracker_handles.lock().await.insert(sid, handle);
+    }
 
     Ok(inner)
 }
@@ -2024,6 +2091,9 @@ impl BrowserBuilder {
         // Identical for spawn (`launch`) and attach (`connect`); the only
         // differences are the owned `Child` / `TempDir` we hand it and the
         // `owns_process` flag (true here — we spawned Chrome).
+        #[cfg(feature = "tracker-blocking")]
+        let tracker_matcher = self.build_tracker_matcher().await?;
+
         let inner = finish_connect(FinishConnect {
             conn,
             registrar,
@@ -2034,6 +2104,8 @@ impl BrowserBuilder {
             debug_host_port: debug_host_port_from_ws(&ws_url),
             ws_url: Some(ws_url),
             owns_process: true,
+            #[cfg(feature = "tracker-blocking")]
+            tracker_matcher,
         })
         .await?;
 
@@ -2184,6 +2256,8 @@ impl BrowserBuilder {
             debug_host_port: debug_host_port_from_ws(&ws_url),
             ws_url: Some(ws_url),
             owns_process: false,
+            #[cfg(feature = "tracker-blocking")]
+            tracker_matcher: None,
         })
         .await?;
 
@@ -3583,6 +3657,10 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "tracker-blocking")]
+                tracker_matcher: None,
+                #[cfg(feature = "tracker-blocking")]
+                tracker_handles: tokio::sync::Mutex::new(HashMap::new()),
             }
         });
         registrar.set_browser(Arc::downgrade(&inner));
@@ -3672,6 +3750,10 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "tracker-blocking")]
+                tracker_matcher: None,
+                #[cfg(feature = "tracker-blocking")]
+                tracker_handles: tokio::sync::Mutex::new(HashMap::new()),
             }
         });
         registrar.set_browser(Arc::downgrade(&inner));
@@ -3777,6 +3859,10 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "tracker-blocking")]
+                tracker_matcher: None,
+                #[cfg(feature = "tracker-blocking")]
+                tracker_handles: tokio::sync::Mutex::new(HashMap::new()),
             }
         });
         registrar.set_browser(Arc::downgrade(&inner));
@@ -3875,6 +3961,10 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "tracker-blocking")]
+                tracker_matcher: None,
+                #[cfg(feature = "tracker-blocking")]
+                tracker_handles: tokio::sync::Mutex::new(HashMap::new()),
             }
         });
         registrar.set_browser(Arc::downgrade(&inner));
@@ -3940,6 +4030,10 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "tracker-blocking")]
+                tracker_matcher: None,
+                #[cfg(feature = "tracker-blocking")]
+                tracker_handles: tokio::sync::Mutex::new(HashMap::new()),
             }
         });
         let browser = Browser { inner };
@@ -4007,6 +4101,10 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "tracker-blocking")]
+                tracker_matcher: None,
+                #[cfg(feature = "tracker-blocking")]
+                tracker_handles: tokio::sync::Mutex::new(HashMap::new()),
             }
         });
         let browser = Browser { inner };
@@ -4064,6 +4162,10 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "tracker-blocking")]
+                tracker_matcher: None,
+                #[cfg(feature = "tracker-blocking")]
+                tracker_handles: tokio::sync::Mutex::new(HashMap::new()),
             }
         });
         registrar.set_browser(Arc::downgrade(&inner));
@@ -4198,6 +4300,10 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "tracker-blocking")]
+                tracker_matcher: None,
+                #[cfg(feature = "tracker-blocking")]
+                tracker_handles: tokio::sync::Mutex::new(HashMap::new()),
             }
         });
         registrar.set_browser(Arc::downgrade(&inner));
@@ -4547,6 +4653,8 @@ mod tests {
                 ),
                 ws_url: Some("ws://127.0.0.1:9222/devtools/browser/abc".to_string()),
                 owns_process: false,
+                #[cfg(feature = "tracker-blocking")]
+                tracker_matcher: None,
             })
             .await
         });
@@ -4613,6 +4721,8 @@ mod tests {
                 debug_host_port: None,
                 ws_url: None,
                 owns_process: false,
+                #[cfg(feature = "tracker-blocking")]
+                tracker_matcher: None,
             })
             .await
         });

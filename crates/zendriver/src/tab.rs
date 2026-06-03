@@ -3671,6 +3671,10 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "tracker-blocking")]
+                tracker_matcher: None,
+                #[cfg(feature = "tracker-blocking")]
+                tracker_handles: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             }
         });
         let tab = inner.main_tab.clone();
@@ -4572,6 +4576,10 @@ mod tests {
                     tabs_changed: tokio::sync::Notify::new(),
                     #[cfg(feature = "interception")]
                     proxy_auth_handle: std::sync::OnceLock::new(),
+                    #[cfg(feature = "tracker-blocking")]
+                    tracker_matcher: None,
+                    #[cfg(feature = "tracker-blocking")]
+                    tracker_handles: tokio::sync::Mutex::new(std::collections::HashMap::new()),
                 }
             });
         let url = inner.main_tab.inspector_url().unwrap();
