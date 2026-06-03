@@ -18,14 +18,37 @@ Follow-up to [#25](https://github.com/TurtIeSocks/zendriver-rs/issues/25) (gener
 > Assumption **A1** is the headline judgement call — the delegate-mode review
 > checkpoint.
 
+> 🔬 **Empirical outcome (2026-06-03) — supersedes the §4.3 apply mechanism.**
+> The §4.4 gate was run against real Chrome 148 and **failed**: `Accept-Encoding`
+> turns out to be **uncorrectable over CDP**. `Network.setExtraHTTPHeaders` for
+> `Accept-Encoding` is *silently dropped* (claimed Chrome 120 on a 148 binary →
+> the wire still showed `gzip, deflate, br, zstd`, a single unduplicated header —
+> i.e. the network service's own value, our override ignored). The
+> `--disable-features=ZstdContentEncoding` launch flag was also probed and is
+> **inert** on current builds (and version-fragile regardless). Chrome's network
+> service authoritatively owns this header.
+>
+> **Shipped design (chosen by the user):** keep the `accept_encoding_for` rule
+> and the skew detection, but **warn instead of override**. `resolve_fingerprint`
+> emits a `tracing::warn!` when a pinned `chrome_version` straddles the `zstd`
+> boundary vs the launched binary, telling the user their request will leak the
+> binary's encodings (pin to the binary's major to stay coherent). No
+> `Network.*` calls, no observer change, no per-request cost. The rejected
+> alternative — forcing the header via the heavyweight `Fetch`/interception path
+> — was judged not worth the per-request latency + feature coupling for so
+> narrow a gap. §3's per-header analysis below is unchanged and still correct;
+> only §4.3's *override* became a *warning*.
+
 ## 1. Goal
 
 Keep the request headers Chrome sends coherent with the **claimed** stealth
-identity. Concretely: when a spoofed profile pins a Chrome major (or platform)
-that differs from the real launched binary, ensure `Accept-Encoding` matches the
-*claimed* major rather than leaking the *binary's* value. Everything else the
-header network models is either already coherent or cannot be set safely/at all
-over CDP (§3).
+identity — or, where coherence is not achievable, make the incoherence visible.
+Concretely: when a spoofed profile pins a Chrome major (or platform) that differs
+from the real launched binary, `Accept-Encoding` will leak the *binary's* value.
+Since CDP cannot correct this (see the Empirical-outcome note above), the shipped
+behavior is to **warn** the user about the leak. Everything else the header
+network models is either already coherent or cannot be set safely/at all over CDP
+(§3).
 
 ## 2. Why not the faithful header-network port — verified data
 
@@ -140,7 +163,13 @@ let coherent_accept_encoding: Option<String> =
 (small struct or tuple — plan picks the seam; both are `pub(crate)`-reachable from
 `browser.rs`, **no public-API change**).
 
-### 4.3 Apply in the observer
+### 4.3 Apply in the observer — ❌ SUPERSEDED (the override is silently dropped)
+
+> The Empirical-outcome note at the top of this spec replaces this subsection:
+> Chrome ignores `Network.setExtraHTTPHeaders` for `Accept-Encoding`, so the
+> observer is **not** changed. The skew is surfaced via a `tracing::warn!` in
+> `resolve_fingerprint` instead. The original (non-working) plan is kept below
+> for the record.
 
 Thread the `Option<String>` into `StealthObserver` (constructor arg or builder
 setter, mirroring `with_persona`). In `on_target_attached`, for a `page` target in
