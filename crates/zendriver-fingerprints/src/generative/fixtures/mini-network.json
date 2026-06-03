@@ -1,0 +1,79 @@
+{
+  "nodes": [
+    {
+      "name": "userAgent",
+      "parentNames": [],
+      "conditionalProbabilities": {
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36": 0.5,
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36": 0.3,
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36": 0.15,
+        "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Mobile Safari/537.36": 0.05
+      }
+    },
+    {
+      "name": "platform",
+      "parentNames": ["userAgent"],
+      "conditionalProbabilities": {
+        "deeper": {
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36": { "Win32": 1.0 },
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36": { "MacIntel": 1.0 },
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36": { "Linux x86_64": 1.0 },
+          "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Mobile Safari/537.36": { "Linux armv8l": 1.0 }
+        },
+        "skip": null
+      }
+    },
+    {
+      "name": "deviceMemory",
+      "parentNames": ["userAgent"],
+      "conditionalProbabilities": {
+        "deeper": {
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36": { "*STRINGIFIED*16": 0.6, "*STRINGIFIED*8": 0.4 },
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36": { "*STRINGIFIED*16": 1.0 },
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36": { "*STRINGIFIED*8": 1.0 },
+          "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Mobile Safari/537.36": { "*STRINGIFIED*4": 1.0 }
+        },
+        "skip": null
+      }
+    },
+    {
+      "name": "hardwareConcurrency",
+      "parentNames": ["userAgent"],
+      "conditionalProbabilities": {
+        "deeper": {
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36": { "*STRINGIFIED*16": 0.5, "*STRINGIFIED*8": 0.5 },
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36": { "*STRINGIFIED*10": 1.0 },
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36": { "*STRINGIFIED*12": 1.0 },
+          "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Mobile Safari/537.36": { "*STRINGIFIED*8": 1.0 }
+        },
+        "skip": null
+      }
+    },
+    {
+      "name": "videoCard",
+      "parentNames": ["userAgent"],
+      "conditionalProbabilities": {
+        "deeper": {
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36": { "*STRINGIFIED*{\"renderer\":\"ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)\",\"vendor\":\"Google Inc. (NVIDIA)\"}": 1.0 },
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36": { "*STRINGIFIED*{\"renderer\":\"ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)\",\"vendor\":\"Google Inc. (Apple)\"}": 1.0 },
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36": { "*STRINGIFIED*{\"renderer\":\"ANGLE (Mesa, llvmpipe (LLVM 15.0.7 256 bits), OpenGL 4.5)\",\"vendor\":\"Google Inc. (Mesa)\"}": 1.0 },
+          "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Mobile Safari/537.36": { "*STRINGIFIED*{\"renderer\":\"Adreno (TM) 730\",\"vendor\":\"Qualcomm\"}": 1.0 }
+        },
+        "skip": null
+      }
+    },
+    {
+      "name": "fonts",
+      "parentNames": ["userAgent"],
+      "conditionalProbabilities": {
+        "deeper": {
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36": { "*STRINGIFIED*[\"Arial\",\"Calibri\",\"Segoe UI\"]": 1.0 },
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36": { "*STRINGIFIED*[\"Helvetica Neue\",\"Menlo\",\"Gill Sans\"]": 1.0 },
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36": { "*STRINGIFIED*[\"DejaVu Sans\",\"Liberation Mono\"]": 1.0 },
+          "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Mobile Safari/537.36": { "*STRINGIFIED*[\"Roboto\"]": 1.0 }
+        },
+        "skip": null
+      }
+    }
+  ]
+}

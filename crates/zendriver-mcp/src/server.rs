@@ -1053,7 +1053,7 @@ impl ZendriverServer {
     /// Generate a fingerprint Persona from a pool or generative source.
     #[tool(
         name = "browser_fingerprint_generate",
-        description = "Generate a realistic fingerprint Persona JSON from a real-device `source`. `generative` synthesizes a coherent persona from the embedded Bayesian network and works offline; `pool` samples a downloaded real-device set (requires the published pool asset — see issue #25; returns an error until the dataset is hosted). Optional `seed` (u64) for reproducibility — omit for a random persona. Returns `{ persona }` — pass it to `browser_open`'s `persona` field (inspect / tweak the JSON first if desired)."
+        description = "Generate a realistic fingerprint Persona JSON from a real-device `source`. `generative` synthesizes a coherent persona from the browserforge Bayesian network, downloaded on first use and cached locally (override the URL with the ZENDRIVER_FP_NETWORK_URL env var). `pool` samples a downloaded real-device set (requires the published pool asset — see issue #25; returns an error until the dataset is hosted). Optional `seed` (u64) for reproducibility — omit for a random persona. Returns `{ persona }` — pass it to `browser_open`'s `persona` field (inspect / tweak the JSON first if desired)."
     )]
     pub async fn browser_fingerprint_generate(
         &self,

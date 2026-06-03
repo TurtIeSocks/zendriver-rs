@@ -15,7 +15,7 @@ properties:
     format: uint64
     minimum: 0
   source:
-    description: "Where the persona comes from. `generative` synthesizes one from the\nembedded Bayesian network (offline); `pool` samples a downloaded\nreal-device set (requires the published pool asset — see issue #25)."
+    description: "Where the persona comes from. `generative` synthesizes one from the\nbrowserforge Bayesian network (downloaded + cached on first use); `pool`\nsamples a downloaded real-device set (requires the published pool asset —\nsee issue #25)."
     $ref: "#/$defs/FpSource"
 additionalProperties: false
 required:
@@ -24,7 +24,7 @@ $defs:
   FpSource:
     description: Where the persona comes from.
     oneOf:
-      - description: "Synthesize a coherent persona from the embedded Bayesian network. Works\noffline; no download needed."
+      - description: "Synthesize a coherent persona from the browserforge Bayesian network,\ndownloaded on first use and cached locally."
         type: string
         const: generative
       - description: "Sample a real-device persona from the published pool dataset. Requires\nthe pool asset to be downloadable — see POOL_URL and issue #25."

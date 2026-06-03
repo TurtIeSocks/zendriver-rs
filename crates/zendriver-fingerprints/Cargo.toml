@@ -14,7 +14,7 @@ workspace = true
 [features]
 default = []
 pool = ["dep:reqwest", "dep:dirs"]
-generative = []
+generative = ["dep:reqwest", "dep:dirs", "dep:zip"]
 
 [dependencies]
 zendriver-stealth.workspace = true
@@ -25,6 +25,12 @@ tracing.workspace           = true
 fastrand                    = "2"
 reqwest  = { workspace = true, optional = true }
 dirs     = { workspace = true, optional = true }
+zip      = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio    = { workspace = true }
+wiremock = { workspace = true }
+tempfile = { workspace = true }
 
 [[example]]
 name = "persona_pool"

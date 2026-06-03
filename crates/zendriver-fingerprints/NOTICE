@@ -1,2 +1,6 @@
 This crate vendors fingerprint data derived from browserforge / fingerprint-suite
 (https://github.com/apify/fingerprint-suite), licensed Apache-2.0.
+
+The generative source downloads the fingerprint Bayesian network from
+fingerprint-suite at runtime (default: the apify GitHub raw URL); a tiny derived
+sample is embedded for tests. Both are Apache-2.0.

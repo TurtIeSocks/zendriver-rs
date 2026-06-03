@@ -6,7 +6,7 @@ $schema: "https://json-schema.org/draft/2020-12/schema"
 title: FpSource
 description: Where the persona comes from.
 oneOf:
-  - description: "Synthesize a coherent persona from the embedded Bayesian network. Works\noffline; no download needed."
+  - description: "Synthesize a coherent persona from the browserforge Bayesian network,\ndownloaded on first use and cached locally."
     type: string
     const: generative
   - description: "Sample a real-device persona from the published pool dataset. Requires\nthe pool asset to be downloadable — see POOL_URL and issue #25."
