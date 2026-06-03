@@ -321,7 +321,9 @@ async fn handle_paused(
     let matched = rules.iter().find(|r| r.matches(&url));
 
     match matched {
-        Some(Rule::Block { .. }) => fail_request(session, &ev.request_id, "BlockedByClient").await,
+        Some(Rule::Block { .. }) | Some(Rule::BlockHosts { .. }) => {
+            fail_request(session, &ev.request_id, "BlockedByClient").await
+        }
         Some(Rule::Redirect { to, .. }) => continue_with_url(session, &ev.request_id, to).await,
         Some(Rule::Respond {
             status,
@@ -688,6 +690,74 @@ mod tests {
 
         // Step 4: cancel the actor + verify it dispatches `Fetch.disable`
         // on shutdown and signals exit through the oneshot.
+        cancel.cancel();
+        let disable_id =
+            tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Fetch.disable"))
+                .await
+                .expect("actor did not send Fetch.disable on cancel");
+        mock.reply(disable_id, json!({})).await;
+
+        tokio::time::timeout(Duration::from_secs(2), done_rx)
+            .await
+            .expect("actor did not signal exit within 2s")
+            .expect("oneshot sender dropped without sending");
+        actor.await.unwrap();
+        conn.shutdown();
+    }
+
+    /// Same end-to-end drive as the `Block` test, but the rule is a
+    /// `BlockHosts` matcher and the request matches by host (subdomain walk).
+    #[tokio::test]
+    async fn block_hosts_rule_dispatches_fail_request() {
+        use crate::host_matcher::HostMatcher;
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+
+        let rules = vec![Rule::BlockHosts {
+            matcher: std::sync::Arc::new(HostMatcher::new(["evil.com".to_string()])),
+        }];
+        let patterns = vec![RequestPattern {
+            url_pattern: Some("*".into()),
+            ..RequestPattern::default()
+        }];
+        let cancel = CancellationToken::new();
+        let (done_tx, done_rx) = oneshot::channel();
+        let actor_cancel = cancel.clone();
+        let actor = tokio::spawn(async move {
+            run_actor(sess, rules, patterns, None, actor_cancel, done_tx).await;
+        });
+
+        let enable_id =
+            tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Fetch.enable"))
+                .await
+                .expect("actor did not send Fetch.enable within 2s");
+        mock.reply(enable_id, json!({})).await;
+
+        // Subdomain of a listed host -> must be failed.
+        mock.emit_event_for_session(
+            "Fetch.requestPaused",
+            json!({
+                "requestId": "REQ-1",
+                "request": {
+                    "url": "https://cdn.evil.com/fp.js",
+                    "method": "GET",
+                    "headers": {},
+                },
+                "resourceType": "Script",
+            }),
+            "S1",
+        )
+        .await;
+
+        let fail_id =
+            tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Fetch.failRequest"))
+                .await
+                .expect("actor did not send Fetch.failRequest within 2s");
+        let fail_params = mock.last_sent()["params"].clone();
+        assert_eq!(fail_params["requestId"], "REQ-1");
+        assert_eq!(fail_params["errorReason"], "BlockedByClient");
+        mock.reply(fail_id, json!({})).await;
+
         cancel.cancel();
         let disable_id =
             tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Fetch.disable"))

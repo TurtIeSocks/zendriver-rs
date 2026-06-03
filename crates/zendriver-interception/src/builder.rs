@@ -1,7 +1,7 @@
 //! [`InterceptBuilder`] — fluent rule + pattern registration.
 //!
 //! Two-phase API:
-//! - **Configure**: chain [`block`], [`redirect`], [`respond`],
+//! - **Configure**: chain [`block`], [`block_hosts`], [`redirect`], [`respond`],
 //!   [`modify_request`], [`modify_response`] for declarative rules, plus
 //!   [`pattern`] / [`at_request`] / [`at_response`] / [`resource`] to control
 //!   which CDP `Fetch.RequestPattern` entries are sent on `Fetch.enable`.
@@ -18,6 +18,7 @@
 //! `InterceptBuilder::new(self.session())`.
 //!
 //! [`block`]: InterceptBuilder::block
+//! [`block_hosts`]: InterceptBuilder::block_hosts
 //! [`redirect`]: InterceptBuilder::redirect
 //! [`respond`]: InterceptBuilder::respond
 //! [`modify_request`]: InterceptBuilder::modify_request
@@ -41,6 +42,7 @@ use crate::actor::{
     serialize_pattern,
 };
 use crate::error::InterceptionError;
+use crate::host_matcher::HostMatcher;
 use crate::paused::PausedRequest;
 use crate::rule::Rule;
 use crate::types::{
@@ -197,6 +199,18 @@ impl<'tab> InterceptBuilder<'tab> {
             pattern: UrlPattern::new(pattern)?,
         });
         Ok(self)
+    }
+
+    /// Register a [`Rule::BlockHosts`] backed by `matcher`.
+    ///
+    /// Every request whose host is in `matcher` (exact, or a parent domain on
+    /// a dot boundary) is failed with `BlockedByClient`. Composes with other
+    /// rules in registration order. `zendriver` core's tracker-blocklist
+    /// wiring uses this; most callers reach it via `BrowserBuilder::block_trackers`.
+    #[must_use]
+    pub fn block_hosts(mut self, matcher: Arc<HostMatcher>) -> Self {
+        self.rules.push(Rule::BlockHosts { matcher });
+        self
     }
 
     /// Register a [`Rule::Redirect`] that rewrites `from` → `to`.

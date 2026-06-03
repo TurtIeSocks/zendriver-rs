@@ -1,19 +1,23 @@
 //! Declarative interception rules.
 //!
-//! Each rule pairs a [`UrlPattern`] with one of five actions ([`Block`],
-//! [`Redirect`], [`Respond`], [`Modify`], [`ModifyResponse`]). The actor in T6
-//! walks the rule list in registration order on each `Fetch.requestPaused`
-//! event; the first rule whose pattern matches the request URL wins.
+//! Each rule pairs a matcher (a [`UrlPattern`], or a [`HostMatcher`] for
+//! [`BlockHosts`]) with one of six actions ([`Block`], [`Redirect`],
+//! [`Respond`], [`Modify`], [`ModifyResponse`], [`BlockHosts`]). The actor in
+//! T6 walks the rule list in registration order on each `Fetch.requestPaused`
+//! event; the first rule that matches the request URL wins.
 //!
 //! [`Block`]: Rule::Block
 //! [`Redirect`]: Rule::Redirect
 //! [`Respond`]: Rule::Respond
 //! [`Modify`]: Rule::Modify
 //! [`ModifyResponse`]: Rule::ModifyResponse
+//! [`BlockHosts`]: Rule::BlockHosts
+//! [`HostMatcher`]: crate::host_matcher::HostMatcher
 
 use std::fmt;
 use std::sync::Arc;
 
+use crate::host_matcher::HostMatcher;
 use crate::types::{RequestInfo, RequestOverrides, ResponseInfo, ResponseOverrides};
 use crate::url_pattern::UrlPattern;
 
@@ -82,6 +86,18 @@ pub enum Rule {
         /// [`Modify`]: Rule::Modify
         modify: Arc<dyn Fn(&ResponseInfo) -> ResponseOverrides + Send + Sync>,
     },
+    /// Abort requests whose **host** is in a [`HostMatcher`] with
+    /// `Fetch.failRequest { errorReason: "BlockedByClient" }` — the same
+    /// `net::ERR_BLOCKED_BY_CLIENT` a real adblocker / Brave raises.
+    ///
+    /// Unlike [`Block`](Rule::Block), which globs the full URL, this matches
+    /// host-set membership (exact + parent-domain suffix on dot boundaries),
+    /// so a curated list of thousands of hosts is one O(1) set lookup per
+    /// request rather than N glob comparisons. Powers the tracker blocklist.
+    BlockHosts {
+        /// Shared host set; cheap to clone across tabs/rules.
+        matcher: Arc<HostMatcher>,
+    },
 }
 
 impl Rule {
@@ -97,6 +113,9 @@ impl Rule {
             | Self::Modify { pattern, .. }
             | Self::ModifyResponse { pattern, .. } => pattern.matches(url),
             Self::Redirect { from, .. } => from.matches(url),
+            Self::BlockHosts { matcher } => {
+                crate::host_matcher::host_of(url).is_some_and(|h| matcher.is_blocked(h))
+            }
         }
     }
 }
@@ -135,6 +154,10 @@ impl fmt::Debug for Rule {
                 .field("pattern", pattern)
                 .field("modify", &"<closure>")
                 .finish(),
+            Self::BlockHosts { matcher } => f
+                .debug_struct("BlockHosts")
+                .field("hosts", &matcher.len())
+                .finish(),
         }
     }
 }
@@ -161,6 +184,23 @@ mod tests {
         };
         assert!(rule.matches("https://example.com/old/page.html"));
         assert!(!rule.matches("https://example.com/new/page.html"));
+    }
+
+    #[test]
+    fn block_hosts_matches_on_host_and_subdomain() {
+        let rule = Rule::BlockHosts {
+            matcher: Arc::new(HostMatcher::new(["evil.com".to_string()])),
+        };
+        assert!(rule.matches("https://evil.com/track.js"));
+        assert!(rule.matches("https://a.b.evil.com/x?y=1"));
+        assert!(!rule.matches("https://good.com/app.js"));
+        assert!(!rule.matches("https://notevil.com/app.js"));
+
+        // Debug renders the variant name + the host count (the Arc<HostMatcher>
+        // is summarized, not dumped).
+        let dbg = format!("{rule:?}");
+        assert!(dbg.contains("BlockHosts"), "got: {dbg}");
+        assert!(dbg.contains("hosts"), "got: {dbg}");
     }
 
     #[test]
