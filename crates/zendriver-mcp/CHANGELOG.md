@@ -3,6 +3,17 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.4.0] - 2026-06-03
+
+### Added
+
+- Geo_country stealth override + schema snapshots
+
+### Fixed
+
+- Make geo_country field unconditional for feature-stable schema
+
+
 ## [0.3.4] - 2026-06-03
 
 
