@@ -1,5 +1,13 @@
 # Header coherence (Accept-Encoding) Implementation Plan
 
+> 🔬 **Partly superseded during execution.** Task 0 (the empirical gate) proved
+> `Network.setExtraHTTPHeaders` cannot override `Accept-Encoding` — Chrome's
+> network service owns it (verified, Chrome 148). Tasks 1 (rule) shipped as-is;
+> the **apply mechanism (Tasks 2–3's `setExtraHTTPHeaders` override) was dropped**
+> in favor of a `tracing::warn!` on skew (Chrome can't be corrected, so we warn).
+> See the Empirical-outcome note in the spec. The Task 2/3 code below is retained
+> for the record but is NOT what shipped.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Keep Chrome's `Accept-Encoding` request header coherent with the *claimed* stealth Chrome major, so a profile that pins an identity across the `zstd`/Chrome-123 boundary no longer leaks the real binary's encoding set.
