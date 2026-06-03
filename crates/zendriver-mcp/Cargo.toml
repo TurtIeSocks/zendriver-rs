@@ -60,6 +60,7 @@ zendriver-fingerprints  = { workspace = true, optional = true, features = ["pool
 [dev-dependencies]
 tokio-test = { workspace = true }
 tempfile   = { workspace = true }
+wiremock   = { workspace = true }
 insta      = { workspace = true }
 # `toml` is used by the `public-api-check` test to parse `mcp-coverage-ledger.toml`.
 toml       = { version = "0.8", default-features = false, features = ["parse"] }
