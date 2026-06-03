@@ -135,6 +135,21 @@ fn apply_overrides(mut profile: StealthProfile, overrides: &StealthOverrides) ->
     if let Some(platform) = overrides.platform {
         profile = profile.platform(platform.into());
     }
+    #[cfg(feature = "geo")]
+    if let Some(ref cc) = overrides.geo_country {
+        match zendriver_stealth::geo::Country::try_from(cc.as_str()) {
+            Ok(country) => {
+                let derived = zendriver_stealth::geo::persona(country);
+                if let Some(locale) = derived.locale {
+                    profile = profile.locale(locale);
+                }
+                if let Some(langs) = derived.languages {
+                    profile = profile.languages(langs);
+                }
+            }
+            Err(_) => tracing::warn!("geo_country {cc:?} is not a valid country code; ignoring"),
+        }
+    }
     if let Some(ref locale) = overrides.locale {
         profile = profile.locale(locale);
     }
@@ -385,6 +400,21 @@ mod tests {
     /// cancel token (which would dispatch `Fetch.disable` against the live
     /// transport in a real session — here we just verify the map is
     /// emptied).
+    #[cfg(feature = "geo")]
+    #[test]
+    fn geo_country_sets_locale_and_languages() {
+        let overrides = StealthOverrides {
+            geo_country: Some("US".into()),
+            ..Default::default()
+        };
+        let profile = apply_overrides(StealthProfile::native(), &overrides);
+        let flags = profile.build_flags();
+        assert!(
+            flags.iter().any(|f| f == "--lang=en-US"),
+            "expected --lang=en-US in flags: {flags:?}",
+        );
+    }
+
     #[cfg(feature = "interception")]
     #[tokio::test]
     async fn close_clears_interception_rules() {

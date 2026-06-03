@@ -103,6 +103,11 @@ pub struct StealthOverrides {
     /// Toggle Content-Security-Policy bypass.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bypass_csp: Option<bool>,
+    /// Derive a coherent `locale` + `languages` from a country code
+    /// (ISO 3166-1 alpha-2, e.g. `"US"`). Overridden by an explicit `locale`.
+    #[cfg(feature = "geo")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geo_country: Option<String>,
 }
 
 /// State held for the duration of a single MCP session.
