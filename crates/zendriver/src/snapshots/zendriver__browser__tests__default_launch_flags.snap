@@ -11,3 +11,4 @@ expression: flags
 - "--disable-features=PasswordManagerOnboarding,AutofillServerCommunication"
 - "--headless=new"
 - "--disable-gpu"
+- "about:blank"

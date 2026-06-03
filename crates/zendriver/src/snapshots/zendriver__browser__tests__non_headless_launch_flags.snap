@@ -9,3 +9,4 @@ expression: flags
 - "--password-store=basic"
 - "--disable-save-password-bubble"
 - "--disable-features=PasswordManagerOnboarding,AutofillServerCommunication"
+- "about:blank"
