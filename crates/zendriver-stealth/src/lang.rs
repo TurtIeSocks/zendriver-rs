@@ -33,7 +33,6 @@ pub fn accept_language(langs: &[String]) -> String {
 /// region locale yields `[locale, base_lang]` where `base_lang` is the
 /// subtag before `-` (e.g. `"fr-FR"` -> `["fr-FR", "fr"]`); a bare locale
 /// (no `-`) yields a single entry.
-#[allow(dead_code)]
 pub(crate) fn resolve_languages(persona: &Persona, fp: &Fingerprint) -> Vec<String> {
     if let Some(langs) = persona.languages.as_ref().filter(|v| !v.is_empty()) {
         return langs.clone();

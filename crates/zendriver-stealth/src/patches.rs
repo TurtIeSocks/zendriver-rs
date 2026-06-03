@@ -114,7 +114,7 @@ fn identity_iife(persona: &Persona, identity: &Fingerprint) -> String {
 
     let cpu = persona.hardware_concurrency.unwrap_or(identity.cpu_count);
     let mem = persona.device_memory_gb.unwrap_or(identity.memory_gb);
-    let locale = persona.locale.clone().or_else(|| identity.locale.clone());
+    let languages = crate::lang::resolve_languages(persona, identity);
 
     let fp_json = json!({
         "platformJs":      platform.js_string(),
@@ -122,10 +122,7 @@ fn identity_iife(persona: &Persona, identity: &Fingerprint) -> String {
         "platformVersion": uam.platform_version,
         "cpuCount":        cpu,
         "memoryGb":        mem,
-        "languages":       locale.as_deref().map_or_else(
-            || vec!["en-US".to_string(), "en".to_string()],
-            |l| vec![l.to_string(), "en".to_string()],
-        ),
+        "languages":       languages,
         "architecture":    uam.architecture,
         "bitness":         uam.bitness,
         "brands":          uam.brands,
@@ -685,6 +682,18 @@ mod tests {
             !s.contains("GPUAdapter.prototype"),
             "Native webgpu omits the patch"
         );
+    }
+
+    #[test]
+    fn navigator_languages_derives_base_lang_not_en() {
+        let persona = Persona { locale: Some("fr-FR".into()), ..Default::default() };
+        let identity = mock_identity(); // existing helper in this test module
+        let script = bootstrap_script(&persona, &identity);
+        assert!(
+            script.contains(r#"["fr-FR","fr"]"#) || script.contains(r#"["fr-FR", "fr"]"#),
+            "languages should derive base lang, not hardcode en: {script}"
+        );
+        assert!(!script.contains(r#"["fr-FR","en"]"#), "must not hardcode en");
     }
 
     #[test]
