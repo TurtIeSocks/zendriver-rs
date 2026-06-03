@@ -109,7 +109,8 @@ pub use request::{RequestBuilder, Response};
 pub use screenshot::{Format, ScreenshotBuilder};
 pub use storage::Storage;
 pub use tab::{
-    FrameResourceMatch, ReadyState, ReloadOptions, ScrollOptions, Tab, UserAgentOverride,
+    FrameResourceMatch, IdleOptions, ReadyState, ReloadOptions, ScrollOptions, Tab,
+    UserAgentOverride,
 };
 pub use traits::{Evaluable, Queryable};
 pub use window::{WindowBounds, WindowState};

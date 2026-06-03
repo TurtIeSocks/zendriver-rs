@@ -398,6 +398,76 @@ async fn wait_for_idle_on_spa_with_delayed_xhr() {
 
 #[tokio::test]
 #[serial]
+async fn wait_for_idle_opts_resolves_despite_stuck_request() {
+    // A request that never completes within the test (server holds it open far
+    // longer than the wait) must NOT pin `wait_for_idle_opts` to its outer
+    // timeout when `max_inflight_age` is set: once the request has been in
+    // flight past that age it is ignored, so idle resolves on the quiet window.
+    //
+    // Single origin + suppressed favicon so the held `/hang` fetch is the only
+    // thing keeping the tab busy.
+    const HANG_DELAY: Duration = Duration::from_secs(5); // ≫ the ~0.6s we wait
+    const MAX_AGE: Duration = Duration::from_millis(400);
+    const QUIET_WINDOW: Duration = Duration::from_millis(200);
+
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/hang"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("late")
+                .set_delay(HANG_DELAY),
+        )
+        .mount(&mock)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(
+                r#"<!doctype html><html><head><link rel="icon" href="data:,"></head><body>
+          <script>fetch("/hang");</script>
+        </body></html>"#
+                    .as_bytes()
+                    .to_vec(),
+                "text/html",
+            ),
+        )
+        .mount(&mock)
+        .await;
+
+    let browser = Browser::builder().headless(true).launch().await.unwrap();
+    let tab = browser.main_tab();
+    tab.goto(&mock.uri()).await.unwrap();
+    tab.wait_for_load().await.unwrap();
+
+    let start = std::time::Instant::now();
+    tab.wait_for_idle_opts(zendriver::IdleOptions {
+        timeout: Duration::from_secs(10),
+        quiet_window: QUIET_WINDOW,
+        max_inflight_age: Some(MAX_AGE),
+    })
+    .await
+    .unwrap();
+    let elapsed = start.elapsed();
+
+    // Resolved by eviction, not by the request finishing (it can't — held 5s)
+    // and not by the 10s outer timeout. So elapsed clears MAX_AGE + window but
+    // stays far below HANG_DELAY.
+    assert!(
+        elapsed >= Duration::from_millis(500),
+        "resolved too early ({elapsed:?}); eviction age + quiet window not enforced"
+    );
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "resolved too late ({elapsed:?}); the stuck /hang request should have been \
+         evicted at {MAX_AGE:?}, not awaited"
+    );
+
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+#[serial]
 async fn frame_find_inside_iframe() {
     // Fixture page hosts an iframe with `srcdoc` content. After load the
     // tab's frame registry should contain the main frame + the iframe;

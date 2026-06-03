@@ -3751,6 +3751,54 @@ impl<T> typenum::type_operators::Same for zendriver::tab::FrameResourceMatch
 pub type zendriver::tab::FrameResourceMatch::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for zendriver::tab::FrameResourceMatch where V: ppv_lite86::types::MultiLane<T>
 pub fn zendriver::tab::FrameResourceMatch::vzip(self) -> V
+pub struct zendriver::tab::IdleOptions
+pub zendriver::tab::IdleOptions::max_inflight_age: core::option::Option<core::time::Duration>
+pub zendriver::tab::IdleOptions::quiet_window: core::time::Duration
+pub zendriver::tab::IdleOptions::timeout: core::time::Duration
+impl core::clone::Clone for zendriver::tab::IdleOptions
+pub fn zendriver::tab::IdleOptions::clone(&self) -> zendriver::tab::IdleOptions
+impl core::default::Default for zendriver::tab::IdleOptions
+pub fn zendriver::tab::IdleOptions::default() -> Self
+impl core::fmt::Debug for zendriver::tab::IdleOptions
+pub fn zendriver::tab::IdleOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for zendriver::tab::IdleOptions
+impl core::marker::Send for zendriver::tab::IdleOptions
+impl core::marker::Sync for zendriver::tab::IdleOptions
+impl core::marker::Unpin for zendriver::tab::IdleOptions
+impl core::marker::UnsafeUnpin for zendriver::tab::IdleOptions
+impl core::panic::unwind_safe::RefUnwindSafe for zendriver::tab::IdleOptions
+impl core::panic::unwind_safe::UnwindSafe for zendriver::tab::IdleOptions
+impl<T, U> core::convert::Into<U> for zendriver::tab::IdleOptions where U: core::convert::From<T>
+pub fn zendriver::tab::IdleOptions::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for zendriver::tab::IdleOptions where U: core::convert::Into<T>
+pub type zendriver::tab::IdleOptions::Error = core::convert::Infallible
+pub fn zendriver::tab::IdleOptions::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for zendriver::tab::IdleOptions where U: core::convert::TryFrom<T>
+pub type zendriver::tab::IdleOptions::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn zendriver::tab::IdleOptions::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for zendriver::tab::IdleOptions where T: core::clone::Clone
+pub type zendriver::tab::IdleOptions::Owned = T
+pub fn zendriver::tab::IdleOptions::clone_into(&self, &mut T)
+pub fn zendriver::tab::IdleOptions::to_owned(&self) -> T
+impl<T> core::any::Any for zendriver::tab::IdleOptions where T: 'static + ?core::marker::Sized
+pub fn zendriver::tab::IdleOptions::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for zendriver::tab::IdleOptions where T: ?core::marker::Sized
+pub fn zendriver::tab::IdleOptions::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for zendriver::tab::IdleOptions where T: ?core::marker::Sized
+pub fn zendriver::tab::IdleOptions::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for zendriver::tab::IdleOptions where T: core::clone::Clone
+pub unsafe fn zendriver::tab::IdleOptions::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for zendriver::tab::IdleOptions
+pub fn zendriver::tab::IdleOptions::from(T) -> T
+impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::tab::IdleOptions where T: ?core::marker::Sized
+pub fn zendriver::tab::IdleOptions::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::IdleOptions::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for zendriver::tab::IdleOptions
+impl<T> tracing::instrument::WithSubscriber for zendriver::tab::IdleOptions
+impl<T> typenum::type_operators::Same for zendriver::tab::IdleOptions
+pub type zendriver::tab::IdleOptions::Output = T
+impl<V, T> ppv_lite86::types::VZip<V> for zendriver::tab::IdleOptions where V: ppv_lite86::types::MultiLane<T>
+pub fn zendriver::tab::IdleOptions::vzip(self) -> V
 pub struct zendriver::tab::ReloadOptions
 pub zendriver::tab::ReloadOptions::ignore_cache: bool
 pub zendriver::tab::ReloadOptions::script_to_evaluate_on_load: core::option::Option<alloc::string::String>
@@ -3890,6 +3938,7 @@ pub fn zendriver::tab::Tab::target_id(&self) -> &str
 pub async fn zendriver::tab::Tab::title(&self) -> zendriver::error::Result<alloc::string::String>
 pub async fn zendriver::tab::Tab::url(&self) -> zendriver::error::Result<url::Url>
 pub async fn zendriver::tab::Tab::wait_for_idle(&self) -> zendriver::error::Result<()>
+pub async fn zendriver::tab::Tab::wait_for_idle_opts(&self, zendriver::tab::IdleOptions) -> zendriver::error::Result<()>
 pub async fn zendriver::tab::Tab::wait_for_idle_with(&self, core::time::Duration, core::time::Duration) -> zendriver::error::Result<()>
 pub async fn zendriver::tab::Tab::wait_for_load(&self) -> zendriver::error::Result<()>
 pub async fn zendriver::tab::Tab::wait_for_ready_state(&self, zendriver::tab::ReadyState) -> zendriver::error::Result<()>
@@ -6226,6 +6275,54 @@ impl<T> typenum::type_operators::Same for zendriver::tab::FrameResourceMatch
 pub type zendriver::tab::FrameResourceMatch::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for zendriver::tab::FrameResourceMatch where V: ppv_lite86::types::MultiLane<T>
 pub fn zendriver::tab::FrameResourceMatch::vzip(self) -> V
+pub struct zendriver::IdleOptions
+pub zendriver::IdleOptions::max_inflight_age: core::option::Option<core::time::Duration>
+pub zendriver::IdleOptions::quiet_window: core::time::Duration
+pub zendriver::IdleOptions::timeout: core::time::Duration
+impl core::clone::Clone for zendriver::tab::IdleOptions
+pub fn zendriver::tab::IdleOptions::clone(&self) -> zendriver::tab::IdleOptions
+impl core::default::Default for zendriver::tab::IdleOptions
+pub fn zendriver::tab::IdleOptions::default() -> Self
+impl core::fmt::Debug for zendriver::tab::IdleOptions
+pub fn zendriver::tab::IdleOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for zendriver::tab::IdleOptions
+impl core::marker::Send for zendriver::tab::IdleOptions
+impl core::marker::Sync for zendriver::tab::IdleOptions
+impl core::marker::Unpin for zendriver::tab::IdleOptions
+impl core::marker::UnsafeUnpin for zendriver::tab::IdleOptions
+impl core::panic::unwind_safe::RefUnwindSafe for zendriver::tab::IdleOptions
+impl core::panic::unwind_safe::UnwindSafe for zendriver::tab::IdleOptions
+impl<T, U> core::convert::Into<U> for zendriver::tab::IdleOptions where U: core::convert::From<T>
+pub fn zendriver::tab::IdleOptions::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for zendriver::tab::IdleOptions where U: core::convert::Into<T>
+pub type zendriver::tab::IdleOptions::Error = core::convert::Infallible
+pub fn zendriver::tab::IdleOptions::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for zendriver::tab::IdleOptions where U: core::convert::TryFrom<T>
+pub type zendriver::tab::IdleOptions::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn zendriver::tab::IdleOptions::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for zendriver::tab::IdleOptions where T: core::clone::Clone
+pub type zendriver::tab::IdleOptions::Owned = T
+pub fn zendriver::tab::IdleOptions::clone_into(&self, &mut T)
+pub fn zendriver::tab::IdleOptions::to_owned(&self) -> T
+impl<T> core::any::Any for zendriver::tab::IdleOptions where T: 'static + ?core::marker::Sized
+pub fn zendriver::tab::IdleOptions::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for zendriver::tab::IdleOptions where T: ?core::marker::Sized
+pub fn zendriver::tab::IdleOptions::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for zendriver::tab::IdleOptions where T: ?core::marker::Sized
+pub fn zendriver::tab::IdleOptions::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for zendriver::tab::IdleOptions where T: core::clone::Clone
+pub unsafe fn zendriver::tab::IdleOptions::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for zendriver::tab::IdleOptions
+pub fn zendriver::tab::IdleOptions::from(T) -> T
+impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::tab::IdleOptions where T: ?core::marker::Sized
+pub fn zendriver::tab::IdleOptions::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::IdleOptions::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for zendriver::tab::IdleOptions
+impl<T> tracing::instrument::WithSubscriber for zendriver::tab::IdleOptions
+impl<T> typenum::type_operators::Same for zendriver::tab::IdleOptions
+pub type zendriver::tab::IdleOptions::Output = T
+impl<V, T> ppv_lite86::types::VZip<V> for zendriver::tab::IdleOptions where V: ppv_lite86::types::MultiLane<T>
+pub fn zendriver::tab::IdleOptions::vzip(self) -> V
 pub struct zendriver::KeyModifiers(_)
 impl zendriver::input::keyboard::KeyModifiers
 pub const zendriver::input::keyboard::KeyModifiers::ALT: Self
@@ -7360,6 +7457,7 @@ pub fn zendriver::tab::Tab::target_id(&self) -> &str
 pub async fn zendriver::tab::Tab::title(&self) -> zendriver::error::Result<alloc::string::String>
 pub async fn zendriver::tab::Tab::url(&self) -> zendriver::error::Result<url::Url>
 pub async fn zendriver::tab::Tab::wait_for_idle(&self) -> zendriver::error::Result<()>
+pub async fn zendriver::tab::Tab::wait_for_idle_opts(&self, zendriver::tab::IdleOptions) -> zendriver::error::Result<()>
 pub async fn zendriver::tab::Tab::wait_for_idle_with(&self, core::time::Duration, core::time::Duration) -> zendriver::error::Result<()>
 pub async fn zendriver::tab::Tab::wait_for_load(&self) -> zendriver::error::Result<()>
 pub async fn zendriver::tab::Tab::wait_for_ready_state(&self, zendriver::tab::ReadyState) -> zendriver::error::Result<()>
