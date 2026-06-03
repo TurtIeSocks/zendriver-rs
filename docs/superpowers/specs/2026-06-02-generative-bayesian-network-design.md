@@ -91,20 +91,16 @@ bundle plan after finding the monthly cadence):
 - `build.rs`/compile-time download is **rejected**: it breaks sandboxed
   `cargo install`, docs.rs, `--offline`/`--locked` CI, and reproducibility.
 
-**Shared fetch helper.** Factor a crate-internal `src/dl.rs`
-(`#[cfg(any(feature = "pool", feature = "generative"))]`):
-
-```rust
-pub(crate) fn cache_path(file: &str) -> PathBuf;                 // …/zendriver/fingerprints/<file>
-pub(crate) async fn fetch_or_cached_bytes(url: &str, cache: &Path)
-    -> Result<Vec<u8>, DlError>;                                 // cache-hit read, else GET + atomic write
-```
-
-Pool refactors to delegate to it (its **public** `load_or_download` signature is
-unchanged — no pool API churn). Generative uses it for the zip bytes. Cache file:
-`fingerprint-network.zip` (store compressed; decompress on load). Like the pool,
-the cache is kept indefinitely; refreshing = deleting the cache file (a TTL /
-`force_refresh` knob is a possible later enhancement, out of scope here).
+**Fetch helper (generative-local).** A small private `generative/download.rs`
+mirrors the pool's cache pattern — `cache_path()`
+(`dirs::cache_dir()/zendriver/fingerprints/fingerprint-network.zip`) and
+`async fetch_or_cached_bytes(url, cache) -> Result<Vec<u8>, GenError>` (cache-hit
+read, else `reqwest::get` bytes + atomic tmp→rename write). **Pool is left
+untouched** — its download path is currently untested, so refactoring it into a
+shared module would add risk for no behavior gain; ~12 lines of cache/fetch are
+duplicated instead. Cache stores the compressed zip; decompress on load. Like the
+pool, the cache is kept indefinitely; refreshing = deleting the cache file (a TTL
+/ `force_refresh` knob is a possible later enhancement, out of scope here).
 
 ### 4.2 Loader + sampler API (async; generic, faithful, deterministic)
 
@@ -225,16 +221,16 @@ fn destringify_json(raw: &str) -> Option<serde_json::Value> {
 ## 5. Files touched
 
 - `crates/zendriver-fingerprints/src/generative/mod.rs` — rewrite loader (async
-  download) + sampler (CPT walk) + mapping.
-- `crates/zendriver-fingerprints/src/dl.rs` — **new** shared fetch/cache helper.
-- `crates/zendriver-fingerprints/src/pool/mod.rs` — delegate to `dl` (public API
-  unchanged).
-- `crates/zendriver-fingerprints/src/lib.rs` — declare `dl` (feature-gated).
+  download) + sampler (CPT walk) + `Generator`/`Node`/`GenError`/`DEFAULT_NETWORK_URL`.
+- `crates/zendriver-fingerprints/src/generative/mapping.rs` — **new** decode
+  helpers (`destringify_*`), `map_platform`, `is_desktop_ua`, `persona_from_assignment`.
+- `crates/zendriver-fingerprints/src/generative/download.rs` — **new**
+  generative-local `cache_path` + `fetch_or_cached_bytes`.
+- `crates/zendriver-fingerprints/src/generative/fixtures/mini-network.json` +
+  `mini-network.zip` — **new** tiny real-schema fixtures (a few desktop UAs + one
+  mobile UA + the 5 mapped child nodes, ~KB) used by `#[cfg(test)]` via
+  `include_str!`/`include_bytes!`. Pool left untouched.
 - `crates/zendriver-fingerprints/src/generative/network.json` — **delete**.
-- `crates/zendriver-fingerprints/tests/fixtures/` — **new** tiny real-schema
-  fixtures: `mini-network.json` (a few desktop UAs + the 5 mapped child nodes,
-  ~KB) for unit tests, and `mini-network.zip` (same, zipped) for the
-  zip/HTTP-path test.
 - `crates/zendriver-fingerprints/Cargo.toml` —
   `generative = ["dep:reqwest", "dep:dirs", "dep:zip"]`; add `zip` optional dep;
   add `[dev-dependencies]` `tokio` + `wiremock` (none exist today) for the async
@@ -275,7 +271,7 @@ fixture — no zip, no network):
 HTTP/zip path (new `tokio`+`wiremock` dev-deps; mirrors the `zendriver-fetcher`
 download tests — this also becomes the first test of the shared download path,
 which pool never had):
-- **`wiremock`** serves `mini-network.zip`; `dl::fetch_or_cached_bytes(url, tmp)`
+- **`wiremock`** serves `mini-network.zip`; `download::fetch_or_cached_bytes(url, tmp)`
   (cache path = a `tempfile` dir) downloads on the first call and reads cache on
   the second (assert the mock saw exactly one request). A thin
   `load_or_download(mock_url)` smoke test asserts it returns a populated persona.
