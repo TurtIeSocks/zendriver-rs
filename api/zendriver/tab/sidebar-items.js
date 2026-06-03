@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["ReadyState"],"struct":["FrameResourceMatch","ReloadOptions","ScrollOptions","Tab","UserAgentOverride"]};
+window.SIDEBAR_ITEMS = {"enum":["ReadyState"],"struct":["FrameResourceMatch","IdleOptions","ReloadOptions","ScrollOptions","Tab","UserAgentOverride"]};
