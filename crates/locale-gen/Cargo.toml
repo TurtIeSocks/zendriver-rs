@@ -1,0 +1,12 @@
+[package]
+name = "locale-gen"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+reqwest = { workspace = true, features = ["blocking", "json"] }
+serde_json.workspace = true
