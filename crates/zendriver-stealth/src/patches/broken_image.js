@@ -4,20 +4,14 @@
 const origNaturalWidth  = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'naturalWidth')?.get;
 const origNaturalHeight = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'naturalHeight')?.get;
 if (origNaturalWidth && origNaturalHeight) {
-    Object.defineProperty(HTMLImageElement.prototype, 'naturalWidth', {
-        get: function() {
+    __zdGetter(HTMLImageElement.prototype, 'naturalWidth', function() {
             const v = origNaturalWidth.call(this);
             if (v === 0 && this.complete && !this.src) return 16;
             return v;
-        },
-        configurable: true, enumerable: true,
-    });
-    Object.defineProperty(HTMLImageElement.prototype, 'naturalHeight', {
-        get: function() {
+        }, { enumerable: true });
+    __zdGetter(HTMLImageElement.prototype, 'naturalHeight', function() {
             const v = origNaturalHeight.call(this);
             if (v === 0 && this.complete && !this.src) return 16;
             return v;
-        },
-        configurable: true, enumerable: true,
-    });
+        }, { enumerable: true });
 }

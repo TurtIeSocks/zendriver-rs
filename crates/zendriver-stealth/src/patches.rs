@@ -381,9 +381,15 @@ mod tests {
     #[test]
     fn bootstrap_wraps_everything_in_outer_masking_iife() {
         let s = bootstrap_script(&Persona::default(), &mock_identity());
-        assert!(s.starts_with("(function(){"), "outer masking IIFE must be first");
+        assert!(
+            s.starts_with("(function(){"),
+            "outer masking IIFE must be first"
+        );
         // identity IIFE is now nested inside the outer one.
-        assert!(s.contains("(function(fp){"), "identity IIFE still present (nested)");
+        assert!(
+            s.contains("(function(fp){"),
+            "identity IIFE still present (nested)"
+        );
         assert!(s.trim_end().ends_with("})();"), "outer IIFE is invoked");
     }
 
@@ -731,6 +737,29 @@ mod tests {
         assert!(
             !script.contains(r#"["fr-FR","en"]"#),
             "must not hardcode en"
+        );
+    }
+
+    #[test]
+    fn identity_patches_route_through_masking_helpers() {
+        let s = bootstrap_script(&Persona::default(), &mock_identity());
+        assert!(
+            s.contains("__zdGetter(Navigator.prototype, 'webdriver'"),
+            "webdriver"
+        );
+        assert!(
+            s.contains("__zdGetter(Navigator.prototype, 'plugins'"),
+            "plugins getter"
+        );
+        assert!(
+            s.contains("__zdReplace"),
+            "permissions/codecs methods routed"
+        );
+        assert!(s.contains("__zdMark"), "value-fn members marked");
+        // No raw defineProperty getter on Navigator.prototype.webdriver remains.
+        assert!(
+            !s.contains("Object.defineProperty(Navigator.prototype, 'webdriver'"),
+            "webdriver should go through __zdGetter, not raw defineProperty"
         );
     }
 
