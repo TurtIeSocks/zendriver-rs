@@ -11,6 +11,8 @@
 //! full upstream browserforge dataset is tracked as a follow-up (spec §14). The
 //! loader and sampler are complete and correct regardless of network size.
 
+mod mapping;
+
 use std::collections::HashMap;
 
 use serde::Deserialize;
