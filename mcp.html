@@ -183,14 +183,17 @@
                     <main>
                         <h1 id="mcp-server-zendriver-mcp"><a class="header" href="#mcp-server-zendriver-mcp">MCP server (<code>zendriver-mcp</code>)</a></h1>
 <p><code>zendriver-mcp</code> is a <a href="https://modelcontextprotocol.io/">Model Context Protocol</a>
-server that exposes zendriver-rs through 65 MCP tools, so any
+server that exposes zendriver-rs through 70 MCP tools (71 with the
+optional <code>fingerprints</code> feature), so any
 MCP-compatible client (Claude Desktop, Claude Code, custom agents) can
 drive a real, stealth-by-default Chrome browser.</p>
 <h2 id="install"><a class="header" href="#install">Install</a></h2>
 <pre><code class="language-bash">cargo install zendriver-mcp
 </code></pre>
-<p>The default build enables all gated features (<code>interception</code>, <code>expect</code>,
-<code>cloudflare</code>, <code>imperva</code>, <code>fetcher</code>). For a lean build:</p>
+<p>The default build enables <code>interception</code>, <code>expect</code>, <code>cloudflare</code>,
+<code>imperva</code>, <code>datadome</code>, <code>monitor</code>, <code>fetcher</code>, and <code>tracker-blocking</code>. The
+<code>fingerprints</code> and <code>geo</code> features are opt-in (add
+<code>--features fingerprints,geo</code>). For a lean build:</p>
 <pre><code class="language-bash">cargo install zendriver-mcp --no-default-features
 </code></pre>
 <h2 id="claude-desktop"><a class="header" href="#claude-desktop">Claude Desktop</a></h2>
@@ -223,7 +226,8 @@ OPTIONS:
     -V, --version
 </code></pre>
 <h2 id="tool-surface"><a class="header" href="#tool-surface">Tool surface</a></h2>
-<p>65 tools across these categories:</p>
+<p>70 tools across these categories (71 with the optional <code>fingerprints</code>
+feature):</p>
 <div class="table-wrapper"><table><thead><tr><th>Category</th><th>Tools</th><th style="text-align: right">Count</th></tr></thead><tbody>
 <tr><td>Lifecycle</td><td><code>browser_open / _close / _status</code></td><td style="text-align: right">3</td></tr>
 <tr><td>Navigation</td><td><code>browser_goto / _back / _forward / _reload / _wait_for_idle / _wait_for_load / _bypass_insecure_warning</code></td><td style="text-align: right">7</td></tr>
@@ -234,6 +238,7 @@ OPTIONS:
 <tr><td>Reads</td><td><code>browser_element_state / _get_links / _search_resources</code></td><td style="text-align: right">3</td></tr>
 <tr><td>Snapshots / Export</td><td><code>browser_html / _screenshot / _pdf / _save_mhtml</code></td><td style="text-align: right">4</td></tr>
 <tr><td>Eval</td><td><code>browser_evaluate / _evaluate_main</code></td><td style="text-align: right">2</td></tr>
+<tr><td>Network</td><td><code>browser_request</code></td><td style="text-align: right">1</td></tr>
 <tr><td>Cookies</td><td><code>browser_cookies_get / _set / _delete / _clear / _persist</code></td><td style="text-align: right">5</td></tr>
 <tr><td>Storage</td><td><code>browser_storage_get / _set / _delete / _clear</code></td><td style="text-align: right">4</td></tr>
 <tr><td>Downloads</td><td><code>browser_download / _set_download_path</code></td><td style="text-align: right">2</td></tr>
@@ -243,18 +248,33 @@ OPTIONS:
 <tr><td>Expect (gated)</td><td><code>browser_expect_register / _await / _cancel</code></td><td style="text-align: right">3</td></tr>
 <tr><td>Cloudflare (gated)</td><td><code>browser_solve_turnstile</code></td><td style="text-align: right">1</td></tr>
 <tr><td>Imperva (gated)</td><td><code>browser_solve_imperva</code></td><td style="text-align: right">1</td></tr>
+<tr><td>DataDome (gated)</td><td><code>browser_solve_datadome</code></td><td style="text-align: right">1</td></tr>
 <tr><td>Fetcher (gated)</td><td><code>browser_install_chrome</code></td><td style="text-align: right">1</td></tr>
+<tr><td>Monitor (gated)</td><td><code>browser_monitor_start / _read / _stop</code></td><td style="text-align: right">3</td></tr>
+<tr><td>Fingerprint (gated)</td><td><code>browser_fingerprint_generate</code></td><td style="text-align: right">1</td></tr>
 </tbody></table>
 </div>
 <p>All find / action tools share a <code>Selector</code> arg — one-of <code>css | xpath | text | text_exact | text_regex | role</code>, with modifiers <code>nth / visible_only / timeout_ms / frame_id</code>. State-changing tools accept
 <code>return_snapshot: bool</code> for one-call action + observe. <code>browser_pdf</code> /
 <code>_save_mhtml</code> / <code>_download</code> return a binary-output shape (<code>{ byte_len, saved_path? , base64? }</code>): bytes go to <code>save_path</code> on the MCP host when
-given, else base64-inline (capped at 5 MiB). The default build adds
-<code>imperva</code> to the gated feature set alongside <code>interception</code> / <code>expect</code> /
-<code>cloudflare</code> / <code>fetcher</code>.</p>
+given, else base64-inline (capped at 5 MiB). The default build enables
+<code>interception</code> / <code>expect</code> / <code>cloudflare</code> / <code>imperva</code> / <code>datadome</code> /
+<code>monitor</code> / <code>fetcher</code> / <code>tracker-blocking</code>; <code>fingerprints</code> and <code>geo</code> are
+opt-in.</p>
 <p>Full JSON Schema for every tool's input + output is captured in
 <code>crates/zendriver-mcp/tests/snapshots/</code> and changes there require an
 explicit <code>cargo insta accept</code> — the wire shape is reviewed.</p>
+<h2 id="browser_open-options"><a class="header" href="#browser_open-options"><code>browser_open</code> options</a></h2>
+<p><code>browser_open</code> accepts opt-in third-party tracker / fingerprinter blocking:</p>
+<ul>
+<li><code>block_trackers: bool</code> — enable blocking with the curated bundled list.</li>
+<li><code>tracker_blocklist</code> — one of <code>{ "url": "..." }</code>, <code>{ "path": "..." }</code>, or
+<code>{ "domains": ["..."] }</code> to add custom hosts (implicitly enables blocking).
+Requires the default <code>tracker-blocking</code> feature.</li>
+</ul>
+<p>The stealth-profile override accepts <code>geo_country</code> (ISO 3166-1 alpha-2, e.g.
+<code>"DE"</code>) to derive a coherent <code>locale</code> + <code>Accept-Language</code>. The field is always
+present in the schema but only takes effect when the <code>geo</code> feature is enabled.</p>
 <h2 id="stealth"><a class="header" href="#stealth">Stealth</a></h2>
 <p>Stealth is on by default (matching the <code>zendriver</code> library). Configure
 the default fingerprint via <code>--stealth-profile</code> at server start; switch

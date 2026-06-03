@@ -416,7 +416,7 @@
 <a href=#416 id=416 data-nosnippet>416</a>
 <a href=#417 id=417 data-nosnippet>417</a><span class="doccomment">/// `true` when the `ErrorData` was produced by mapping an
 <a href=#418 id=418 data-nosnippet>418</a>/// [`zendriver::ZendriverError::ElementNotFound`]. We rely on the
-<a href=#419 id=419 data-nosnippet>419</a>/// `_meta.suggested_next == "browser_snapshot"` marker that `map_error`
+<a href=#419 id=419 data-nosnippet>419</a>/// `_meta.suggested_next == "browser_html"` marker that `map_error`
 <a href=#420 id=420 data-nosnippet>420</a>/// attaches to that variant — checking the message would be brittle
 <a href=#421 id=421 data-nosnippet>421</a>/// across translation tweaks.
 <a href=#422 id=422 data-nosnippet>422</a></span><span class="kw">fn </span>is_not_found(err: <span class="kw-2">&amp;</span>ErrorData) -&gt; bool {
@@ -424,7 +424,7 @@
 <a href=#424 id=424 data-nosnippet>424</a>        .as_ref()
 <a href=#425 id=425 data-nosnippet>425</a>        .and_then(|v| v.get(<span class="string">"suggested_next"</span>))
 <a href=#426 id=426 data-nosnippet>426</a>        .and_then(|v| v.as_str())
-<a href=#427 id=427 data-nosnippet>427</a>        == <span class="prelude-val">Some</span>(<span class="string">"browser_snapshot"</span>)
+<a href=#427 id=427 data-nosnippet>427</a>        == <span class="prelude-val">Some</span>(<span class="string">"browser_html"</span>)
 <a href=#428 id=428 data-nosnippet>428</a>        &amp;&amp; err.message.contains(<span class="string">"No element matched"</span>)
 <a href=#429 id=429 data-nosnippet>429</a>}
 <a href=#430 id=430 data-nosnippet>430</a>

@@ -365,6 +365,30 @@ you're seeing the raw <code>Cdp</code> form, you're on a CDP method we haven't
 special-cased. Wait for <code>wait_for_load()</code> / <code>wait_for_idle()</code> before
 the call, or use <a href="./expect.html"><code>expect_response</code></a> to pin the wait to
 the specific event you care about.</p>
+<h2 id="wait_for_idle-never-returns-on-a-page-with-a-long-poll-sse-or-analytics-beacon-request"><a class="header" href="#wait_for_idle-never-returns-on-a-page-with-a-long-poll-sse-or-analytics-beacon-request"><code>wait_for_idle</code> never returns on a page with a long-poll, SSE, or analytics-beacon request</a></h2>
+<p>By default <code>wait_for_idle</code> waits for <em>every</em> in-flight request to
+terminate, so a single never-completing request (a Server-Sent Events
+stream, a long-poll, a hung analytics beacon) keeps the tab non-idle
+until <code>timeout</code>. Use <code>Tab::wait_for_idle_opts</code> with an
+<code>IdleOptions::max_inflight_age</code> — any request older than that age is
+treated as background, letting idle resolve while it stays open:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span><span class="boring">let browser = zendriver::Browser::builder().launch().await?;
+</span><span class="boring">let tab = browser.main_tab();
+</span>use std::time::Duration;
+use zendriver::IdleOptions;
+
+tab.wait_for_idle_opts(IdleOptions {
+    max_inflight_age: Some(Duration::from_secs(5)),
+    ..Default::default()
+})
+.await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p><code>max_inflight_age</code> defaults to <code>None</code> (the historical
+wait-for-everything behavior).</p>
 <h2 id="where-do-i-find-the-full-list-of-errors"><a class="header" href="#where-do-i-find-the-full-list-of-errors">Where do I find the full list of errors?</a></h2>
 <p><a href="./error-reference.html">Error Reference</a> — every public variant of
 <code>ZendriverError</code> plus the sub-crate errors that flow into it.</p>

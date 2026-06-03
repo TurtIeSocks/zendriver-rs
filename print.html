@@ -835,6 +835,24 @@ let browser = Browser::builder()
     .surface(Surface::Canvas, Strategy::Random)  // max entropy
     .launch().await?;
 <span class="boring">}</span></code></pre></pre>
+<h2 id="country--locale-overlay-geo_locale"><a class="header" href="#country--locale-overlay-geo_locale">Country → locale overlay (<code>geo_locale</code>)</a></h2>
+<p>The optional <code>geo</code> feature adds <a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.geo_locale"><code>BrowserBuilder::geo_locale</code></a>, which maps an
+ISO 3166-1 alpha-2 country code (e.g. <code>"US"</code>, <code>"de"</code>) to a coherent <code>locale</code> +
+<code>languages</code> (Accept-Language) set drawn from a bundled CLDR-derived table. It
+is layered as a <strong>persona overlay</strong>, so it composes with <code>.persona(..)</code> and is
+overridden by an explicit <code>.persona_overlay(..)</code> locale. An invalid / unknown
+country code is ignored (logged) — the value is never locked.</p>
+<pre><code class="language-toml">[dependencies]
+zendriver = { version = "0.1", features = ["geo"] }
+</code></pre>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::Browser;
+
+let browser = Browser::builder()
+    .geo_locale("DE")   // de-DE locale + matching Accept-Language
+    .launch().await?;
+<span class="boring">}</span></code></pre></pre>
 <h2 id="json-persona-try_from_json"><a class="header" href="#json-persona-try_from_json">JSON persona (<code>try_from_json</code>)</a></h2>
 <p>Any <code>Persona</code> can be expressed as a JSON object and round-trips cleanly.
 Fields are snake_case; all fields are optional. Useful for configuration files
@@ -1870,6 +1888,33 @@ holds the connection open until exactly one of the four terminal methods
 arrives. If your stream consumer panics mid-flow, the actor's <code>Drop</code>
 will dispatch <code>Fetch.disable</code> — every still-paused request fails with
 <code>net::ERR_BLOCKED_BY_CLIENT</code>, which is unpleasant but not silent.</p>
+<h2 id="tracker--fingerprinter-blocklist"><a class="header" href="#tracker--fingerprinter-blocklist">Tracker / fingerprinter blocklist</a></h2>
+<p>The <code>tracker-blocking</code> feature builds a ready-made host-blocking rule on top
+of interception, so you can block third-party trackers and fingerprinters
+without writing patterns. Enable it on the builder and it installs on the main
+tab and every new tab automatically.</p>
+<pre><code class="language-toml">[dependencies]
+zendriver = { version = "0.1", features = ["tracker-blocking"] }
+</code></pre>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::Browser;
+
+let browser = Browser::builder()
+    .block_trackers(true)                        // curated bundled list
+    .tracker_blocklist_add(["ads.example.com"])  // + your own hosts
+    .launch().await?;
+<span class="boring">}</span></code></pre></pre>
+<div class="table-wrapper"><table><thead><tr><th>Method</th><th>Effect</th></tr></thead><tbody>
+<tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.block_trackers"><code>block_trackers(true)</code></a></td><td>Enable blocking with the curated bundled list (<code>include_str!</code>-embedded — only adds binary size when the feature is on)</td></tr>
+<tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.tracker_blocklist_add"><code>tracker_blocklist_add</code></a></td><td>Add extra hosts (repeatable; implicitly enables blocking)</td></tr>
+<tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.tracker_blocklist_file"><code>tracker_blocklist_file</code></a></td><td>Add hosts from a local file (one host per line; <code>0.0.0.0 host</code> hosts-file lines tolerated)</td></tr>
+<tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.tracker_blocklist_url"><code>tracker_blocklist_url</code></a></td><td>Add hosts fetched from a URL at launch</td></tr>
+</tbody></table>
+</div>
+<p>Matching is host-based: a blocked host also blocks its subdomains. The bundle
+ships only our own clean list — point <code>tracker_blocklist_url</code> at a third-party
+list only if you accept that list's license.</p>
 <h2 id="pattern--stage-filters"><a class="header" href="#pattern--stage-filters">Pattern + stage filters</a></h2>
 <p>By default the builder pauses on every request at the <code>Request</code> stage.
 Restrict it with builder modifiers:</p>
@@ -3041,14 +3086,17 @@ the cache out-of-band or ship a Docker image with Chrome baked in.</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="mcp-server-zendriver-mcp"><a class="header" href="#mcp-server-zendriver-mcp">MCP server (<code>zendriver-mcp</code>)</a></h1>
 <p><code>zendriver-mcp</code> is a <a href="https://modelcontextprotocol.io/">Model Context Protocol</a>
-server that exposes zendriver-rs through 65 MCP tools, so any
+server that exposes zendriver-rs through 70 MCP tools (71 with the
+optional <code>fingerprints</code> feature), so any
 MCP-compatible client (Claude Desktop, Claude Code, custom agents) can
 drive a real, stealth-by-default Chrome browser.</p>
 <h2 id="install-1"><a class="header" href="#install-1">Install</a></h2>
 <pre><code class="language-bash">cargo install zendriver-mcp
 </code></pre>
-<p>The default build enables all gated features (<code>interception</code>, <code>expect</code>,
-<code>cloudflare</code>, <code>imperva</code>, <code>fetcher</code>). For a lean build:</p>
+<p>The default build enables <code>interception</code>, <code>expect</code>, <code>cloudflare</code>,
+<code>imperva</code>, <code>datadome</code>, <code>monitor</code>, <code>fetcher</code>, and <code>tracker-blocking</code>. The
+<code>fingerprints</code> and <code>geo</code> features are opt-in (add
+<code>--features fingerprints,geo</code>). For a lean build:</p>
 <pre><code class="language-bash">cargo install zendriver-mcp --no-default-features
 </code></pre>
 <h2 id="claude-desktop"><a class="header" href="#claude-desktop">Claude Desktop</a></h2>
@@ -3081,7 +3129,8 @@ OPTIONS:
     -V, --version
 </code></pre>
 <h2 id="tool-surface"><a class="header" href="#tool-surface">Tool surface</a></h2>
-<p>65 tools across these categories:</p>
+<p>70 tools across these categories (71 with the optional <code>fingerprints</code>
+feature):</p>
 <div class="table-wrapper"><table><thead><tr><th>Category</th><th>Tools</th><th style="text-align: right">Count</th></tr></thead><tbody>
 <tr><td>Lifecycle</td><td><code>browser_open / _close / _status</code></td><td style="text-align: right">3</td></tr>
 <tr><td>Navigation</td><td><code>browser_goto / _back / _forward / _reload / _wait_for_idle / _wait_for_load / _bypass_insecure_warning</code></td><td style="text-align: right">7</td></tr>
@@ -3092,6 +3141,7 @@ OPTIONS:
 <tr><td>Reads</td><td><code>browser_element_state / _get_links / _search_resources</code></td><td style="text-align: right">3</td></tr>
 <tr><td>Snapshots / Export</td><td><code>browser_html / _screenshot / _pdf / _save_mhtml</code></td><td style="text-align: right">4</td></tr>
 <tr><td>Eval</td><td><code>browser_evaluate / _evaluate_main</code></td><td style="text-align: right">2</td></tr>
+<tr><td>Network</td><td><code>browser_request</code></td><td style="text-align: right">1</td></tr>
 <tr><td>Cookies</td><td><code>browser_cookies_get / _set / _delete / _clear / _persist</code></td><td style="text-align: right">5</td></tr>
 <tr><td>Storage</td><td><code>browser_storage_get / _set / _delete / _clear</code></td><td style="text-align: right">4</td></tr>
 <tr><td>Downloads</td><td><code>browser_download / _set_download_path</code></td><td style="text-align: right">2</td></tr>
@@ -3101,18 +3151,33 @@ OPTIONS:
 <tr><td>Expect (gated)</td><td><code>browser_expect_register / _await / _cancel</code></td><td style="text-align: right">3</td></tr>
 <tr><td>Cloudflare (gated)</td><td><code>browser_solve_turnstile</code></td><td style="text-align: right">1</td></tr>
 <tr><td>Imperva (gated)</td><td><code>browser_solve_imperva</code></td><td style="text-align: right">1</td></tr>
+<tr><td>DataDome (gated)</td><td><code>browser_solve_datadome</code></td><td style="text-align: right">1</td></tr>
 <tr><td>Fetcher (gated)</td><td><code>browser_install_chrome</code></td><td style="text-align: right">1</td></tr>
+<tr><td>Monitor (gated)</td><td><code>browser_monitor_start / _read / _stop</code></td><td style="text-align: right">3</td></tr>
+<tr><td>Fingerprint (gated)</td><td><code>browser_fingerprint_generate</code></td><td style="text-align: right">1</td></tr>
 </tbody></table>
 </div>
 <p>All find / action tools share a <code>Selector</code> arg — one-of <code>css | xpath | text | text_exact | text_regex | role</code>, with modifiers <code>nth / visible_only / timeout_ms / frame_id</code>. State-changing tools accept
 <code>return_snapshot: bool</code> for one-call action + observe. <code>browser_pdf</code> /
 <code>_save_mhtml</code> / <code>_download</code> return a binary-output shape (<code>{ byte_len, saved_path? , base64? }</code>): bytes go to <code>save_path</code> on the MCP host when
-given, else base64-inline (capped at 5 MiB). The default build adds
-<code>imperva</code> to the gated feature set alongside <code>interception</code> / <code>expect</code> /
-<code>cloudflare</code> / <code>fetcher</code>.</p>
+given, else base64-inline (capped at 5 MiB). The default build enables
+<code>interception</code> / <code>expect</code> / <code>cloudflare</code> / <code>imperva</code> / <code>datadome</code> /
+<code>monitor</code> / <code>fetcher</code> / <code>tracker-blocking</code>; <code>fingerprints</code> and <code>geo</code> are
+opt-in.</p>
 <p>Full JSON Schema for every tool's input + output is captured in
 <code>crates/zendriver-mcp/tests/snapshots/</code> and changes there require an
 explicit <code>cargo insta accept</code> — the wire shape is reviewed.</p>
+<h2 id="browser_open-options"><a class="header" href="#browser_open-options"><code>browser_open</code> options</a></h2>
+<p><code>browser_open</code> accepts opt-in third-party tracker / fingerprinter blocking:</p>
+<ul>
+<li><code>block_trackers: bool</code> — enable blocking with the curated bundled list.</li>
+<li><code>tracker_blocklist</code> — one of <code>{ "url": "..." }</code>, <code>{ "path": "..." }</code>, or
+<code>{ "domains": ["..."] }</code> to add custom hosts (implicitly enables blocking).
+Requires the default <code>tracker-blocking</code> feature.</li>
+</ul>
+<p>The stealth-profile override accepts <code>geo_country</code> (ISO 3166-1 alpha-2, e.g.
+<code>"DE"</code>) to derive a coherent <code>locale</code> + <code>Accept-Language</code>. The field is always
+present in the schema but only takes effect when the <code>geo</code> feature is enabled.</p>
 <h2 id="stealth-1"><a class="header" href="#stealth-1">Stealth</a></h2>
 <p>Stealth is on by default (matching the <code>zendriver</code> library). Configure
 the default fingerprint via <code>--stealth-profile</code> at server start; switch
@@ -4048,6 +4113,30 @@ you're seeing the raw <code>Cdp</code> form, you're on a CDP method we haven't
 special-cased. Wait for <code>wait_for_load()</code> / <code>wait_for_idle()</code> before
 the call, or use <a href="./expect.html"><code>expect_response</code></a> to pin the wait to
 the specific event you care about.</p>
+<h2 id="wait_for_idle-never-returns-on-a-page-with-a-long-poll-sse-or-analytics-beacon-request"><a class="header" href="#wait_for_idle-never-returns-on-a-page-with-a-long-poll-sse-or-analytics-beacon-request"><code>wait_for_idle</code> never returns on a page with a long-poll, SSE, or analytics-beacon request</a></h2>
+<p>By default <code>wait_for_idle</code> waits for <em>every</em> in-flight request to
+terminate, so a single never-completing request (a Server-Sent Events
+stream, a long-poll, a hung analytics beacon) keeps the tab non-idle
+until <code>timeout</code>. Use <code>Tab::wait_for_idle_opts</code> with an
+<code>IdleOptions::max_inflight_age</code> — any request older than that age is
+treated as background, letting idle resolve while it stays open:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span><span class="boring">let browser = zendriver::Browser::builder().launch().await?;
+</span><span class="boring">let tab = browser.main_tab();
+</span>use std::time::Duration;
+use zendriver::IdleOptions;
+
+tab.wait_for_idle_opts(IdleOptions {
+    max_inflight_age: Some(Duration::from_secs(5)),
+    ..Default::default()
+})
+.await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p><code>max_inflight_age</code> defaults to <code>None</code> (the historical
+wait-for-everything behavior).</p>
 <h2 id="where-do-i-find-the-full-list-of-errors"><a class="header" href="#where-do-i-find-the-full-list-of-errors">Where do I find the full list of errors?</a></h2>
 <p><a href="./error-reference.html">Error Reference</a> — every public variant of
 <code>ZendriverError</code> plus the sub-crate errors that flow into it.</p>

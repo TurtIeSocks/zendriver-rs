@@ -305,6 +305,24 @@ let browser = Browser::builder()
     .surface(Surface::Canvas, Strategy::Random)  // max entropy
     .launch().await?;
 <span class="boring">}</span></code></pre></pre>
+<h2 id="country--locale-overlay-geo_locale"><a class="header" href="#country--locale-overlay-geo_locale">Country → locale overlay (<code>geo_locale</code>)</a></h2>
+<p>The optional <code>geo</code> feature adds <a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.geo_locale"><code>BrowserBuilder::geo_locale</code></a>, which maps an
+ISO 3166-1 alpha-2 country code (e.g. <code>"US"</code>, <code>"de"</code>) to a coherent <code>locale</code> +
+<code>languages</code> (Accept-Language) set drawn from a bundled CLDR-derived table. It
+is layered as a <strong>persona overlay</strong>, so it composes with <code>.persona(..)</code> and is
+overridden by an explicit <code>.persona_overlay(..)</code> locale. An invalid / unknown
+country code is ignored (logged) — the value is never locked.</p>
+<pre><code class="language-toml">[dependencies]
+zendriver = { version = "0.1", features = ["geo"] }
+</code></pre>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::Browser;
+
+let browser = Browser::builder()
+    .geo_locale("DE")   // de-DE locale + matching Accept-Language
+    .launch().await?;
+<span class="boring">}</span></code></pre></pre>
 <h2 id="json-persona-try_from_json"><a class="header" href="#json-persona-try_from_json">JSON persona (<code>try_from_json</code>)</a></h2>
 <p>Any <code>Persona</code> can be expressed as a JSON object and round-trips cleanly.
 Fields are snake_case; all fields are optional. Useful for configuration files

@@ -365,6 +365,33 @@ holds the connection open until exactly one of the four terminal methods
 arrives. If your stream consumer panics mid-flow, the actor's <code>Drop</code>
 will dispatch <code>Fetch.disable</code> — every still-paused request fails with
 <code>net::ERR_BLOCKED_BY_CLIENT</code>, which is unpleasant but not silent.</p>
+<h2 id="tracker--fingerprinter-blocklist"><a class="header" href="#tracker--fingerprinter-blocklist">Tracker / fingerprinter blocklist</a></h2>
+<p>The <code>tracker-blocking</code> feature builds a ready-made host-blocking rule on top
+of interception, so you can block third-party trackers and fingerprinters
+without writing patterns. Enable it on the builder and it installs on the main
+tab and every new tab automatically.</p>
+<pre><code class="language-toml">[dependencies]
+zendriver = { version = "0.1", features = ["tracker-blocking"] }
+</code></pre>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::Browser;
+
+let browser = Browser::builder()
+    .block_trackers(true)                        // curated bundled list
+    .tracker_blocklist_add(["ads.example.com"])  // + your own hosts
+    .launch().await?;
+<span class="boring">}</span></code></pre></pre>
+<div class="table-wrapper"><table><thead><tr><th>Method</th><th>Effect</th></tr></thead><tbody>
+<tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.block_trackers"><code>block_trackers(true)</code></a></td><td>Enable blocking with the curated bundled list (<code>include_str!</code>-embedded — only adds binary size when the feature is on)</td></tr>
+<tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.tracker_blocklist_add"><code>tracker_blocklist_add</code></a></td><td>Add extra hosts (repeatable; implicitly enables blocking)</td></tr>
+<tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.tracker_blocklist_file"><code>tracker_blocklist_file</code></a></td><td>Add hosts from a local file (one host per line; <code>0.0.0.0 host</code> hosts-file lines tolerated)</td></tr>
+<tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.tracker_blocklist_url"><code>tracker_blocklist_url</code></a></td><td>Add hosts fetched from a URL at launch</td></tr>
+</tbody></table>
+</div>
+<p>Matching is host-based: a blocked host also blocks its subdomains. The bundle
+ships only our own clean list — point <code>tracker_blocklist_url</code> at a third-party
+list only if you accept that list's license.</p>
 <h2 id="pattern--stage-filters"><a class="header" href="#pattern--stage-filters">Pattern + stage filters</a></h2>
 <p>By default the builder pauses on every request at the <code>Request</code> stage.
 Restrict it with builder modifiers:</p>

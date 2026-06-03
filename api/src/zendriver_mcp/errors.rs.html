@@ -68,21 +68,21 @@
 <a href=#68 id=68 data-nosnippet>68</a>    <span class="kw">match </span>err {
 <a href=#69 id=69 data-nosnippet>69</a>        ZendriverError::ElementNotFound { selector } =&gt; (
 <a href=#70 id=70 data-nosnippet>70</a>            <span class="macro">format!</span>(
-<a href=#71 id=71 data-nosnippet>71</a>                <span class="string">"No element matched `{selector}`. Try `browser_snapshot` or `browser_html` to inspect current page."
+<a href=#71 id=71 data-nosnippet>71</a>                <span class="string">"No element matched `{selector}`. Try `browser_html` to inspect current page."
 <a href=#72 id=72 data-nosnippet>72</a>            </span>),
-<a href=#73 id=73 data-nosnippet>73</a>            <span class="prelude-val">Some</span>(<span class="string">"browser_snapshot"</span>),
+<a href=#73 id=73 data-nosnippet>73</a>            <span class="prelude-val">Some</span>(<span class="string">"browser_html"</span>),
 <a href=#74 id=74 data-nosnippet>74</a>        ),
 <a href=#75 id=75 data-nosnippet>75</a>        ZendriverError::Timeout(d) =&gt; (
 <a href=#76 id=76 data-nosnippet>76</a>            <span class="macro">format!</span>(
-<a href=#77 id=77 data-nosnippet>77</a>                <span class="string">"Operation timed out after {d:?}. Retry with a larger `timeout_ms` or inspect with `browser_snapshot`."
+<a href=#77 id=77 data-nosnippet>77</a>                <span class="string">"Operation timed out after {d:?}. Retry with a larger `timeout_ms` or inspect with `browser_html`."
 <a href=#78 id=78 data-nosnippet>78</a>            </span>),
-<a href=#79 id=79 data-nosnippet>79</a>            <span class="prelude-val">Some</span>(<span class="string">"browser_snapshot"</span>),
+<a href=#79 id=79 data-nosnippet>79</a>            <span class="prelude-val">Some</span>(<span class="string">"browser_html"</span>),
 <a href=#80 id=80 data-nosnippet>80</a>        ),
 <a href=#81 id=81 data-nosnippet>81</a>        ZendriverError::NotActionable(<span class="kw">_</span>, reason) =&gt; (
 <a href=#82 id=82 data-nosnippet>82</a>            <span class="macro">format!</span>(
-<a href=#83 id=83 data-nosnippet>83</a>                <span class="string">"Element not actionable: {reason}. Inspect with `browser_snapshot` or wait for the page to settle."
+<a href=#83 id=83 data-nosnippet>83</a>                <span class="string">"Element not actionable: {reason}. Inspect with `browser_html` or wait for the page to settle."
 <a href=#84 id=84 data-nosnippet>84</a>            </span>),
-<a href=#85 id=85 data-nosnippet>85</a>            <span class="prelude-val">Some</span>(<span class="string">"browser_snapshot"</span>),
+<a href=#85 id=85 data-nosnippet>85</a>            <span class="prelude-val">Some</span>(<span class="string">"browser_html"</span>),
 <a href=#86 id=86 data-nosnippet>86</a>        ),
 <a href=#87 id=87 data-nosnippet>87</a>        ZendriverError::TabNotFound(id) =&gt; (
 <a href=#88 id=88 data-nosnippet>88</a>            <span class="macro">format!</span>(<span class="string">"Tab `{id}` not found. Use `browser_tab_list` to enumerate live tabs."</span>),
@@ -130,14 +130,14 @@
 <a href=#130 id=130 data-nosnippet>130</a>    }
 <a href=#131 id=131 data-nosnippet>131</a>
 <a href=#132 id=132 data-nosnippet>132</a>    <span class="attr">#[test]
-<a href=#133 id=133 data-nosnippet>133</a>    </span><span class="kw">fn </span>element_not_found_suggests_snapshot() {
+<a href=#133 id=133 data-nosnippet>133</a>    </span><span class="kw">fn </span>element_not_found_suggests_html() {
 <a href=#134 id=134 data-nosnippet>134</a>        <span class="kw">let </span>inner = ZendriverError::ElementNotFound {
 <a href=#135 id=135 data-nosnippet>135</a>            selector: <span class="string">"css(button.primary)"</span>.into(),
 <a href=#136 id=136 data-nosnippet>136</a>        };
 <a href=#137 id=137 data-nosnippet>137</a>        <span class="kw">let </span>e = map_error(McpServerError::from(inner));
 <a href=#138 id=138 data-nosnippet>138</a>        <span class="macro">assert!</span>(e.message.contains(<span class="string">"`css(button.primary)`"</span>));
 <a href=#139 id=139 data-nosnippet>139</a>        <span class="kw">let </span>data = e.data.as_ref().expect(<span class="string">"data populated"</span>);
-<a href=#140 id=140 data-nosnippet>140</a>        <span class="macro">assert_eq!</span>(data[<span class="string">"suggested_next"</span>], <span class="string">"browser_snapshot"</span>);
+<a href=#140 id=140 data-nosnippet>140</a>        <span class="macro">assert_eq!</span>(data[<span class="string">"suggested_next"</span>], <span class="string">"browser_html"</span>);
 <a href=#141 id=141 data-nosnippet>141</a>    }
 <a href=#142 id=142 data-nosnippet>142</a>
 <a href=#143 id=143 data-nosnippet>143</a>    <span class="attr">#[test]
