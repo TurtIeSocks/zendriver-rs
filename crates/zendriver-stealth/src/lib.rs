@@ -37,6 +37,7 @@
 pub mod error;
 pub mod fingerprint;
 pub mod flags;
+mod headers;
 pub mod input_profile;
 pub mod observer;
 pub mod patches;
