@@ -1,0 +1,48 @@
+name: plugin-validate
+
+on:
+  push:
+    paths:
+      - "plugins/**"
+      - ".claude-plugin/**"
+      - ".github/workflows/plugin-validate.yml"
+  pull_request:
+    paths:
+      - "plugins/**"
+      - ".claude-plugin/**"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate JSON manifests
+        run: |
+          set -e
+          for f in .claude-plugin/marketplace.json \
+                   plugins/zendriver/.claude-plugin/plugin.json \
+                   plugins/zendriver/.mcp.json \
+                   plugins/zendriver/hooks/hooks.json; do
+            echo "jq $f"; jq empty "$f"
+          done
+
+      - name: Assert required fields
+        run: |
+          jq -e '.name=="zendriver-rs" and (.plugins[0].source=="./plugins/zendriver")' .claude-plugin/marketplace.json
+          jq -e '.name=="zendriver"' plugins/zendriver/.claude-plugin/plugin.json
+          jq -e '.mcpServers.zendriver.command=="${CLAUDE_PLUGIN_DATA}/bin/zendriver-mcp"' plugins/zendriver/.mcp.json
+
+      - name: Shellcheck scripts
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          shellcheck plugins/zendriver/scripts/setup.sh plugins/zendriver/hooks/session-start.sh
+
+      - name: Skill/command/agent frontmatter present
+        run: |
+          for f in plugins/zendriver/skills/*/SKILL.md \
+                   plugins/zendriver/commands/*.md \
+                   plugins/zendriver/agents/*.md; do
+            head -1 "$f" | grep -q '^---$' || { echo "missing frontmatter: $f"; exit 1; }
+          done
+          echo "frontmatter OK"
