@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "zendriver": {
+      "command": "${CLAUDE_PLUGIN_DATA}/bin/zendriver-mcp",
+      "args": ["--log", "warn"]
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "zendriver-rs",
+  "description": "Stealth browser automation for Claude — bundles the zendriver-mcp server plus scraping skills, commands, and a subagent.",
+  "owner": {
+    "name": "TurtIeSocks",
+    "url": "https://github.com/TurtIeSocks"
+  },
+  "plugins": [
+    {
+      "name": "zendriver",
+      "description": "Stealth web scraping & extraction with Claude: bundled CDP browser MCP server, a guided binary setup, and skills that teach Claude how to drive it.",
+      "source": "./plugins/zendriver",
+      "category": "web",
+      "keywords": ["browser", "scraping", "automation", "cdp", "stealth", "mcp"]
+    }
+  ]
+}

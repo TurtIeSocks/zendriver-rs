@@ -1,0 +1,21 @@
+{
+  "name": "zendriver",
+  "version": "0.1.0",
+  "description": "Stealth web scraping & extraction with Claude. Bundles the zendriver-mcp Chrome-DevTools-Protocol browser server, a guided /setup, scraping skills, commands, and a subagent.",
+  "author": {
+    "name": "TurtIeSocks",
+    "url": "https://github.com/TurtIeSocks"
+  },
+  "repository": "https://github.com/TurtIeSocks/zendriver-rs",
+  "homepage": "https://turtiesocks.github.io/zendriver-rs/",
+  "license": "MIT OR Apache-2.0",
+  "keywords": ["browser", "scraping", "automation", "cdp", "stealth", "mcp"],
+  "commands": [
+    "./commands/setup.md",
+    "./commands/scrape.md",
+    "./commands/extract.md"
+  ],
+  "agents": [
+    "./agents/zendriver-scraper.md"
+  ]
+}
