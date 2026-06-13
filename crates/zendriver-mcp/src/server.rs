@@ -1146,12 +1146,66 @@ pub fn build_handler(state: Arc<Mutex<SessionState>>) -> ZendriverServer {
     ZendriverServer::new(state)
 }
 
-/// Run the MCP server over stdio until the peer disconnects.
+/// Run the MCP server over stdio until the peer disconnects **or** a shutdown
+/// signal arrives, then gracefully close any browser this session owns.
+///
+/// rmcp's `serve(stdio())` already returns when the peer closes stdin (EOF).
+/// On that path process exit drops [`SessionState`], and an owned Chrome dies
+/// via `kill_on_drop`. A SIGTERM/SIGINT, however — e.g. an MCP client
+/// terminating the server on session end — kills the process before any async
+/// `Drop` runs, orphaning the Chrome we launched. So we race the serve future
+/// against a signal future and, on **either** path, take the browser out of the
+/// session and [`Browser::close`] it (graceful SIGTERM→SIGKILL of the child).
+/// `close` is a no-op for an attached/`connect`ed Chrome (the `owns_process`
+/// guard), so a user's own browser is never killed.
+///
+/// Manual verification (needs a real Chrome): launch `zendriver-mcp`, drive a
+/// `browser_open`, find the spawned Chrome PID (`pgrep -f
+/// 'Chrome.*--headless'`), `kill -TERM` the server, then confirm that Chrome
+/// PID is gone.
 pub async fn run_stdio(state: Arc<Mutex<SessionState>>) -> Result<(), Box<dyn std::error::Error>> {
-    let handler = build_handler(state);
+    let handler = build_handler(state.clone());
     let service = handler.serve(stdio()).await?;
-    service.waiting().await?;
+    tokio::select! {
+        res = service.waiting() => { res?; }
+        () = shutdown_signal() => {
+            tracing::info!("shutdown signal received; closing owned browser before exit");
+        }
+    }
+    close_owned_browser(&state).await;
     Ok(())
+}
+
+/// Resolve when the process receives a termination signal: SIGTERM or SIGINT
+/// on Unix, Ctrl-C elsewhere.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut term = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+        let mut interrupt = signal(SignalKind::interrupt()).expect("install SIGINT handler");
+        tokio::select! {
+            _ = term.recv() => {}
+            _ = interrupt.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+/// Take the browser out of the session (if any) and gracefully close it.
+/// Idempotent and panic-free when no browser was ever opened — it runs on
+/// every shutdown path. [`Browser::close`] leaves an attached/`connect`ed
+/// Chrome running (the `owns_process` guard), only the transport is torn down.
+async fn close_owned_browser(state: &Arc<Mutex<SessionState>>) {
+    let browser = { state.lock().await.browser.take() };
+    if let Some(browser) = browser {
+        if let Err(e) = browser.close().await {
+            tracing::warn!("error closing browser during shutdown: {e}");
+        }
+    }
 }
 
 /// Run the MCP server over streamable HTTP, bound to `addr`. Each new
@@ -1168,6 +1222,17 @@ pub async fn run_http(
 mod tests {
     use super::*;
     use crate::state::StealthProfileChoice;
+
+    #[tokio::test]
+    async fn close_owned_browser_is_a_noop_when_no_browser_open() {
+        // Shutdown teardown runs on every exit path, including the common case
+        // where no browser was ever opened. It must be panic-free and
+        // idempotent (callable twice without error).
+        let state = Arc::new(Mutex::new(SessionState::new()));
+        close_owned_browser(&state).await;
+        close_owned_browser(&state).await;
+        assert!(state.lock().await.browser.is_none());
+    }
 
     #[tokio::test]
     async fn browser_status_with_no_browser_reports_closed() {
