@@ -17,6 +17,7 @@
 - [DataDome](./datadome.md)
 - [Fetcher](./fetcher.md)
 - [MCP server](./mcp.md)
+- [Claude Code plugin](./plugin.md)
 - [Migration from Playwright](./migration-playwright.md)
 - [Migration from zendriver (Python)](./migration-zendriver-python.md)
 - [Migration from nodriver (Python)](./migration-nodriver-python.md)

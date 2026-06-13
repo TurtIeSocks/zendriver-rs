@@ -6,6 +6,10 @@ optional `fingerprints` feature), so any
 MCP-compatible client (Claude Desktop, Claude Code, custom agents) can
 drive a real, stealth-by-default Chrome browser.
 
+> **Using Claude Code?** The [`zendriver` plugin](./plugin.md) installs this
+> server plus scraping skills, commands, and a subagent in two commands — see
+> the [plugin chapter](./plugin.md).
+
 ## Install
 
 ```bash

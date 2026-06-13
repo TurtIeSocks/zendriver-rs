@@ -24,7 +24,7 @@ automatically on first use — no system Chrome required.
 
 ## What you get
 
-- **MCP server** — ~80 stealth browser tools (`browser_goto`, `browser_html`, `browser_find`,
+- **MCP server** — 70 stealth browser tools (`browser_goto`, `browser_html`, `browser_find`,
   `browser_solve_turnstile`, …).
 - **Skills** — `scraping` (the playbook, auto-triggers), `bypass` (anti-bot walls), `advanced`
   (interception, monitoring, capture, sessions).

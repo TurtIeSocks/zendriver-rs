@@ -112,6 +112,17 @@ cargo install zendriver-mcp
 }
 ```
 
+**Even easier — the [Claude Code plugin](plugins/zendriver/):**
+
+```bash
+claude plugin marketplace add TurtIeSocks/zendriver-rs
+claude plugin install zendriver@zendriver-rs
+# then, in a session:
+/zendriver:setup     # prebuilt (no Rust), source, or link
+```
+
+No manual MCP config — the plugin bundles the server plus scraping skills, the `/zendriver:scrape` and `/zendriver:extract` commands, and a `zendriver-scraper` subagent.
+
 **What agents get out of the box:**
 
 - **Stealth navigation** — `browser_open`, `browser_goto`, `browser_back/forward/reload`, `browser_wait_for_idle`, plus a runtime-swappable `browser_set_stealth_profile` (auto / native / spoof_macos / spoof_linux / spoof_windows)
