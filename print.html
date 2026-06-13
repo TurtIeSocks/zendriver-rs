@@ -3090,6 +3090,11 @@ server that exposes zendriver-rs through 70 MCP tools (71 with the
 optional <code>fingerprints</code> feature), so any
 MCP-compatible client (Claude Desktop, Claude Code, custom agents) can
 drive a real, stealth-by-default Chrome browser.</p>
+<blockquote>
+<p><strong>Using Claude Code?</strong> The <a href="./plugin.html"><code>zendriver</code> plugin</a> installs this
+server plus scraping skills, commands, and a subagent in two commands — see
+the <a href="./plugin.html">plugin chapter</a>.</p>
+</blockquote>
 <h2 id="install-1"><a class="header" href="#install-1">Install</a></h2>
 <pre><code class="language-bash">cargo install zendriver-mcp
 </code></pre>
@@ -3196,6 +3201,37 @@ environment has that port taken, set a different port via <code>--http</code>.</
 <code>integration-tests</code> and <code>#[ignore]</code> markers: run via
 <code>cargo test -p zendriver-mcp --features integration-tests -- --ignored</code>.</li>
 </ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="claude-code-plugin"><a class="header" href="#claude-code-plugin">Claude Code plugin</a></h1>
+<p>The <code>zendriver</code> Claude Code plugin bundles the <a href="./mcp.html">MCP server</a> with skills, commands,
+and a subagent so Claude can drive zendriver effectively out of the box.</p>
+<h2 id="install-2"><a class="header" href="#install-2">Install</a></h2>
+<pre><code class="language-bash">claude plugin marketplace add TurtIeSocks/zendriver-rs
+claude plugin install zendriver@zendriver-rs
+/zendriver:setup
+</code></pre>
+<p><code>/zendriver:setup</code> provisions the <code>zendriver-mcp</code> binary — choose:</p>
+<ul>
+<li><strong>prebuilt</strong> — download the matching binary from the latest <code>zendriver-mcp-v*</code> GitHub
+release (checksum-verified). No Rust toolchain.</li>
+<li><strong>source</strong> — <code>cargo install zendriver-mcp</code> (compile the public source yourself).</li>
+<li><strong>link</strong> — reuse a <code>zendriver-mcp</code> already on your PATH.</li>
+</ul>
+<p>Restart the session afterward. Chrome is fetched automatically on first use.</p>
+<h2 id="whats-included"><a class="header" href="#whats-included">What's included</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Kind</th><th>Items</th></tr></thead><tbody>
+<tr><td>MCP server</td><td>the full zendriver browser tool surface</td></tr>
+<tr><td>Skills</td><td><code>scraping</code> (canonical playbook), <code>bypass</code> (anti-bot walls), <code>advanced</code> (interception/monitor/capture/sessions)</td></tr>
+<tr><td>Commands</td><td><code>/zendriver:setup</code>, <code>/zendriver:scrape &lt;url&gt; [goal]</code>, <code>/zendriver:extract &lt;url&gt; &lt;schema&gt;</code></td></tr>
+<tr><td>Subagent</td><td><code>zendriver-scraper</code></td></tr>
+</tbody></table>
+</div>
+<h2 id="how-it-fits-together"><a class="header" href="#how-it-fits-together">How it fits together</a></h2>
+<p>The <code>scraping</code> skill is the single source of truth for "how to scrape well"; the commands and
+the subagent both follow it. The subagent runs jobs in its own context so big extractions
+don't fill the main thread.</p>
+<h2 id="responsible-use"><a class="header" href="#responsible-use">Responsible use</a></h2>
+<p>Authorized access only — your own sites, permitted content, authorized testing, research.
+Respect rate limits and site terms.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="migration-from-playwright"><a class="header" href="#migration-from-playwright">Migration from Playwright</a></h1>
 <p>zendriver-rs's surface borrows heavily from Playwright (locator-based
 queries, pre-register expectations, fluent builders) so most flows port
