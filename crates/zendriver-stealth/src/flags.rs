@@ -27,6 +27,13 @@ fn shared_stealth_flags() -> Vec<String> {
         "--disable-session-crashed-bubble".into(),
         "--disable-search-engine-choice-screen".into(),
         "--remote-allow-origins=*".into(),
+        // Stop Blink injecting `navigator.webdriver` (native getter → `true`).
+        // py-zendriver sets this by default (config.py); ALL non-Off profiles
+        // need it. Previously it lived only in the Spoofed branch, so the
+        // Native profile leaked `navigator.webdriver === true` — an instant
+        // bot tell. The Spoofed JS webdriver shim also relies on this flag so
+        // Chrome's AutomationControlled hook can't re-inject over the shim.
+        "--disable-blink-features=AutomationControlled".into(),
         // WebRTC IP-leak prevention (zendriver Python disable_webrtc=True default)
         "--webrtc-ip-handling-policy=disable_non_proxied_udp".into(),
         "--force-webrtc-ip-handling-policy".into(),
@@ -41,25 +48,13 @@ pub fn flags_for_profile(kind: ProfileKind) -> Vec<String> {
         ProfileKind::Native => shared_stealth_flags(),
         ProfileKind::Spoofed => {
             let mut v = shared_stealth_flags();
-            // Stop Blink from injecting `navigator.webdriver` (a native
-            // getter that returns `true`). Without this flag Chrome's
-            // own AutomationControlled hook overwrites whichever
-            // `Object.defineProperty(Navigator.prototype, 'webdriver',
-            // ...)` patch we install via
-            // `Page.addScriptToEvaluateOnNewDocument`, because the
-            // hook runs at context-start AFTER our bootstrap script.
-            // Disabling the feature removes the native injection and
-            // lets our shim's prototype getter stick.
-            v.push("--disable-blink-features=AutomationControlled".into());
-            // Route WebGL through ANGLE + SwiftShader so headless Chrome
-            // reports a realistic vendor/renderer pair to fingerprinters
-            // even when GPU acceleration is disabled. Without this trio
-            // headless mode returns `Canvas has no webgl context` for
-            // both `UNMASKED_VENDOR_WEBGL` and `UNMASKED_RENDERER_WEBGL`,
-            // which detectors like sannysoft flag as bot-tier.
-            // `--enable-unsafe-swiftshader` is required on Chrome >= 116
-            // because SwiftShader was deprecated for production use; the
-            // flag re-enables it for fingerprinting purposes.
+            // (`--disable-blink-features=AutomationControlled` lives in
+            // `shared_stealth_flags` — both Native and Spoofed need it.)
+            // SwiftShader supplies a WebGL CONTEXT in headless. Chrome runs
+            // headless with `--headless=new --disable-gpu` (browser.rs), so with
+            // no software backend `canvas.getContext('webgl')` returns null —
+            // itself a bot tell (real browsers always have WebGL).
+            // `--enable-unsafe-swiftshader` re-enables SwiftShader on Chrome >=116.
             v.push("--use-gl=angle".into());
             v.push("--use-angle=swiftshader".into());
             v.push("--enable-unsafe-swiftshader".into());

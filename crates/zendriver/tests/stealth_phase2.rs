@@ -149,9 +149,11 @@ async fn spoofed_passes_intoli_basic_test() {
 
 #[tokio::test]
 #[serial]
-async fn native_fails_sannysoft_navigator_webdriver_but_passes_user_agent() {
-    // Opposite-direction assertion: the native profile honors its
-    // "no JS patches" contract while still scrubbing the headless UA.
+async fn native_hides_webdriver_and_scrubs_user_agent() {
+    // The native profile keeps its "no JS prototype patches" contract while
+    // still (a) scrubbing the headless UA and (b) hiding navigator.webdriver
+    // via the --disable-blink-features=AutomationControlled launch flag (a
+    // command-line flag, not a JS shim — so the contract holds).
     let browser = Browser::builder()
         .stealth(StealthProfile::native())
         .headless(true)
@@ -170,11 +172,11 @@ async fn native_fails_sannysoft_navigator_webdriver_but_passes_user_agent() {
         "native profile must scrub UA: got {ua}"
     );
 
-    // WebDriver row should fail (native applies no JS patch for webdriver).
+    // WebDriver row should pass — the AutomationControlled flag hides it.
     let wd: bool = tab.evaluate_main("navigator.webdriver").await.expect("wd");
     assert!(
-        wd,
-        "native profile must NOT hide webdriver (would defeat the 'no JS' contract)"
+        !wd,
+        "native profile must hide webdriver via the AutomationControlled flag"
     );
 
     browser.close().await.expect("close");

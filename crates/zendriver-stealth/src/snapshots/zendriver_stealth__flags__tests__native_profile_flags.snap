@@ -19,5 +19,6 @@ expression: flags
 - "--disable-session-crashed-bubble"
 - "--disable-search-engine-choice-screen"
 - "--remote-allow-origins=*"
+- "--disable-blink-features=AutomationControlled"
 - "--webrtc-ip-handling-policy=disable_non_proxied_udp"
 - "--force-webrtc-ip-handling-policy"
