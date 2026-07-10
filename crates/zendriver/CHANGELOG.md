@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.16] - 2026-07-10
+
+### Fixed
+
+- Hide navigator.webdriver in the native profile
+
+
 ## [0.2.15] - 2026-06-13
 
 

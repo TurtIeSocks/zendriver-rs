@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.3.3] - 2026-07-10
+
+### Fixed
+
+- Skip match-all Fetch pattern on the auth-only proxy path
+
+
 ## [0.3.2] - 2026-06-13
 
 
