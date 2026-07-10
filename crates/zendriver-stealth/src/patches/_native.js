@@ -50,7 +50,17 @@ const __zdReplace = (obj, prop, make) => {
   const length =
     orig && typeof orig.length === "number" ? orig.length : fn.length;
   __zdMark(fn, name, length);
-  obj[prop] = fn;
+  // `obj[prop] = fn` fails SILENTLY (non-strict) when prop is a non-writable
+  // prototype method — e.g. WebGLRenderingContext.prototype.getParameter — so
+  // the override never installs. defineProperty replaces it regardless, keeping
+  // the original descriptor's enumerable flag so the shape stays native.
+  const __d = Object.getOwnPropertyDescriptor(obj, prop);
+  Object.defineProperty(obj, prop, {
+    value: fn,
+    writable: true,
+    enumerable: __d ? __d.enumerable : true,
+    configurable: true,
+  });
   return fn;
 };
 
