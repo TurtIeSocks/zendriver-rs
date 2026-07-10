@@ -85,7 +85,13 @@ impl TargetObserver for StealthObserver {
         // separately.
         let accept_language = {
             let langs = crate::lang::resolve_languages(&Persona::default(), &self.fingerprint);
-            crate::lang::accept_language(&langs)
+            // `Emulation.setUserAgentOverride.acceptLanguage` wants a PLAIN
+            // comma-separated locale list (e.g. `en-US,en`) — Chrome appends the
+            // `;q=` weights itself. Passing an already-weighted string (the
+            // `accept_language()` header form) makes Chrome double them, yielding
+            // a malformed `Accept-Language: en-US,en;q=0.9;q=0.9`. Send the bare
+            // list so the emitted header is a clean `en-US,en;q=0.9`.
+            langs.join(",")
         };
         session
             .call(
@@ -228,6 +234,20 @@ mod tests {
                 tokio::time::timeout(std::time::Duration::from_secs(2), mock.expect_cmd(expected))
                     .await
                     .unwrap_or_else(|_| panic!("did not see {expected} within 2s"));
+            // `acceptLanguage` must be a PLAIN locale list — Chrome adds the
+            // `;q=` weights. A weighted value here makes Chrome double them into
+            // a malformed `en-US,en;q=0.9;q=0.9` header.
+            if expected == "Emulation.setUserAgentOverride" {
+                let al = mock.last_sent()["params"]["acceptLanguage"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                assert!(!al.is_empty(), "acceptLanguage must be set");
+                assert!(
+                    !al.contains(";q="),
+                    "acceptLanguage must be a bare locale list (no q-weights); got: {al}"
+                );
+            }
             mock.reply(id, json!({})).await;
         }
 
