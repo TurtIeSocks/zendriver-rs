@@ -5,14 +5,18 @@ name: MCP Coverage Check
 # excluded with a reason) in `crates/zendriver-mcp/mcp-coverage-ledger.toml`.
 #
 # Required tool: cargo-public-api v0.52.0 (needs nightly rustdoc JSON).
-# Pinned so that rustdoc JSON format changes don't silently break the check.
+# BOTH the cargo-public-api version AND the nightly toolchain are pinned:
+# rustdoc-JSON format drifts between nightlies, and an unpinned `@nightly`
+# surfaced spurious "new" items (tower_http blanket-impl combinators) on every
+# release — failing this check daily. The pinned nightly + a baseline cut with
+# that same nightly makes the diff deterministic.
 #
-# To update the pin:
-#   1. Change the version below.
-#   2. Regenerate the baseline locally:
-#        cargo +nightly public-api -p zendriver --all-features \
+# To bump the pinned nightly:
+#   1. Change `nightly-YYYY-MM-DD` in both places below.
+#   2. Regenerate the baseline with the SAME toolchain:
+#        cargo +nightly-YYYY-MM-DD public-api -p zendriver --all-features \
 #            > crates/zendriver-mcp/public-api-baseline.txt
-#   3. Commit the new baseline + updated version.
+#   3. Commit the new baseline + updated workflow together.
 
 on:
   schedule:
@@ -43,8 +47,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install nightly toolchain
-        uses: dtolnay/rust-toolchain@nightly
+      - name: Install pinned nightly toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-06-10
 
       - uses: Swatinem/rust-cache@v2
 
@@ -52,8 +58,10 @@ jobs:
         run: cargo install cargo-public-api --locked --version 0.52.0
 
       - name: Run MCP coverage check
+        env:
+          PUBLIC_API_TOOLCHAIN: nightly-2026-06-10
         run: |
-          cargo +nightly test \
+          cargo +nightly-2026-06-10 test \
             -p zendriver-mcp \
             --features public-api-check \
             --test public_api \
