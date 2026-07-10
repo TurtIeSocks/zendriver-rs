@@ -301,11 +301,19 @@ impl<'tab> InterceptBuilder<'tab> {
     /// list would never fire.
     #[must_use = "interception stops when the handle is dropped — bind the returned InterceptHandle to keep it alive"]
     pub fn start(mut self) -> InterceptHandle {
-        if self.patterns.is_empty() {
-            // Default to a single match-all pattern. Without it Chrome's
-            // `Fetch.enable` receives an empty `patterns` array and pauses
-            // nothing — silently making every rule a no-op. The actor still
-            // sends `handleAuthRequests: false` either way.
+        if self.patterns.is_empty() && !self.rules.is_empty() {
+            // Rules need Chrome to actually pause requests, so a match-all
+            // pattern is required — without it `Fetch.enable` attaches to
+            // nothing and every rule is a silent no-op.
+            //
+            // But when there are NO rules (the proxy/HTTP-auth-ONLY path),
+            // injecting "*" makes Chrome pause EVERY request and round-trip it
+            // through this single actor over one CDP socket — which distorts the
+            // timing/cadence of the page's own XHRs. Bot sensors (reese84 /
+            // Incapsula) read exactly that. So leave patterns empty here:
+            // `Fetch.enable { patterns: [], handleAuthRequests: true }` still
+            // surfaces `Fetch.authRequired` for 407 challenges (answered via
+            // continueWithAuth) while pausing zero requests.
             self.patterns.push(RequestPattern {
                 url_pattern: Some("*".into()),
                 ..RequestPattern::default()

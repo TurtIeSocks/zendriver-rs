@@ -46,6 +46,14 @@ const FONTS: &str = include_str!("patches/fonts.js");
 const WEBRTC: &str = include_str!("patches/webrtc.js");
 const HARDWARE: &str = include_str!("patches/hardware.js");
 const WEBGPU: &str = include_str!("patches/webgpu.js");
+// Coherent window/screen geometry — fixes the impossible innerWidth>outerWidth
+// and availHeight===height that setDeviceMetricsOverride leaves behind (a hard
+// reese84/Imperva bot tell). References no `fp` fields; emitted unconditionally.
+const SCREEN: &str = include_str!("patches/screen.js");
+// Synthetic pointer entropy — a zero-mouse-motion session is a top reese84
+// behavioral bot tell. Feeds a human-looking trajectory to the challenge's own
+// mouse listeners. References no `fp` fields; emitted unconditionally.
+const MOUSE: &str = include_str!("patches/mouse.js");
 
 /// Build the bootstrap script for the spoofed profile.
 ///
@@ -72,6 +80,14 @@ pub fn bootstrap_script(persona: &Persona, identity: &Fingerprint) -> String {
     // surface is Native (it just defines an unused function).
     body.push('\n');
     body.push_str(PRNG);
+
+    // Geometry coherence runs unconditionally (no persona spec) — it repairs the
+    // outer*/avail* props that the CDP metrics override cannot reach.
+    body.push('\n');
+    body.push_str(SCREEN);
+    // Synthetic pointer entropy, also unconditional.
+    body.push('\n');
+    body.push_str(MOUSE);
 
     push_noise(
         &mut body,

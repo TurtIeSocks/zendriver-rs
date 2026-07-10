@@ -39,7 +39,12 @@ async fn spoofed_profile_patches_navigator_webdriver_to_false() {
 
 #[tokio::test]
 #[serial]
-async fn native_profile_does_not_patch_navigator_webdriver() {
+async fn native_profile_hides_webdriver_via_flag() {
+    // Native applies `--disable-blink-features=AutomationControlled` (a launch
+    // flag, NOT a prototype patch), so `navigator.webdriver` reports false while
+    // native's "no JS bootstrap" contract is preserved. Previously the flag lived
+    // only in the Spoofed branch, so native leaked `navigator.webdriver === true`
+    // — an instant bot tell.
     let mock = fixture_with_html("<!doctype html><body>hello</body>").await;
     let browser = Browser::builder()
         .stealth(StealthProfile::native())
@@ -50,7 +55,10 @@ async fn native_profile_does_not_patch_navigator_webdriver() {
     tab.goto(&mock.uri()).await.unwrap();
     tab.wait_for_load().await.unwrap();
     let wd: bool = tab.evaluate_main("navigator.webdriver").await.unwrap();
-    assert!(wd, "native profile leaves webdriver alone");
+    assert!(
+        !wd,
+        "native profile hides webdriver via the AutomationControlled flag"
+    );
     browser.close().await.unwrap();
 }
 

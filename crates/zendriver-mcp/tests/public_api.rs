@@ -55,12 +55,18 @@ fn ledger_path(root: &Path) -> PathBuf {
     root.join("crates/zendriver-mcp/mcp-coverage-ledger.toml")
 }
 
-/// Run `cargo +nightly public-api -p zendriver --all-features` and return its
-/// stdout line-by-line (excluding diagnostics lines on stderr).
+/// Run `cargo +<toolchain> public-api -p zendriver --all-features` and return
+/// its stdout line-by-line (excluding diagnostics lines on stderr).
+///
+/// The toolchain is read from `PUBLIC_API_TOOLCHAIN` (default `nightly`). CI
+/// PINS this to a specific dated nightly so rustdoc-JSON drift can't
+/// spuriously surface "new" items on every nightly release; regenerate the
+/// baseline with the SAME pinned toolchain when it changes.
 fn current_public_api(root: &Path) -> Vec<String> {
+    let toolchain = std::env::var("PUBLIC_API_TOOLCHAIN").unwrap_or_else(|_| "nightly".to_string());
     let output = Command::new("cargo")
         .args([
-            "+nightly",
+            &format!("+{toolchain}"),
             "public-api",
             "-p",
             "zendriver",
@@ -68,7 +74,7 @@ fn current_public_api(root: &Path) -> Vec<String> {
         ])
         .current_dir(root)
         .output()
-        .expect("cargo +nightly public-api failed to launch; ensure cargo-public-api v0.52.0 is installed");
+        .expect("cargo +<toolchain> public-api failed to launch; ensure cargo-public-api v0.52.0 is installed");
 
     assert!(
         output.status.success(),

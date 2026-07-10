@@ -101,8 +101,8 @@ pub unsafe fn zendriver::browser::Channel::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::browser::Channel
 pub fn zendriver::browser::Channel::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::browser::Channel where T: ?core::marker::Sized
-pub fn zendriver::browser::Channel::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::browser::Channel::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::browser::Channel::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::browser::Channel::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::browser::Channel
 impl<T> tracing::instrument::WithSubscriber for zendriver::browser::Channel
 impl<T> typenum::type_operators::Same for zendriver::browser::Channel
@@ -186,8 +186,8 @@ pub unsafe fn zendriver::browser::PermissionType::clone_to_uninit(&self, *mut u8
 impl<T> core::convert::From<T> for zendriver::browser::PermissionType
 pub fn zendriver::browser::PermissionType::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::browser::PermissionType where T: ?core::marker::Sized
-pub fn zendriver::browser::PermissionType::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::browser::PermissionType::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::browser::PermissionType::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::browser::PermissionType::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::browser::PermissionType
 impl<T> tracing::instrument::WithSubscriber for zendriver::browser::PermissionType
 impl<T> typenum::type_operators::Same for zendriver::browser::PermissionType
@@ -249,8 +249,8 @@ pub unsafe fn zendriver::browser::Browser::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::browser::Browser
 pub fn zendriver::browser::Browser::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::browser::Browser where T: ?core::marker::Sized
-pub fn zendriver::browser::Browser::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::browser::Browser::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::browser::Browser::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::browser::Browser::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::browser::Browser
 impl<T> tracing::instrument::WithSubscriber for zendriver::browser::Browser
 impl<T> typenum::type_operators::Same for zendriver::browser::Browser
@@ -328,8 +328,8 @@ pub unsafe fn zendriver::browser::BrowserBuilder::clone_to_uninit(&self, *mut u8
 impl<T> core::convert::From<T> for zendriver::browser::BrowserBuilder
 pub fn zendriver::browser::BrowserBuilder::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::browser::BrowserBuilder where T: ?core::marker::Sized
-pub fn zendriver::browser::BrowserBuilder::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::browser::BrowserBuilder::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::browser::BrowserBuilder::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::browser::BrowserBuilder::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::browser::BrowserBuilder
 impl<T> tracing::instrument::WithSubscriber for zendriver::browser::BrowserBuilder
 impl<T> typenum::type_operators::Same for zendriver::browser::BrowserBuilder
@@ -370,8 +370,8 @@ pub fn zendriver::browser_context::BrowserContext::borrow_mut(&mut self) -> &mut
 impl<T> core::convert::From<T> for zendriver::browser_context::BrowserContext
 pub fn zendriver::browser_context::BrowserContext::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::browser_context::BrowserContext where T: ?core::marker::Sized
-pub fn zendriver::browser_context::BrowserContext::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::browser_context::BrowserContext::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::browser_context::BrowserContext::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::browser_context::BrowserContext::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::browser_context::BrowserContext
 impl<T> tracing::instrument::WithSubscriber for zendriver::browser_context::BrowserContext
 impl<T> typenum::type_operators::Same for zendriver::browser_context::BrowserContext
@@ -432,8 +432,8 @@ impl<T> core::convert::From<T> for zendriver::cookies::CookiePriority
 pub fn zendriver::cookies::CookiePriority::from(T) -> T
 impl<T> serde_core::de::DeserializeOwned for zendriver::cookies::CookiePriority where T: for<'de> serde_core::de::Deserialize<'de>
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::cookies::CookiePriority where T: ?core::marker::Sized
-pub fn zendriver::cookies::CookiePriority::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::cookies::CookiePriority::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::cookies::CookiePriority::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::cookies::CookiePriority::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::cookies::CookiePriority
 impl<T> tracing::instrument::WithSubscriber for zendriver::cookies::CookiePriority
 impl<T> typenum::type_operators::Same for zendriver::cookies::CookiePriority
@@ -492,8 +492,8 @@ impl<T> core::convert::From<T> for zendriver::cookies::CookieSourceScheme
 pub fn zendriver::cookies::CookieSourceScheme::from(T) -> T
 impl<T> serde_core::de::DeserializeOwned for zendriver::cookies::CookieSourceScheme where T: for<'de> serde_core::de::Deserialize<'de>
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::cookies::CookieSourceScheme where T: ?core::marker::Sized
-pub fn zendriver::cookies::CookieSourceScheme::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::cookies::CookieSourceScheme::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::cookies::CookieSourceScheme::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::cookies::CookieSourceScheme::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::cookies::CookieSourceScheme
 impl<T> tracing::instrument::WithSubscriber for zendriver::cookies::CookieSourceScheme
 impl<T> typenum::type_operators::Same for zendriver::cookies::CookieSourceScheme
@@ -552,8 +552,8 @@ impl<T> core::convert::From<T> for zendriver::cookies::SameSite
 pub fn zendriver::cookies::SameSite::from(T) -> T
 impl<T> serde_core::de::DeserializeOwned for zendriver::cookies::SameSite where T: for<'de> serde_core::de::Deserialize<'de>
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::cookies::SameSite where T: ?core::marker::Sized
-pub fn zendriver::cookies::SameSite::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::cookies::SameSite::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::cookies::SameSite::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::cookies::SameSite::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::cookies::SameSite
 impl<T> tracing::instrument::WithSubscriber for zendriver::cookies::SameSite
 impl<T> typenum::type_operators::Same for zendriver::cookies::SameSite
@@ -619,8 +619,8 @@ impl<T> core::convert::From<T> for zendriver::cookies::Cookie
 pub fn zendriver::cookies::Cookie::from(T) -> T
 impl<T> serde_core::de::DeserializeOwned for zendriver::cookies::Cookie where T: for<'de> serde_core::de::Deserialize<'de>
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::cookies::Cookie where T: ?core::marker::Sized
-pub fn zendriver::cookies::Cookie::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::cookies::Cookie::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::cookies::Cookie::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::cookies::Cookie::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::cookies::Cookie
 impl<T> tracing::instrument::WithSubscriber for zendriver::cookies::Cookie
 impl<T> typenum::type_operators::Same for zendriver::cookies::Cookie
@@ -675,8 +675,8 @@ pub unsafe fn zendriver::cookies::CookieJar::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::cookies::CookieJar
 pub fn zendriver::cookies::CookieJar::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::cookies::CookieJar where T: ?core::marker::Sized
-pub fn zendriver::cookies::CookieJar::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::cookies::CookieJar::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::cookies::CookieJar::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::cookies::CookieJar::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::cookies::CookieJar
 impl<T> tracing::instrument::WithSubscriber for zendriver::cookies::CookieJar
 impl<T> typenum::type_operators::Same for zendriver::cookies::CookieJar
@@ -729,8 +729,8 @@ pub unsafe fn zendriver::element::actions::ClickOptions::clone_to_uninit(&self, 
 impl<T> core::convert::From<T> for zendriver::element::actions::ClickOptions
 pub fn zendriver::element::actions::ClickOptions::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::element::actions::ClickOptions where T: ?core::marker::Sized
-pub fn zendriver::element::actions::ClickOptions::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::element::actions::ClickOptions::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::element::actions::ClickOptions::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::element::actions::ClickOptions::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::element::actions::ClickOptions
 impl<T> tracing::instrument::WithSubscriber for zendriver::element::actions::ClickOptions
 impl<T> typenum::type_operators::Same for zendriver::element::actions::ClickOptions
@@ -829,8 +829,8 @@ pub unsafe fn zendriver::element::Element::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::element::Element
 pub fn zendriver::element::Element::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::element::Element where T: ?core::marker::Sized
-pub fn zendriver::element::Element::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::element::Element::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::element::Element::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::element::Element::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::element::Element
 impl<T> tracing::instrument::WithSubscriber for zendriver::element::Element
 impl<T> typenum::type_operators::Same for zendriver::element::Element
@@ -883,8 +883,8 @@ pub fn zendriver::error::BrowserError::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for zendriver::error::BrowserError
 pub fn zendriver::error::BrowserError::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::error::BrowserError where T: ?core::marker::Sized
-pub fn zendriver::error::BrowserError::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::error::BrowserError::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::error::BrowserError::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::error::BrowserError::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::error::BrowserError
 impl<T> tracing::instrument::WithSubscriber for zendriver::error::BrowserError
 impl<T> typenum::type_operators::Same for zendriver::error::BrowserError
@@ -977,8 +977,8 @@ pub fn zendriver::error::ZendriverError::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for zendriver::error::ZendriverError
 pub fn zendriver::error::ZendriverError::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::error::ZendriverError where T: ?core::marker::Sized
-pub fn zendriver::error::ZendriverError::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::error::ZendriverError::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::error::ZendriverError::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::error::ZendriverError::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::error::ZendriverError
 impl<T> tracing::instrument::WithSubscriber for zendriver::error::ZendriverError
 impl<T> typenum::type_operators::Same for zendriver::error::ZendriverError
@@ -1035,8 +1035,8 @@ pub unsafe fn zendriver::expect::dialog::DialogType::clone_to_uninit(&self, *mut
 impl<T> core::convert::From<T> for zendriver::expect::dialog::DialogType
 pub fn zendriver::expect::dialog::DialogType::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::dialog::DialogType where T: ?core::marker::Sized
-pub fn zendriver::expect::dialog::DialogType::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::expect::dialog::DialogType::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::dialog::DialogType::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::dialog::DialogType::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::expect::dialog::DialogType
 impl<T> tracing::instrument::WithSubscriber for zendriver::expect::dialog::DialogType
 impl<T> typenum::type_operators::Same for zendriver::expect::dialog::DialogType
@@ -1087,8 +1087,8 @@ pub fn zendriver::expect::dialog::DialogExpectation::from(T) -> T
 impl<T> futures_util::future::future::FutureExt for zendriver::expect::dialog::DialogExpectation where T: core::future::future::Future + ?core::marker::Sized
 impl<T> tokio_util::future::FutureExt for zendriver::expect::dialog::DialogExpectation where T: core::future::future::Future + ?core::marker::Sized
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::dialog::DialogExpectation where T: ?core::marker::Sized
-pub fn zendriver::expect::dialog::DialogExpectation::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::expect::dialog::DialogExpectation::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::dialog::DialogExpectation::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::dialog::DialogExpectation::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::expect::dialog::DialogExpectation
 impl<T> tracing::instrument::WithSubscriber for zendriver::expect::dialog::DialogExpectation
 impl<T> typenum::type_operators::Same for zendriver::expect::dialog::DialogExpectation
@@ -1138,8 +1138,8 @@ pub unsafe fn zendriver::expect::dialog::MatchedDialog::clone_to_uninit(&self, *
 impl<T> core::convert::From<T> for zendriver::expect::dialog::MatchedDialog
 pub fn zendriver::expect::dialog::MatchedDialog::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::dialog::MatchedDialog where T: ?core::marker::Sized
-pub fn zendriver::expect::dialog::MatchedDialog::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::expect::dialog::MatchedDialog::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::dialog::MatchedDialog::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::dialog::MatchedDialog::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::expect::dialog::MatchedDialog
 impl<T> tracing::instrument::WithSubscriber for zendriver::expect::dialog::MatchedDialog
 impl<T> typenum::type_operators::Same for zendriver::expect::dialog::MatchedDialog
@@ -1194,8 +1194,8 @@ pub unsafe fn zendriver::expect::download::DownloadProgressState::clone_to_unini
 impl<T> core::convert::From<T> for zendriver::expect::download::DownloadProgressState
 pub fn zendriver::expect::download::DownloadProgressState::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::download::DownloadProgressState where T: ?core::marker::Sized
-pub fn zendriver::expect::download::DownloadProgressState::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::expect::download::DownloadProgressState::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::download::DownloadProgressState::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::download::DownloadProgressState::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::expect::download::DownloadProgressState
 impl<T> tracing::instrument::WithSubscriber for zendriver::expect::download::DownloadProgressState
 impl<T> typenum::type_operators::Same for zendriver::expect::download::DownloadProgressState
@@ -1246,8 +1246,8 @@ pub fn zendriver::expect::download::DownloadExpectation::from(T) -> T
 impl<T> futures_util::future::future::FutureExt for zendriver::expect::download::DownloadExpectation where T: core::future::future::Future + ?core::marker::Sized
 impl<T> tokio_util::future::FutureExt for zendriver::expect::download::DownloadExpectation where T: core::future::future::Future + ?core::marker::Sized
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::download::DownloadExpectation where T: ?core::marker::Sized
-pub fn zendriver::expect::download::DownloadExpectation::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::expect::download::DownloadExpectation::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::download::DownloadExpectation::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::download::DownloadExpectation::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::expect::download::DownloadExpectation
 impl<T> tracing::instrument::WithSubscriber for zendriver::expect::download::DownloadExpectation
 impl<T> typenum::type_operators::Same for zendriver::expect::download::DownloadExpectation
@@ -1295,8 +1295,8 @@ pub unsafe fn zendriver::expect::download::DownloadState::clone_to_uninit(&self,
 impl<T> core::convert::From<T> for zendriver::expect::download::DownloadState
 pub fn zendriver::expect::download::DownloadState::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::download::DownloadState where T: ?core::marker::Sized
-pub fn zendriver::expect::download::DownloadState::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::expect::download::DownloadState::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::download::DownloadState::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::download::DownloadState::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::expect::download::DownloadState
 impl<T> tracing::instrument::WithSubscriber for zendriver::expect::download::DownloadState
 impl<T> typenum::type_operators::Same for zendriver::expect::download::DownloadState
@@ -1347,8 +1347,8 @@ pub unsafe fn zendriver::expect::download::MatchedDownload::clone_to_uninit(&sel
 impl<T> core::convert::From<T> for zendriver::expect::download::MatchedDownload
 pub fn zendriver::expect::download::MatchedDownload::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::download::MatchedDownload where T: ?core::marker::Sized
-pub fn zendriver::expect::download::MatchedDownload::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::expect::download::MatchedDownload::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::download::MatchedDownload::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::download::MatchedDownload::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::expect::download::MatchedDownload
 impl<T> tracing::instrument::WithSubscriber for zendriver::expect::download::MatchedDownload
 impl<T> typenum::type_operators::Same for zendriver::expect::download::MatchedDownload
@@ -1396,8 +1396,8 @@ pub unsafe fn zendriver::expect::request::MatchedRequest::clone_to_uninit(&self,
 impl<T> core::convert::From<T> for zendriver::expect::request::MatchedRequest
 pub fn zendriver::expect::request::MatchedRequest::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::request::MatchedRequest where T: ?core::marker::Sized
-pub fn zendriver::expect::request::MatchedRequest::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::expect::request::MatchedRequest::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::request::MatchedRequest::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::request::MatchedRequest::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::expect::request::MatchedRequest
 impl<T> tracing::instrument::WithSubscriber for zendriver::expect::request::MatchedRequest
 impl<T> typenum::type_operators::Same for zendriver::expect::request::MatchedRequest
@@ -1448,8 +1448,8 @@ pub fn zendriver::expect::request::RequestExpectation::from(T) -> T
 impl<T> futures_util::future::future::FutureExt for zendriver::expect::request::RequestExpectation where T: core::future::future::Future + ?core::marker::Sized
 impl<T> tokio_util::future::FutureExt for zendriver::expect::request::RequestExpectation where T: core::future::future::Future + ?core::marker::Sized
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::request::RequestExpectation where T: ?core::marker::Sized
-pub fn zendriver::expect::request::RequestExpectation::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::expect::request::RequestExpectation::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::request::RequestExpectation::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::request::RequestExpectation::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::expect::request::RequestExpectation
 impl<T> tracing::instrument::WithSubscriber for zendriver::expect::request::RequestExpectation
 impl<T> typenum::type_operators::Same for zendriver::expect::request::RequestExpectation
@@ -1499,8 +1499,8 @@ pub unsafe fn zendriver::expect::response::MatchedResponse::clone_to_uninit(&sel
 impl<T> core::convert::From<T> for zendriver::expect::response::MatchedResponse
 pub fn zendriver::expect::response::MatchedResponse::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::response::MatchedResponse where T: ?core::marker::Sized
-pub fn zendriver::expect::response::MatchedResponse::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::expect::response::MatchedResponse::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::response::MatchedResponse::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::response::MatchedResponse::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::expect::response::MatchedResponse
 impl<T> tracing::instrument::WithSubscriber for zendriver::expect::response::MatchedResponse
 impl<T> typenum::type_operators::Same for zendriver::expect::response::MatchedResponse
@@ -1551,8 +1551,8 @@ pub fn zendriver::expect::response::ResponseExpectation::from(T) -> T
 impl<T> futures_util::future::future::FutureExt for zendriver::expect::response::ResponseExpectation where T: core::future::future::Future + ?core::marker::Sized
 impl<T> tokio_util::future::FutureExt for zendriver::expect::response::ResponseExpectation where T: core::future::future::Future + ?core::marker::Sized
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::response::ResponseExpectation where T: ?core::marker::Sized
-pub fn zendriver::expect::response::ResponseExpectation::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::expect::response::ResponseExpectation::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::response::ResponseExpectation::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::response::ResponseExpectation::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::expect::response::ResponseExpectation
 impl<T> tracing::instrument::WithSubscriber for zendriver::expect::response::ResponseExpectation
 impl<T> typenum::type_operators::Same for zendriver::expect::response::ResponseExpectation
@@ -1604,8 +1604,8 @@ pub unsafe fn zendriver::UrlMatcher::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::UrlMatcher
 pub fn zendriver::UrlMatcher::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::UrlMatcher where T: ?core::marker::Sized
-pub fn zendriver::UrlMatcher::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::UrlMatcher::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::UrlMatcher::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::UrlMatcher::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::UrlMatcher
 impl<T> tracing::instrument::WithSubscriber for zendriver::UrlMatcher
 impl<T> typenum::type_operators::Same for zendriver::UrlMatcher
@@ -1671,8 +1671,8 @@ pub unsafe fn zendriver::frame::Frame::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::frame::Frame
 pub fn zendriver::frame::Frame::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::frame::Frame where T: ?core::marker::Sized
-pub fn zendriver::frame::Frame::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::frame::Frame::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::frame::Frame::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::frame::Frame::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::frame::Frame
 impl<T> tracing::instrument::WithSubscriber for zendriver::frame::Frame
 impl<T> typenum::type_operators::Same for zendriver::frame::Frame
@@ -1728,8 +1728,8 @@ pub unsafe fn zendriver::input::keyboard::Key::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::input::keyboard::Key
 pub fn zendriver::input::keyboard::Key::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::input::keyboard::Key where T: ?core::marker::Sized
-pub fn zendriver::input::keyboard::Key::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::input::keyboard::Key::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::keyboard::Key::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::keyboard::Key::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::input::keyboard::Key
 impl<T> tracing::instrument::WithSubscriber for zendriver::input::keyboard::Key
 impl<T> typenum::type_operators::Same for zendriver::input::keyboard::Key
@@ -1815,8 +1815,8 @@ pub unsafe fn zendriver::input::keyboard::SpecialKey::clone_to_uninit(&self, *mu
 impl<T> core::convert::From<T> for zendriver::input::keyboard::SpecialKey
 pub fn zendriver::input::keyboard::SpecialKey::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::input::keyboard::SpecialKey where T: ?core::marker::Sized
-pub fn zendriver::input::keyboard::SpecialKey::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::input::keyboard::SpecialKey::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::keyboard::SpecialKey::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::keyboard::SpecialKey::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::input::keyboard::SpecialKey
 impl<T> tracing::instrument::WithSubscriber for zendriver::input::keyboard::SpecialKey
 impl<T> typenum::type_operators::Same for zendriver::input::keyboard::SpecialKey
@@ -1947,8 +1947,8 @@ pub unsafe fn zendriver::input::keyboard::KeyModifiers::clone_to_uninit(&self, *
 impl<T> core::convert::From<T> for zendriver::input::keyboard::KeyModifiers
 pub fn zendriver::input::keyboard::KeyModifiers::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::input::keyboard::KeyModifiers where T: ?core::marker::Sized
-pub fn zendriver::input::keyboard::KeyModifiers::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::input::keyboard::KeyModifiers::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::keyboard::KeyModifiers::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::keyboard::KeyModifiers::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::input::keyboard::KeyModifiers
 impl<T> tracing::instrument::WithSubscriber for zendriver::input::keyboard::KeyModifiers
 impl<T> typenum::type_operators::Same for zendriver::input::keyboard::KeyModifiers
@@ -1997,8 +1997,8 @@ pub unsafe fn zendriver::input::keyboard::KeySequence::clone_to_uninit(&self, *m
 impl<T> core::convert::From<T> for zendriver::input::keyboard::KeySequence
 pub fn zendriver::input::keyboard::KeySequence::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::input::keyboard::KeySequence where T: ?core::marker::Sized
-pub fn zendriver::input::keyboard::KeySequence::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::input::keyboard::KeySequence::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::keyboard::KeySequence::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::keyboard::KeySequence::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::input::keyboard::KeySequence
 impl<T> tracing::instrument::WithSubscriber for zendriver::input::keyboard::KeySequence
 impl<T> typenum::type_operators::Same for zendriver::input::keyboard::KeySequence
@@ -2057,8 +2057,8 @@ pub unsafe fn zendriver::input::mouse::MouseButton::clone_to_uninit(&self, *mut 
 impl<T> core::convert::From<T> for zendriver::input::mouse::MouseButton
 pub fn zendriver::input::mouse::MouseButton::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::input::mouse::MouseButton where T: ?core::marker::Sized
-pub fn zendriver::input::mouse::MouseButton::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::input::mouse::MouseButton::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::mouse::MouseButton::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::mouse::MouseButton::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::input::mouse::MouseButton
 impl<T> tracing::instrument::WithSubscriber for zendriver::input::mouse::MouseButton
 impl<T> typenum::type_operators::Same for zendriver::input::mouse::MouseButton
@@ -2189,8 +2189,8 @@ pub unsafe fn zendriver::input::pointer_state::MouseButtonSet::clone_to_uninit(&
 impl<T> core::convert::From<T> for zendriver::input::pointer_state::MouseButtonSet
 pub fn zendriver::input::pointer_state::MouseButtonSet::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::input::pointer_state::MouseButtonSet where T: ?core::marker::Sized
-pub fn zendriver::input::pointer_state::MouseButtonSet::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::input::pointer_state::MouseButtonSet::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::pointer_state::MouseButtonSet::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::pointer_state::MouseButtonSet::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::input::pointer_state::MouseButtonSet
 impl<T> tracing::instrument::WithSubscriber for zendriver::input::pointer_state::MouseButtonSet
 impl<T> typenum::type_operators::Same for zendriver::input::pointer_state::MouseButtonSet
@@ -2243,8 +2243,8 @@ pub unsafe fn zendriver::input::keyboard::Key::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::input::keyboard::Key
 pub fn zendriver::input::keyboard::Key::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::input::keyboard::Key where T: ?core::marker::Sized
-pub fn zendriver::input::keyboard::Key::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::input::keyboard::Key::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::keyboard::Key::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::keyboard::Key::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::input::keyboard::Key
 impl<T> tracing::instrument::WithSubscriber for zendriver::input::keyboard::Key
 impl<T> typenum::type_operators::Same for zendriver::input::keyboard::Key
@@ -2302,8 +2302,8 @@ pub unsafe fn zendriver::input::mouse::MouseButton::clone_to_uninit(&self, *mut 
 impl<T> core::convert::From<T> for zendriver::input::mouse::MouseButton
 pub fn zendriver::input::mouse::MouseButton::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::input::mouse::MouseButton where T: ?core::marker::Sized
-pub fn zendriver::input::mouse::MouseButton::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::input::mouse::MouseButton::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::mouse::MouseButton::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::mouse::MouseButton::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::input::mouse::MouseButton
 impl<T> tracing::instrument::WithSubscriber for zendriver::input::mouse::MouseButton
 impl<T> typenum::type_operators::Same for zendriver::input::mouse::MouseButton
@@ -2389,8 +2389,8 @@ pub unsafe fn zendriver::input::keyboard::SpecialKey::clone_to_uninit(&self, *mu
 impl<T> core::convert::From<T> for zendriver::input::keyboard::SpecialKey
 pub fn zendriver::input::keyboard::SpecialKey::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::input::keyboard::SpecialKey where T: ?core::marker::Sized
-pub fn zendriver::input::keyboard::SpecialKey::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::input::keyboard::SpecialKey::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::keyboard::SpecialKey::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::keyboard::SpecialKey::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::input::keyboard::SpecialKey
 impl<T> tracing::instrument::WithSubscriber for zendriver::input::keyboard::SpecialKey
 impl<T> typenum::type_operators::Same for zendriver::input::keyboard::SpecialKey
@@ -2427,8 +2427,8 @@ pub fn zendriver::input::InputController::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for zendriver::input::InputController
 pub fn zendriver::input::InputController::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::input::InputController where T: ?core::marker::Sized
-pub fn zendriver::input::InputController::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::input::InputController::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::InputController::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::InputController::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::input::InputController
 impl<T> tracing::instrument::WithSubscriber for zendriver::input::InputController
 impl<T> typenum::type_operators::Same for zendriver::input::InputController
@@ -2559,8 +2559,8 @@ pub unsafe fn zendriver::input::keyboard::KeyModifiers::clone_to_uninit(&self, *
 impl<T> core::convert::From<T> for zendriver::input::keyboard::KeyModifiers
 pub fn zendriver::input::keyboard::KeyModifiers::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::input::keyboard::KeyModifiers where T: ?core::marker::Sized
-pub fn zendriver::input::keyboard::KeyModifiers::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::input::keyboard::KeyModifiers::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::keyboard::KeyModifiers::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::keyboard::KeyModifiers::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::input::keyboard::KeyModifiers
 impl<T> tracing::instrument::WithSubscriber for zendriver::input::keyboard::KeyModifiers
 impl<T> typenum::type_operators::Same for zendriver::input::keyboard::KeyModifiers
@@ -2609,8 +2609,8 @@ pub unsafe fn zendriver::input::keyboard::KeySequence::clone_to_uninit(&self, *m
 impl<T> core::convert::From<T> for zendriver::input::keyboard::KeySequence
 pub fn zendriver::input::keyboard::KeySequence::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::input::keyboard::KeySequence where T: ?core::marker::Sized
-pub fn zendriver::input::keyboard::KeySequence::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::input::keyboard::KeySequence::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::keyboard::KeySequence::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::keyboard::KeySequence::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::input::keyboard::KeySequence
 impl<T> tracing::instrument::WithSubscriber for zendriver::input::keyboard::KeySequence
 impl<T> typenum::type_operators::Same for zendriver::input::keyboard::KeySequence
@@ -2664,8 +2664,8 @@ pub unsafe fn zendriver::monitor::FrameDirection::clone_to_uninit(&self, *mut u8
 impl<T> core::convert::From<T> for zendriver::monitor::FrameDirection
 pub fn zendriver::monitor::FrameDirection::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::monitor::FrameDirection where T: ?core::marker::Sized
-pub fn zendriver::monitor::FrameDirection::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::monitor::FrameDirection::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::FrameDirection::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::FrameDirection::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::monitor::FrameDirection
 impl<T> tracing::instrument::WithSubscriber for zendriver::monitor::FrameDirection
 impl<T> typenum::type_operators::Same for zendriver::monitor::FrameDirection
@@ -2723,8 +2723,8 @@ pub unsafe fn zendriver::monitor::NetworkEvent::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::monitor::NetworkEvent
 pub fn zendriver::monitor::NetworkEvent::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::monitor::NetworkEvent where T: ?core::marker::Sized
-pub fn zendriver::monitor::NetworkEvent::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::monitor::NetworkEvent::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::NetworkEvent::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::NetworkEvent::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::monitor::NetworkEvent
 impl<T> tracing::instrument::WithSubscriber for zendriver::monitor::NetworkEvent
 impl<T> typenum::type_operators::Same for zendriver::monitor::NetworkEvent
@@ -2759,8 +2759,8 @@ pub fn zendriver::monitor::MonitorBuilder::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for zendriver::monitor::MonitorBuilder
 pub fn zendriver::monitor::MonitorBuilder::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::monitor::MonitorBuilder where T: ?core::marker::Sized
-pub fn zendriver::monitor::MonitorBuilder::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::monitor::MonitorBuilder::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::MonitorBuilder::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::MonitorBuilder::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::monitor::MonitorBuilder
 impl<T> tracing::instrument::WithSubscriber for zendriver::monitor::MonitorBuilder
 impl<T> typenum::type_operators::Same for zendriver::monitor::MonitorBuilder
@@ -2806,8 +2806,8 @@ pub unsafe fn zendriver::monitor::MonitoredRequest::clone_to_uninit(&self, *mut 
 impl<T> core::convert::From<T> for zendriver::monitor::MonitoredRequest
 pub fn zendriver::monitor::MonitoredRequest::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::monitor::MonitoredRequest where T: ?core::marker::Sized
-pub fn zendriver::monitor::MonitoredRequest::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::monitor::MonitoredRequest::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::MonitoredRequest::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::MonitoredRequest::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::monitor::MonitoredRequest
 impl<T> tracing::instrument::WithSubscriber for zendriver::monitor::MonitoredRequest
 impl<T> typenum::type_operators::Same for zendriver::monitor::MonitoredRequest
@@ -2853,8 +2853,8 @@ pub unsafe fn zendriver::monitor::MonitoredResponse::clone_to_uninit(&self, *mut
 impl<T> core::convert::From<T> for zendriver::monitor::MonitoredResponse
 pub fn zendriver::monitor::MonitoredResponse::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::monitor::MonitoredResponse where T: ?core::marker::Sized
-pub fn zendriver::monitor::MonitoredResponse::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::monitor::MonitoredResponse::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::MonitoredResponse::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::MonitoredResponse::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::monitor::MonitoredResponse
 impl<T> tracing::instrument::WithSubscriber for zendriver::monitor::MonitoredResponse
 impl<T> typenum::type_operators::Same for zendriver::monitor::MonitoredResponse
@@ -2904,8 +2904,8 @@ pub unsafe fn zendriver::monitor::NetworkExchange::clone_to_uninit(&self, *mut u
 impl<T> core::convert::From<T> for zendriver::monitor::NetworkExchange
 pub fn zendriver::monitor::NetworkExchange::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::monitor::NetworkExchange where T: ?core::marker::Sized
-pub fn zendriver::monitor::NetworkExchange::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::monitor::NetworkExchange::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::NetworkExchange::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::NetworkExchange::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::monitor::NetworkExchange
 impl<T> tracing::instrument::WithSubscriber for zendriver::monitor::NetworkExchange
 impl<T> typenum::type_operators::Same for zendriver::monitor::NetworkExchange
@@ -2946,8 +2946,8 @@ impl<T> core::convert::From<T> for zendriver::monitor::NetworkMonitor
 pub fn zendriver::monitor::NetworkMonitor::from(T) -> T
 impl<T> futures_util::stream::stream::StreamExt for zendriver::monitor::NetworkMonitor where T: futures_core::stream::Stream + ?core::marker::Sized
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::monitor::NetworkMonitor where T: ?core::marker::Sized
-pub fn zendriver::monitor::NetworkMonitor::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::monitor::NetworkMonitor::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::NetworkMonitor::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::NetworkMonitor::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::monitor::NetworkMonitor
 impl<T> tracing::instrument::WithSubscriber for zendriver::monitor::NetworkMonitor
 impl<T> typenum::type_operators::Same for zendriver::monitor::NetworkMonitor
@@ -2998,8 +2998,8 @@ pub fn zendriver::pdf::PdfBuilder<'tab>::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for zendriver::pdf::PdfBuilder<'tab>
 pub fn zendriver::pdf::PdfBuilder<'tab>::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::pdf::PdfBuilder<'tab> where T: ?core::marker::Sized
-pub fn zendriver::pdf::PdfBuilder<'tab>::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::pdf::PdfBuilder<'tab>::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::pdf::PdfBuilder<'tab>::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::pdf::PdfBuilder<'tab>::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::pdf::PdfBuilder<'tab>
 impl<T> tracing::instrument::WithSubscriber for zendriver::pdf::PdfBuilder<'tab>
 impl<T> typenum::type_operators::Same for zendriver::pdf::PdfBuilder<'tab>
@@ -3078,8 +3078,8 @@ pub unsafe fn zendriver::query::role::AriaRole::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::query::role::AriaRole
 pub fn zendriver::query::role::AriaRole::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::query::role::AriaRole where T: ?core::marker::Sized
-pub fn zendriver::query::role::AriaRole::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::query::role::AriaRole::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::query::role::AriaRole::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::query::role::AriaRole::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::query::role::AriaRole
 impl<T> tracing::instrument::WithSubscriber for zendriver::query::role::AriaRole
 impl<T> typenum::type_operators::Same for zendriver::query::role::AriaRole
@@ -3155,8 +3155,8 @@ pub unsafe fn zendriver::query::role::AriaRole::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::query::role::AriaRole
 pub fn zendriver::query::role::AriaRole::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::query::role::AriaRole where T: ?core::marker::Sized
-pub fn zendriver::query::role::AriaRole::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::query::role::AriaRole::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::query::role::AriaRole::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::query::role::AriaRole::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::query::role::AriaRole
 impl<T> tracing::instrument::WithSubscriber for zendriver::query::role::AriaRole
 impl<T> typenum::type_operators::Same for zendriver::query::role::AriaRole
@@ -3206,8 +3206,8 @@ pub unsafe fn zendriver::query::BoundingBox::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::query::BoundingBox
 pub fn zendriver::query::BoundingBox::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::query::BoundingBox where T: ?core::marker::Sized
-pub fn zendriver::query::BoundingBox::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::query::BoundingBox::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::query::BoundingBox::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::query::BoundingBox::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::query::BoundingBox
 impl<T> tracing::instrument::WithSubscriber for zendriver::query::BoundingBox
 impl<T> typenum::type_operators::Same for zendriver::query::BoundingBox
@@ -3267,8 +3267,8 @@ pub fn zendriver::query::FindAllBuilder<'scope>::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for zendriver::query::FindAllBuilder<'scope>
 pub fn zendriver::query::FindAllBuilder<'scope>::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::query::FindAllBuilder<'scope> where T: ?core::marker::Sized
-pub fn zendriver::query::FindAllBuilder<'scope>::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::query::FindAllBuilder<'scope>::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::query::FindAllBuilder<'scope>::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::query::FindAllBuilder<'scope>::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::query::FindAllBuilder<'scope>
 impl<T> tracing::instrument::WithSubscriber for zendriver::query::FindAllBuilder<'scope>
 impl<T> typenum::type_operators::Same for zendriver::query::FindAllBuilder<'scope>
@@ -3329,8 +3329,8 @@ pub fn zendriver::query::FindBuilder<'scope>::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for zendriver::query::FindBuilder<'scope>
 pub fn zendriver::query::FindBuilder<'scope>::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::query::FindBuilder<'scope> where T: ?core::marker::Sized
-pub fn zendriver::query::FindBuilder<'scope>::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::query::FindBuilder<'scope>::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::query::FindBuilder<'scope>::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::query::FindBuilder<'scope>::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::query::FindBuilder<'scope>
 impl<T> tracing::instrument::WithSubscriber for zendriver::query::FindBuilder<'scope>
 impl<T> typenum::type_operators::Same for zendriver::query::FindBuilder<'scope>
@@ -3382,8 +3382,8 @@ pub unsafe fn zendriver::query::PageBox::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::query::PageBox
 pub fn zendriver::query::PageBox::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::query::PageBox where T: ?core::marker::Sized
-pub fn zendriver::query::PageBox::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::query::PageBox::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::query::PageBox::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::query::PageBox::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::query::PageBox
 impl<T> tracing::instrument::WithSubscriber for zendriver::query::PageBox
 impl<T> typenum::type_operators::Same for zendriver::query::PageBox
@@ -3428,8 +3428,8 @@ pub fn zendriver::request::RequestBuilder<'a>::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for zendriver::request::RequestBuilder<'a>
 pub fn zendriver::request::RequestBuilder<'a>::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::request::RequestBuilder<'a> where T: ?core::marker::Sized
-pub fn zendriver::request::RequestBuilder<'a>::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::request::RequestBuilder<'a>::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::request::RequestBuilder<'a>::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::request::RequestBuilder<'a>::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::request::RequestBuilder<'a>
 impl<T> tracing::instrument::WithSubscriber for zendriver::request::RequestBuilder<'a>
 impl<T> typenum::type_operators::Same for zendriver::request::RequestBuilder<'a>
@@ -3467,8 +3467,8 @@ pub fn zendriver::request::Response::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for zendriver::request::Response
 pub fn zendriver::request::Response::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::request::Response where T: ?core::marker::Sized
-pub fn zendriver::request::Response::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::request::Response::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::request::Response::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::request::Response::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::request::Response
 impl<T> tracing::instrument::WithSubscriber for zendriver::request::Response
 impl<T> typenum::type_operators::Same for zendriver::request::Response
@@ -3525,8 +3525,8 @@ pub unsafe fn zendriver::screenshot::Format::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::screenshot::Format
 pub fn zendriver::screenshot::Format::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::screenshot::Format where T: ?core::marker::Sized
-pub fn zendriver::screenshot::Format::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::screenshot::Format::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::screenshot::Format::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::screenshot::Format::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::screenshot::Format
 impl<T> tracing::instrument::WithSubscriber for zendriver::screenshot::Format
 impl<T> typenum::type_operators::Same for zendriver::screenshot::Format
@@ -3571,8 +3571,8 @@ pub fn zendriver::screenshot::ScreenshotBuilder<'tab>::borrow_mut(&mut self) -> 
 impl<T> core::convert::From<T> for zendriver::screenshot::ScreenshotBuilder<'tab>
 pub fn zendriver::screenshot::ScreenshotBuilder<'tab>::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::screenshot::ScreenshotBuilder<'tab> where T: ?core::marker::Sized
-pub fn zendriver::screenshot::ScreenshotBuilder<'tab>::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::screenshot::ScreenshotBuilder<'tab>::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::screenshot::ScreenshotBuilder<'tab>::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::screenshot::ScreenshotBuilder<'tab>::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::screenshot::ScreenshotBuilder<'tab>
 impl<T> tracing::instrument::WithSubscriber for zendriver::screenshot::ScreenshotBuilder<'tab>
 impl<T> typenum::type_operators::Same for zendriver::screenshot::ScreenshotBuilder<'tab>
@@ -3634,8 +3634,8 @@ pub unsafe fn zendriver::storage::Storage::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::storage::Storage
 pub fn zendriver::storage::Storage::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::storage::Storage where T: ?core::marker::Sized
-pub fn zendriver::storage::Storage::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::storage::Storage::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::storage::Storage::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::storage::Storage::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::storage::Storage
 impl<T> tracing::instrument::WithSubscriber for zendriver::storage::Storage
 impl<T> typenum::type_operators::Same for zendriver::storage::Storage
@@ -3695,8 +3695,8 @@ impl<T> core::convert::From<T> for zendriver::tab::ReadyState
 pub fn zendriver::tab::ReadyState::from(T) -> T
 impl<T> serde_core::de::DeserializeOwned for zendriver::tab::ReadyState where T: for<'de> serde_core::de::Deserialize<'de>
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::tab::ReadyState where T: ?core::marker::Sized
-pub fn zendriver::tab::ReadyState::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::tab::ReadyState::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::ReadyState::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::ReadyState::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::tab::ReadyState
 impl<T> tracing::instrument::WithSubscriber for zendriver::tab::ReadyState
 impl<T> typenum::type_operators::Same for zendriver::tab::ReadyState
@@ -3748,8 +3748,8 @@ pub unsafe fn zendriver::tab::FrameResourceMatch::clone_to_uninit(&self, *mut u8
 impl<T> core::convert::From<T> for zendriver::tab::FrameResourceMatch
 pub fn zendriver::tab::FrameResourceMatch::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::tab::FrameResourceMatch where T: ?core::marker::Sized
-pub fn zendriver::tab::FrameResourceMatch::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::tab::FrameResourceMatch::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::FrameResourceMatch::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::FrameResourceMatch::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::tab::FrameResourceMatch
 impl<T> tracing::instrument::WithSubscriber for zendriver::tab::FrameResourceMatch
 impl<T> typenum::type_operators::Same for zendriver::tab::FrameResourceMatch
@@ -3796,8 +3796,8 @@ pub unsafe fn zendriver::tab::IdleOptions::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::tab::IdleOptions
 pub fn zendriver::tab::IdleOptions::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::tab::IdleOptions where T: ?core::marker::Sized
-pub fn zendriver::tab::IdleOptions::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::tab::IdleOptions::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::IdleOptions::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::IdleOptions::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::tab::IdleOptions
 impl<T> tracing::instrument::WithSubscriber for zendriver::tab::IdleOptions
 impl<T> typenum::type_operators::Same for zendriver::tab::IdleOptions
@@ -3843,8 +3843,8 @@ pub unsafe fn zendriver::tab::ReloadOptions::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::tab::ReloadOptions
 pub fn zendriver::tab::ReloadOptions::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::tab::ReloadOptions where T: ?core::marker::Sized
-pub fn zendriver::tab::ReloadOptions::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::tab::ReloadOptions::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::ReloadOptions::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::ReloadOptions::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::tab::ReloadOptions
 impl<T> tracing::instrument::WithSubscriber for zendriver::tab::ReloadOptions
 impl<T> typenum::type_operators::Same for zendriver::tab::ReloadOptions
@@ -3891,8 +3891,8 @@ pub unsafe fn zendriver::tab::ScrollOptions::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::tab::ScrollOptions
 pub fn zendriver::tab::ScrollOptions::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::tab::ScrollOptions where T: ?core::marker::Sized
-pub fn zendriver::tab::ScrollOptions::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::tab::ScrollOptions::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::ScrollOptions::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::ScrollOptions::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::tab::ScrollOptions
 impl<T> tracing::instrument::WithSubscriber for zendriver::tab::ScrollOptions
 impl<T> typenum::type_operators::Same for zendriver::tab::ScrollOptions
@@ -4023,8 +4023,8 @@ pub unsafe fn zendriver::tab::Tab::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::tab::Tab
 pub fn zendriver::tab::Tab::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::tab::Tab where T: ?core::marker::Sized
-pub fn zendriver::tab::Tab::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::tab::Tab::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::Tab::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::Tab::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::tab::Tab
 impl<T> tracing::instrument::WithSubscriber for zendriver::tab::Tab
 impl<T> typenum::type_operators::Same for zendriver::tab::Tab
@@ -4071,8 +4071,8 @@ pub unsafe fn zendriver::tab::UserAgentOverride::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::tab::UserAgentOverride
 pub fn zendriver::tab::UserAgentOverride::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::tab::UserAgentOverride where T: ?core::marker::Sized
-pub fn zendriver::tab::UserAgentOverride::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::tab::UserAgentOverride::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::UserAgentOverride::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::UserAgentOverride::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::tab::UserAgentOverride
 impl<T> tracing::instrument::WithSubscriber for zendriver::tab::UserAgentOverride
 impl<T> typenum::type_operators::Same for zendriver::tab::UserAgentOverride
@@ -4180,8 +4180,8 @@ impl<T> core::convert::From<T> for zendriver::window::WindowState
 pub fn zendriver::window::WindowState::from(T) -> T
 impl<T> serde_core::de::DeserializeOwned for zendriver::window::WindowState where T: for<'de> serde_core::de::Deserialize<'de>
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::window::WindowState where T: ?core::marker::Sized
-pub fn zendriver::window::WindowState::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::window::WindowState::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::window::WindowState::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::window::WindowState::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::window::WindowState
 impl<T> tracing::instrument::WithSubscriber for zendriver::window::WindowState
 impl<T> typenum::type_operators::Same for zendriver::window::WindowState
@@ -4238,8 +4238,8 @@ pub unsafe fn zendriver::window::WindowBounds::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::window::WindowBounds
 pub fn zendriver::window::WindowBounds::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::window::WindowBounds where T: ?core::marker::Sized
-pub fn zendriver::window::WindowBounds::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::window::WindowBounds::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::window::WindowBounds::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::window::WindowBounds::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::window::WindowBounds
 impl<T> tracing::instrument::WithSubscriber for zendriver::window::WindowBounds
 impl<T> typenum::type_operators::Same for zendriver::window::WindowBounds
@@ -4314,8 +4314,8 @@ pub unsafe fn zendriver::query::role::AriaRole::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::query::role::AriaRole
 pub fn zendriver::query::role::AriaRole::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::query::role::AriaRole where T: ?core::marker::Sized
-pub fn zendriver::query::role::AriaRole::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::query::role::AriaRole::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::query::role::AriaRole::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::query::role::AriaRole::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::query::role::AriaRole
 impl<T> tracing::instrument::WithSubscriber for zendriver::query::role::AriaRole
 impl<T> typenum::type_operators::Same for zendriver::query::role::AriaRole
@@ -4367,8 +4367,8 @@ pub fn zendriver::error::BrowserError::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for zendriver::error::BrowserError
 pub fn zendriver::error::BrowserError::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::error::BrowserError where T: ?core::marker::Sized
-pub fn zendriver::error::BrowserError::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::error::BrowserError::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::error::BrowserError::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::error::BrowserError::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::error::BrowserError
 impl<T> tracing::instrument::WithSubscriber for zendriver::error::BrowserError
 impl<T> typenum::type_operators::Same for zendriver::error::BrowserError
@@ -4428,8 +4428,8 @@ pub unsafe fn zendriver::browser::Channel::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::browser::Channel
 pub fn zendriver::browser::Channel::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::browser::Channel where T: ?core::marker::Sized
-pub fn zendriver::browser::Channel::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::browser::Channel::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::browser::Channel::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::browser::Channel::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::browser::Channel
 impl<T> tracing::instrument::WithSubscriber for zendriver::browser::Channel
 impl<T> typenum::type_operators::Same for zendriver::browser::Channel
@@ -4488,8 +4488,8 @@ impl<T> core::convert::From<T> for zendriver::cookies::CookiePriority
 pub fn zendriver::cookies::CookiePriority::from(T) -> T
 impl<T> serde_core::de::DeserializeOwned for zendriver::cookies::CookiePriority where T: for<'de> serde_core::de::Deserialize<'de>
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::cookies::CookiePriority where T: ?core::marker::Sized
-pub fn zendriver::cookies::CookiePriority::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::cookies::CookiePriority::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::cookies::CookiePriority::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::cookies::CookiePriority::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::cookies::CookiePriority
 impl<T> tracing::instrument::WithSubscriber for zendriver::cookies::CookiePriority
 impl<T> typenum::type_operators::Same for zendriver::cookies::CookiePriority
@@ -4548,8 +4548,8 @@ impl<T> core::convert::From<T> for zendriver::cookies::CookieSourceScheme
 pub fn zendriver::cookies::CookieSourceScheme::from(T) -> T
 impl<T> serde_core::de::DeserializeOwned for zendriver::cookies::CookieSourceScheme where T: for<'de> serde_core::de::Deserialize<'de>
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::cookies::CookieSourceScheme where T: ?core::marker::Sized
-pub fn zendriver::cookies::CookieSourceScheme::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::cookies::CookieSourceScheme::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::cookies::CookieSourceScheme::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::cookies::CookieSourceScheme::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::cookies::CookieSourceScheme
 impl<T> tracing::instrument::WithSubscriber for zendriver::cookies::CookieSourceScheme
 impl<T> typenum::type_operators::Same for zendriver::cookies::CookieSourceScheme
@@ -4603,8 +4603,8 @@ pub unsafe fn zendriver::expect::dialog::DialogType::clone_to_uninit(&self, *mut
 impl<T> core::convert::From<T> for zendriver::expect::dialog::DialogType
 pub fn zendriver::expect::dialog::DialogType::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::dialog::DialogType where T: ?core::marker::Sized
-pub fn zendriver::expect::dialog::DialogType::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::expect::dialog::DialogType::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::dialog::DialogType::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::dialog::DialogType::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::expect::dialog::DialogType
 impl<T> tracing::instrument::WithSubscriber for zendriver::expect::dialog::DialogType
 impl<T> typenum::type_operators::Same for zendriver::expect::dialog::DialogType
@@ -4658,8 +4658,8 @@ pub unsafe fn zendriver::expect::download::DownloadProgressState::clone_to_unini
 impl<T> core::convert::From<T> for zendriver::expect::download::DownloadProgressState
 pub fn zendriver::expect::download::DownloadProgressState::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::download::DownloadProgressState where T: ?core::marker::Sized
-pub fn zendriver::expect::download::DownloadProgressState::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::expect::download::DownloadProgressState::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::download::DownloadProgressState::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::download::DownloadProgressState::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::expect::download::DownloadProgressState
 impl<T> tracing::instrument::WithSubscriber for zendriver::expect::download::DownloadProgressState
 impl<T> typenum::type_operators::Same for zendriver::expect::download::DownloadProgressState
@@ -4715,8 +4715,8 @@ pub unsafe fn zendriver::screenshot::Format::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::screenshot::Format
 pub fn zendriver::screenshot::Format::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::screenshot::Format where T: ?core::marker::Sized
-pub fn zendriver::screenshot::Format::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::screenshot::Format::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::screenshot::Format::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::screenshot::Format::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::screenshot::Format
 impl<T> tracing::instrument::WithSubscriber for zendriver::screenshot::Format
 impl<T> typenum::type_operators::Same for zendriver::screenshot::Format
@@ -4769,8 +4769,8 @@ pub unsafe fn zendriver::monitor::FrameDirection::clone_to_uninit(&self, *mut u8
 impl<T> core::convert::From<T> for zendriver::monitor::FrameDirection
 pub fn zendriver::monitor::FrameDirection::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::monitor::FrameDirection where T: ?core::marker::Sized
-pub fn zendriver::monitor::FrameDirection::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::monitor::FrameDirection::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::FrameDirection::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::FrameDirection::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::monitor::FrameDirection
 impl<T> tracing::instrument::WithSubscriber for zendriver::monitor::FrameDirection
 impl<T> typenum::type_operators::Same for zendriver::monitor::FrameDirection
@@ -4823,8 +4823,8 @@ pub unsafe fn zendriver::input::keyboard::Key::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::input::keyboard::Key
 pub fn zendriver::input::keyboard::Key::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::input::keyboard::Key where T: ?core::marker::Sized
-pub fn zendriver::input::keyboard::Key::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::input::keyboard::Key::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::keyboard::Key::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::keyboard::Key::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::input::keyboard::Key
 impl<T> tracing::instrument::WithSubscriber for zendriver::input::keyboard::Key
 impl<T> typenum::type_operators::Same for zendriver::input::keyboard::Key
@@ -4882,8 +4882,8 @@ pub unsafe fn zendriver::input::mouse::MouseButton::clone_to_uninit(&self, *mut 
 impl<T> core::convert::From<T> for zendriver::input::mouse::MouseButton
 pub fn zendriver::input::mouse::MouseButton::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::input::mouse::MouseButton where T: ?core::marker::Sized
-pub fn zendriver::input::mouse::MouseButton::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::input::mouse::MouseButton::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::mouse::MouseButton::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::mouse::MouseButton::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::input::mouse::MouseButton
 impl<T> tracing::instrument::WithSubscriber for zendriver::input::mouse::MouseButton
 impl<T> typenum::type_operators::Same for zendriver::input::mouse::MouseButton
@@ -4941,8 +4941,8 @@ pub unsafe fn zendriver::monitor::NetworkEvent::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::monitor::NetworkEvent
 pub fn zendriver::monitor::NetworkEvent::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::monitor::NetworkEvent where T: ?core::marker::Sized
-pub fn zendriver::monitor::NetworkEvent::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::monitor::NetworkEvent::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::NetworkEvent::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::NetworkEvent::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::monitor::NetworkEvent
 impl<T> tracing::instrument::WithSubscriber for zendriver::monitor::NetworkEvent
 impl<T> typenum::type_operators::Same for zendriver::monitor::NetworkEvent
@@ -5026,8 +5026,8 @@ pub unsafe fn zendriver::browser::PermissionType::clone_to_uninit(&self, *mut u8
 impl<T> core::convert::From<T> for zendriver::browser::PermissionType
 pub fn zendriver::browser::PermissionType::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::browser::PermissionType where T: ?core::marker::Sized
-pub fn zendriver::browser::PermissionType::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::browser::PermissionType::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::browser::PermissionType::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::browser::PermissionType::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::browser::PermissionType
 impl<T> tracing::instrument::WithSubscriber for zendriver::browser::PermissionType
 impl<T> typenum::type_operators::Same for zendriver::browser::PermissionType
@@ -5086,8 +5086,8 @@ impl<T> core::convert::From<T> for zendriver::tab::ReadyState
 pub fn zendriver::tab::ReadyState::from(T) -> T
 impl<T> serde_core::de::DeserializeOwned for zendriver::tab::ReadyState where T: for<'de> serde_core::de::Deserialize<'de>
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::tab::ReadyState where T: ?core::marker::Sized
-pub fn zendriver::tab::ReadyState::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::tab::ReadyState::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::ReadyState::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::ReadyState::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::tab::ReadyState
 impl<T> tracing::instrument::WithSubscriber for zendriver::tab::ReadyState
 impl<T> typenum::type_operators::Same for zendriver::tab::ReadyState
@@ -5146,8 +5146,8 @@ impl<T> core::convert::From<T> for zendriver::cookies::SameSite
 pub fn zendriver::cookies::SameSite::from(T) -> T
 impl<T> serde_core::de::DeserializeOwned for zendriver::cookies::SameSite where T: for<'de> serde_core::de::Deserialize<'de>
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::cookies::SameSite where T: ?core::marker::Sized
-pub fn zendriver::cookies::SameSite::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::cookies::SameSite::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::cookies::SameSite::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::cookies::SameSite::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::cookies::SameSite
 impl<T> tracing::instrument::WithSubscriber for zendriver::cookies::SameSite
 impl<T> typenum::type_operators::Same for zendriver::cookies::SameSite
@@ -5233,8 +5233,8 @@ pub unsafe fn zendriver::input::keyboard::SpecialKey::clone_to_uninit(&self, *mu
 impl<T> core::convert::From<T> for zendriver::input::keyboard::SpecialKey
 pub fn zendriver::input::keyboard::SpecialKey::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::input::keyboard::SpecialKey where T: ?core::marker::Sized
-pub fn zendriver::input::keyboard::SpecialKey::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::input::keyboard::SpecialKey::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::keyboard::SpecialKey::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::keyboard::SpecialKey::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::input::keyboard::SpecialKey
 impl<T> tracing::instrument::WithSubscriber for zendriver::input::keyboard::SpecialKey
 impl<T> typenum::type_operators::Same for zendriver::input::keyboard::SpecialKey
@@ -5286,8 +5286,8 @@ pub unsafe fn zendriver::UrlMatcher::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::UrlMatcher
 pub fn zendriver::UrlMatcher::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::UrlMatcher where T: ?core::marker::Sized
-pub fn zendriver::UrlMatcher::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::UrlMatcher::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::UrlMatcher::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::UrlMatcher::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::UrlMatcher
 impl<T> tracing::instrument::WithSubscriber for zendriver::UrlMatcher
 impl<T> typenum::type_operators::Same for zendriver::UrlMatcher
@@ -5349,8 +5349,8 @@ impl<T> core::convert::From<T> for zendriver::window::WindowState
 pub fn zendriver::window::WindowState::from(T) -> T
 impl<T> serde_core::de::DeserializeOwned for zendriver::window::WindowState where T: for<'de> serde_core::de::Deserialize<'de>
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::window::WindowState where T: ?core::marker::Sized
-pub fn zendriver::window::WindowState::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::window::WindowState::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::window::WindowState::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::window::WindowState::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::window::WindowState
 impl<T> tracing::instrument::WithSubscriber for zendriver::window::WindowState
 impl<T> typenum::type_operators::Same for zendriver::window::WindowState
@@ -5443,8 +5443,8 @@ pub fn zendriver::error::ZendriverError::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for zendriver::error::ZendriverError
 pub fn zendriver::error::ZendriverError::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::error::ZendriverError where T: ?core::marker::Sized
-pub fn zendriver::error::ZendriverError::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::error::ZendriverError::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::error::ZendriverError::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::error::ZendriverError::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::error::ZendriverError
 impl<T> tracing::instrument::WithSubscriber for zendriver::error::ZendriverError
 impl<T> typenum::type_operators::Same for zendriver::error::ZendriverError
@@ -5494,8 +5494,8 @@ pub unsafe fn zendriver::query::BoundingBox::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::query::BoundingBox
 pub fn zendriver::query::BoundingBox::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::query::BoundingBox where T: ?core::marker::Sized
-pub fn zendriver::query::BoundingBox::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::query::BoundingBox::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::query::BoundingBox::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::query::BoundingBox::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::query::BoundingBox
 impl<T> tracing::instrument::WithSubscriber for zendriver::query::BoundingBox
 impl<T> typenum::type_operators::Same for zendriver::query::BoundingBox
@@ -5557,8 +5557,8 @@ pub unsafe fn zendriver::browser::Browser::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::browser::Browser
 pub fn zendriver::browser::Browser::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::browser::Browser where T: ?core::marker::Sized
-pub fn zendriver::browser::Browser::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::browser::Browser::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::browser::Browser::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::browser::Browser::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::browser::Browser
 impl<T> tracing::instrument::WithSubscriber for zendriver::browser::Browser
 impl<T> typenum::type_operators::Same for zendriver::browser::Browser
@@ -5636,8 +5636,8 @@ pub unsafe fn zendriver::browser::BrowserBuilder::clone_to_uninit(&self, *mut u8
 impl<T> core::convert::From<T> for zendriver::browser::BrowserBuilder
 pub fn zendriver::browser::BrowserBuilder::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::browser::BrowserBuilder where T: ?core::marker::Sized
-pub fn zendriver::browser::BrowserBuilder::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::browser::BrowserBuilder::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::browser::BrowserBuilder::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::browser::BrowserBuilder::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::browser::BrowserBuilder
 impl<T> tracing::instrument::WithSubscriber for zendriver::browser::BrowserBuilder
 impl<T> typenum::type_operators::Same for zendriver::browser::BrowserBuilder
@@ -5675,8 +5675,8 @@ pub fn zendriver::browser_context::BrowserContext::borrow_mut(&mut self) -> &mut
 impl<T> core::convert::From<T> for zendriver::browser_context::BrowserContext
 pub fn zendriver::browser_context::BrowserContext::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::browser_context::BrowserContext where T: ?core::marker::Sized
-pub fn zendriver::browser_context::BrowserContext::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::browser_context::BrowserContext::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::browser_context::BrowserContext::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::browser_context::BrowserContext::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::browser_context::BrowserContext
 impl<T> tracing::instrument::WithSubscriber for zendriver::browser_context::BrowserContext
 impl<T> typenum::type_operators::Same for zendriver::browser_context::BrowserContext
@@ -5727,8 +5727,8 @@ pub unsafe fn zendriver::element::actions::ClickOptions::clone_to_uninit(&self, 
 impl<T> core::convert::From<T> for zendriver::element::actions::ClickOptions
 pub fn zendriver::element::actions::ClickOptions::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::element::actions::ClickOptions where T: ?core::marker::Sized
-pub fn zendriver::element::actions::ClickOptions::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::element::actions::ClickOptions::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::element::actions::ClickOptions::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::element::actions::ClickOptions::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::element::actions::ClickOptions
 impl<T> tracing::instrument::WithSubscriber for zendriver::element::actions::ClickOptions
 impl<T> typenum::type_operators::Same for zendriver::element::actions::ClickOptions
@@ -5794,8 +5794,8 @@ impl<T> core::convert::From<T> for zendriver::cookies::Cookie
 pub fn zendriver::cookies::Cookie::from(T) -> T
 impl<T> serde_core::de::DeserializeOwned for zendriver::cookies::Cookie where T: for<'de> serde_core::de::Deserialize<'de>
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::cookies::Cookie where T: ?core::marker::Sized
-pub fn zendriver::cookies::Cookie::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::cookies::Cookie::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::cookies::Cookie::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::cookies::Cookie::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::cookies::Cookie
 impl<T> tracing::instrument::WithSubscriber for zendriver::cookies::Cookie
 impl<T> typenum::type_operators::Same for zendriver::cookies::Cookie
@@ -5850,8 +5850,8 @@ pub unsafe fn zendriver::cookies::CookieJar::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::cookies::CookieJar
 pub fn zendriver::cookies::CookieJar::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::cookies::CookieJar where T: ?core::marker::Sized
-pub fn zendriver::cookies::CookieJar::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::cookies::CookieJar::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::cookies::CookieJar::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::cookies::CookieJar::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::cookies::CookieJar
 impl<T> tracing::instrument::WithSubscriber for zendriver::cookies::CookieJar
 impl<T> typenum::type_operators::Same for zendriver::cookies::CookieJar
@@ -5902,8 +5902,8 @@ pub fn zendriver::expect::dialog::DialogExpectation::from(T) -> T
 impl<T> futures_util::future::future::FutureExt for zendriver::expect::dialog::DialogExpectation where T: core::future::future::Future + ?core::marker::Sized
 impl<T> tokio_util::future::FutureExt for zendriver::expect::dialog::DialogExpectation where T: core::future::future::Future + ?core::marker::Sized
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::dialog::DialogExpectation where T: ?core::marker::Sized
-pub fn zendriver::expect::dialog::DialogExpectation::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::expect::dialog::DialogExpectation::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::dialog::DialogExpectation::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::dialog::DialogExpectation::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::expect::dialog::DialogExpectation
 impl<T> tracing::instrument::WithSubscriber for zendriver::expect::dialog::DialogExpectation
 impl<T> typenum::type_operators::Same for zendriver::expect::dialog::DialogExpectation
@@ -5954,8 +5954,8 @@ pub fn zendriver::expect::download::DownloadExpectation::from(T) -> T
 impl<T> futures_util::future::future::FutureExt for zendriver::expect::download::DownloadExpectation where T: core::future::future::Future + ?core::marker::Sized
 impl<T> tokio_util::future::FutureExt for zendriver::expect::download::DownloadExpectation where T: core::future::future::Future + ?core::marker::Sized
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::download::DownloadExpectation where T: ?core::marker::Sized
-pub fn zendriver::expect::download::DownloadExpectation::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::expect::download::DownloadExpectation::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::download::DownloadExpectation::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::download::DownloadExpectation::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::expect::download::DownloadExpectation
 impl<T> tracing::instrument::WithSubscriber for zendriver::expect::download::DownloadExpectation
 impl<T> typenum::type_operators::Same for zendriver::expect::download::DownloadExpectation
@@ -6003,8 +6003,8 @@ pub unsafe fn zendriver::expect::download::DownloadState::clone_to_uninit(&self,
 impl<T> core::convert::From<T> for zendriver::expect::download::DownloadState
 pub fn zendriver::expect::download::DownloadState::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::download::DownloadState where T: ?core::marker::Sized
-pub fn zendriver::expect::download::DownloadState::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::expect::download::DownloadState::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::download::DownloadState::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::download::DownloadState::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::expect::download::DownloadState
 impl<T> tracing::instrument::WithSubscriber for zendriver::expect::download::DownloadState
 impl<T> typenum::type_operators::Same for zendriver::expect::download::DownloadState
@@ -6097,8 +6097,8 @@ pub unsafe fn zendriver::element::Element::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::element::Element
 pub fn zendriver::element::Element::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::element::Element where T: ?core::marker::Sized
-pub fn zendriver::element::Element::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::element::Element::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::element::Element::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::element::Element::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::element::Element
 impl<T> tracing::instrument::WithSubscriber for zendriver::element::Element
 impl<T> typenum::type_operators::Same for zendriver::element::Element
@@ -6159,8 +6159,8 @@ pub fn zendriver::query::FindBuilder<'scope>::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for zendriver::query::FindBuilder<'scope>
 pub fn zendriver::query::FindBuilder<'scope>::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::query::FindBuilder<'scope> where T: ?core::marker::Sized
-pub fn zendriver::query::FindBuilder<'scope>::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::query::FindBuilder<'scope>::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::query::FindBuilder<'scope>::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::query::FindBuilder<'scope>::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::query::FindBuilder<'scope>
 impl<T> tracing::instrument::WithSubscriber for zendriver::query::FindBuilder<'scope>
 impl<T> typenum::type_operators::Same for zendriver::query::FindBuilder<'scope>
@@ -6223,8 +6223,8 @@ pub unsafe fn zendriver::frame::Frame::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::frame::Frame
 pub fn zendriver::frame::Frame::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::frame::Frame where T: ?core::marker::Sized
-pub fn zendriver::frame::Frame::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::frame::Frame::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::frame::Frame::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::frame::Frame::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::frame::Frame
 impl<T> tracing::instrument::WithSubscriber for zendriver::frame::Frame
 impl<T> typenum::type_operators::Same for zendriver::frame::Frame
@@ -6276,8 +6276,8 @@ pub unsafe fn zendriver::tab::FrameResourceMatch::clone_to_uninit(&self, *mut u8
 impl<T> core::convert::From<T> for zendriver::tab::FrameResourceMatch
 pub fn zendriver::tab::FrameResourceMatch::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::tab::FrameResourceMatch where T: ?core::marker::Sized
-pub fn zendriver::tab::FrameResourceMatch::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::tab::FrameResourceMatch::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::FrameResourceMatch::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::FrameResourceMatch::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::tab::FrameResourceMatch
 impl<T> tracing::instrument::WithSubscriber for zendriver::tab::FrameResourceMatch
 impl<T> typenum::type_operators::Same for zendriver::tab::FrameResourceMatch
@@ -6324,8 +6324,8 @@ pub unsafe fn zendriver::tab::IdleOptions::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::tab::IdleOptions
 pub fn zendriver::tab::IdleOptions::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::tab::IdleOptions where T: ?core::marker::Sized
-pub fn zendriver::tab::IdleOptions::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::tab::IdleOptions::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::IdleOptions::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::IdleOptions::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::tab::IdleOptions
 impl<T> tracing::instrument::WithSubscriber for zendriver::tab::IdleOptions
 impl<T> typenum::type_operators::Same for zendriver::tab::IdleOptions
@@ -6456,8 +6456,8 @@ pub unsafe fn zendriver::input::keyboard::KeyModifiers::clone_to_uninit(&self, *
 impl<T> core::convert::From<T> for zendriver::input::keyboard::KeyModifiers
 pub fn zendriver::input::keyboard::KeyModifiers::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::input::keyboard::KeyModifiers where T: ?core::marker::Sized
-pub fn zendriver::input::keyboard::KeyModifiers::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::input::keyboard::KeyModifiers::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::keyboard::KeyModifiers::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::keyboard::KeyModifiers::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::input::keyboard::KeyModifiers
 impl<T> tracing::instrument::WithSubscriber for zendriver::input::keyboard::KeyModifiers
 impl<T> typenum::type_operators::Same for zendriver::input::keyboard::KeyModifiers
@@ -6506,8 +6506,8 @@ pub unsafe fn zendriver::input::keyboard::KeySequence::clone_to_uninit(&self, *m
 impl<T> core::convert::From<T> for zendriver::input::keyboard::KeySequence
 pub fn zendriver::input::keyboard::KeySequence::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::input::keyboard::KeySequence where T: ?core::marker::Sized
-pub fn zendriver::input::keyboard::KeySequence::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::input::keyboard::KeySequence::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::keyboard::KeySequence::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::input::keyboard::KeySequence::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::input::keyboard::KeySequence
 impl<T> tracing::instrument::WithSubscriber for zendriver::input::keyboard::KeySequence
 impl<T> typenum::type_operators::Same for zendriver::input::keyboard::KeySequence
@@ -6557,8 +6557,8 @@ pub unsafe fn zendriver::expect::dialog::MatchedDialog::clone_to_uninit(&self, *
 impl<T> core::convert::From<T> for zendriver::expect::dialog::MatchedDialog
 pub fn zendriver::expect::dialog::MatchedDialog::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::dialog::MatchedDialog where T: ?core::marker::Sized
-pub fn zendriver::expect::dialog::MatchedDialog::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::expect::dialog::MatchedDialog::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::dialog::MatchedDialog::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::dialog::MatchedDialog::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::expect::dialog::MatchedDialog
 impl<T> tracing::instrument::WithSubscriber for zendriver::expect::dialog::MatchedDialog
 impl<T> typenum::type_operators::Same for zendriver::expect::dialog::MatchedDialog
@@ -6609,8 +6609,8 @@ pub unsafe fn zendriver::expect::download::MatchedDownload::clone_to_uninit(&sel
 impl<T> core::convert::From<T> for zendriver::expect::download::MatchedDownload
 pub fn zendriver::expect::download::MatchedDownload::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::download::MatchedDownload where T: ?core::marker::Sized
-pub fn zendriver::expect::download::MatchedDownload::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::expect::download::MatchedDownload::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::download::MatchedDownload::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::download::MatchedDownload::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::expect::download::MatchedDownload
 impl<T> tracing::instrument::WithSubscriber for zendriver::expect::download::MatchedDownload
 impl<T> typenum::type_operators::Same for zendriver::expect::download::MatchedDownload
@@ -6657,8 +6657,8 @@ pub unsafe fn zendriver::expect::request::MatchedRequest::clone_to_uninit(&self,
 impl<T> core::convert::From<T> for zendriver::expect::request::MatchedRequest
 pub fn zendriver::expect::request::MatchedRequest::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::request::MatchedRequest where T: ?core::marker::Sized
-pub fn zendriver::expect::request::MatchedRequest::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::expect::request::MatchedRequest::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::request::MatchedRequest::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::request::MatchedRequest::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::expect::request::MatchedRequest
 impl<T> tracing::instrument::WithSubscriber for zendriver::expect::request::MatchedRequest
 impl<T> typenum::type_operators::Same for zendriver::expect::request::MatchedRequest
@@ -6707,8 +6707,8 @@ pub unsafe fn zendriver::expect::response::MatchedResponse::clone_to_uninit(&sel
 impl<T> core::convert::From<T> for zendriver::expect::response::MatchedResponse
 pub fn zendriver::expect::response::MatchedResponse::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::response::MatchedResponse where T: ?core::marker::Sized
-pub fn zendriver::expect::response::MatchedResponse::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::expect::response::MatchedResponse::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::response::MatchedResponse::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::response::MatchedResponse::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::expect::response::MatchedResponse
 impl<T> tracing::instrument::WithSubscriber for zendriver::expect::response::MatchedResponse
 impl<T> typenum::type_operators::Same for zendriver::expect::response::MatchedResponse
@@ -6743,8 +6743,8 @@ pub fn zendriver::monitor::MonitorBuilder::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for zendriver::monitor::MonitorBuilder
 pub fn zendriver::monitor::MonitorBuilder::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::monitor::MonitorBuilder where T: ?core::marker::Sized
-pub fn zendriver::monitor::MonitorBuilder::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::monitor::MonitorBuilder::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::MonitorBuilder::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::MonitorBuilder::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::monitor::MonitorBuilder
 impl<T> tracing::instrument::WithSubscriber for zendriver::monitor::MonitorBuilder
 impl<T> typenum::type_operators::Same for zendriver::monitor::MonitorBuilder
@@ -6790,8 +6790,8 @@ pub unsafe fn zendriver::monitor::MonitoredRequest::clone_to_uninit(&self, *mut 
 impl<T> core::convert::From<T> for zendriver::monitor::MonitoredRequest
 pub fn zendriver::monitor::MonitoredRequest::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::monitor::MonitoredRequest where T: ?core::marker::Sized
-pub fn zendriver::monitor::MonitoredRequest::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::monitor::MonitoredRequest::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::MonitoredRequest::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::MonitoredRequest::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::monitor::MonitoredRequest
 impl<T> tracing::instrument::WithSubscriber for zendriver::monitor::MonitoredRequest
 impl<T> typenum::type_operators::Same for zendriver::monitor::MonitoredRequest
@@ -6837,8 +6837,8 @@ pub unsafe fn zendriver::monitor::MonitoredResponse::clone_to_uninit(&self, *mut
 impl<T> core::convert::From<T> for zendriver::monitor::MonitoredResponse
 pub fn zendriver::monitor::MonitoredResponse::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::monitor::MonitoredResponse where T: ?core::marker::Sized
-pub fn zendriver::monitor::MonitoredResponse::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::monitor::MonitoredResponse::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::MonitoredResponse::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::MonitoredResponse::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::monitor::MonitoredResponse
 impl<T> tracing::instrument::WithSubscriber for zendriver::monitor::MonitoredResponse
 impl<T> typenum::type_operators::Same for zendriver::monitor::MonitoredResponse
@@ -6888,8 +6888,8 @@ pub unsafe fn zendriver::monitor::NetworkExchange::clone_to_uninit(&self, *mut u
 impl<T> core::convert::From<T> for zendriver::monitor::NetworkExchange
 pub fn zendriver::monitor::NetworkExchange::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::monitor::NetworkExchange where T: ?core::marker::Sized
-pub fn zendriver::monitor::NetworkExchange::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::monitor::NetworkExchange::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::NetworkExchange::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::NetworkExchange::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::monitor::NetworkExchange
 impl<T> tracing::instrument::WithSubscriber for zendriver::monitor::NetworkExchange
 impl<T> typenum::type_operators::Same for zendriver::monitor::NetworkExchange
@@ -6930,8 +6930,8 @@ impl<T> core::convert::From<T> for zendriver::monitor::NetworkMonitor
 pub fn zendriver::monitor::NetworkMonitor::from(T) -> T
 impl<T> futures_util::stream::stream::StreamExt for zendriver::monitor::NetworkMonitor where T: futures_core::stream::Stream + ?core::marker::Sized
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::monitor::NetworkMonitor where T: ?core::marker::Sized
-pub fn zendriver::monitor::NetworkMonitor::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::monitor::NetworkMonitor::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::NetworkMonitor::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::NetworkMonitor::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::monitor::NetworkMonitor
 impl<T> tracing::instrument::WithSubscriber for zendriver::monitor::NetworkMonitor
 impl<T> typenum::type_operators::Same for zendriver::monitor::NetworkMonitor
@@ -6983,8 +6983,8 @@ pub unsafe fn zendriver::query::PageBox::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::query::PageBox
 pub fn zendriver::query::PageBox::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::query::PageBox where T: ?core::marker::Sized
-pub fn zendriver::query::PageBox::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::query::PageBox::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::query::PageBox::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::query::PageBox::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::query::PageBox
 impl<T> tracing::instrument::WithSubscriber for zendriver::query::PageBox
 impl<T> typenum::type_operators::Same for zendriver::query::PageBox
@@ -7033,8 +7033,8 @@ pub fn zendriver::pdf::PdfBuilder<'tab>::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for zendriver::pdf::PdfBuilder<'tab>
 pub fn zendriver::pdf::PdfBuilder<'tab>::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::pdf::PdfBuilder<'tab> where T: ?core::marker::Sized
-pub fn zendriver::pdf::PdfBuilder<'tab>::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::pdf::PdfBuilder<'tab>::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::pdf::PdfBuilder<'tab>::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::pdf::PdfBuilder<'tab>::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::pdf::PdfBuilder<'tab>
 impl<T> tracing::instrument::WithSubscriber for zendriver::pdf::PdfBuilder<'tab>
 impl<T> typenum::type_operators::Same for zendriver::pdf::PdfBuilder<'tab>
@@ -7080,8 +7080,8 @@ pub unsafe fn zendriver::tab::ReloadOptions::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::tab::ReloadOptions
 pub fn zendriver::tab::ReloadOptions::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::tab::ReloadOptions where T: ?core::marker::Sized
-pub fn zendriver::tab::ReloadOptions::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::tab::ReloadOptions::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::ReloadOptions::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::ReloadOptions::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::tab::ReloadOptions
 impl<T> tracing::instrument::WithSubscriber for zendriver::tab::ReloadOptions
 impl<T> typenum::type_operators::Same for zendriver::tab::ReloadOptions
@@ -7125,8 +7125,8 @@ pub fn zendriver::request::RequestBuilder<'a>::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for zendriver::request::RequestBuilder<'a>
 pub fn zendriver::request::RequestBuilder<'a>::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::request::RequestBuilder<'a> where T: ?core::marker::Sized
-pub fn zendriver::request::RequestBuilder<'a>::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::request::RequestBuilder<'a>::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::request::RequestBuilder<'a>::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::request::RequestBuilder<'a>::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::request::RequestBuilder<'a>
 impl<T> tracing::instrument::WithSubscriber for zendriver::request::RequestBuilder<'a>
 impl<T> typenum::type_operators::Same for zendriver::request::RequestBuilder<'a>
@@ -7177,8 +7177,8 @@ pub fn zendriver::expect::request::RequestExpectation::from(T) -> T
 impl<T> futures_util::future::future::FutureExt for zendriver::expect::request::RequestExpectation where T: core::future::future::Future + ?core::marker::Sized
 impl<T> tokio_util::future::FutureExt for zendriver::expect::request::RequestExpectation where T: core::future::future::Future + ?core::marker::Sized
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::request::RequestExpectation where T: ?core::marker::Sized
-pub fn zendriver::expect::request::RequestExpectation::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::expect::request::RequestExpectation::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::request::RequestExpectation::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::request::RequestExpectation::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::expect::request::RequestExpectation
 impl<T> tracing::instrument::WithSubscriber for zendriver::expect::request::RequestExpectation
 impl<T> typenum::type_operators::Same for zendriver::expect::request::RequestExpectation
@@ -7216,8 +7216,8 @@ pub fn zendriver::request::Response::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for zendriver::request::Response
 pub fn zendriver::request::Response::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::request::Response where T: ?core::marker::Sized
-pub fn zendriver::request::Response::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::request::Response::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::request::Response::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::request::Response::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::request::Response
 impl<T> tracing::instrument::WithSubscriber for zendriver::request::Response
 impl<T> typenum::type_operators::Same for zendriver::request::Response
@@ -7268,8 +7268,8 @@ pub fn zendriver::expect::response::ResponseExpectation::from(T) -> T
 impl<T> futures_util::future::future::FutureExt for zendriver::expect::response::ResponseExpectation where T: core::future::future::Future + ?core::marker::Sized
 impl<T> tokio_util::future::FutureExt for zendriver::expect::response::ResponseExpectation where T: core::future::future::Future + ?core::marker::Sized
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::response::ResponseExpectation where T: ?core::marker::Sized
-pub fn zendriver::expect::response::ResponseExpectation::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::expect::response::ResponseExpectation::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::response::ResponseExpectation::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::response::ResponseExpectation::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::expect::response::ResponseExpectation
 impl<T> tracing::instrument::WithSubscriber for zendriver::expect::response::ResponseExpectation
 impl<T> typenum::type_operators::Same for zendriver::expect::response::ResponseExpectation
@@ -7314,8 +7314,8 @@ pub fn zendriver::screenshot::ScreenshotBuilder<'tab>::borrow_mut(&mut self) -> 
 impl<T> core::convert::From<T> for zendriver::screenshot::ScreenshotBuilder<'tab>
 pub fn zendriver::screenshot::ScreenshotBuilder<'tab>::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::screenshot::ScreenshotBuilder<'tab> where T: ?core::marker::Sized
-pub fn zendriver::screenshot::ScreenshotBuilder<'tab>::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::screenshot::ScreenshotBuilder<'tab>::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::screenshot::ScreenshotBuilder<'tab>::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::screenshot::ScreenshotBuilder<'tab>::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::screenshot::ScreenshotBuilder<'tab>
 impl<T> tracing::instrument::WithSubscriber for zendriver::screenshot::ScreenshotBuilder<'tab>
 impl<T> typenum::type_operators::Same for zendriver::screenshot::ScreenshotBuilder<'tab>
@@ -7362,8 +7362,8 @@ pub unsafe fn zendriver::tab::ScrollOptions::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::tab::ScrollOptions
 pub fn zendriver::tab::ScrollOptions::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::tab::ScrollOptions where T: ?core::marker::Sized
-pub fn zendriver::tab::ScrollOptions::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::tab::ScrollOptions::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::ScrollOptions::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::ScrollOptions::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::tab::ScrollOptions
 impl<T> tracing::instrument::WithSubscriber for zendriver::tab::ScrollOptions
 impl<T> typenum::type_operators::Same for zendriver::tab::ScrollOptions
@@ -7414,8 +7414,8 @@ pub unsafe fn zendriver::storage::Storage::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::storage::Storage
 pub fn zendriver::storage::Storage::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::storage::Storage where T: ?core::marker::Sized
-pub fn zendriver::storage::Storage::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::storage::Storage::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::storage::Storage::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::storage::Storage::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::storage::Storage
 impl<T> tracing::instrument::WithSubscriber for zendriver::storage::Storage
 impl<T> typenum::type_operators::Same for zendriver::storage::Storage
@@ -7546,8 +7546,8 @@ pub unsafe fn zendriver::tab::Tab::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::tab::Tab
 pub fn zendriver::tab::Tab::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::tab::Tab where T: ?core::marker::Sized
-pub fn zendriver::tab::Tab::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::tab::Tab::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::Tab::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::Tab::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::tab::Tab
 impl<T> tracing::instrument::WithSubscriber for zendriver::tab::Tab
 impl<T> typenum::type_operators::Same for zendriver::tab::Tab
@@ -7594,8 +7594,8 @@ pub unsafe fn zendriver::tab::UserAgentOverride::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::tab::UserAgentOverride
 pub fn zendriver::tab::UserAgentOverride::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::tab::UserAgentOverride where T: ?core::marker::Sized
-pub fn zendriver::tab::UserAgentOverride::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::tab::UserAgentOverride::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::UserAgentOverride::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::tab::UserAgentOverride::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::tab::UserAgentOverride
 impl<T> tracing::instrument::WithSubscriber for zendriver::tab::UserAgentOverride
 impl<T> typenum::type_operators::Same for zendriver::tab::UserAgentOverride
@@ -7652,8 +7652,8 @@ pub unsafe fn zendriver::window::WindowBounds::clone_to_uninit(&self, *mut u8)
 impl<T> core::convert::From<T> for zendriver::window::WindowBounds
 pub fn zendriver::window::WindowBounds::from(T) -> T
 impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::window::WindowBounds where T: ?core::marker::Sized
-pub fn zendriver::window::WindowBounds::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::window::WindowBounds::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::window::WindowBounds::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::window::WindowBounds::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
 impl<T> tracing::instrument::Instrument for zendriver::window::WindowBounds
 impl<T> tracing::instrument::WithSubscriber for zendriver::window::WindowBounds
 impl<T> typenum::type_operators::Same for zendriver::window::WindowBounds
