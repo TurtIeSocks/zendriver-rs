@@ -3,6 +3,18 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.4.4] - 2026-07-10
+
+### Added
+
+- Coherent chrome/webgl surface + screen geometry + pointer entropy
+
+### Fixed
+
+- Hide navigator.webdriver in the native profile
+- Install prototype overrides via defineProperty
+
+
 ## [0.4.3] - 2026-06-13
 
 

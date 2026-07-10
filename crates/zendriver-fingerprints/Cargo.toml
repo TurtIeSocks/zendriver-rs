@@ -1,7 +1,7 @@
 [package]
 name = "zendriver-fingerprints"
 description = "Real-device persona sources (pool + generative) for zendriver-rs"
-version = "0.2.5"
+version = "0.2.6"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
