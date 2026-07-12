@@ -301,19 +301,29 @@ impl<'tab> InterceptBuilder<'tab> {
     /// list would never fire.
     #[must_use = "interception stops when the handle is dropped — bind the returned InterceptHandle to keep it alive"]
     pub fn start(mut self) -> InterceptHandle {
-        if self.patterns.is_empty() && !self.rules.is_empty() {
-            // Rules need Chrome to actually pause requests, so a match-all
-            // pattern is required — without it `Fetch.enable` attaches to
-            // nothing and every rule is a silent no-op.
+        if self.patterns.is_empty() && (!self.rules.is_empty() || self.auth.is_some()) {
+            // A match-all pattern is required in two cases:
             //
-            // But when there are NO rules (the proxy/HTTP-auth-ONLY path),
-            // injecting "*" makes Chrome pause EVERY request and round-trip it
-            // through this single actor over one CDP socket — which distorts the
-            // timing/cadence of the page's own XHRs. Bot sensors (reese84 /
-            // Incapsula) read exactly that. So leave patterns empty here:
-            // `Fetch.enable { patterns: [], handleAuthRequests: true }` still
-            // surfaces `Fetch.authRequired` for 407 challenges (answered via
-            // continueWithAuth) while pausing zero requests.
+            // 1. Rules need Chrome to actually pause requests — without a
+            //    pattern `Fetch.enable` attaches to nothing and every rule is a
+            //    silent no-op.
+            // 2. `handleAuthRequests: true` (the proxy / HTTP-auth path):
+            //    Chrome (~M132+) REJECTS `Fetch.enable { patterns: [],
+            //    handleAuthRequests: true }` with CDP error -32602 "Can't
+            //    specify empty patterns with handleAuth set". Older Chrome
+            //    tolerated empty patterns — auth challenges still surfaced while
+            //    pausing zero requests — so we used to leave them empty on the
+            //    auth-ONLY path to avoid distorting the page's XHR cadence
+            //    (reese84 / Incapsula read it). Modern Chrome no longer permits
+            //    that, so a pattern is mandatory whenever auth handling is on.
+            //
+            // On the auth-only path this pauses (and immediately auto-continues
+            // — see `handle_paused`'s no-match arm) every request. If that
+            // per-request CDP round-trip regresses a timing-sensitive bot
+            // sensor, a caller can register an explicit narrower pattern (e.g.
+            // `resource_type: Document`, so only the main navigation — which
+            // carries the first proxy 407 — is paused), at the risk of missing
+            // 407s on parallel proxy connections.
             self.patterns.push(RequestPattern {
                 url_pattern: Some("*".into()),
                 ..RequestPattern::default()
@@ -553,6 +563,47 @@ mod tests {
         mock.reply(enable_id, json!({})).await;
 
         // Drop the handle to tear down; we don't need to observe the disable.
+        drop(handle);
+        conn.shutdown();
+    }
+
+    /// Regression guard for the "empty patterns with handleAuth" breakage: the
+    /// proxy / HTTP-auth-ONLY path (`handle_auth`, no rules, no explicit
+    /// pattern) must still send a NON-empty `patterns` on `Fetch.enable`.
+    /// Modern Chrome (~M132+) rejects `{ patterns: [], handleAuthRequests:
+    /// true }` with CDP -32602 ("Can't specify empty patterns with handleAuth
+    /// set"), which silently disables proxy-auth handling and 407s every
+    /// navigation. `start()` must inject a match-all `"*"` and set
+    /// `handleAuthRequests`.
+    #[tokio::test]
+    async fn start_auth_only_sends_match_all_pattern_with_handle_auth() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+
+        let handle = InterceptBuilder::new(&sess)
+            .handle_auth("puser", "ppass")
+            .start();
+
+        let enable_id =
+            tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Fetch.enable"))
+                .await
+                .expect("actor did not send Fetch.enable within 2s");
+        let params = mock.last_sent()["params"].clone();
+        assert_eq!(
+            params["handleAuthRequests"], true,
+            "auth-only path must enable auth handling"
+        );
+        let arr = params["patterns"]
+            .as_array()
+            .expect("patterns must be a JSON array");
+        assert_eq!(
+            arr.len(),
+            1,
+            "auth-only must send exactly one match-all pattern, never an empty array"
+        );
+        assert_eq!(arr[0]["urlPattern"], "*");
+        mock.reply(enable_id, json!({})).await;
+
         drop(handle);
         conn.shutdown();
     }
