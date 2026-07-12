@@ -23,15 +23,15 @@ authors = ["zendriver-rs contributors"]
 
 [workspace.dependencies]
 # Internal
-zendriver               = { path = "crates/zendriver", version = "0.2.17", default-features = false }
+zendriver               = { path = "crates/zendriver", version = "0.2.18", default-features = false }
 zendriver-transport     = { path = "crates/zendriver-transport", version = "0.1.6" }
 zendriver-stealth       = { path = "crates/zendriver-stealth", version = "0.4.5" }
 zendriver-cloudflare    = { path = "crates/zendriver-cloudflare", version = "0.2.2" }
-zendriver-interception  = { path = "crates/zendriver-interception", version = "0.3.3" }
+zendriver-interception  = { path = "crates/zendriver-interception", version = "0.3.4" }
 zendriver-fetcher       = { path = "crates/zendriver-fetcher", version = "0.1.5" }
-zendriver-mcp           = { path = "crates/zendriver-mcp", version = "0.6.5" }
-zendriver-imperva       = { path = "crates/zendriver-imperva", version = "0.2.4" }
-zendriver-datadome      = { path = "crates/zendriver-datadome", version = "0.1.5" }
+zendriver-mcp           = { path = "crates/zendriver-mcp", version = "0.6.6" }
+zendriver-imperva       = { path = "crates/zendriver-imperva", version = "0.2.5" }
+zendriver-datadome      = { path = "crates/zendriver-datadome", version = "0.1.6" }
 zendriver-fingerprints  = { path = "crates/zendriver-fingerprints", version = "0.2.7" }
 
 # MCP server
