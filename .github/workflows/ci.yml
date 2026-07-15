@@ -158,6 +158,45 @@ jobs:
           Write-Host "Using preinstalled Chrome $version at $chrome"
       - run: cargo nextest run --workspace --features integration-tests --locked --profile ci-integration -E '${{ matrix.filter }}'
 
+  # Aggregate gate. The branch ruleset requires a status check named exactly
+  # `test-integration`; a matrix job never provides one, because GitHub appends
+  # the matrix values to the job name. So the legs above report as
+  # `test-integration (ubuntu-latest, kind(test))` and
+  # `test-integration (windows-latest, binary_id(...))`, and the bare name
+  # simply does not exist.
+  #
+  # Converting `test-integration` from a single job into a matrix (0d83a585)
+  # therefore deleted the very check the ruleset requires, deadlocking every PR
+  # that carries the change: both legs go green, and the merge stays blocked
+  # forever on "Expected — Waiting for status to be reported". This job restores
+  # that name.
+  #
+  # Prefer this over pinning the ruleset to the expanded leg names, which
+  # re-breaks the moment any matrix value changes — and the windows `filter` is
+  # expected to change if that leg is ever widened to `kind(test)`.
+  test-integration-gate:
+    name: test-integration
+    needs: test-integration
+    # Not stylistic. Without `always()`, a FAILED leg skips this job, and a
+    # skipped check never reports a failure — the gate would fall silent in
+    # exactly the case it exists to catch, which is worse than no gate at all.
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every integration leg to have succeeded
+        run: |
+          set -euo pipefail
+          result='${{ needs.test-integration.result }}'
+          echo "test-integration matrix aggregate result: ${result}"
+          # For a matrix dependency this is `success` only when EVERY leg
+          # succeeded. Treat everything else -- failure, cancelled, and skipped
+          # -- as blocking: a leg that silently stops running must not read as
+          # a pass.
+          if [ "${result}" != 'success' ]; then
+            echo "::error::integration matrix did not succeed (result=${result})"
+            exit 1
+          fi
+
   nightly-stealth-tests:
     if: github.event_name == 'schedule' && github.event.schedule == '0 6 * * *'
     runs-on: ubuntu-latest
