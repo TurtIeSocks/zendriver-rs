@@ -847,6 +847,7 @@ pub zendriver::error::BrowserError::ExecutableNotFound::searched: alloc::vec::Ve
 pub zendriver::error::BrowserError::ExtensionLoad
 pub zendriver::error::BrowserError::ExtensionLoad::path: std::path::PathBuf
 pub zendriver::error::BrowserError::ExtensionLoad::reason: alloc::string::String
+pub zendriver::error::BrowserError::HandshakeTimeout
 pub zendriver::error::BrowserError::SpawnFailed(std::io::error::Error)
 pub zendriver::error::BrowserError::WsTimeout
 impl core::convert::From<zendriver::error::BrowserError> for zendriver::error::ZendriverError
@@ -4331,6 +4332,7 @@ pub zendriver::BrowserError::ExecutableNotFound::searched: alloc::vec::Vec<std::
 pub zendriver::BrowserError::ExtensionLoad
 pub zendriver::BrowserError::ExtensionLoad::path: std::path::PathBuf
 pub zendriver::BrowserError::ExtensionLoad::reason: alloc::string::String
+pub zendriver::BrowserError::HandshakeTimeout
 pub zendriver::BrowserError::SpawnFailed(std::io::error::Error)
 pub zendriver::BrowserError::WsTimeout
 impl core::convert::From<zendriver::error::BrowserError> for zendriver::error::ZendriverError
