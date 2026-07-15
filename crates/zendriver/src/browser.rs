@@ -120,6 +120,12 @@ pub fn find_chrome_executable_for_channel(channel: Channel) -> Result<PathBuf, B
 /// install dir), followed by the per-OS conventional install locations for
 /// the requested channel. Factored out (and `pub(crate)`) so unit tests can
 /// assert the table without requiring the browser installed.
+///
+/// On Windows the machine-wide `Program Files` locations are listed ahead of
+/// the per-user `%LOCALAPPDATA%` ones: callers take the first candidate that
+/// *exists*, so a machine with a system-wide install resolves exactly as it
+/// always has, and the per-user path is reached only where discovery would
+/// otherwise have found nothing.
 pub(crate) fn candidate_paths_for_channel(channel: Channel) -> Vec<PathBuf> {
     let mut v = Vec::new();
 
@@ -205,20 +211,43 @@ pub(crate) fn candidate_paths_for_channel(channel: Channel) -> Vec<PathBuf> {
             r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
             r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
         ];
+
+        // Per-user installs live under `%LOCALAPPDATA%` — where Chrome's
+        // installer puts it whenever it runs without admin rights, which is the
+        // common outcome on a locked-down or personal desktop. Only the two
+        // `Program Files` (machine-wide) locations were ever checked, so on such
+        // a machine discovery found nothing and `launch()` failed unless the
+        // caller happened to set an explicit `chrome_path` / `CHROME_BIN`.
+        //
+        // `None` when the variable is unset (a service account, a stripped
+        // environment), in which case the table is simply what it was before.
+        let local_app_data = std::env::var_os("LOCALAPPDATA")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from);
+
         match channel {
             Channel::Chrome | Channel::Chromium | Channel::Auto => {
                 for p in chrome {
                     v.push(PathBuf::from(p));
+                }
+                if let Some(local) = &local_app_data {
+                    v.push(local.join(r"Google\Chrome\Application\chrome.exe"));
                 }
             }
             Channel::Brave => {
                 for p in brave {
                     v.push(PathBuf::from(p));
                 }
+                if let Some(local) = &local_app_data {
+                    v.push(local.join(r"BraveSoftware\Brave-Browser\Application\brave.exe"));
+                }
             }
             Channel::Edge => {
                 for p in edge {
                     v.push(PathBuf::from(p));
+                }
+                if let Some(local) = &local_app_data {
+                    v.push(local.join(r"Microsoft\Edge\Application\msedge.exe"));
                 }
             }
         }
@@ -4166,6 +4195,49 @@ mod tests {
                 .all(|p| p.to_string_lossy().to_lowercase().contains("edge")),
             "every Edge candidate path should reference Edge: {paths:?}"
         );
+    }
+
+    /// A non-admin Chrome installs itself under `%LOCALAPPDATA%`, which the
+    /// candidate table never checked — so discovery found nothing on such a
+    /// box and `launch()` failed unless an explicit path was configured.
+    ///
+    /// Ordering is the other half of the contract: callers take the first
+    /// candidate that *exists*, so the machine-wide `Program Files` entries
+    /// must stay ahead of the per-user one. This is purely a fallback for
+    /// machines that had no answer before; it must never re-point a machine
+    /// that already resolves a system-wide install.
+    ///
+    /// Reads the ambient `LOCALAPPDATA` rather than setting it: `set_var` is
+    /// `unsafe` in edition 2024 and the workspace denies `unsafe_code`. Windows
+    /// always defines it, so the guard is a formality there.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_chrome_candidates_include_the_per_user_install_after_program_files() {
+        let Some(local) = std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()) else {
+            return;
+        };
+        let local = PathBuf::from(local);
+
+        let paths = candidate_paths_for_channel(Channel::Chrome);
+        let per_user = local.join(r"Google\Chrome\Application\chrome.exe");
+
+        let per_user_at = paths.iter().position(|p| *p == per_user);
+        assert!(
+            per_user_at.is_some(),
+            "the per-user %LOCALAPPDATA% chrome.exe must be a candidate: {paths:?}",
+        );
+
+        let program_files_at = paths
+            .iter()
+            .position(|p| p.to_string_lossy().contains(r"Program Files\Google"));
+        if let (Some(system), Some(user)) = (program_files_at, per_user_at) {
+            assert!(
+                system < user,
+                "machine-wide Program Files must be tried before the per-user \
+                 install, or a box with both would change which binary it \
+                 launches: {paths:?}",
+            );
+        }
     }
 
     #[test]
