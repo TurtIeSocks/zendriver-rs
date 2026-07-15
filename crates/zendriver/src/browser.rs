@@ -1404,12 +1404,27 @@ impl TargetObserver for TabRegistrar {
                 // auto-opens when the last user tab closes, devtools://, etc).
                 // These aren't pages the caller drove zendriver to create and
                 // would inflate `tab_count` / `tabs()` with unwanted entries.
+                //
+                // Skipping the *registry* is right; skipping it **silently**
+                // was not. A chrome-scheme page Chrome opened on its own is a
+                // real window: it is invisible to `Browser::tabs()`, so no
+                // caller can close it, and `close()` only kills the tracked
+                // PID — on Windows that leaves it orphaned on screen. This is
+                // one of the two live candidates for the double-window
+                // symptom, so make it observable rather than inferring it from
+                // a screenshot.
                 let url = &session.target_info.url;
                 if url.starts_with("chrome://")
                     || url.starts_with("devtools://")
                     || url.starts_with("chrome-extension://")
                     || url.starts_with("chrome-untrusted://")
                 {
+                    warn!(
+                        url = %url,
+                        target_id = %session.target_info.target_id,
+                        "chrome opened an internal page on its own; not tracked as a tab \
+                         (if a stray window is visible, this is it)",
+                    );
                     return Ok(());
                 }
                 let conn = session.connection().clone();
@@ -1671,16 +1686,39 @@ pub(crate) async fn finish_connect(
 
     // Discover the initial target via Target.getTargets (prefer a page).
     let list = conn.call_raw("Target.getTargets", json!({}), None).await?;
-    let target_id = list["targetInfos"]
-        .as_array()
-        .and_then(|arr| {
-            arr.iter()
-                .find(|t| t["type"] == "page")
-                .or_else(|| arr.first())
-        })
+    let no_targets = Vec::new();
+    let targets = list["targetInfos"].as_array().unwrap_or(&no_targets);
+    // Preference rule (unchanged): the first page target, else the first
+    // target of any type.
+    let target_id = targets
+        .iter()
+        .find(|t| t["type"] == "page")
+        .or_else(|| targets.first())
         .and_then(|t| t["targetId"].as_str())
         .ok_or_else(|| ZendriverError::Navigation("no initial target found".into()))?
         .to_string();
+
+    // Every *other* page target is a window we are not driving. Chrome opens
+    // some on its own (a Windows first-run window, a `chrome://newtab/`), and
+    // `.find()`-ing one target used to silently discard the rest: invisible to
+    // `Browser::tabs()`, and closed by nothing — `close()` only ever killed the
+    // one tracked PID. Collect them now, sweep them once we are attached.
+    //
+    // Only for a Chrome we spawned. On the `connect` path those extra pages are
+    // the user's own tabs in their own browser; closing them would be
+    // destructive and is emphatically not ours to do. Non-page targets (workers,
+    // etc.) are never swept — they are not windows.
+    let strays: Vec<String> = if owns_process {
+        targets
+            .iter()
+            .filter(|t| t["type"] == "page")
+            .filter_map(|t| t["targetId"].as_str())
+            .filter(|id| *id != target_id)
+            .map(str::to_string)
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     // Attach to the initial target. This triggers `Target.attachedToTarget`
     // which the actor routes through observers (`on_target_attached`) and
@@ -1702,6 +1740,21 @@ pub(crate) async fn finish_connect(
         .as_str()
         .ok_or_else(|| ZendriverError::Navigation("attach returned no sessionId".into()))?
         .to_string();
+
+    // Sweep the stray windows now that our own tab is safely attached.
+    // Best-effort: a stray we cannot close is worth a warning, not a failed
+    // launch — the caller has a perfectly usable browser either way.
+    for stray in strays {
+        match conn
+            .call_raw("Target.closeTarget", json!({ "targetId": stray }), None)
+            .await
+        {
+            Ok(_) => debug!(target_id = %stray, "closed stray page target at connect"),
+            Err(e) => {
+                warn!(target_id = %stray, error = %e, "could not close stray page target");
+            }
+        }
+    }
 
     // Wrap session in Tab; build BrowserInner via the canonical
     // `Arc::new_cyclic` self-referential pattern.
@@ -5229,6 +5282,239 @@ mod tests {
         assert!(
             !sent.iter().any(|m| m == "Browser.close"),
             "close() on an attached browser must never quit the user's Chrome; sent: {sent:?}",
+        );
+    }
+
+    /// T3: when Chrome hands back more than one page target, `finish_connect`
+    /// used to `.find()` the first and silently discard the rest — leaving
+    /// every extra window open, untracked by `Browser::tabs()`, and closable by
+    /// nothing. Exactly one attach, and every other page swept.
+    #[tokio::test]
+    async fn finish_connect_attaches_one_page_and_closes_every_other() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+        let fut = tokio::spawn(finish_connect(FinishConnect {
+            conn,
+            registrar,
+            input_profile,
+            child: ChildSlot::default(),
+            owned_tmp: None,
+            extension_dirs: Vec::new(),
+            debug_host_port: None,
+            ws_url: None,
+            owns_process: true,
+            #[cfg(feature = "tracker-blocking")]
+            tracker_matcher: None,
+        }));
+
+        let id = mock.expect_cmd("Target.setAutoAttach").await;
+        mock.reply(id, json!({})).await;
+
+        // Two page targets — the double-window symptom.
+        let id = mock.expect_cmd("Target.getTargets").await;
+        mock.reply(
+            id,
+            json!({ "targetInfos": [
+                { "targetId": "T1", "type": "page", "url": "about:blank" },
+                { "targetId": "T2", "type": "page", "url": "chrome://newtab/" },
+            ] }),
+        )
+        .await;
+
+        // The preference rule is unchanged: the first page wins.
+        let id = mock.expect_cmd("Target.attachToTarget").await;
+        assert_eq!(mock.last_sent()["params"]["targetId"], "T1");
+        mock.reply(id, json!({ "sessionId": "S1" })).await;
+
+        // The loser is closed, not abandoned.
+        let id = mock.expect_cmd("Target.closeTarget").await;
+        assert_eq!(
+            mock.last_sent()["params"]["targetId"],
+            "T2",
+            "the non-chosen page target must be swept",
+        );
+        mock.reply(id, json!({ "success": true })).await;
+
+        let inner = fut.await.unwrap().unwrap();
+        assert!(inner.tabs.read().await.contains_key("S1"));
+
+        // Exactly one attach and one close — no second attach, no sweep of the
+        // target we are driving.
+        let mut attaches = 0;
+        let mut closes = 0;
+        while let Some((method, _)) = mock.try_recv_cmd() {
+            match method.as_str() {
+                "Target.attachToTarget" => attaches += 1,
+                "Target.closeTarget" => closes += 1,
+                _ => {}
+            }
+        }
+        assert_eq!(attaches, 0, "no attach beyond the chosen target");
+        assert_eq!(closes, 0, "no close beyond the single extra page");
+
+        inner.conn.shutdown();
+    }
+
+    /// T3: a lone page target is the normal case — nothing to sweep, and the
+    /// sweep must not close the target we just attached to.
+    #[tokio::test]
+    async fn finish_connect_sweeps_nothing_when_there_is_one_page() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+        let fut = tokio::spawn(finish_connect(FinishConnect {
+            conn,
+            registrar,
+            input_profile,
+            child: ChildSlot::default(),
+            owned_tmp: None,
+            extension_dirs: Vec::new(),
+            debug_host_port: None,
+            ws_url: None,
+            owns_process: true,
+            #[cfg(feature = "tracker-blocking")]
+            tracker_matcher: None,
+        }));
+
+        let id = mock.expect_cmd("Target.setAutoAttach").await;
+        mock.reply(id, json!({})).await;
+        let id = mock.expect_cmd("Target.getTargets").await;
+        mock.reply(
+            id,
+            json!({ "targetInfos": [
+                { "targetId": "T1", "type": "page", "url": "about:blank" },
+                // A non-page target must never be swept — it is not a window.
+                { "targetId": "W1", "type": "service_worker", "url": "https://x.test/sw.js" },
+            ] }),
+        )
+        .await;
+        let id = mock.expect_cmd("Target.attachToTarget").await;
+        mock.reply(id, json!({ "sessionId": "S1" })).await;
+
+        // Bounded for the same reason: sweeping the worker (or the page we just
+        // attached to) would block on a reply that never comes.
+        let inner = timeout(Duration::from_secs(5), fut)
+            .await
+            .expect("finish_connect must not block sweeping a non-page target")
+            .unwrap()
+            .unwrap();
+
+        let mut closes = Vec::new();
+        while let Some((method, _)) = mock.try_recv_cmd() {
+            if method == "Target.closeTarget" {
+                closes.push(mock.last_sent()["params"]["targetId"].clone());
+            }
+        }
+        assert!(
+            closes.is_empty(),
+            "a single page (plus a worker) must trigger no sweep; closed: {closes:?}",
+        );
+        inner.conn.shutdown();
+    }
+
+    /// T3 safety: the sweep must never run on the `connect` path. Those extra
+    /// pages are the user's own tabs in their own browser — closing them would
+    /// be destructive and is not ours to do. `finish_connect` is shared between
+    /// `launch` and `connect`, so this is gated on `owns_process`, not implied.
+    #[tokio::test]
+    async fn finish_connect_never_sweeps_tabs_of_a_browser_it_did_not_spawn() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+        let fut = tokio::spawn(finish_connect(FinishConnect {
+            conn,
+            registrar,
+            input_profile,
+            child: ChildSlot::default(),
+            owned_tmp: None,
+            extension_dirs: Vec::new(),
+            debug_host_port: None,
+            ws_url: None,
+            // Attached, not spawned — this is the user's Chrome.
+            owns_process: false,
+            #[cfg(feature = "tracker-blocking")]
+            tracker_matcher: None,
+        }));
+
+        let id = mock.expect_cmd("Target.setAutoAttach").await;
+        mock.reply(id, json!({})).await;
+        let id = mock.expect_cmd("Target.getTargets").await;
+        mock.reply(
+            id,
+            json!({ "targetInfos": [
+                { "targetId": "T1", "type": "page", "url": "https://mail.test/" },
+                { "targetId": "T2", "type": "page", "url": "https://docs.test/" },
+                { "targetId": "T3", "type": "page", "url": "https://news.test/" },
+            ] }),
+        )
+        .await;
+        let id = mock.expect_cmd("Target.attachToTarget").await;
+        mock.reply(id, json!({ "sessionId": "S1" })).await;
+
+        // Bounded: a sweep here would block on a `closeTarget` reply the mock
+        // never sends, so a regression must fail cleanly rather than hang.
+        let inner = timeout(Duration::from_secs(5), fut)
+            .await
+            .expect("finish_connect must not block sweeping tabs it does not own")
+            .unwrap()
+            .unwrap();
+
+        let mut closes = Vec::new();
+        while let Some((method, _)) = mock.try_recv_cmd() {
+            if method == "Target.closeTarget" {
+                closes.push(mock.last_sent()["params"]["targetId"].clone());
+            }
+        }
+        assert!(
+            closes.is_empty(),
+            "connect() must not close the user's tabs; closed: {closes:?}",
+        );
+        inner.conn.shutdown();
+    }
+
+    /// T3: no targets at all still fails cleanly — the sweep rework must not
+    /// turn "nothing to attach to" into a panic or a hang.
+    #[tokio::test]
+    async fn finish_connect_errors_cleanly_on_empty_get_targets() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+        let fut = tokio::spawn(finish_connect(FinishConnect {
+            conn,
+            registrar,
+            input_profile,
+            child: ChildSlot::default(),
+            owned_tmp: None,
+            extension_dirs: Vec::new(),
+            debug_host_port: None,
+            ws_url: None,
+            owns_process: true,
+            #[cfg(feature = "tracker-blocking")]
+            tracker_matcher: None,
+        }));
+
+        let id = mock.expect_cmd("Target.setAutoAttach").await;
+        mock.reply(id, json!({})).await;
+        let id = mock.expect_cmd("Target.getTargets").await;
+        mock.reply(id, json!({ "targetInfos": [] })).await;
+
+        let err = fut.await.unwrap().unwrap_err();
+        assert!(
+            matches!(err, ZendriverError::Navigation(ref m) if m.contains("no initial target")),
+            "expected a clean Navigation error, got {err:?}",
         );
     }
 
