@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-07-15
+
+### Fixed
+
+- Bound every CDP call, not just the launch handshake
+
+
 ## [0.1.6] - 2026-06-13
 
 

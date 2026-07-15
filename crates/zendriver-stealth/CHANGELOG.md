@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.4.6] - 2026-07-15
+
+### Fixed
+
+- Stop exec'ing `chrome --version` on Windows, where it never exits
+
+
 ## [0.4.5] - 2026-07-10
 
 ### Fixed

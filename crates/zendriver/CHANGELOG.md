@@ -5,6 +5,25 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.19] - 2026-07-15
+
+### Added
+
+- Resolve the WS endpoint from DevToolsActivePort as a fallback
+- Discover per-user %LOCALAPPDATA% chrome installs on windows
+
+### Fixed
+
+- Bound the CDP handshake and kill the child on timeout
+- Send CDP Browser.close before falling back to signals
+- Sweep stray page targets instead of silently discarding them
+- Kill chrome's whole process tree via a windows job object
+- Gate the owning-browser test helper to unix like its callers
+- Bound every CDP call, not just the launch handshake
+- Stop exec'ing `chrome --version` on Windows, where it never exits
+- Stop crying wolf on the initial target attach
+
+
 ## [0.2.18] - 2026-07-12
 
 

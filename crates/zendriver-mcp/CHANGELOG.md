@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.6.7] - 2026-07-15
+
+### Fixed
+
+- Bound every CDP call, not just the launch handshake
+
+
 ## [0.6.6] - 2026-07-12
 
 
