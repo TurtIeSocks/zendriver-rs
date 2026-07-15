@@ -1497,6 +1497,90 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 /// How long [`resolve_ws_from_http`] waits for the `/json/version` round-trip.
 const JSON_VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Budget for everything *after* Chrome advertises its WS endpoint: the
+/// WebSocket dial plus the initial `Target.setAutoAttach` / `Target.getTargets`
+/// / `Target.attachToTarget` round-trips.
+///
+/// Before this existed, every step past the `WS_ENDPOINT_TIMEOUT`-guarded
+/// stderr read was unbounded, so a Chrome whose CDP responder was slow or
+/// wedged hung `launch()` **forever** — no error, no retry. Bounding it turns
+/// that invisible hang into a retryable [`BrowserError::HandshakeTimeout`].
+///
+/// **PROVISIONAL.** 30s is a deliberately generous placeholder chosen to sit
+/// well clear of a warm handshake (single-digit milliseconds against a local
+/// socket) while still bounding the pathological case. It is **not** yet
+/// calibrated against a real measurement: the motivating failure is a Windows
+/// *cold* start (first launch of an OS session, before GPU/DXGI/DWM bring-up
+/// and any Defender first-run scan of `chrome.exe` are paid), which cannot be
+/// measured from the macOS/Linux dev boxes this was written on. Re-tune once a
+/// cold Windows 11 launch has been timed; prefer raising it over lowering it,
+/// since a false timeout costs a whole retried launch while a slow success
+/// costs only latency.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The freshly-spawned Chrome process, shared between [`guard_handshake`] and
+/// [`finish_connect`].
+///
+/// Shared rather than moved because ownership has to survive a *dropped*
+/// future: [`finish_connect`] installs the child on [`BrowserInner`] only after
+/// its CDP round-trips succeed, so when the handshake budget expires mid-flight
+/// the guard must still be able to reach the child and kill it. A plain
+/// `Option<Child>` moved into the handshake future would vanish with it,
+/// leaving the orphan `chrome.exe` this type exists to prevent.
+///
+/// `std::sync::Mutex` (not tokio's) is deliberate: the only operation is a
+/// non-blocking `take()`, never held across an `.await`.
+pub(crate) type ChildSlot = Arc<std::sync::Mutex<Option<Child>>>;
+
+/// Run the post-endpoint handshake under `budget`, guaranteeing that a launch
+/// which times out leaves no orphan Chrome behind.
+///
+/// `handshake` is the WS dial + [`finish_connect`] sequence. On expiry the
+/// future is dropped (cancelling the in-flight CDP call) and any child still
+/// parked in `child_slot` is killed **and reaped** before returning, so the
+/// process is gone by the time the caller sees the error rather than whenever
+/// tokio's orphan queue next runs.
+///
+/// The `kill_on_drop(true)` set at spawn stays as a backstop for the narrow
+/// window after [`finish_connect`] has moved the child onto `BrowserInner` (the
+/// `Arc<BrowserInner>` then drops with the future, and
+/// [`Drop for BrowserInner`] relies on `kill_on_drop`). The explicit kill here
+/// covers the whole span before that — which is where every CDP round-trip,
+/// and therefore every realistic stall, actually lives.
+///
+/// # Errors
+///
+/// Returns [`BrowserError::HandshakeTimeout`] when `budget` expires; otherwise
+/// passes the handshake's own result through untouched.
+pub(crate) async fn guard_handshake<F>(
+    budget: Duration,
+    child_slot: &ChildSlot,
+    handshake: F,
+) -> Result<Arc<BrowserInner>, ZendriverError>
+where
+    F: std::future::Future<Output = Result<Arc<BrowserInner>, ZendriverError>>,
+{
+    match timeout(budget, handshake).await {
+        Ok(res) => res,
+        Err(_elapsed) => {
+            let orphan = child_slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if let Some(mut child) = orphan {
+                warn!(
+                    budget = ?budget,
+                    "chrome CDP handshake exceeded its budget; killing the spawned child",
+                );
+                // `kill()` is start_kill + wait, so the process is reaped
+                // before we return — no zombie, no orphan.
+                let _ = child.kill().await;
+            }
+            Err(BrowserError::HandshakeTimeout.into())
+        }
+    }
+}
+
 /// Inputs to [`finish_connect`] — the post-connect handshake shared by
 /// [`BrowserBuilder::launch`] (spawn) and [`BrowserBuilder::connect`]
 /// (attach). Bundled into a struct to keep the function signature readable
@@ -1511,8 +1595,11 @@ pub(crate) struct FinishConnect {
     pub(crate) registrar: Arc<TabRegistrar>,
     /// Per-tab input profile cached on `BrowserInner` for new-tab construction.
     pub(crate) input_profile: zendriver_stealth::InputProfile,
-    /// Owned Chrome child process — `Some` for `launch`, `None` for `connect`.
-    pub(crate) child: Option<Child>,
+    /// The spawned Chrome process — occupied for `launch`, empty for `connect`
+    /// (which attaches to a process it does not own). Taken out of the slot and
+    /// installed on [`BrowserInner`] once the handshake succeeds; see
+    /// [`ChildSlot`] for why this is shared rather than moved.
+    pub(crate) child: ChildSlot,
     /// Owned `user_data_dir` tempdir — `Some` only when `launch` allocated one.
     pub(crate) owned_tmp: Option<TempDir>,
     /// Tempdirs for any `.crx` extensions `launch` unzipped. Empty for
@@ -1624,7 +1711,16 @@ pub(crate) async fn finish_connect(
         BrowserInner {
             conn,
             main_tab,
-            child: tokio::sync::Mutex::new(child),
+            // Take ownership of the child only now, once every CDP round-trip
+            // has succeeded. Until this point `guard_handshake` owns the
+            // cleanup: if the budget expires mid-handshake the child is still
+            // in the slot and gets killed there.
+            child: tokio::sync::Mutex::new(
+                child
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take(),
+            ),
             _user_data: owned_tmp,
             _extension_dirs: extension_dirs,
             owns_process,
@@ -2069,11 +2165,7 @@ impl BrowserBuilder {
         .await
         .map_err(|_| BrowserError::WsTimeout)??;
 
-        // 7. Connect with observers.
-        debug!(ws_url = %ws_url, "connecting to chrome");
-        let conn = zendriver_transport::connect_with_observers(&ws_url, observers).await?;
-
-        // 8–12. Shared post-connect handshake (auto-attach, main-tab
+        // 7–12. WS dial + shared post-connect handshake (auto-attach, main-tab
         // discovery + attach, BrowserInner construction, registrar wiring).
         // Identical for spawn (`launch`) and attach (`connect`); the only
         // differences are the owned `Child` / `TempDir` we hand it and the
@@ -2081,18 +2173,31 @@ impl BrowserBuilder {
         #[cfg(feature = "tracker-blocking")]
         let tracker_matcher = self.build_tracker_matcher().await?;
 
-        let inner = finish_connect(FinishConnect {
-            conn,
-            registrar,
-            input_profile,
-            child: Some(child),
-            owned_tmp,
-            extension_dirs,
-            debug_host_port: debug_host_port_from_ws(&ws_url),
-            ws_url: Some(ws_url),
-            owns_process: true,
-            #[cfg(feature = "tracker-blocking")]
-            tracker_matcher,
+        // Everything from here to a live `BrowserInner` runs under a single
+        // budget. `WS_ENDPOINT_TIMEOUT` above only guards Chrome *advertising*
+        // its endpoint; the dial and the CDP round-trips that follow used to be
+        // unbounded, so a Chrome that came up but never answered CDP hung
+        // `launch()` forever. `guard_handshake` bounds them and kills the
+        // child we spawned on expiry, so a failed launch is retryable and
+        // leaves no orphan `chrome.exe`.
+        let child_slot: ChildSlot = Arc::new(std::sync::Mutex::new(Some(child)));
+        let inner = guard_handshake(HANDSHAKE_TIMEOUT, &child_slot, async {
+            debug!(ws_url = %ws_url, "connecting to chrome");
+            let conn = zendriver_transport::connect_with_observers(&ws_url, observers).await?;
+            finish_connect(FinishConnect {
+                conn,
+                registrar,
+                input_profile,
+                child: child_slot.clone(),
+                owned_tmp,
+                extension_dirs,
+                debug_host_port: debug_host_port_from_ws(&ws_url),
+                ws_url: Some(ws_url.clone()),
+                owns_process: true,
+                #[cfg(feature = "tracker-blocking")]
+                tracker_matcher,
+            })
+            .await
         })
         .await?;
 
@@ -2249,7 +2354,7 @@ impl BrowserBuilder {
             conn,
             registrar,
             input_profile,
-            child: None,
+            child: ChildSlot::default(),
             owned_tmp: None,
             extension_dirs: Vec::new(),
             debug_host_port: debug_host_port_from_ws(&ws_url),
@@ -4644,7 +4749,7 @@ mod tests {
                 conn,
                 registrar,
                 input_profile,
-                child: None,
+                child: ChildSlot::default(),
                 owned_tmp: None,
                 extension_dirs: Vec::new(),
                 debug_host_port: debug_host_port_from_ws(
@@ -4714,7 +4819,7 @@ mod tests {
                 conn,
                 registrar,
                 input_profile,
-                child: None,
+                child: ChildSlot::default(),
                 owned_tmp: None,
                 extension_dirs: Vec::new(),
                 debug_host_port: None,
@@ -4744,6 +4849,143 @@ mod tests {
         // close() on a non-owning browser: shuts the transport, skips the
         // kill path entirely. No panic, no hang, returns Ok.
         browser.close().await.unwrap();
+    }
+
+    /// Build a `finish_connect` future wired to a mock Chrome that never
+    /// answers a single CDP command — the exact shape of the symptom-1 stall
+    /// (Chrome printed its WS endpoint, then its CDP responder went silent).
+    /// Returns the mock, which the caller MUST hold alive: dropping it closes
+    /// the transport and drains in-flight calls, turning the hang into a
+    /// prompt `Disconnected` and defeating the test.
+    fn never_answering_handshake(
+        child: ChildSlot,
+    ) -> (
+        zendriver_transport::testing::MockConnection,
+        impl std::future::Future<Output = Result<Arc<BrowserInner>, ZendriverError>>,
+    ) {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+        let fut = finish_connect(FinishConnect {
+            conn,
+            registrar,
+            input_profile,
+            child,
+            owned_tmp: None,
+            extension_dirs: Vec::new(),
+            debug_host_port: None,
+            ws_url: None,
+            owns_process: true,
+            #[cfg(feature = "tracker-blocking")]
+            tracker_matcher: None,
+        });
+        (mock, fut)
+    }
+
+    /// T1: a handshake that never completes must surface the dedicated
+    /// `HandshakeTimeout` — NOT `WsTimeout` (the endpoint was fine) and not an
+    /// infinite hang, which is the bug this replaces.
+    #[tokio::test]
+    async fn handshake_timeout_reports_handshake_timeout_within_budget() {
+        let slot: ChildSlot = ChildSlot::default();
+        let (_mock, fut) = never_answering_handshake(slot.clone());
+
+        let budget = Duration::from_millis(150);
+        let started = std::time::Instant::now();
+        let err = guard_handshake(budget, &slot, fut).await.unwrap_err();
+
+        assert!(
+            matches!(err, ZendriverError::Browser(BrowserError::HandshakeTimeout)),
+            "expected HandshakeTimeout, got {err:?}",
+        );
+        assert!(
+            started.elapsed() < budget * 20,
+            "must fail inside the budget, took {:?}",
+            started.elapsed(),
+        );
+    }
+
+    /// T1, the load-bearing half: a launch whose handshake times out must
+    /// leave **no orphan `chrome.exe`**. The child is spawned exactly the way
+    /// `launch` spawns Chrome (`kill_on_drop(true)`), parked in the same
+    /// `ChildSlot` the real handshake uses, and must be dead — not merely
+    /// dropped-and-maybe-reaped-later — by the time the guard returns.
+    ///
+    /// Unix-only because the liveness probe is `kill(pid, 0)`; the
+    /// slot-drained assertion above covers the cross-platform contract.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn handshake_timeout_leaves_no_orphan_child() {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("300")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let child = cmd.spawn().expect("spawn stand-in child");
+        let pid = child.id().expect("child has a pid") as i32;
+
+        // Sanity: the stand-in is actually running before we start.
+        #[allow(unsafe_code)]
+        let alive_before = unsafe { libc::kill(pid, 0) } == 0;
+        assert!(alive_before, "stand-in child should be alive pre-handshake");
+
+        let slot: ChildSlot = Arc::new(std::sync::Mutex::new(Some(child)));
+        let (_mock, fut) = never_answering_handshake(slot.clone());
+
+        let err = guard_handshake(Duration::from_millis(150), &slot, fut)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ZendriverError::Browser(BrowserError::HandshakeTimeout)
+        ));
+
+        // The guard must have taken the child out of the slot...
+        assert!(
+            slot.lock().unwrap().is_none(),
+            "guard must drain the child slot",
+        );
+        // ...and reaped it, so the pid is gone (ESRCH), not a live orphan and
+        // not a zombie waiting on tokio's orphan queue.
+        #[allow(unsafe_code)]
+        let alive_after = unsafe { libc::kill(pid, 0) } == 0;
+        assert!(
+            !alive_after,
+            "handshake timeout must leave no orphan chrome process (pid {pid} still alive)",
+        );
+    }
+
+    /// T1: the guard is transparent on the happy path — a handshake that
+    /// completes inside the budget returns its `BrowserInner` untouched, and
+    /// `finish_connect` (not the guard) owns the child by then.
+    #[tokio::test]
+    async fn guard_handshake_passes_through_a_successful_handshake() {
+        let slot: ChildSlot = ChildSlot::default();
+        let (mut mock, fut) = never_answering_handshake(slot.clone());
+
+        let guarded = tokio::spawn({
+            let slot = slot.clone();
+            async move { guard_handshake(Duration::from_secs(30), &slot, fut).await }
+        });
+
+        let id = mock.expect_cmd("Target.setAutoAttach").await;
+        mock.reply(id, json!({})).await;
+        let id = mock.expect_cmd("Target.getTargets").await;
+        mock.reply(
+            id,
+            json!({ "targetInfos": [{ "targetId": "T1", "type": "page", "url": "about:blank" }] }),
+        )
+        .await;
+        let id = mock.expect_cmd("Target.attachToTarget").await;
+        mock.reply(id, json!({ "sessionId": "S1" })).await;
+
+        let inner = guarded.await.unwrap().expect("handshake should succeed");
+        assert!(inner.tabs.read().await.contains_key("S1"));
+        inner.conn.shutdown();
     }
 
     #[test]

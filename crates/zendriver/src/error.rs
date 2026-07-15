@@ -285,6 +285,19 @@ pub enum BrowserError {
     #[error("timed out waiting for chrome WS endpoint")]
     WsTimeout,
 
+    /// Chrome printed its WS endpoint (or wrote `DevToolsActivePort`) but the
+    /// post-endpoint handshake — the WebSocket dial plus the initial
+    /// `Target.setAutoAttach` / `Target.getTargets` / `Target.attachToTarget`
+    /// round-trips — did not complete within the handshake budget.
+    ///
+    /// Distinct from [`BrowserError::WsTimeout`], which means the endpoint
+    /// itself never appeared. Here Chrome *started* but its CDP responder went
+    /// unresponsive, historically hanging `launch()` forever. The spawned
+    /// Chrome process is terminated before this error is returned, so a failed
+    /// launch leaves no orphan process and the call is safe to retry.
+    #[error("timed out during chrome CDP handshake")]
+    HandshakeTimeout,
+
     /// Stderr contained an unparseable DevTools URL line.
     #[error("could not parse devtools endpoint from chrome stderr")]
     DevtoolsParse,
