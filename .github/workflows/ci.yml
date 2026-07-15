@@ -67,40 +67,42 @@ jobs:
           # Linux is the reference platform: run everything.
           - os: ubuntu-latest
             filter: 'kind(test)'
-          # Windows runs exactly ONE test binary, and that is deliberate.
+          # Windows runs exactly ONE test binary, and that is deliberate —
+          # though NOT for the reason this comment used to give.
           #
-          # Chrome on the windows-latest runner cannot complete a loopback
-          # fetch from a `wiremock::MockServer`. Every test backed by that
-          # fixture hangs in `tab.goto(&mock.uri())` / `wait_for_load` until
-          # something kills it. This is not a launch problem — Chrome starts
-          # fine there and the 30s `HANDSHAKE_TIMEOUT` never fires — and it is
-          # not a headed-vs-headless problem either; these tests are headless.
-          # It is the runner's loopback networking, which we do not control.
+          # Corrected history. This filter was added on the theory that Chrome
+          # on windows-latest cannot complete a loopback fetch from a
+          # `wiremock::MockServer`, inferred from a first run that spent 4966s
+          # (~83 min) with 4 wiremock-backed tests timing out. That theory was
+          # WRONG, and the allowlist did not help: a later run had all 3
+          # network-free `prerelease_verification` tests time out at 360s too,
+          # having emitted nothing at all.
           #
-          # The first windows-latest run proved the cost: 4966s (~83 min) to
-          # run 4 of 175 tests, all 4 timing out, the other 171 never reached.
-          # An unfiltered leg burns the entire job budget without ever
-          # executing the tests Windows is here for.
+          # The actual cause was `zendriver-stealth`'s Chrome version probe
+          # exec'ing `chrome.exe --version` from inside `launch()`. Windows
+          # Chrome has no POSIX print-and-exit for `--version` (upstream gates
+          # it on `#if BUILDFLAG(IS_POSIX)`); with no existing browser session
+          # to hand off to it starts a whole browser that never exits, and the
+          # blocking `Command::output()` waits forever. Being a blocking call
+          # inside the launch future, it also wedged the poll — which is why no
+          # timeout ever fired and the hang was silent. EVERY test hung there,
+          # before touching a socket. Fixed by reading the PE version resource
+          # instead of executing anything.
           #
-          # What Windows is here for is `prerelease_verification`: it needs no
-          # network (about:blank only) and it locks the two things that are
-          # genuinely OS-specific — Chrome *discovery* (finding chrome.exe at
-          # all) and the orphan/zombie process class from upstream
+          # So loopback on this runner is UNVERIFIED, not broken — no test ever
+          # got far enough to exercise it. Widening to `kind(test)` is now
+          # plausible and worth measuring, but do it as its own change and watch
+          # the clock: `.config/nextest.toml` bounds a hung test at 3 x 6 min,
+          # which across 175 tests is still a job-budget fire if loopback does
+          # turn out to be genuinely broken.
+          #
+          # Keeping the allowlist meanwhile is cheap and keeps this leg aimed at
+          # what Windows is actually here for: `prerelease_verification` locks
+          # the two genuinely OS-specific things — Chrome *discovery* (finding
+          # chrome.exe at all) and the orphan/zombie process class from upstream
           # cdpdriver/zendriver#33 + #198, via
           # `repeated_launch_close_leaves_no_orphan_chrome_processes`, which
-          # launches real Chrome 25x and diffs the system PID set. Those are
-          # the bugs this branch exists to fix and the ones most likely to
-          # regress on Windows specifically.
-          #
-          # This is an ALLOWLIST, not a denylist, on purpose: a new
-          # wiremock-backed test added to any other binary can never silently
-          # re-stall this leg. The residual gap is a wiremock fixture added
-          # *inside* prerelease_verification.rs — that file carries a comment
-          # saying don't, because it is the Windows allowlist.
-          #
-          # Do not widen this back to `kind(test)` without first proving
-          # loopback works on the runner. You will rediscover an 83-minute
-          # stall.
+          # launches real Chrome 25x and diffs the system PID set.
           - os: windows-latest
             filter: 'binary_id(zendriver::prerelease_verification)'
     runs-on: ${{ matrix.os }}

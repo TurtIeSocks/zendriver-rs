@@ -80,11 +80,12 @@ impl UserAgentMetadata {
 }
 
 use std::path::Path;
+#[cfg(not(windows))]
 use std::process::Command;
 
 use crate::error::StealthError;
 
-/// Default Chrome version used when `chrome --version` probe fails.
+/// Default Chrome version used when the version probe fails.
 /// Bump on each release of zendriver-rs.
 const FALLBACK_CHROME_FULL: &str = "148.0.7778.181";
 const FALLBACK_CHROME_MAJOR: u32 = 148;
@@ -167,20 +168,11 @@ pub(crate) fn detect_platform() -> Platform {
     }
 }
 
+/// Parse `Google Chrome 120.0.6099.234` / `Chromium 120.0.6099.0` into
+/// `(major, full)`. Shared by the Unix probe and its tests.
+#[cfg(not(windows))]
 #[allow(clippy::result_large_err)]
-pub(crate) fn probe_chrome_version(exe: &Path) -> Result<(u32, String), StealthError> {
-    let output = Command::new(exe)
-        .arg("--version")
-        .output()
-        .map_err(|e| StealthError::ChromeVersionDetect(format!("spawn failed: {e}")))?;
-    if !output.status.success() {
-        return Err(StealthError::ChromeVersionDetect(format!(
-            "exit {:?}",
-            output.status.code()
-        )));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    // Format: "Google Chrome 120.0.6099.234" (sometimes "Chromium 120.0.6099.0")
+fn parse_version_banner(stdout: &str) -> Result<(u32, String), StealthError> {
     let full = stdout
         .split_whitespace()
         .find(|tok| tok.chars().next().is_some_and(|c| c.is_ascii_digit()))
@@ -192,6 +184,185 @@ pub(crate) fn probe_chrome_version(exe: &Path) -> Result<(u32, String), StealthE
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| StealthError::ChromeVersionDetect(format!("bad major in: {full}")))?;
     Ok((major, full))
+}
+
+/// Probe the Chrome version by running `chrome --version`.
+///
+/// Unix-only *by design*. Chrome on Windows does not implement `--version` as a
+/// print-and-exit: with no existing browser session it starts a whole browser
+/// and never exits, so reading its output blocks forever. See the `cfg(windows)`
+/// twin below for what Windows does instead, and why it must not exec.
+///
+/// Bounded even here. `--version` returns in milliseconds on a healthy Unix
+/// Chrome, but this runs *synchronously inside* `Browser::launch()`'s future:
+/// an unbounded wait would wedge the poll, and a future that never yields
+/// starves the tokio timer driver — which silently disables every
+/// `tokio::time::timeout` in the process, including the ones meant to catch
+/// exactly this. A blocking call on the async path must carry its own deadline,
+/// because no outer timeout can rescue it.
+#[cfg(not(windows))]
+#[allow(clippy::result_large_err)]
+pub(crate) fn probe_chrome_version(exe: &Path) -> Result<(u32, String), StealthError> {
+    use std::io::Read;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    /// Generous: a healthy `chrome --version` answers in ~50ms. This is a
+    /// backstop against a wedged binary, not a performance budget.
+    const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+    const POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+    let mut child = Command::new(exe)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| StealthError::ChromeVersionDetect(format!("spawn failed: {e}")))?;
+
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    // Reap rather than leak: kill_on_drop is not in play here.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(StealthError::ChromeVersionDetect(format!(
+                        "`--version` did not exit within {PROBE_TIMEOUT:?}"
+                    )));
+                }
+                std::thread::sleep(POLL_INTERVAL);
+            }
+            Err(e) => {
+                return Err(StealthError::ChromeVersionDetect(format!(
+                    "wait failed: {e}"
+                )));
+            }
+        }
+    };
+    if !status.success() {
+        return Err(StealthError::ChromeVersionDetect(format!(
+            "exit {:?}",
+            status.code()
+        )));
+    }
+
+    let mut stdout = String::new();
+    child
+        .stdout
+        .take()
+        .ok_or_else(|| StealthError::ChromeVersionDetect("no stdout pipe".to_string()))?
+        .read_to_string(&mut stdout)
+        .map_err(|e| StealthError::ChromeVersionDetect(format!("read stdout: {e}")))?;
+    parse_version_banner(&stdout)
+}
+
+/// Probe the Chrome version by reading the binary's own PE version resource.
+///
+/// **Never exec Chrome to ask its version on Windows.** `chrome.exe --version`
+/// is not the Unix print-and-exit: with no existing browser session to hand off
+/// to, it launches a full browser (GPU + network service + crashpad children)
+/// and never exits. `Command::output()` waits for the child to exit *and* for
+/// its stdout/stderr to hit EOF, so it blocks forever.
+///
+/// That block is what made this pathological rather than merely slow. The call
+/// sits synchronously inside `Browser::launch()`'s future, so the task never
+/// yields; `tokio::time::timeout` can only cancel at an await point, leaving
+/// every guard in the launch path — `WS_ENDPOINT_TIMEOUT` (15s),
+/// `HANDSHAKE_TIMEOUT` (30s) — structurally unable to fire. The result was an
+/// infinite, *silent* hang: on windows-latest CI all three
+/// `prerelease_verification` tests timed out at 360s having emitted nothing.
+///
+/// It hides on dev machines because a developer usually has Chrome already
+/// open, and `--version` then hands off to the running instance
+/// ("Opening in existing browser session.") and exits in milliseconds. It only
+/// bites where no session exists — i.e. exactly on CI.
+///
+/// A version is a static property of the file, so read it from the file. This
+/// parses the documented `VS_FIXEDFILEINFO` block, which keeps the crate's
+/// `unsafe_code = "deny"` intact and adds no dependency.
+#[cfg(windows)]
+#[allow(clippy::result_large_err)]
+pub(crate) fn probe_chrome_version(exe: &Path) -> Result<(u32, String), StealthError> {
+    let bytes = std::fs::read(exe)
+        .map_err(|e| StealthError::ChromeVersionDetect(format!("read {}: {e}", exe.display())))?;
+    parse_pe_file_version(&bytes).ok_or_else(|| {
+        StealthError::ChromeVersionDetect(format!(
+            "no VS_FIXEDFILEINFO version resource in {}",
+            exe.display()
+        ))
+    })
+}
+
+/// Find the first occurrence of `needle` in `haystack`.
+#[cfg(windows)]
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// Extract `(major, "a.b.c.d")` from a PE image's `VS_FIXEDFILEINFO`.
+///
+/// Anchors on the UTF-16LE `VS_VERSION_INFO` key, then reads the `0xFEEF04BD`
+/// signature that opens the fixed-info block a few bytes later. Layout
+/// (little-endian): `+0` signature, `+8` dwFileVersionMS, `+12` dwFileVersionLS,
+/// each packing two 16-bit fields as `high.low`.
+///
+/// Both halves of that search are load-bearing, and real `chrome.exe` punishes
+/// getting either wrong:
+///
+/// - **Anchor on the key, not the signature.** The signature is only four bytes
+///   and does occur by chance in a multi-megabyte image: Chrome 150 carries one
+///   at file offset ~2.79M, ~475KB *before* the resource, which decodes to
+///   nonsense (`9340.36168.8075.18720`).
+/// - **Try every key match, not just the first.** Chrome's `.rdata` contains the
+///   literal text `VS_VERSION_INFO` — error strings from Chrome's *own* resource
+///   parser ("unexpected VS_VERSIONINFO in ") — ~645KB before the genuine
+///   resource. The first match is therefore a decoy with no signature after it;
+///   only a later one is real. Scanning all matches and keeping the first that
+///   is actually followed by a signature tolerates any number of such decoys.
+#[cfg(windows)]
+fn parse_pe_file_version(bytes: &[u8]) -> Option<(u32, String)> {
+    const SIGNATURE: [u8; 4] = 0xFEEF_04BDu32.to_le_bytes();
+    /// The signature sits just past the key + NUL + 32-bit alignment padding
+    /// (34 bytes in practice). Bounding the search is what makes a decoy match
+    /// fail fast and fall through to the next candidate.
+    const SIG_SEARCH_WINDOW: usize = 64;
+
+    let key: Vec<u8> = "VS_VERSION_INFO"
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+
+    let mut search_from = 0usize;
+    while let Some(rel) = find_bytes(bytes.get(search_from..)?, &key) {
+        let anchor = search_from + rel + key.len();
+        let window_end = anchor.saturating_add(SIG_SEARCH_WINDOW).min(bytes.len());
+
+        if let Some(sig) = bytes
+            .get(anchor..window_end)
+            .and_then(|w| find_bytes(w, &SIGNATURE))
+            .map(|sig_rel| anchor + sig_rel)
+        {
+            let word = |off: usize| -> Option<u32> {
+                Some(u32::from_le_bytes(
+                    bytes.get(sig + off..sig + off + 4)?.try_into().ok()?,
+                ))
+            };
+            let ms = word(8)?;
+            let ls = word(12)?;
+            let major = ms >> 16;
+            // A zero major means we locked onto something that is not a version
+            // block; keep looking rather than reporting `0.x.y.z`.
+            if major != 0 {
+                let full = format!("{}.{}.{}.{}", major, ms & 0xFFFF, ls >> 16, ls & 0xFFFF);
+                return Some((major, full));
+            }
+        }
+        search_from += rel + 1;
+    }
+    None
 }
 
 pub(crate) fn clamp_cpu_count(n: u32) -> u32 {
@@ -225,6 +396,123 @@ fn round_to_navigator_memory(gb: u32) -> u32 {
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    /// The version probe must never *execute* Chrome on Windows: with no
+    /// existing browser session `chrome.exe --version` starts a browser that
+    /// never exits, and because the probe is called synchronously from inside
+    /// `Browser::launch()`'s future it wedges the poll — starving the tokio
+    /// timer so that no `timeout` anywhere in the launch path can fire. That
+    /// shipped as a silent, infinite hang on windows-latest CI.
+    ///
+    /// Reading a real on-disk PE (this test binary itself) proves the parser
+    /// works against a genuine version resource and needs no Chrome installed.
+    #[cfg(windows)]
+    #[test]
+    fn probes_windows_version_from_pe_resource_without_executing() {
+        let exe = std::env::current_exe().unwrap();
+        let bytes = std::fs::read(&exe).unwrap();
+        // Rust test binaries carry a version resource only when built with one,
+        // so tolerate absence; what must never happen is a *wrong* parse.
+        if let Some((major, full)) = parse_pe_file_version(&bytes) {
+            assert!(
+                full.split('.').count() == 4,
+                "expected a 4-part version, got {full:?}"
+            );
+            assert_eq!(
+                major,
+                full.split('.').next().unwrap().parse::<u32>().unwrap(),
+                "major must be the first component of {full:?}"
+            );
+        }
+    }
+
+    /// Locks the `VS_FIXEDFILEINFO` field packing (`high.low` per dword) against
+    /// a synthetic resource, so the bit-twiddling is verified without depending
+    /// on whatever Chrome happens to be installed on the test host.
+    #[cfg(windows)]
+    #[test]
+    fn parses_fixed_file_info_field_packing() {
+        let mut buf: Vec<u8> = Vec::new();
+        buf.extend_from_slice(&[0xAA; 128]); // leading noise
+        buf.extend("VS_VERSION_INFO".encode_utf16().flat_map(u16::to_le_bytes));
+        buf.extend_from_slice(&[0x00, 0x00]); // NUL + padding to the signature
+        buf.extend_from_slice(&0xFEEF_04BDu32.to_le_bytes()); // dwSignature
+        buf.extend_from_slice(&0x0001_0000u32.to_le_bytes()); // dwStrucVersion
+        // Each dword packs `high.low`: MS = 150.0, LS = 7871.114.
+        buf.extend_from_slice(&(150u32 << 16).to_le_bytes());
+        buf.extend_from_slice(&((7871u32 << 16) | 114).to_le_bytes());
+
+        assert_eq!(
+            parse_pe_file_version(&buf),
+            Some((150, "150.0.7871.114".to_string()))
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pe_version_parse_rejects_image_without_version_resource() {
+        assert_eq!(parse_pe_file_version(&[0x00; 512]), None);
+    }
+
+    /// Real `chrome.exe` carries the literal `VS_VERSION_INFO` in `.rdata`
+    /// (error text from Chrome's own resource parser) ~645KB before the genuine
+    /// resource. Anchoring on the *first* match alone finds no signature and
+    /// silently falls back to the baked-in version — which is precisely the
+    /// wrong-version bug this probe exists to fix. Every match must be tried.
+    #[cfg(windows)]
+    #[test]
+    fn pe_version_parse_skips_decoy_key_without_signature() {
+        let key: Vec<u8> = "VS_VERSION_INFO"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+
+        let mut buf: Vec<u8> = Vec::new();
+        // Decoy #1: the key as plain string data, followed by prose rather than
+        // a signature (mirrors Chrome's "unexpected VS_VERSIONINFO in " text).
+        buf.extend_from_slice(&key);
+        buf.extend_from_slice(b"\0\0unexpected VS_VERSIONINFO in \0");
+        buf.extend_from_slice(&[0xCC; 96]);
+        // The genuine resource.
+        buf.extend_from_slice(&key);
+        buf.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // NUL + alignment padding
+        buf.extend_from_slice(&0xFEEF_04BDu32.to_le_bytes());
+        buf.extend_from_slice(&0x0001_0000u32.to_le_bytes());
+        buf.extend_from_slice(&(150u32 << 16).to_le_bytes());
+        buf.extend_from_slice(&((7871u32 << 16) | 114).to_le_bytes());
+
+        assert_eq!(
+            parse_pe_file_version(&buf),
+            Some((150, "150.0.7871.114".to_string())),
+            "must skip the decoy key and find the real resource behind it"
+        );
+    }
+
+    /// A bare `0xFEEF04BD` occurring in code/data must never be mistaken for the
+    /// version block. Chrome 150 really does contain one ~475KB before the
+    /// resource, decoding to `9340.36168.8075.18720`.
+    #[cfg(windows)]
+    #[test]
+    fn pe_version_parse_ignores_stray_signature_without_key() {
+        let mut buf: Vec<u8> = Vec::new();
+        buf.extend_from_slice(&0xFEEF_04BDu32.to_le_bytes());
+        buf.extend_from_slice(&[0xEF; 32]);
+        assert_eq!(parse_pe_file_version(&buf), None);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn parses_chrome_and_chromium_version_banners() {
+        assert_eq!(
+            parse_version_banner("Google Chrome 120.0.6099.234\n").unwrap(),
+            (120, "120.0.6099.234".to_string())
+        );
+        assert_eq!(
+            parse_version_banner("Chromium 120.0.6099.0\n").unwrap(),
+            (120, "120.0.6099.0".to_string())
+        );
+        assert!(parse_version_banner("Opening in existing browser session.\n").is_err());
+    }
 
     #[test]
     fn realistic_uam_macintel_chrome_120_matches_snapshot() {
