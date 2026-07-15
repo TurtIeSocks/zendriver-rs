@@ -49,14 +49,29 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --doc --locked
 
+  # The only job that runs real-Chrome tests on more than one OS. Windows is
+  # included deliberately: the Chrome *process lifecycle* (spawn, CDP
+  # handshake, teardown of the process tree) is where this library's
+  # platform-specific behavior actually lives, and it went untested on
+  # Windows long enough to ship four lifecycle bugs. Kept to this job alone —
+  # the nightly stealth/cloudflare/imperva suites stay Linux-only, since they
+  # probe remote anti-bot services rather than OS process semantics and
+  # Windows runner minutes bill at a premium.
   test-integration:
-    runs-on: ubuntu-latest
+    strategy:
+      # Windows is the newest, least-proven leg. A failure there must not
+      # cancel the Linux run we depend on for signal.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
       - name: Ensure Chrome available (preinstalled or apt fallback)
+        if: runner.os == 'Linux'
         run: |
           set -euo pipefail
           if command -v google-chrome >/dev/null 2>&1; then
@@ -71,6 +86,27 @@ jobs:
             sudo apt-get install -y chromium-browser
             chromium-browser --version
           fi
+      # windows-latest ships Google Chrome preinstalled, so there is no
+      # install fallback to make. Assert it up front anyway: if the runner
+      # image ever drops it, fail here with a clear reason instead of as an
+      # opaque discovery error inside every test.
+      - name: Ensure Chrome available (preinstalled)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $candidates = @(
+            "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+            "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
+            "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe"
+          )
+          $chrome = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $chrome) {
+            Write-Host "::error::No chrome.exe in any location zendriver discovers."
+            $candidates | ForEach-Object { Write-Host "  looked in: $_" }
+            exit 1
+          }
+          $version = (Get-Item $chrome).VersionInfo.ProductVersion
+          Write-Host "Using preinstalled Chrome $version at $chrome"
       - run: cargo nextest run --workspace --features integration-tests --locked --profile ci-integration -E 'kind(test)'
 
   nightly-stealth-tests:
