@@ -104,7 +104,7 @@ jobs:
           # `repeated_launch_close_leaves_no_orphan_chrome_processes`, which
           # launches real Chrome 25x and diffs the system PID set.
           - os: windows-latest
-            filter: 'binary_id(zendriver::prerelease_verification)'
+            filter: 'kind(test)'
     runs-on: ${{ matrix.os }}
     # Backstop only -- the per-test `slow-timeout` in .config/nextest.toml is
     # what actually names a stuck test. This exists so a hang that escapes it
