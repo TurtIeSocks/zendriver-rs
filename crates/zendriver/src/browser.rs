@@ -1220,6 +1220,18 @@ pub(crate) struct BrowserInner {
     pub(crate) conn: Connection,
     pub(crate) main_tab: Tab,
     pub(crate) child: tokio::sync::Mutex<Option<Child>>,
+    /// Windows job object confining Chrome's whole process tree; a zero-sized
+    /// no-op elsewhere. Killing the tracked `child` alone is not enough on
+    /// Windows — nothing reaps its renderer/GPU/utility/crashpad children — so
+    /// `close()` closes this job and `Drop` closes it implicitly. See
+    /// [`ProcessJob`].
+    ///
+    /// Read only from `close()`'s `cfg(not(unix))` branch, so on Unix it is
+    /// genuinely never read — it still drops with the struct, which is the only
+    /// thing that matters there. The allow is scoped to `unix` rather than
+    /// blanket so that a Windows build still reports it if it ever goes unused.
+    #[cfg_attr(unix, allow(dead_code))]
+    pub(crate) job: ProcessJob,
     pub(crate) _user_data: Option<TempDir>,
     /// Tempdirs holding `.crx` extensions unzipped at launch. Held here so the
     /// extracted unpacked directories outlive the Chrome process that was
@@ -1349,6 +1361,7 @@ pub(crate) fn test_only_inner_from_conn(conn: Connection) -> Arc<BrowserInner> {
             conn,
             main_tab,
             child: tokio::sync::Mutex::new(None),
+            job: ProcessJob::none(),
             _user_data: None,
             _extension_dirs: Vec::new(),
             owns_process: false,
@@ -1586,6 +1599,202 @@ const JSON_VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 /// costs only latency.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// [`CREATE_NEW_PROCESS_GROUP`][1] — spawn Chrome as the root of its own
+/// process group so a console `Ctrl+C` is not delivered to it.
+///
+/// Without this, `Ctrl+C` in a terminal running a zendriver program goes to
+/// every process in the console's group, Chrome included: Chrome starts tearing
+/// itself down at the same moment our own handler starts an orchestrated
+/// shutdown, and the two race. With it, the `Ctrl+C` reaches only our process
+/// and Chrome goes down the one way we control — CDP quit, then the job object.
+///
+/// Declared locally rather than pulled from a `windows`-crate dependency: it is
+/// a single stable ABI constant, and the alternative is a heavyweight dep for
+/// one `u32`. `std` ORs its own required `CREATE_UNICODE_ENVIRONMENT` into
+/// whatever is passed here, so this does not clobber it.
+///
+/// [1]: https://learn.microsoft.com/en-us/windows/win32/procthread/process-creation-flags
+#[cfg(windows)]
+const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+
+/// A Windows [job object][1] holding the launched Chrome **and every process it
+/// spawns**, so the whole tree can be terminated as one unit.
+///
+/// # Why this exists
+///
+/// Windows has no parent→child reaping. `close()` tracks exactly one `Child` —
+/// the `chrome.exe` that `Command::spawn` returned — but Chrome's renderer, GPU,
+/// utility and crashpad-handler processes are spawned *by that chrome.exe*, and
+/// `TerminateProcess` against the parent does nothing to them. They survive as
+/// orphans that no code path in this crate can ever reach. Unix is spared only
+/// because SIGTERM triggers Chrome's own handler, which cascades the shutdown
+/// itself.
+///
+/// A job object is the OS-level fix: processes assigned to a job are joined by
+/// every process *they* subsequently spawn, and
+/// `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` terminates all of them the moment the
+/// last handle to the job closes. That "last handle closes" wording is doing
+/// more work than it looks: it holds even when *this* process dies abruptly —
+/// a panic, a `SIGKILL`, an end-task from Task Manager — because Windows closes
+/// our handles as part of tearing us down. The Chrome tree cannot outlive its
+/// owner even when the owner never gets to run cleanup code. That self-healing
+/// property is most of the value here, so [`kill_tree`](Self::kill_tree) is an
+/// optimization for the orderly path rather than the mechanism itself.
+///
+/// # Non-Windows
+///
+/// A zero-sized no-op. Kept as a real (non-`cfg`-gated) field on
+/// [`BrowserInner`] rather than a `#[cfg(windows)]` one so that the struct has
+/// the same shape on every platform: the ~10 construction sites, the tests
+/// among them, then compile identically everywhere, and a macOS `cargo check`
+/// still type-checks the plumbing. Only the internals are conditional.
+///
+/// [1]: https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects
+pub(crate) struct ProcessJob {
+    /// `Some` only for a Windows `launch()` whose assignment succeeded.
+    /// `Mutex` because the kill happens through `&self` (via `Arc<BrowserInner>`)
+    /// and has to *take* the job to drop it; `std::sync` because the only
+    /// operation is a non-blocking `take()`, never held across an `.await`.
+    #[cfg(windows)]
+    job: std::sync::Mutex<Option<win32job::Job>>,
+}
+
+impl ProcessJob {
+    /// A handle that confines nothing: `connect()` (we do not own the process),
+    /// every non-Windows platform, and the fallback when confinement fails.
+    pub(crate) fn none() -> Self {
+        Self {
+            #[cfg(windows)]
+            job: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Confine `child` — and everything it goes on to spawn — to a fresh job
+    /// object that kills the lot when its last handle closes.
+    ///
+    /// **Never fails.** Assignment is legitimately refused in environments we do
+    /// not control (an outer job that forbids nesting, some sandboxes and CI
+    /// containers), and a browser that cannot be confined is still a perfectly
+    /// usable browser. Any error is logged and degrades to [`Self::none`],
+    /// which leaves `close()` on exactly the single-PID kill it performed
+    /// before this existed — the pre-existing behavior, not a new failure mode.
+    /// It must never panic and must never fail `launch()`.
+    #[cfg(windows)]
+    pub(crate) fn confine(child: &Child) -> Self {
+        // `raw_handle` is `None` only once the child has been reaped, which
+        // cannot have happened yet — but a launch is not worth panicking over.
+        let Some(handle) = child.raw_handle() else {
+            warn!(
+                "chrome exited before it could be confined to a job object; \
+                 falling back to single-process termination"
+            );
+            return Self::none();
+        };
+
+        match Self::try_confine(handle) {
+            Ok(job) => {
+                debug!("confined chrome to a job object; its process tree will die with it");
+                Self {
+                    job: std::sync::Mutex::new(Some(job)),
+                }
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "could not confine chrome to a job object; falling back to \
+                     single-process termination — chrome's renderer/GPU/utility \
+                     processes may outlive close()"
+                );
+                Self::none()
+            }
+        }
+    }
+
+    /// The fallible half of [`Self::confine`], split out so every failure path
+    /// funnels through one `warn!` instead of being handled three times.
+    ///
+    /// Note the ordering: the limit is set *at creation*, before any process is
+    /// assigned. Assigning first and setting the limit second would leave a
+    /// window in which the job holds Chrome but would not kill it.
+    #[cfg(windows)]
+    fn try_confine(
+        handle: std::os::windows::io::RawHandle,
+    ) -> Result<win32job::Job, win32job::JobError> {
+        let mut info = win32job::ExtendedLimitInfo::new();
+        info.limit_kill_on_job_close();
+        let job = win32job::Job::create_with_limit_info(&info)?;
+        // `assign_process` takes the raw `HANDLE` as an `isize`. A pointer →
+        // integer cast is safe; no `unsafe` block is needed anywhere here,
+        // which is the whole reason `win32job` is preferred over raw FFI in a
+        // crate that denies `unsafe_code`.
+        job.assign_process(handle as isize)?;
+        Ok(job)
+    }
+
+    /// No-op stand-in on platforms without job objects, where Chrome's own
+    /// SIGTERM handler already cascades the shutdown.
+    #[cfg(not(windows))]
+    pub(crate) fn confine(_child: &Child) -> Self {
+        Self::none()
+    }
+
+    /// Terminate every process still in the job, immediately.
+    ///
+    /// Returns `true` if a job was actually closed, so the caller can tell
+    /// "the tree is being killed" from "there is no job; fall back to the
+    /// single-PID kill".
+    ///
+    /// Dropping the job *is* the kill: closing the last handle to a
+    /// `KILL_ON_JOB_CLOSE` job is what terminates its members, and there is no
+    /// separate "terminate" call to make. Idempotent — a second call finds the
+    /// slot empty and reports `false`.
+    #[cfg(windows)]
+    pub(crate) fn kill_tree(&self) -> bool {
+        let taken = self
+            .job
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+
+        match taken {
+            Some(job) => {
+                // Explicit, because this drop is load-bearing rather than
+                // incidental: it is the syscall that kills the tree.
+                drop(job);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// No-op stand-in; there is never a job to close off Windows.
+    ///
+    /// Called only from `close()`'s `cfg(not(unix))` branch, so a Unix build
+    /// never reaches it. Scoped to `unix` rather than a blanket allow so the
+    /// Windows build — where this is load-bearing — still reports it if the
+    /// call site is ever lost.
+    #[cfg(not(windows))]
+    #[cfg_attr(unix, allow(dead_code))]
+    pub(crate) fn kill_tree(&self) -> bool {
+        false
+    }
+}
+
+impl std::fmt::Debug for ProcessJob {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #[cfg(windows)]
+        let held = self
+            .job
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some();
+        #[cfg(not(windows))]
+        let held = false;
+
+        f.debug_struct("ProcessJob").field("held", &held).finish()
+    }
+}
+
 /// The freshly-spawned Chrome process, shared between [`guard_handshake`] and
 /// [`finish_connect`].
 ///
@@ -1668,6 +1877,16 @@ pub(crate) struct FinishConnect {
     /// installed on [`BrowserInner`] once the handshake succeeds; see
     /// [`ChildSlot`] for why this is shared rather than moved.
     pub(crate) child: ChildSlot,
+    /// Windows job object confining the spawned Chrome's whole process tree.
+    /// Real only for a Windows `launch()`; [`ProcessJob::none`] for `connect`
+    /// (not our process to kill) and on every other platform.
+    ///
+    /// Owned by this struct — and therefore by the handshake future — until
+    /// [`finish_connect`] installs it on [`BrowserInner`]. That is deliberate:
+    /// if the handshake budget expires, dropping the future drops the job,
+    /// which kills the entire tree rather than leaking the helpers of a Chrome
+    /// that never finished starting.
+    pub(crate) job: ProcessJob,
     /// Owned `user_data_dir` tempdir — `Some` only when `launch` allocated one.
     pub(crate) owned_tmp: Option<TempDir>,
     /// Tempdirs for any `.crx` extensions `launch` unzipped. Empty for
@@ -1706,6 +1925,7 @@ pub(crate) async fn finish_connect(
         registrar,
         input_profile,
         child,
+        job,
         owned_tmp,
         extension_dirs,
         debug_host_port,
@@ -1827,6 +2047,10 @@ pub(crate) async fn finish_connect(
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .take(),
             ),
+            // Moves with the child, for the same reason: until this point the
+            // job belongs to the handshake future, so a timed-out launch drops
+            // it and takes the whole Chrome tree down with it.
+            job,
             _user_data: owned_tmp,
             _extension_dirs: extension_dirs,
             owns_process,
@@ -2260,7 +2484,39 @@ impl BrowserBuilder {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
+        // Take Chrome out of our console's Ctrl+C group, so an interactive
+        // Ctrl+C cannot signal it behind our back and race the orchestrated
+        // shutdown in `close()`. See [`CREATE_NEW_PROCESS_GROUP`].
+        //
+        // `creation_flags` here is tokio's own inherent method on its
+        // `Command`, so no `std::os::windows::process::CommandExt` import is
+        // needed (importing it is an unused-import warning, not a no-op).
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
+
         let mut child = cmd.spawn().map_err(BrowserError::SpawnFailed)?;
+
+        // Confine Chrome's whole process tree to a job object, immediately —
+        // before its first `.await`, so nothing can be scheduled between the
+        // spawn and the assignment.
+        //
+        // Job membership is inherited by processes spawned *after* assignment,
+        // which is every Chrome helper that matters: chrome.exe has to complete
+        // a good deal of startup before it forks its first crashpad/GPU child,
+        // and this runs within microseconds of the spawn returning.
+        //
+        // `CREATE_SUSPENDED` + assign-before-resume would close that window
+        // formally, and it was considered and rejected: resuming demands the
+        // main *thread* handle, which neither `std` nor `tokio`'s `Command`
+        // exposes. Recovering it means a ToolHelp thread snapshot plus
+        // `OpenThread`/`ResumeThread` — raw FFI well past what `win32job`
+        // covers, in a crate that denies `unsafe_code`, to close a race whose
+        // realistic width is a few instructions. Not a trade worth making. It
+        // is *not* the stderr readiness path that blocks this; that would
+        // survive a suspended start.
+        //
+        // Never fails: see [`ProcessJob::confine`].
+        let job = ProcessJob::confine(&child);
 
         // Read stderr line-by-line until we see the DevTools URL.
         let stderr = child.stderr.take().ok_or(BrowserError::DevtoolsParse)?;
@@ -2325,6 +2581,7 @@ impl BrowserBuilder {
                 registrar,
                 input_profile,
                 child: child_slot.clone(),
+                job,
                 owned_tmp,
                 extension_dirs,
                 debug_host_port: debug_host_port_from_ws(&ws_url),
@@ -2485,12 +2742,16 @@ impl BrowserBuilder {
         let conn = zendriver_transport::connect_with_observers(&ws_url, observers).await?;
 
         // Same post-connect handshake as `launch`, but with no owned process:
-        // no `Child`, no `TempDir`, `owns_process = false`.
+        // no `Child`, no `TempDir`, no job, `owns_process = false`.
         let inner = finish_connect(FinishConnect {
             conn,
             registrar,
             input_profile,
             child: ChildSlot::default(),
+            // We attached to a Chrome we did not spawn. Confining someone
+            // else's browser to our job would kill it — and every tab they had
+            // open — when this process exits.
+            job: ProcessJob::none(),
             owned_tmp: None,
             extension_dirs: Vec::new(),
             debug_host_port: debug_host_port_from_ws(&ws_url),
@@ -3300,7 +3561,19 @@ impl Browser {
             }
             #[cfg(not(unix))]
             {
-                let _ = child.start_kill(); // best-effort on non-Unix
+                // Close the job first: on Windows this is the only step that
+                // reaches Chrome's renderer/GPU/utility/crashpad children.
+                // `start_kill` is a `TerminateProcess` against the one tracked
+                // `chrome.exe`, and nothing on Windows cascades that to the
+                // tree, so on its own it orphans every helper.
+                if self.inner.job.kill_tree() {
+                    debug!("closed chrome's job object; its whole process tree is terminating");
+                }
+                // Still sent unconditionally. When a job exists this is
+                // redundant (the OS has already terminated this pid); when
+                // confinement was refused it is the entire kill, exactly as
+                // before this fix. The `wait`/`kill` fallback below covers both.
+                let _ = child.start_kill();
             }
             match timeout(SHUTDOWN_GRACE, child.wait()).await {
                 Ok(Ok(_status)) => {}
@@ -3450,6 +3723,15 @@ impl Drop for BrowserInner {
         // causes tokio to SIGKILL the child when the Child is dropped.
         // The TempDir for user_data_dir is dropped here too.
         //
+        // On Windows `kill_on_drop` has the same blind spot as every other
+        // single-pid kill — it does not reach Chrome's helper processes. The
+        // `job` field covers them without needing a line of code here: dropping
+        // it closes the last handle to a `KILL_ON_JOB_CLOSE` job, which is
+        // itself the syscall that terminates the tree. That is also why it
+        // survives paths that never run Drop at all (a `SIGKILL`, an end-task
+        // from Task Manager): Windows closes our handles as it tears us down,
+        // and the tree dies with them.
+        //
         // Attached (`connect`) browsers hold no `Child` — `owns_process` is
         // false and the field is `None` — so nothing is killed here.
         debug_assert!(
@@ -3468,6 +3750,24 @@ mod tests {
     fn candidate_paths_is_nonempty() {
         let v = candidate_paths_for_channel(Channel::Auto);
         assert!(!v.is_empty());
+    }
+
+    /// A [`ProcessJob::none`] confines nothing, so it must report that it
+    /// killed nothing — that `false` is what tells `close()` to fall back to
+    /// the single-PID kill instead of assuming the tree is already dying.
+    ///
+    /// This is the whole of what a non-Windows host can assert about the type:
+    /// the real `CreateJobObjectW` / `AssignProcessToJobObject` path is
+    /// `#[cfg(windows)]` and is not compiled here. It does lock the contract
+    /// that the graceful-degradation path depends on, on every platform.
+    #[test]
+    fn a_job_that_confines_nothing_reports_no_kill_and_is_idempotent() {
+        let job = ProcessJob::none();
+        assert!(
+            !job.kill_tree(),
+            "an empty ProcessJob must report false so close() falls back to the single-PID kill",
+        );
+        assert!(!job.kill_tree(), "kill_tree must be idempotent");
     }
 
     #[test]
@@ -3947,6 +4247,7 @@ mod tests {
                 conn: conn.clone(),
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
+                job: ProcessJob::none(),
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
@@ -4040,6 +4341,7 @@ mod tests {
                 conn: conn.clone(),
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
+                job: ProcessJob::none(),
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
@@ -4149,6 +4451,7 @@ mod tests {
                 conn: conn.clone(),
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
+                job: ProcessJob::none(),
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
@@ -4251,6 +4554,7 @@ mod tests {
                 conn: conn.clone(),
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
+                job: ProcessJob::none(),
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
@@ -4320,6 +4624,7 @@ mod tests {
                 conn: conn.clone(),
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
+                job: ProcessJob::none(),
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
@@ -4391,6 +4696,7 @@ mod tests {
                 conn: conn.clone(),
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
+                job: ProcessJob::none(),
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
@@ -4452,6 +4758,7 @@ mod tests {
                 conn: conn.clone(),
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
+                job: ProcessJob::none(),
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
@@ -4590,6 +4897,7 @@ mod tests {
                 conn: conn.clone(),
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
+                job: ProcessJob::none(),
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
@@ -4946,6 +5254,7 @@ mod tests {
                 registrar,
                 input_profile,
                 child: ChildSlot::default(),
+                job: ProcessJob::none(),
                 owned_tmp: None,
                 extension_dirs: Vec::new(),
                 debug_host_port: debug_host_port_from_ws(
@@ -5016,6 +5325,7 @@ mod tests {
                 registrar,
                 input_profile,
                 child: ChildSlot::default(),
+                job: ProcessJob::none(),
                 owned_tmp: None,
                 extension_dirs: Vec::new(),
                 debug_host_port: None,
@@ -5070,6 +5380,7 @@ mod tests {
             registrar,
             input_profile,
             child,
+            job: ProcessJob::none(),
             owned_tmp: None,
             extension_dirs: Vec::new(),
             debug_host_port: None,
@@ -5202,6 +5513,7 @@ mod tests {
             registrar,
             input_profile,
             child: Arc::new(std::sync::Mutex::new(child)),
+            job: ProcessJob::none(),
             owned_tmp: None,
             extension_dirs: Vec::new(),
             debug_host_port: None,
@@ -5326,6 +5638,7 @@ mod tests {
             registrar,
             input_profile,
             child: ChildSlot::default(),
+            job: ProcessJob::none(),
             owned_tmp: None,
             extension_dirs: Vec::new(),
             debug_host_port: None,
@@ -5377,6 +5690,7 @@ mod tests {
             registrar,
             input_profile,
             child: ChildSlot::default(),
+            job: ProcessJob::none(),
             owned_tmp: None,
             extension_dirs: Vec::new(),
             debug_host_port: None,
@@ -5449,6 +5763,7 @@ mod tests {
             registrar,
             input_profile,
             child: ChildSlot::default(),
+            job: ProcessJob::none(),
             owned_tmp: None,
             extension_dirs: Vec::new(),
             debug_host_port: None,
@@ -5511,6 +5826,7 @@ mod tests {
             registrar,
             input_profile,
             child: ChildSlot::default(),
+            job: ProcessJob::none(),
             owned_tmp: None,
             extension_dirs: Vec::new(),
             debug_host_port: None,
@@ -5572,6 +5888,7 @@ mod tests {
             registrar,
             input_profile,
             child: ChildSlot::default(),
+            job: ProcessJob::none(),
             owned_tmp: None,
             extension_dirs: Vec::new(),
             debug_host_port: None,
