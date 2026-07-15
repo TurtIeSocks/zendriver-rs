@@ -414,3 +414,11 @@ excluded = "error variant, not an operation; the post-WS CDP handshake exceeding
 [[entry]]
 api = "zendriver::BrowserError::HandshakeTimeout"
 excluded = "crate-root re-export of the above variant; same browser_open failure surface"
+
+[[entry]]
+api = "zendriver::error::ZendriverError::CdpTimeout"
+excluded = "error variant, not an operation; a CDP call going unanswered within its budget, surfaced as a failure of whichever tool made the call"
+
+[[entry]]
+api = "zendriver::ZendriverError::CdpTimeout"
+excluded = "crate-root re-export of the above variant; same per-tool failure surface"

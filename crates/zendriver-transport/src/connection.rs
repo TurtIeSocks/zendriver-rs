@@ -1,5 +1,6 @@
 //! `Connection` — the public handle to the transport actor.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -20,6 +21,53 @@ use crate::observer::TargetObserver;
 /// `Runtime.runIfWaitingForDebugger`. Slow observers don't block the actor
 /// indefinitely; a misbehaving one trips the timeout and the debugger releases.
 pub(crate) const DEFAULT_OBSERVER_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Default ceiling on how long [`Connection::call_raw`] waits for Chrome to
+/// answer a single CDP command.
+///
+/// # Why this exists
+///
+/// Without it, `call_raw` awaited its reply oneshot bare, and the **only**
+/// thing that could resolve a pending call early was the websocket dying. A
+/// Chrome that accepted a command and never answered hung the caller forever
+/// — no error, no retry, nothing in the log naming the stuck method. That is
+/// not a hypothetical: it is what stalled `goto` on the windows-latest CI
+/// runner for 83 minutes, and it is the same disease as the unbounded launch
+/// handshake fixed in b5705aa9 — that fix just happened to bound only the
+/// handshake.
+///
+/// # Why 180s
+///
+/// This is a **backstop against a wedged browser**, not a latency policy.
+/// Sizing is bounded from both directions:
+///
+/// - **Floor — must not break legitimately slow work.** A single CDP
+///   round-trip against a local socket is sub-millisecond warm. The slow
+///   cases are `Page.navigate` to a tarpit origin and a heavy
+///   `Runtime.evaluate` with `awaitPromise`; both are far under 3 minutes in
+///   practice, and Chrome's own network stack surfaces `net::ERR_*` for a
+///   dead origin well inside that — so a legitimately slow navigation still
+///   gets Chrome's real error rather than ours. A tighter blanket default
+///   would convert working code into flaky failures, which is strictly worse
+///   than the hang: a false timeout is a silent behavior change in every
+///   consumer, while the hang at least only bites a wedged browser.
+/// - **Ceiling — must stay well under `.config/nextest.toml`'s
+///   `terminate-after = 6` (6 x 60s).** A default at or above that is
+///   unreachable in CI: nextest hard-kills the test first, and we learn
+///   nothing. At 180s the call errors with ~3 minutes left for the test to
+///   unwind and report — the whole point being that a stuck call produces a
+///   *diagnosable* error rather than a stall.
+/// - **Must not preempt tighter, more specific guards.** `HANDSHAKE_TIMEOUT`
+///   (30s) in the `zendriver` crate wraps the launch handshake's CDP calls,
+///   and `BROWSER_CLOSE_TIMEOUT` (3s) wraps the quit. Both are far tighter,
+///   so both still fire first and report their own typed errors; this default
+///   only catches calls nobody else bounded. Locked by
+///   `default_call_timeout_does_not_preempt_the_launch_handshake_guard`.
+///
+/// Callers needing something else use
+/// [`Connection::call_raw_with_timeout`] (per-call) or
+/// [`Connection::set_call_timeout`] (per-connection).
+pub const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Internal JSON-RPC code stamped onto drained pendings when the transport
 /// actor shuts down. Mapped back to [`TransportError::Shutdown`] by
@@ -67,6 +115,15 @@ pub(crate) struct ConnectionInner {
     /// swapping here only ever cancels the latest actor.
     pub(crate) shutdown: Mutex<CancellationToken>,
     pub(crate) observer_timeout: Duration,
+    /// Default per-call reply budget, in milliseconds. See
+    /// [`DEFAULT_CALL_TIMEOUT`].
+    ///
+    /// Atomic rather than plain so it can be retuned on a live `Connection`
+    /// (which is shared behind an `Arc` by every `Tab`/`SessionHandle`)
+    /// without another `spawn_actor_*` constructor overload or a re-spawn.
+    /// `Relaxed` is right: this is an advisory backstop read once per call,
+    /// with no ordering relationship to anything else.
+    pub(crate) call_timeout_ms: AtomicU64,
     /// Observer chain, retained so [`Connection::reconnect`] can re-spawn the
     /// actor with the same observers (so stealth re-injection etc. re-fire on
     /// the new targets). Stored as the `Vec` directly — an empty `Vec` means no
@@ -84,6 +141,7 @@ impl std::fmt::Debug for ConnectionInner {
             .field("event_tx", &self.event_tx)
             .field("shutdown", &self.shutdown)
             .field("observer_timeout", &self.observer_timeout)
+            .field("call_timeout_ms", &self.call_timeout_ms)
             .field(
                 "observers",
                 &format_args!("<{} observers>", self.observers.len()),
@@ -99,15 +157,64 @@ impl Connection {
     /// `params` is the JSON value for the command's parameters.
     /// `session_id` routes the command to a particular target's session.
     ///
+    /// Bounded by this connection's [`call_timeout`](Connection::call_timeout)
+    /// ([`DEFAULT_CALL_TIMEOUT`] unless changed): a Chrome that accepts the
+    /// command and never answers yields [`CallError::Timeout`] rather than
+    /// hanging the caller forever. Use [`Connection::call_raw_with_timeout`]
+    /// to override the budget for one call.
+    ///
     /// Returns [`CallError::Rpc`] when Chrome answered with a JSON-RPC error
-    /// (preserving `code`, `message`, and `data`), and [`CallError::Transport`]
-    /// for connection-level failures.
+    /// (preserving `code`, `message`, and `data`), [`CallError::Transport`]
+    /// for connection-level failures, and [`CallError::Timeout`] when Chrome
+    /// never answered at all.
     pub async fn call_raw(
         &self,
         method: impl Into<String>,
         params: Value,
         session_id: Option<String>,
     ) -> Result<Value, CallError> {
+        self.call_raw_with_timeout(method, params, session_id, Some(self.call_timeout()))
+            .await
+    }
+
+    /// This connection's default per-call reply budget.
+    pub fn call_timeout(&self) -> Duration {
+        Duration::from_millis(self.inner.call_timeout_ms.load(Ordering::Relaxed))
+    }
+
+    /// Retune the default per-call reply budget for **every** future call on
+    /// this connection (and on every `Tab`/`SessionHandle` sharing it).
+    ///
+    /// Prefer [`Connection::call_raw_with_timeout`] when only one call is
+    /// unusual; reach for this when a whole workload is (a deliberately
+    /// throttled proxy, say). Raising it is safe; lowering it below a real
+    /// operation's latency turns success into [`CallError::Timeout`].
+    pub fn set_call_timeout(&self, budget: Duration) {
+        // Saturate rather than wrap: a `Duration` larger than u64 ms is
+        // ~584M years and unambiguously means "effectively never".
+        let ms = u64::try_from(budget.as_millis()).unwrap_or(u64::MAX);
+        self.inner.call_timeout_ms.store(ms, Ordering::Relaxed);
+    }
+
+    /// [`Connection::call_raw`] with an explicit reply budget.
+    ///
+    /// `budget` of `Some(d)` bounds the wait at `d`; `None` opts out entirely
+    /// and restores the old unbounded behavior for a call the caller knows is
+    /// genuinely long-lived. `None` is a loaded gun — an unbounded call
+    /// resolves only if the socket dies — so it exists for deliberate,
+    /// documented use, not convenience.
+    ///
+    /// Note the budget covers **only** the wait for Chrome's reply. Queueing
+    /// the command onto the actor is bounded independently by the actor's
+    /// channel capacity and fails fast with [`TransportError::Shutdown`].
+    pub async fn call_raw_with_timeout(
+        &self,
+        method: impl Into<String>,
+        params: Value,
+        session_id: Option<String>,
+        budget: Option<Duration>,
+    ) -> Result<Value, CallError> {
+        let method = method.into();
         let (reply_tx, reply_rx) = oneshot::channel();
         // Clone the current sender out from under the lock, then release the
         // guard before the `.await` — `std::sync::Mutex` must not be held
@@ -123,14 +230,28 @@ impl Connection {
         };
         cmd_tx
             .send(OutboundCmd {
-                method: method.into(),
+                // Cloned so the error path can name the stuck method — one
+                // small alloc against a websocket round-trip.
+                method: method.clone(),
                 params,
                 session_id,
                 reply: reply_tx,
             })
             .await
             .map_err(|_| TransportError::Shutdown)?;
-        match reply_rx.await {
+
+        // The bare `reply_rx.await` this replaces was THE hang: only a dying
+        // websocket could resolve a pending call, so a wedged-but-connected
+        // Chrome blocked the caller forever.
+        let reply = match budget {
+            Some(budget) => match tokio::time::timeout(budget, reply_rx).await {
+                Ok(reply) => reply,
+                Err(_elapsed) => return Err(CallError::Timeout { method, budget }),
+            },
+            None => reply_rx.await,
+        };
+
+        match reply {
             Ok(Ok(v)) => Ok(v),
             Ok(Err(rpc_err)) => {
                 // Preserve the transport drain sentinels for drained pendings;
@@ -411,6 +532,7 @@ where
         event_tx: event_tx.clone(),
         shutdown: Mutex::new(shutdown.clone()),
         observer_timeout,
+        call_timeout_ms: AtomicU64::new(DEFAULT_CALL_TIMEOUT.as_millis() as u64),
         // Retain the observer chain so `reconnect` can re-spawn the actor with
         // the same observers without the caller re-supplying them.
         observers: observers.clone(),
@@ -631,6 +753,239 @@ mod tests {
         assert_eq!(res["frameId"], "F-new");
 
         conn.shutdown();
+    }
+
+    /// The core regression lock. Before this, `call_raw` awaited the reply
+    /// oneshot bare: a Chrome that accepted a command and never answered hung
+    /// the caller **forever**, resolving only if the socket happened to die.
+    /// That is what stalled `goto` on the windows-latest runner.
+    #[tokio::test]
+    async fn call_raw_times_out_when_the_reply_never_arrives() {
+        let (ws, _test_tx, mut test_rx) = duplex_pair();
+        let conn = spawn_actor(ws);
+        conn.set_call_timeout(Duration::from_millis(100));
+
+        let started = tokio::time::Instant::now();
+        let call = tokio::spawn({
+            let c = conn.clone();
+            async move {
+                c.call_raw("Page.navigate", json!({ "url": "https://x.test" }), None)
+                    .await
+            }
+        });
+
+        // The command lands; we deliberately never reply and never drop the
+        // socket, so nothing but the timeout can resolve this call.
+        let _ = test_rx.recv().await.unwrap();
+
+        let res = call.await.unwrap();
+        match res {
+            Err(CallError::Timeout { method, budget }) => {
+                assert_eq!(method, "Page.navigate", "must name the stuck method");
+                assert_eq!(budget, Duration::from_millis(100));
+            }
+            other => panic!("expected CallError::Timeout, got {other:?}"),
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "timeout must fire on budget, not hang; took {:?}",
+            started.elapsed()
+        );
+
+        conn.shutdown();
+    }
+
+    /// A caller that knows its call is legitimately slow (or legitimately
+    /// must not be bounded) can say so per-call without retuning the whole
+    /// connection.
+    #[tokio::test]
+    async fn call_raw_with_timeout_honours_the_per_call_override() {
+        let (ws, _test_tx, mut test_rx) = duplex_pair();
+        let conn = spawn_actor(ws);
+        // Connection default stays generous; the per-call override is what
+        // must win, proving the override is actually consulted.
+        assert_eq!(conn.call_timeout(), DEFAULT_CALL_TIMEOUT);
+
+        let started = tokio::time::Instant::now();
+        let call = tokio::spawn({
+            let c = conn.clone();
+            async move {
+                c.call_raw_with_timeout(
+                    "Runtime.evaluate",
+                    json!({ "expression": "1" }),
+                    None,
+                    Some(Duration::from_millis(50)),
+                )
+                .await
+            }
+        });
+        let _ = test_rx.recv().await.unwrap();
+
+        let res = call.await.unwrap();
+        assert!(
+            matches!(res, Err(CallError::Timeout { ref method, budget })
+                if method == "Runtime.evaluate" && budget == Duration::from_millis(50)),
+            "per-call override must win over the connection default, got {res:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "override must fire on its own budget, not the 180s default"
+        );
+
+        conn.shutdown();
+    }
+
+    /// `None` is the explicit opt-out for a genuinely unbounded call. Proven
+    /// by the fact that the call is still pending long after a 50ms-style
+    /// budget would have fired, and then still completes normally.
+    #[tokio::test]
+    async fn call_raw_with_timeout_none_is_unbounded() {
+        let (ws, test_tx, mut test_rx) = duplex_pair();
+        let conn = spawn_actor(ws);
+        conn.set_call_timeout(Duration::from_millis(50));
+
+        let call = tokio::spawn({
+            let c = conn.clone();
+            async move {
+                c.call_raw_with_timeout("Page.navigate", json!({}), None, None)
+                    .await
+            }
+        });
+        let sent = test_rx.recv().await.unwrap();
+        let id = serde_json::from_str::<Value>(match &sent {
+            Message::Text(t) => t,
+            _ => panic!("expected text frame"),
+        })
+        .unwrap()["id"]
+            .as_u64()
+            .unwrap();
+
+        // Far past the connection default; an opted-out call must still be
+        // alive rather than already timed out.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!call.is_finished(), "None budget must not time out");
+
+        test_tx
+            .send(Ok(Message::text(
+                json!({ "id": id, "result": { "frameId": "F1" } }).to_string(),
+            )))
+            .await
+            .unwrap();
+        let res = call.await.unwrap().unwrap();
+        assert_eq!(res["frameId"], "F1");
+
+        conn.shutdown();
+    }
+
+    /// A reply that arrives inside the budget must be completely unaffected —
+    /// the timeout is a backstop, not a latency policy.
+    #[tokio::test]
+    async fn call_raw_reply_within_budget_is_unaffected() {
+        let (ws, test_tx, mut test_rx) = duplex_pair();
+        let conn = spawn_actor(ws);
+        conn.set_call_timeout(Duration::from_secs(30));
+
+        let call = tokio::spawn({
+            let c = conn.clone();
+            async move { c.call_raw("Page.navigate", json!({}), None).await }
+        });
+        let sent = test_rx.recv().await.unwrap();
+        let id = serde_json::from_str::<Value>(match &sent {
+            Message::Text(t) => t,
+            _ => panic!("expected text frame"),
+        })
+        .unwrap()["id"]
+            .as_u64()
+            .unwrap();
+
+        // Slow, but well inside budget.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        test_tx
+            .send(Ok(Message::text(
+                json!({ "id": id, "result": { "frameId": "OK" } }).to_string(),
+            )))
+            .await
+            .unwrap();
+
+        let res = call.await.unwrap().expect("in-budget reply must succeed");
+        assert_eq!(res["frameId"], "OK");
+
+        conn.shutdown();
+    }
+
+    /// A timeout must be distinguishable from "Chrome said no" (`Rpc`) and
+    /// "the connection broke" (`Transport`). Callers key retry/diagnosis off
+    /// exactly this distinction.
+    #[tokio::test]
+    async fn call_raw_timeout_is_distinct_from_rpc_and_transport() {
+        let (ws, test_tx, mut test_rx) = duplex_pair();
+        let conn = spawn_actor(ws);
+        conn.set_call_timeout(Duration::from_millis(100));
+
+        // A real RPC refusal must NOT be reported as a timeout.
+        let call = tokio::spawn({
+            let c = conn.clone();
+            async move { c.call_raw("Bogus.method", json!({}), None).await }
+        });
+        let sent = test_rx.recv().await.unwrap();
+        let id = serde_json::from_str::<Value>(match &sent {
+            Message::Text(t) => t,
+            _ => panic!("expected text frame"),
+        })
+        .unwrap()["id"]
+            .as_u64()
+            .unwrap();
+        test_tx
+            .send(Ok(Message::text(
+                json!({ "id": id, "error": { "code": -32601, "message": "not found" } })
+                    .to_string(),
+            )))
+            .await
+            .unwrap();
+        let res = call.await.unwrap();
+        assert!(
+            matches!(res, Err(CallError::Rpc(-32601, _, _))),
+            "an answered-but-refused call must stay Rpc, got {res:?}"
+        );
+
+        conn.shutdown();
+    }
+
+    /// The default must stay comfortably under `.config/nextest.toml`'s
+    /// `terminate-after = 6` (6 x 60s). A default above that ceiling would be
+    /// unreachable in CI: nextest would kill the test before the call could
+    /// report a diagnosable error, which is the entire point of having one.
+    #[test]
+    fn default_call_timeout_is_under_the_nextest_terminate_after_ceiling() {
+        const NEXTEST_TERMINATE_AFTER: Duration = Duration::from_secs(6 * 60);
+        assert!(
+            DEFAULT_CALL_TIMEOUT < NEXTEST_TERMINATE_AFTER,
+            "DEFAULT_CALL_TIMEOUT ({DEFAULT_CALL_TIMEOUT:?}) must be under nextest's \
+             {NEXTEST_TERMINATE_AFTER:?} hard kill or it can never surface as an error"
+        );
+        // And it must leave real room to unwind and report, not squeak under.
+        assert!(
+            DEFAULT_CALL_TIMEOUT <= NEXTEST_TERMINATE_AFTER / 2,
+            "DEFAULT_CALL_TIMEOUT must leave at least half the nextest budget \
+             for the test to report the failure"
+        );
+    }
+
+    /// `HANDSHAKE_TIMEOUT` (30s, in the `zendriver` crate) wraps the launch
+    /// handshake's CDP calls. The transport default must sit strictly *under*
+    /// it in generosity terms — i.e. be larger — so the tighter, more specific
+    /// launch guard is always the one that reports. If this inverted, a slow
+    /// handshake would surface as a generic per-call timeout instead of
+    /// `BrowserError::HandshakeTimeout`, and the launch child-kill branch
+    /// keyed to it would not run.
+    #[test]
+    fn default_call_timeout_does_not_preempt_the_launch_handshake_guard() {
+        const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+        assert!(
+            DEFAULT_CALL_TIMEOUT > HANDSHAKE_TIMEOUT,
+            "the launch handshake's own 30s guard must fire first; a transport \
+             default below it would preempt HandshakeTimeout"
+        );
     }
 
     #[tokio::test]

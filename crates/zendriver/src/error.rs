@@ -84,6 +84,27 @@ pub enum ZendriverError {
     #[error("timed out after {0:?}")]
     Timeout(Duration),
 
+    /// Chrome accepted a CDP command and never answered it within the call's
+    /// budget.
+    ///
+    /// Distinct from [`ZendriverError::Cdp`] (Chrome answered and *refused*)
+    /// and [`ZendriverError::Disconnected`] (the socket died): here the
+    /// connection is healthy and the browser is simply wedged or slower than
+    /// the budget allows. Distinct from the generic
+    /// [`ZendriverError::Timeout`] because it names the CDP method, which is
+    /// what makes a stuck call diagnosable.
+    ///
+    /// See `zendriver_transport::DEFAULT_CALL_TIMEOUT` for the budget and
+    /// `Connection::call_raw_with_timeout` / `Connection::set_call_timeout`
+    /// to change it.
+    #[error("CDP call `{method}` went unanswered after {budget:?}")]
+    CdpTimeout {
+        /// The CDP method that was never answered (e.g. `"Page.navigate"`).
+        method: String,
+        /// The budget that elapsed without a reply.
+        budget: Duration,
+    },
+
     /// Page navigation failed (DNS, connection refused, page crashed, etc.).
     #[error("navigation failed: {0}")]
     Navigation(String),
@@ -230,6 +251,10 @@ impl From<CallError> for ZendriverError {
                 ZendriverError::Disconnected
             }
             CallError::Transport(t) => ZendriverError::Transport(Box::new(t)),
+            // Chrome never answered. Kept as its own variant rather than
+            // folded into the generic `Timeout(Duration)` so the method name
+            // — the only thing that makes a stuck call diagnosable — survives.
+            CallError::Timeout { method, budget } => ZendriverError::CdpTimeout { method, budget },
             CallError::Rpc(code, message, data) => {
                 // Special-case: Chrome returns -32000 "Cannot find context in
                 // which to perform call" when the page navigated out from
@@ -405,6 +430,42 @@ mod tests {
         let ce = CallError::Transport(zendriver_transport::TransportError::Disconnected);
         let ze: ZendriverError = ce.into();
         assert!(matches!(ze, ZendriverError::Disconnected));
+    }
+
+    #[test]
+    fn from_call_error_timeout_maps_to_cdp_timeout_keeping_the_method() {
+        // "Chrome never answered" must not be laundered into the generic
+        // `Io` fallback: the method name is the diagnostic that makes a stuck
+        // call actionable, and it must survive the mapping.
+        let ce = CallError::Timeout {
+            method: "Page.navigate".into(),
+            budget: Duration::from_secs(180),
+        };
+        let ze: ZendriverError = ce.into();
+        match ze {
+            ZendriverError::CdpTimeout { method, budget } => {
+                assert_eq!(method, "Page.navigate");
+                assert_eq!(budget, Duration::from_secs(180));
+            }
+            other => panic!("expected CdpTimeout, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cdp_timeout_is_distinguishable_from_cdp_error_and_disconnect() {
+        // The three ways a call can fail must stay tellable apart: Chrome
+        // never answered / Chrome said no / the socket died.
+        let never_answered: ZendriverError = CallError::Timeout {
+            method: "Page.navigate".into(),
+            budget: Duration::from_secs(180),
+        }
+        .into();
+        let said_no: ZendriverError = CallError::Rpc(-32601, "not found".into(), None).into();
+        let socket_died: ZendriverError =
+            CallError::Transport(zendriver_transport::TransportError::Disconnected).into();
+        assert!(matches!(never_answered, ZendriverError::CdpTimeout { .. }));
+        assert!(matches!(said_no, ZendriverError::Cdp { .. }));
+        assert!(matches!(socket_died, ZendriverError::Disconnected));
     }
 
     #[test]

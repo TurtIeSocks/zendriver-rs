@@ -898,6 +898,9 @@ pub zendriver::error::ZendriverError::Cdp
 pub zendriver::error::ZendriverError::Cdp::code: i32
 pub zendriver::error::ZendriverError::Cdp::data: core::option::Option<serde_json::value::Value>
 pub zendriver::error::ZendriverError::Cdp::message: alloc::string::String
+pub zendriver::error::ZendriverError::CdpTimeout
+pub zendriver::error::ZendriverError::CdpTimeout::budget: core::time::Duration
+pub zendriver::error::ZendriverError::CdpTimeout::method: alloc::string::String
 pub zendriver::error::ZendriverError::Cloudflare(alloc::boxed::Box<zendriver_cloudflare::error::CloudflareError>)
 pub zendriver::error::ZendriverError::ConflictingSelectors
 pub zendriver::error::ZendriverError::Cookie(alloc::string::String)
@@ -5365,6 +5368,9 @@ pub zendriver::ZendriverError::Cdp
 pub zendriver::ZendriverError::Cdp::code: i32
 pub zendriver::ZendriverError::Cdp::data: core::option::Option<serde_json::value::Value>
 pub zendriver::ZendriverError::Cdp::message: alloc::string::String
+pub zendriver::ZendriverError::CdpTimeout
+pub zendriver::ZendriverError::CdpTimeout::budget: core::time::Duration
+pub zendriver::ZendriverError::CdpTimeout::method: alloc::string::String
 pub zendriver::ZendriverError::Cloudflare(alloc::boxed::Box<zendriver_cloudflare::error::CloudflareError>)
 pub zendriver::ZendriverError::ConflictingSelectors
 pub zendriver::ZendriverError::Cookie(alloc::string::String)

@@ -3546,6 +3546,15 @@ impl Browser {
             // Chrome commonly drops the socket on quit instead of replying;
             // the transport dying here means the quit landed.
             Ok(Err(zendriver_transport::CallError::Transport(_))) => true,
+            // Chrome never answered. Unreachable while `browser_close_budget`
+            // (3s) stays far tighter than the transport's per-call default
+            // (180s) — the outer timeout below wins — but matched explicitly
+            // so a retuned budget can never make this report "refused", which
+            // it categorically is not: nothing was heard, let alone declined.
+            Ok(Err(e @ zendriver_transport::CallError::Timeout { .. })) => {
+                warn!(error = %e, "Browser.close went unanswered; falling back to signal shutdown");
+                false
+            }
             // An RPC refusal means Chrome heard us and declined — nothing to
             // wait for, go straight to signals.
             Ok(Err(e)) => {
