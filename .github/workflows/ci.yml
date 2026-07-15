@@ -65,6 +65,14 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # Backstop only -- the per-test `slow-timeout` in .config/nextest.toml is
+    # what actually names a stuck test. This exists so a hang that escapes it
+    # (or a wedged compile) cannot ride the 6h default; Windows minutes bill
+    # at 2x. Linux runs this in ~2m; Windows needs room for a cold compile
+    # with an empty rust-cache, so 90m is deliberately generous rather than
+    # tight -- a timeout here should mean "something is wrong", never "the
+    # runner was slow today".
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
