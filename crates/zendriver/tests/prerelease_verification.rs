@@ -8,6 +8,21 @@
 //!
 //! Gated behind `integration-tests` because each test launches real Chrome.
 //!
+//! # This file is the windows-latest CI allowlist
+//!
+//! `ci.yml`'s `test-integration` job runs `-E
+//! 'binary_id(zendriver::prerelease_verification)'` on Windows — this binary
+//! and nothing else. Chrome on that runner cannot complete a loopback fetch,
+//! so any test backed by a `wiremock::MockServer` hangs there until it is
+//! killed (the first such run spent ~83 minutes running 4 tests, all timing
+//! out). This file qualifies only because every test here is network-free:
+//! `about:blank` and `evaluate`, no fixture server.
+//!
+//! **Do not add a `wiremock` / `MockServer` fixture, or any test that fetches
+//! a URL, to this file.** It would silently re-stall the Windows leg. Such a
+//! test belongs in one of the `integration_phase*` binaries, which Windows
+//! does not run.
+//!
 //! Coverage map:
 //! - `ua_override_persists_across_new_tabs` → cdpdriver/zendriver#107
 //! - `repeated_launch_close_leaves_no_orphan_chrome_processes` → #33, #198
