@@ -5571,6 +5571,10 @@ mod tests {
     /// Chrome, with `child` standing in for the spawned `chrome.exe`. Drives
     /// the post-connect handshake to completion and hands back the mock so the
     /// test can keep asserting on CDP traffic — notably what `close()` sends.
+    ///
+    /// Unix-only to match its callers, which need a stand-in child process
+    /// (`sleep 300`) and `libc::kill` to observe the close ordering.
+    #[cfg(unix)]
     async fn owning_browser_with_child(
         child: Option<Child>,
     ) -> (zendriver_transport::testing::MockConnection, Browser) {
