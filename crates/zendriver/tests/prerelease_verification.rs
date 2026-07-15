@@ -7,8 +7,26 @@
 //! the assertion.
 //!
 //! Gated behind `integration-tests` because each test launches real Chrome.
-//! Test 2 is additionally Unix-only because its process-leak audit shells out
-//! to `ps`.
+//!
+//! # This file is the windows-latest CI allowlist
+//!
+//! `ci.yml`'s `test-integration` job runs `-E
+//! 'binary_id(zendriver::prerelease_verification)'` on Windows — this binary
+//! and nothing else. It qualifies because every test here is network-free:
+//! `about:blank` and `evaluate`, no fixture server.
+//!
+//! That allowlist was originally justified by a belief that Chrome on the
+//! runner cannot complete a loopback fetch, so only `wiremock`-backed tests
+//! hung. That was wrong: all three tests below then timed out at 360s too,
+//! silently. The real cause was `zendriver-stealth`'s Chrome version probe
+//! blocking forever on `chrome.exe --version` inside `launch()` — see
+//! `fingerprint::probe_chrome_version`. Loopback on the runner remains
+//! **unverified** rather than known-broken.
+//!
+//! **Prefer not to add a `wiremock` / `MockServer` fixture, or any test that
+//! fetches a URL, to this file** while the Windows leg is filtered to it: such
+//! a test belongs in an `integration_phase*` binary, which Windows does not
+//! run. If the leg is ever widened to `kind(test)`, this caveat retires.
 //!
 //! Coverage map:
 //! - `ua_override_persists_across_new_tabs` → cdpdriver/zendriver#107
@@ -69,23 +87,140 @@ async fn ua_override_persists_across_new_tabs() {
     browser.close().await.expect("close");
 }
 
-/// Snapshot all live `chrome` / `chromium` PIDs on the system. Unix-only —
-/// shells out to `ps` (which Windows lacks). Used by the leak audit below to
-/// diff the set before/after a repeated launch+close loop.
-#[cfg(unix)]
-fn ps_chrome_pids() -> std::collections::HashSet<u32> {
-    use std::process::Command;
-    let out = Command::new("ps")
-        .args(["axo", "pid,comm"])
-        .output()
-        .expect("ps");
-    let s = String::from_utf8_lossy(&out.stdout);
-    s.lines()
-        .filter(|l| {
-            let lower = l.to_lowercase();
-            lower.contains("chrome") || lower.contains("chromium")
-        })
-        .filter_map(|l| l.split_whitespace().next()?.parse::<u32>().ok())
+/// Parse the Chrome major out of a UA string; handles both `Chrome/150.0.x.y`
+/// and headless's `HeadlessChrome/150.0.x.y` (the latter contains the former).
+fn chrome_major_from_ua(ua: &str) -> u32 {
+    let rest = ua
+        .find("Chrome/")
+        .map(|i| &ua[i + "Chrome/".len()..])
+        .unwrap_or_else(|| panic!("no `Chrome/` token in UA: {ua:?}"));
+    rest.split('.')
+        .next()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| panic!("no numeric major in UA: {ua:?}"))
+}
+
+/// The stealth UA must claim the Chrome major the real binary actually is.
+///
+/// This locks the Chrome *version probe* against a real Chrome binary — which
+/// nothing else in the suite did, and that gap is exactly how two bugs shipped
+/// together:
+///
+/// 1. The probe exec'd `chrome.exe --version`, which on Windows starts a
+///    browser that never exits, hanging `launch()` forever and *silently*
+///    (a blocking call inside the future starves every tokio timeout).
+/// 2. Where it did *not* hang — a dev box with Chrome already open — Windows
+///    Chrome answered `--version` with "Opening in existing browser session.",
+///    which carries no version token, so the probe silently fell back to a
+///    baked-in major and shipped a UA claiming Chrome 148 on a real Chrome 150.
+///
+/// Bug 2 is the insidious one: a UA that contradicts the browser rendering it is
+/// precisely the inconsistency stealth exists to avoid, and it failed *open*.
+/// Asserting against the fallback constant would not catch it (the constant gets
+/// bumped); asserting against the real browser does.
+///
+/// Non-circular by construction: the real major comes from a `stealth(off)`
+/// browser reporting its own UA, the claimed major from a `native()` profile
+/// whose UA is composed from the probe. Network-free — `about:blank` only.
+#[tokio::test]
+#[serial]
+async fn stealth_ua_major_matches_the_real_chrome_binary() {
+    let real_major = {
+        let browser = Browser::builder()
+            .headless(true)
+            .stealth(StealthProfile::off())
+            .launch()
+            .await
+            .expect("launch with stealth off");
+        let ua: String = browser
+            .main_tab()
+            .evaluate("navigator.userAgent")
+            .await
+            .expect("read real UA");
+        browser.close().await.expect("close");
+        chrome_major_from_ua(&ua)
+    };
+
+    let claimed_major = {
+        let browser = Browser::builder()
+            .headless(true)
+            .stealth(StealthProfile::native())
+            .launch()
+            .await
+            .expect("launch with stealth native");
+        let ua: String = browser
+            .main_tab()
+            .evaluate("navigator.userAgent")
+            .await
+            .expect("read stealth UA");
+        browser.close().await.expect("close");
+        chrome_major_from_ua(&ua)
+    };
+
+    assert_eq!(
+        claimed_major, real_major,
+        "stealth UA claims Chrome {claimed_major} but the real binary is Chrome \
+         {real_major}; the version probe is falling back instead of detecting \
+         the installed Chrome",
+    );
+}
+
+/// True if `s` names a Chrome/Chromium binary, case-insensitively.
+///
+/// `chromium` is tested separately rather than folded into a `chrom` prefix:
+/// "chromium" does **not** contain the substring "chrome", and CI installs
+/// `chromium-browser`, so a single `contains("chrome")` would silently miss
+/// every process on the Linux runner.
+fn is_chrome_binary_name(s: &str) -> bool {
+    let lower = s.to_lowercase();
+    lower.contains("chrome") || lower.contains("chromium")
+}
+
+/// True if a process belongs to a Chrome/Chromium browser tree.
+///
+/// Matched against the executable's **base name**, which is the part that
+/// differs per platform — this is what makes the audit portable:
+/// - Windows: `chrome.exe`
+/// - macOS:   `Google Chrome`, `Google Chrome Helper (Renderer)`
+/// - Linux:   `chrome`, `chromium-browser`, `chrome-sandbox`
+///
+/// All of them contain "chrome" or "chromium" case-insensitively, so one
+/// matcher covers the three platforms without any `cfg` branching.
+fn is_chrome_process(proc: &sysinfo::Process) -> bool {
+    if is_chrome_binary_name(&proc.name().to_string_lossy()) {
+        return true;
+    }
+    // sysinfo derives `name` from `/proc/<pid>/stat` (Linux, truncated to 15
+    // bytes) or `proc_pidpath` (macOS), either of which can come back empty
+    // for a process that exits mid-refresh. The exe's base name is the same
+    // string by another route, so use it to recover rather than miss a PID.
+    proc.exe()
+        .and_then(|p| p.file_name())
+        .is_some_and(|n| is_chrome_binary_name(&n.to_string_lossy()))
+}
+
+/// Snapshot all live `chrome` / `chromium` PIDs on the system. Used by the
+/// leak audit below to diff the set before/after a repeated launch+close loop.
+///
+/// Uses `sysinfo` rather than shelling out to `ps`: `ps` does not exist on
+/// Windows, which is what previously confined this regression lock — and so
+/// the whole orphaned-process bug class it guards — to Unix.
+fn chrome_pids() -> std::collections::HashSet<u32> {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+
+    let mut sys = System::new();
+    // `with_exe` is not optional: on macOS a process's `name` is populated as
+    // a side effect of resolving its exe path, so refreshing without it can
+    // hand back empty names for everything — a silently blind audit.
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::new().with_exe(UpdateKind::Always),
+    );
+    sys.processes()
+        .iter()
+        .filter(|(_, proc)| is_chrome_process(proc))
+        .map(|(pid, _)| pid.as_u32())
         .collect()
 }
 
@@ -97,12 +232,13 @@ fn ps_chrome_pids() -> std::collections::HashSet<u32> {
 /// system-wide `chrome` PID set.
 ///
 /// 25 cycles is enough to surface a single-process-per-iteration leak
-/// without making CI brutal. Unix-only because the audit shells out to `ps`.
-#[cfg(unix)]
+/// without making CI brutal. Runs on every platform: the audit enumerates
+/// processes via `sysinfo`, so Windows — the platform this bug class
+/// actually shipped on — is covered too.
 #[tokio::test]
 #[serial]
 async fn repeated_launch_close_leaves_no_orphan_chrome_processes() {
-    let before = ps_chrome_pids();
+    let before = chrome_pids();
 
     for i in 0..25 {
         let browser = Browser::builder()
@@ -114,6 +250,23 @@ async fn repeated_launch_close_leaves_no_orphan_chrome_processes() {
         // does we still want the close path to run so we don't poison the
         // leak count with our own failed-test process.
         let _ = browser.main_tab().goto("about:blank").await;
+
+        // Prove the audit can SEE a live Chrome before trusting it to prove
+        // an absence. A matcher that silently matches nothing would make the
+        // diff below trivially empty and this test vacuously green — worse
+        // than the `#[cfg(unix)]` gate it replaces, because it would look
+        // like coverage. This is the assertion that fails first if the
+        // per-platform process names ever drift.
+        if i == 0 {
+            let live = chrome_pids();
+            assert!(
+                live.difference(&before).count() > 0,
+                "process audit saw no new Chrome PID while a browser was \
+                 live — the matcher is blind on this platform, so the leak \
+                 check below would pass without auditing anything",
+            );
+        }
+
         browser
             .close()
             .await
@@ -124,7 +277,7 @@ async fn repeated_launch_close_leaves_no_orphan_chrome_processes() {
     // by the kernel after the parent exits.
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    let after = ps_chrome_pids();
+    let after = chrome_pids();
     let leaked: Vec<u32> = after.difference(&before).copied().collect();
     assert!(
         leaked.is_empty(),

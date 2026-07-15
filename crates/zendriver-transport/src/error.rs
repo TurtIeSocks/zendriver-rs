@@ -48,6 +48,31 @@ pub enum CallError {
     /// the JSON-RPC `code`, `message`, and optional `data` payload.
     #[error("CDP RPC error [{0}] {1}")]
     Rpc(i32, String, Option<serde_json::Value>),
+
+    /// The command was written to the socket but Chrome never answered it
+    /// within the call's budget.
+    ///
+    /// Deliberately distinct from both siblings, because the three mean
+    /// different things and warrant different responses:
+    ///
+    /// - [`CallError::Rpc`] — Chrome heard the command and **said no**. The
+    ///   browser is healthy; the command was wrong. Retrying is pointless.
+    /// - [`CallError::Transport`] — the **connection broke**. Chrome may be
+    ///   gone; the handle is unusable.
+    /// - `Timeout` — the connection is **fine** and Chrome simply never
+    ///   replied. The browser is wedged, or the operation is slower than the
+    ///   budget allows. Retrying (or raising the budget) can be reasonable.
+    ///
+    /// Carries the method name because that is the diagnostic that makes a
+    /// stuck call actionable: "Chrome never answered" is not a bug report,
+    /// "`Page.navigate` went unanswered after 180s" is.
+    #[error("CDP call `{method}` went unanswered after {budget:?}")]
+    Timeout {
+        /// The CDP method that was never answered (e.g. `"Page.navigate"`).
+        method: String,
+        /// The budget that elapsed without a reply.
+        budget: std::time::Duration,
+    },
 }
 
 #[cfg(test)]
@@ -73,6 +98,18 @@ mod tests {
         assert_eq!(
             e.to_string(),
             "response channel dropped before reply (id=42)"
+        );
+    }
+
+    #[test]
+    fn display_call_timeout_names_the_method_and_budget() {
+        let e = CallError::Timeout {
+            method: "Page.navigate".into(),
+            budget: std::time::Duration::from_secs(180),
+        };
+        assert_eq!(
+            e.to_string(),
+            "CDP call `Page.navigate` went unanswered after 180s"
         );
     }
 

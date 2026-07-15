@@ -120,6 +120,12 @@ pub fn find_chrome_executable_for_channel(channel: Channel) -> Result<PathBuf, B
 /// install dir), followed by the per-OS conventional install locations for
 /// the requested channel. Factored out (and `pub(crate)`) so unit tests can
 /// assert the table without requiring the browser installed.
+///
+/// On Windows the machine-wide `Program Files` locations are listed ahead of
+/// the per-user `%LOCALAPPDATA%` ones: callers take the first candidate that
+/// *exists*, so a machine with a system-wide install resolves exactly as it
+/// always has, and the per-user path is reached only where discovery would
+/// otherwise have found nothing.
 pub(crate) fn candidate_paths_for_channel(channel: Channel) -> Vec<PathBuf> {
     let mut v = Vec::new();
 
@@ -205,20 +211,43 @@ pub(crate) fn candidate_paths_for_channel(channel: Channel) -> Vec<PathBuf> {
             r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
             r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
         ];
+
+        // Per-user installs live under `%LOCALAPPDATA%` — where Chrome's
+        // installer puts it whenever it runs without admin rights, which is the
+        // common outcome on a locked-down or personal desktop. Only the two
+        // `Program Files` (machine-wide) locations were ever checked, so on such
+        // a machine discovery found nothing and `launch()` failed unless the
+        // caller happened to set an explicit `chrome_path` / `CHROME_BIN`.
+        //
+        // `None` when the variable is unset (a service account, a stripped
+        // environment), in which case the table is simply what it was before.
+        let local_app_data = std::env::var_os("LOCALAPPDATA")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from);
+
         match channel {
             Channel::Chrome | Channel::Chromium | Channel::Auto => {
                 for p in chrome {
                     v.push(PathBuf::from(p));
+                }
+                if let Some(local) = &local_app_data {
+                    v.push(local.join(r"Google\Chrome\Application\chrome.exe"));
                 }
             }
             Channel::Brave => {
                 for p in brave {
                     v.push(PathBuf::from(p));
                 }
+                if let Some(local) = &local_app_data {
+                    v.push(local.join(r"BraveSoftware\Brave-Browser\Application\brave.exe"));
+                }
             }
             Channel::Edge => {
                 for p in edge {
                     v.push(PathBuf::from(p));
+                }
+                if let Some(local) = &local_app_data {
+                    v.push(local.join(r"Microsoft\Edge\Application\msedge.exe"));
                 }
             }
         }
@@ -280,6 +309,51 @@ pub(crate) fn parse_devtools_line(line: &str) -> Option<String> {
         Some(url.to_string())
     } else {
         None
+    }
+}
+
+/// Chrome's own record of the debug port it bound, written into the
+/// `user_data_dir`. A second, independent source for the WS endpoint.
+const DEVTOOLS_ACTIVE_PORT_FILE: &str = "DevToolsActivePort";
+
+/// How often [`poll_devtools_active_port`] re-reads the file while waiting for
+/// Chrome to create it.
+const DEVTOOLS_PORT_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+/// Parse Chrome's `DevToolsActivePort` file into a `ws://` endpoint.
+///
+/// The file is two lines: the port Chrome actually bound (which is the only way
+/// to learn it when launched with `--remote-debugging-port=0`), then the
+/// browser target's path (`/devtools/browser/<uuid>`).
+///
+/// Both lines are required. The file is polled while Chrome may still be
+/// creating it, so a partial read must yield `None` and let the caller keep
+/// waiting rather than resolve an endpoint that will not dial.
+pub(crate) fn parse_devtools_active_port(contents: &str) -> Option<String> {
+    let mut lines = contents.lines();
+    let port: u16 = lines.next()?.trim().parse().ok()?;
+    let path = lines.next()?.trim();
+    // Guard a torn read: the path line must at least look like a path.
+    if !path.starts_with('/') {
+        return None;
+    }
+    Some(format!("ws://127.0.0.1:{port}{path}"))
+}
+
+/// Wait for Chrome to write `<user_data_dir>/DevToolsActivePort`, then return
+/// the `ws://` endpoint it describes.
+///
+/// Never returns until the file exists and parses — callers bound it with a
+/// timeout (and race it against the stderr read).
+pub(crate) async fn poll_devtools_active_port(user_data_dir: &Path) -> String {
+    let path = user_data_dir.join(DEVTOOLS_ACTIVE_PORT_FILE);
+    loop {
+        if let Ok(contents) = tokio::fs::read_to_string(&path).await {
+            if let Some(url) = parse_devtools_active_port(&contents) {
+                return url;
+            }
+        }
+        tokio::time::sleep(DEVTOOLS_PORT_POLL_INTERVAL).await;
     }
 }
 
@@ -1175,6 +1249,18 @@ pub(crate) struct BrowserInner {
     pub(crate) conn: Connection,
     pub(crate) main_tab: Tab,
     pub(crate) child: tokio::sync::Mutex<Option<Child>>,
+    /// Windows job object confining Chrome's whole process tree; a zero-sized
+    /// no-op elsewhere. Killing the tracked `child` alone is not enough on
+    /// Windows — nothing reaps its renderer/GPU/utility/crashpad children — so
+    /// `close()` closes this job and `Drop` closes it implicitly. See
+    /// [`ProcessJob`].
+    ///
+    /// Read only from `close()`'s `cfg(not(unix))` branch, so on Unix it is
+    /// genuinely never read — it still drops with the struct, which is the only
+    /// thing that matters there. The allow is scoped to `unix` rather than
+    /// blanket so that a Windows build still reports it if it ever goes unused.
+    #[cfg_attr(unix, allow(dead_code))]
+    pub(crate) job: ProcessJob,
     pub(crate) _user_data: Option<TempDir>,
     /// Tempdirs holding `.crx` extensions unzipped at launch. Held here so the
     /// extracted unpacked directories outlive the Chrome process that was
@@ -1304,6 +1390,7 @@ pub(crate) fn test_only_inner_from_conn(conn: Connection) -> Arc<BrowserInner> {
             conn,
             main_tab,
             child: tokio::sync::Mutex::new(None),
+            job: ProcessJob::none(),
             _user_data: None,
             _extension_dirs: Vec::new(),
             owns_process: false,
@@ -1368,11 +1455,27 @@ impl TargetObserver for TabRegistrar {
 
     async fn on_target_attached(&self, session: PausedSession<'_>) -> Result<(), ObserverError> {
         let Some(weak) = self.browser.get() else {
-            // Registrar wired into observer chain before `set_browser` ran.
-            // Should not happen in practice because launch wires the weak
-            // before any observer can fire — log + bail gracefully if it
-            // ever does.
-            warn!("TabRegistrar fired before browser weak ref was wired; skipping");
+            // EXPECTED on the launch path, exactly once per browser: the
+            // initial target is attached during `finish_connect`, which is
+            // upstream of the `Arc::new_cyclic` that produces the
+            // `Weak<BrowserInner>` this observer needs. So the first attach
+            // always lands here and bails — and `finish_connect` compensates
+            // by inserting the main tab into the registry by hand right after
+            // it calls `set_browser` (see the call site).
+            //
+            // This was a `warn!` claiming it "should not happen in practice".
+            // It happens on every single launch, which made real registrar
+            // warnings (the chrome-scheme page below) impossible to spot in a
+            // log — so it is `debug!`. If it ever fires for a target OTHER
+            // than the initial one, that target is genuinely unregistered:
+            // the tab is then invisible to `Browser::tabs()` and closeable by
+            // nothing, which is worth the noise it costs to find.
+            debug!(
+                target_id = %session.target_info.target_id,
+                url = %session.target_info.url,
+                "tab-registrar: target attached before the browser weak ref was wired; skipping \
+                 registration (expected exactly once, for the initial target)"
+            );
             return Ok(());
         };
         let Some(browser) = weak.upgrade() else {
@@ -1404,12 +1507,27 @@ impl TargetObserver for TabRegistrar {
                 // auto-opens when the last user tab closes, devtools://, etc).
                 // These aren't pages the caller drove zendriver to create and
                 // would inflate `tab_count` / `tabs()` with unwanted entries.
+                //
+                // Skipping the *registry* is right; skipping it **silently**
+                // was not. A chrome-scheme page Chrome opened on its own is a
+                // real window: it is invisible to `Browser::tabs()`, so no
+                // caller can close it, and `close()` only kills the tracked
+                // PID — on Windows that leaves it orphaned on screen. This is
+                // one of the two live candidates for the double-window
+                // symptom, so make it observable rather than inferring it from
+                // a screenshot.
                 let url = &session.target_info.url;
                 if url.starts_with("chrome://")
                     || url.starts_with("devtools://")
                     || url.starts_with("chrome-extension://")
                     || url.starts_with("chrome-untrusted://")
                 {
+                    warn!(
+                        url = %url,
+                        target_id = %session.target_info.target_id,
+                        "chrome opened an internal page on its own; not tracked as a tab \
+                         (if a stray window is visible, this is it)",
+                    );
                     return Ok(());
                 }
                 let conn = session.connection().clone();
@@ -1494,8 +1612,296 @@ impl TargetObserver for TabRegistrar {
 
 const WS_ENDPOINT_TIMEOUT: Duration = Duration::from_secs(15);
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+/// How long [`Browser::close`] waits for Chrome to answer the CDP
+/// `Browser.close` quit before giving up and falling back to the signal path.
+///
+/// Deliberately short: this is a local-socket round-trip to a browser that is
+/// about to exit, and a wedged renderer — the exact case the signal fallback
+/// exists for — must not stall teardown for long. `SHUTDOWN_GRACE` still
+/// governs how long Chrome then gets to actually exit.
+const BROWSER_CLOSE_TIMEOUT: Duration = Duration::from_secs(3);
 /// How long [`resolve_ws_from_http`] waits for the `/json/version` round-trip.
 const JSON_VERSION_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Budget for everything *after* Chrome advertises its WS endpoint: the
+/// WebSocket dial plus the initial `Target.setAutoAttach` / `Target.getTargets`
+/// / `Target.attachToTarget` round-trips.
+///
+/// Before this existed, every step past the `WS_ENDPOINT_TIMEOUT`-guarded
+/// stderr read was unbounded, so a Chrome whose CDP responder was slow or
+/// wedged hung `launch()` **forever** — no error, no retry. Bounding it turns
+/// that invisible hang into a retryable [`BrowserError::HandshakeTimeout`].
+///
+/// **PROVISIONAL.** 30s is a deliberately generous placeholder chosen to sit
+/// well clear of a warm handshake (single-digit milliseconds against a local
+/// socket) while still bounding the pathological case. It is **not** yet
+/// calibrated against a real measurement: the motivating failure is a Windows
+/// *cold* start (first launch of an OS session, before GPU/DXGI/DWM bring-up
+/// and any Defender first-run scan of `chrome.exe` are paid), which cannot be
+/// measured from the macOS/Linux dev boxes this was written on. Re-tune once a
+/// cold Windows 11 launch has been timed; prefer raising it over lowering it,
+/// since a false timeout costs a whole retried launch while a slow success
+/// costs only latency.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// [`CREATE_NEW_PROCESS_GROUP`][1] — spawn Chrome as the root of its own
+/// process group so a console `Ctrl+C` is not delivered to it.
+///
+/// Without this, `Ctrl+C` in a terminal running a zendriver program goes to
+/// every process in the console's group, Chrome included: Chrome starts tearing
+/// itself down at the same moment our own handler starts an orchestrated
+/// shutdown, and the two race. With it, the `Ctrl+C` reaches only our process
+/// and Chrome goes down the one way we control — CDP quit, then the job object.
+///
+/// Declared locally rather than pulled from a `windows`-crate dependency: it is
+/// a single stable ABI constant, and the alternative is a heavyweight dep for
+/// one `u32`. `std` ORs its own required `CREATE_UNICODE_ENVIRONMENT` into
+/// whatever is passed here, so this does not clobber it.
+///
+/// [1]: https://learn.microsoft.com/en-us/windows/win32/procthread/process-creation-flags
+#[cfg(windows)]
+const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+
+/// A Windows [job object][1] holding the launched Chrome **and every process it
+/// spawns**, so the whole tree can be terminated as one unit.
+///
+/// # Why this exists
+///
+/// Windows has no parent→child reaping. `close()` tracks exactly one `Child` —
+/// the `chrome.exe` that `Command::spawn` returned — but Chrome's renderer, GPU,
+/// utility and crashpad-handler processes are spawned *by that chrome.exe*, and
+/// `TerminateProcess` against the parent does nothing to them. They survive as
+/// orphans that no code path in this crate can ever reach. Unix is spared only
+/// because SIGTERM triggers Chrome's own handler, which cascades the shutdown
+/// itself.
+///
+/// A job object is the OS-level fix: processes assigned to a job are joined by
+/// every process *they* subsequently spawn, and
+/// `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` terminates all of them the moment the
+/// last handle to the job closes. That "last handle closes" wording is doing
+/// more work than it looks: it holds even when *this* process dies abruptly —
+/// a panic, a `SIGKILL`, an end-task from Task Manager — because Windows closes
+/// our handles as part of tearing us down. The Chrome tree cannot outlive its
+/// owner even when the owner never gets to run cleanup code. That self-healing
+/// property is most of the value here, so [`kill_tree`](Self::kill_tree) is an
+/// optimization for the orderly path rather than the mechanism itself.
+///
+/// # Non-Windows
+///
+/// A zero-sized no-op. Kept as a real (non-`cfg`-gated) field on
+/// [`BrowserInner`] rather than a `#[cfg(windows)]` one so that the struct has
+/// the same shape on every platform: the ~10 construction sites, the tests
+/// among them, then compile identically everywhere, and a macOS `cargo check`
+/// still type-checks the plumbing. Only the internals are conditional.
+///
+/// [1]: https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects
+pub(crate) struct ProcessJob {
+    /// `Some` only for a Windows `launch()` whose assignment succeeded.
+    /// `Mutex` because the kill happens through `&self` (via `Arc<BrowserInner>`)
+    /// and has to *take* the job to drop it; `std::sync` because the only
+    /// operation is a non-blocking `take()`, never held across an `.await`.
+    #[cfg(windows)]
+    job: std::sync::Mutex<Option<win32job::Job>>,
+}
+
+impl ProcessJob {
+    /// A handle that confines nothing: `connect()` (we do not own the process),
+    /// every non-Windows platform, and the fallback when confinement fails.
+    pub(crate) fn none() -> Self {
+        Self {
+            #[cfg(windows)]
+            job: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Confine `child` — and everything it goes on to spawn — to a fresh job
+    /// object that kills the lot when its last handle closes.
+    ///
+    /// **Never fails.** Assignment is legitimately refused in environments we do
+    /// not control (an outer job that forbids nesting, some sandboxes and CI
+    /// containers), and a browser that cannot be confined is still a perfectly
+    /// usable browser. Any error is logged and degrades to [`Self::none`],
+    /// which leaves `close()` on exactly the single-PID kill it performed
+    /// before this existed — the pre-existing behavior, not a new failure mode.
+    /// It must never panic and must never fail `launch()`.
+    #[cfg(windows)]
+    pub(crate) fn confine(child: &Child) -> Self {
+        // `raw_handle` is `None` only once the child has been reaped, which
+        // cannot have happened yet — but a launch is not worth panicking over.
+        let Some(handle) = child.raw_handle() else {
+            warn!(
+                "chrome exited before it could be confined to a job object; \
+                 falling back to single-process termination"
+            );
+            return Self::none();
+        };
+
+        match Self::try_confine(handle) {
+            Ok(job) => {
+                debug!("confined chrome to a job object; its process tree will die with it");
+                Self {
+                    job: std::sync::Mutex::new(Some(job)),
+                }
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "could not confine chrome to a job object; falling back to \
+                     single-process termination — chrome's renderer/GPU/utility \
+                     processes may outlive close()"
+                );
+                Self::none()
+            }
+        }
+    }
+
+    /// The fallible half of [`Self::confine`], split out so every failure path
+    /// funnels through one `warn!` instead of being handled three times.
+    ///
+    /// Note the ordering: the limit is set *at creation*, before any process is
+    /// assigned. Assigning first and setting the limit second would leave a
+    /// window in which the job holds Chrome but would not kill it.
+    #[cfg(windows)]
+    fn try_confine(
+        handle: std::os::windows::io::RawHandle,
+    ) -> Result<win32job::Job, win32job::JobError> {
+        let mut info = win32job::ExtendedLimitInfo::new();
+        info.limit_kill_on_job_close();
+        let job = win32job::Job::create_with_limit_info(&info)?;
+        // `assign_process` takes the raw `HANDLE` as an `isize`. A pointer →
+        // integer cast is safe; no `unsafe` block is needed anywhere here,
+        // which is the whole reason `win32job` is preferred over raw FFI in a
+        // crate that denies `unsafe_code`.
+        job.assign_process(handle as isize)?;
+        Ok(job)
+    }
+
+    /// No-op stand-in on platforms without job objects, where Chrome's own
+    /// SIGTERM handler already cascades the shutdown.
+    #[cfg(not(windows))]
+    pub(crate) fn confine(_child: &Child) -> Self {
+        Self::none()
+    }
+
+    /// Terminate every process still in the job, immediately.
+    ///
+    /// Returns `true` if a job was actually closed, so the caller can tell
+    /// "the tree is being killed" from "there is no job; fall back to the
+    /// single-PID kill".
+    ///
+    /// Dropping the job *is* the kill: closing the last handle to a
+    /// `KILL_ON_JOB_CLOSE` job is what terminates its members, and there is no
+    /// separate "terminate" call to make. Idempotent — a second call finds the
+    /// slot empty and reports `false`.
+    #[cfg(windows)]
+    pub(crate) fn kill_tree(&self) -> bool {
+        let taken = self
+            .job
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+
+        match taken {
+            Some(job) => {
+                // Explicit, because this drop is load-bearing rather than
+                // incidental: it is the syscall that kills the tree.
+                drop(job);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// No-op stand-in; there is never a job to close off Windows.
+    ///
+    /// Called only from `close()`'s `cfg(not(unix))` branch, so a Unix build
+    /// never reaches it. Scoped to `unix` rather than a blanket allow so the
+    /// Windows build — where this is load-bearing — still reports it if the
+    /// call site is ever lost.
+    #[cfg(not(windows))]
+    #[cfg_attr(unix, allow(dead_code))]
+    pub(crate) fn kill_tree(&self) -> bool {
+        false
+    }
+}
+
+impl std::fmt::Debug for ProcessJob {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #[cfg(windows)]
+        let held = self
+            .job
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some();
+        #[cfg(not(windows))]
+        let held = false;
+
+        f.debug_struct("ProcessJob").field("held", &held).finish()
+    }
+}
+
+/// The freshly-spawned Chrome process, shared between [`guard_handshake`] and
+/// [`finish_connect`].
+///
+/// Shared rather than moved because ownership has to survive a *dropped*
+/// future: [`finish_connect`] installs the child on [`BrowserInner`] only after
+/// its CDP round-trips succeed, so when the handshake budget expires mid-flight
+/// the guard must still be able to reach the child and kill it. A plain
+/// `Option<Child>` moved into the handshake future would vanish with it,
+/// leaving the orphan `chrome.exe` this type exists to prevent.
+///
+/// `std::sync::Mutex` (not tokio's) is deliberate: the only operation is a
+/// non-blocking `take()`, never held across an `.await`.
+pub(crate) type ChildSlot = Arc<std::sync::Mutex<Option<Child>>>;
+
+/// Run the post-endpoint handshake under `budget`, guaranteeing that a launch
+/// which times out leaves no orphan Chrome behind.
+///
+/// `handshake` is the WS dial + [`finish_connect`] sequence. On expiry the
+/// future is dropped (cancelling the in-flight CDP call) and any child still
+/// parked in `child_slot` is killed **and reaped** before returning, so the
+/// process is gone by the time the caller sees the error rather than whenever
+/// tokio's orphan queue next runs.
+///
+/// The `kill_on_drop(true)` set at spawn stays as a backstop for the narrow
+/// window after [`finish_connect`] has moved the child onto `BrowserInner` (the
+/// `Arc<BrowserInner>` then drops with the future, and
+/// [`Drop for BrowserInner`] relies on `kill_on_drop`). The explicit kill here
+/// covers the whole span before that — which is where every CDP round-trip,
+/// and therefore every realistic stall, actually lives.
+///
+/// # Errors
+///
+/// Returns [`BrowserError::HandshakeTimeout`] when `budget` expires; otherwise
+/// passes the handshake's own result through untouched.
+pub(crate) async fn guard_handshake<F>(
+    budget: Duration,
+    child_slot: &ChildSlot,
+    handshake: F,
+) -> Result<Arc<BrowserInner>, ZendriverError>
+where
+    F: std::future::Future<Output = Result<Arc<BrowserInner>, ZendriverError>>,
+{
+    match timeout(budget, handshake).await {
+        Ok(res) => res,
+        Err(_elapsed) => {
+            let orphan = child_slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if let Some(mut child) = orphan {
+                warn!(
+                    budget = ?budget,
+                    "chrome CDP handshake exceeded its budget; killing the spawned child",
+                );
+                // `kill()` is start_kill + wait, so the process is reaped
+                // before we return — no zombie, no orphan.
+                let _ = child.kill().await;
+            }
+            Err(BrowserError::HandshakeTimeout.into())
+        }
+    }
+}
 
 /// Inputs to [`finish_connect`] — the post-connect handshake shared by
 /// [`BrowserBuilder::launch`] (spawn) and [`BrowserBuilder::connect`]
@@ -1511,8 +1917,21 @@ pub(crate) struct FinishConnect {
     pub(crate) registrar: Arc<TabRegistrar>,
     /// Per-tab input profile cached on `BrowserInner` for new-tab construction.
     pub(crate) input_profile: zendriver_stealth::InputProfile,
-    /// Owned Chrome child process — `Some` for `launch`, `None` for `connect`.
-    pub(crate) child: Option<Child>,
+    /// The spawned Chrome process — occupied for `launch`, empty for `connect`
+    /// (which attaches to a process it does not own). Taken out of the slot and
+    /// installed on [`BrowserInner`] once the handshake succeeds; see
+    /// [`ChildSlot`] for why this is shared rather than moved.
+    pub(crate) child: ChildSlot,
+    /// Windows job object confining the spawned Chrome's whole process tree.
+    /// Real only for a Windows `launch()`; [`ProcessJob::none`] for `connect`
+    /// (not our process to kill) and on every other platform.
+    ///
+    /// Owned by this struct — and therefore by the handshake future — until
+    /// [`finish_connect`] installs it on [`BrowserInner`]. That is deliberate:
+    /// if the handshake budget expires, dropping the future drops the job,
+    /// which kills the entire tree rather than leaking the helpers of a Chrome
+    /// that never finished starting.
+    pub(crate) job: ProcessJob,
     /// Owned `user_data_dir` tempdir — `Some` only when `launch` allocated one.
     pub(crate) owned_tmp: Option<TempDir>,
     /// Tempdirs for any `.crx` extensions `launch` unzipped. Empty for
@@ -1551,6 +1970,7 @@ pub(crate) async fn finish_connect(
         registrar,
         input_profile,
         child,
+        job,
         owned_tmp,
         extension_dirs,
         debug_host_port,
@@ -1576,16 +1996,39 @@ pub(crate) async fn finish_connect(
 
     // Discover the initial target via Target.getTargets (prefer a page).
     let list = conn.call_raw("Target.getTargets", json!({}), None).await?;
-    let target_id = list["targetInfos"]
-        .as_array()
-        .and_then(|arr| {
-            arr.iter()
-                .find(|t| t["type"] == "page")
-                .or_else(|| arr.first())
-        })
+    let no_targets = Vec::new();
+    let targets = list["targetInfos"].as_array().unwrap_or(&no_targets);
+    // Preference rule (unchanged): the first page target, else the first
+    // target of any type.
+    let target_id = targets
+        .iter()
+        .find(|t| t["type"] == "page")
+        .or_else(|| targets.first())
         .and_then(|t| t["targetId"].as_str())
         .ok_or_else(|| ZendriverError::Navigation("no initial target found".into()))?
         .to_string();
+
+    // Every *other* page target is a window we are not driving. Chrome opens
+    // some on its own (a Windows first-run window, a `chrome://newtab/`), and
+    // `.find()`-ing one target used to silently discard the rest: invisible to
+    // `Browser::tabs()`, and closed by nothing — `close()` only ever killed the
+    // one tracked PID. Collect them now, sweep them once we are attached.
+    //
+    // Only for a Chrome we spawned. On the `connect` path those extra pages are
+    // the user's own tabs in their own browser; closing them would be
+    // destructive and is emphatically not ours to do. Non-page targets (workers,
+    // etc.) are never swept — they are not windows.
+    let strays: Vec<String> = if owns_process {
+        targets
+            .iter()
+            .filter(|t| t["type"] == "page")
+            .filter_map(|t| t["targetId"].as_str())
+            .filter(|id| *id != target_id)
+            .map(str::to_string)
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     // Attach to the initial target. This triggers `Target.attachedToTarget`
     // which the actor routes through observers (`on_target_attached`) and
@@ -1593,9 +2036,9 @@ pub(crate) async fn finish_connect(
     //
     // The `TabRegistrar` observer (in the chain) will try to insert into
     // `BrowserInner.tabs` for the main tab too. That insertion is a no-op
-    // because the weak ref isn't wired yet (`OnceLock` empty → observer warns
-    // + skips). We re-insert the main tab manually below so the registry is
-    // consistent post-connect.
+    // because the weak ref isn't wired yet (`OnceLock` empty → observer logs
+    // at debug and skips). We re-insert the main tab manually below so the
+    // registry is consistent post-connect.
     let attach = conn
         .call_raw(
             "Target.attachToTarget",
@@ -1607,6 +2050,21 @@ pub(crate) async fn finish_connect(
         .as_str()
         .ok_or_else(|| ZendriverError::Navigation("attach returned no sessionId".into()))?
         .to_string();
+
+    // Sweep the stray windows now that our own tab is safely attached.
+    // Best-effort: a stray we cannot close is worth a warning, not a failed
+    // launch — the caller has a perfectly usable browser either way.
+    for stray in strays {
+        match conn
+            .call_raw("Target.closeTarget", json!({ "targetId": stray }), None)
+            .await
+        {
+            Ok(_) => debug!(target_id = %stray, "closed stray page target at connect"),
+            Err(e) => {
+                warn!(target_id = %stray, error = %e, "could not close stray page target");
+            }
+        }
+    }
 
     // Wrap session in Tab; build BrowserInner via the canonical
     // `Arc::new_cyclic` self-referential pattern.
@@ -1624,7 +2082,20 @@ pub(crate) async fn finish_connect(
         BrowserInner {
             conn,
             main_tab,
-            child: tokio::sync::Mutex::new(child),
+            // Take ownership of the child only now, once every CDP round-trip
+            // has succeeded. Until this point `guard_handshake` owns the
+            // cleanup: if the budget expires mid-handshake the child is still
+            // in the slot and gets killed there.
+            child: tokio::sync::Mutex::new(
+                child
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take(),
+            ),
+            // Moves with the child, for the same reason: until this point the
+            // job belongs to the handshake future, so a timed-out launch drops
+            // it and takes the whole Chrome tree down with it.
+            job,
             _user_data: owned_tmp,
             _extension_dirs: extension_dirs,
             owns_process,
@@ -2043,6 +2514,13 @@ impl BrowserBuilder {
         }
         info!(executable = %exe.display(), "launching chrome");
 
+        // Drop any `DevToolsActivePort` left behind by a previous run before we
+        // spawn. The default `user_data_dir` is a fresh tempdir so there is
+        // nothing to find, but a caller-supplied dir can carry a stale file
+        // naming a long-dead port — which the poll below would otherwise
+        // resolve instantly and hand us an endpoint that dials nothing.
+        let _ = std::fs::remove_file(user_data_path.join(DEVTOOLS_ACTIVE_PORT_FILE));
+
         // 6. Spawn chrome + parse WS URL.
         let mut cmd = Command::new(&exe);
         cmd.args(&flags)
@@ -2051,29 +2529,80 @@ impl BrowserBuilder {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
+        // Take Chrome out of our console's Ctrl+C group, so an interactive
+        // Ctrl+C cannot signal it behind our back and race the orchestrated
+        // shutdown in `close()`. See [`CREATE_NEW_PROCESS_GROUP`].
+        //
+        // `creation_flags` here is tokio's own inherent method on its
+        // `Command`, so no `std::os::windows::process::CommandExt` import is
+        // needed (importing it is an unused-import warning, not a no-op).
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
+
         let mut child = cmd.spawn().map_err(BrowserError::SpawnFailed)?;
+
+        // Confine Chrome's whole process tree to a job object, immediately —
+        // before its first `.await`, so nothing can be scheduled between the
+        // spawn and the assignment.
+        //
+        // Job membership is inherited by processes spawned *after* assignment,
+        // which is every Chrome helper that matters: chrome.exe has to complete
+        // a good deal of startup before it forks its first crashpad/GPU child,
+        // and this runs within microseconds of the spawn returning.
+        //
+        // `CREATE_SUSPENDED` + assign-before-resume would close that window
+        // formally, and it was considered and rejected: resuming demands the
+        // main *thread* handle, which neither `std` nor `tokio`'s `Command`
+        // exposes. Recovering it means a ToolHelp thread snapshot plus
+        // `OpenThread`/`ResumeThread` — raw FFI well past what `win32job`
+        // covers, in a crate that denies `unsafe_code`, to close a race whose
+        // realistic width is a few instructions. Not a trade worth making. It
+        // is *not* the stderr readiness path that blocks this; that would
+        // survive a suspended start.
+        //
+        // Never fails: see [`ProcessJob::confine`].
+        let job = ProcessJob::confine(&child);
 
         // Read stderr line-by-line until we see the DevTools URL.
         let stderr = child.stderr.take().ok_or(BrowserError::DevtoolsParse)?;
         let mut lines = BufReader::new(stderr).lines();
 
+        // Race two independent sources for the endpoint, inside one
+        // `WS_ENDPOINT_TIMEOUT` budget; first to resolve wins.
+        //
+        // Reading the `DevTools listening on` line off *this* child's piped
+        // stderr is the historical path and stays primary. But it couples
+        // "learn the debug port" to "this exact process writes to the pipe we
+        // handed it", which is a stronger assumption than it looks on Windows.
+        // `DevToolsActivePort` is Chrome's own record of the port it bound and
+        // does not depend on the pipe at all.
+        //
+        // Deliberately additive: an stderr EOF still fails fast with
+        // `DevtoolsParse` exactly as before (a closed pipe means the child
+        // exited — a bad flag, a profile lock — and no port file is coming), so
+        // a genuinely failed launch does not start waiting out the budget. The
+        // poll can only ever win *earlier*; it never delays a failure.
         let ws_url = timeout(WS_ENDPOINT_TIMEOUT, async {
-            while let Ok(Some(line)) = lines.next_line().await {
-                debug!(line = %line, "chrome stderr");
-                if let Some(url) = parse_devtools_line(&line) {
-                    return Ok::<String, ZendriverError>(url);
+            tokio::select! {
+                res = async {
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        debug!(line = %line, "chrome stderr");
+                        if let Some(url) = parse_devtools_line(&line) {
+                            return Ok::<String, ZendriverError>(url);
+                        }
+                    }
+                    Err(BrowserError::DevtoolsParse.into())
+                } => res,
+                url = poll_devtools_active_port(&user_data_path) => {
+                    debug!(ws_url = %url, "resolved endpoint from DevToolsActivePort");
+                    Ok(url)
                 }
             }
-            Err(BrowserError::DevtoolsParse.into())
         })
         .await
         .map_err(|_| BrowserError::WsTimeout)??;
 
-        // 7. Connect with observers.
-        debug!(ws_url = %ws_url, "connecting to chrome");
-        let conn = zendriver_transport::connect_with_observers(&ws_url, observers).await?;
-
-        // 8–12. Shared post-connect handshake (auto-attach, main-tab
+        // 7–12. WS dial + shared post-connect handshake (auto-attach, main-tab
         // discovery + attach, BrowserInner construction, registrar wiring).
         // Identical for spawn (`launch`) and attach (`connect`); the only
         // differences are the owned `Child` / `TempDir` we hand it and the
@@ -2081,18 +2610,32 @@ impl BrowserBuilder {
         #[cfg(feature = "tracker-blocking")]
         let tracker_matcher = self.build_tracker_matcher().await?;
 
-        let inner = finish_connect(FinishConnect {
-            conn,
-            registrar,
-            input_profile,
-            child: Some(child),
-            owned_tmp,
-            extension_dirs,
-            debug_host_port: debug_host_port_from_ws(&ws_url),
-            ws_url: Some(ws_url),
-            owns_process: true,
-            #[cfg(feature = "tracker-blocking")]
-            tracker_matcher,
+        // Everything from here to a live `BrowserInner` runs under a single
+        // budget. `WS_ENDPOINT_TIMEOUT` above only guards Chrome *advertising*
+        // its endpoint; the dial and the CDP round-trips that follow used to be
+        // unbounded, so a Chrome that came up but never answered CDP hung
+        // `launch()` forever. `guard_handshake` bounds them and kills the
+        // child we spawned on expiry, so a failed launch is retryable and
+        // leaves no orphan `chrome.exe`.
+        let child_slot: ChildSlot = Arc::new(std::sync::Mutex::new(Some(child)));
+        let inner = guard_handshake(HANDSHAKE_TIMEOUT, &child_slot, async {
+            debug!(ws_url = %ws_url, "connecting to chrome");
+            let conn = zendriver_transport::connect_with_observers(&ws_url, observers).await?;
+            finish_connect(FinishConnect {
+                conn,
+                registrar,
+                input_profile,
+                child: child_slot.clone(),
+                job,
+                owned_tmp,
+                extension_dirs,
+                debug_host_port: debug_host_port_from_ws(&ws_url),
+                ws_url: Some(ws_url.clone()),
+                owns_process: true,
+                #[cfg(feature = "tracker-blocking")]
+                tracker_matcher,
+            })
+            .await
         })
         .await?;
 
@@ -2244,12 +2787,16 @@ impl BrowserBuilder {
         let conn = zendriver_transport::connect_with_observers(&ws_url, observers).await?;
 
         // Same post-connect handshake as `launch`, but with no owned process:
-        // no `Child`, no `TempDir`, `owns_process = false`.
+        // no `Child`, no `TempDir`, no job, `owns_process = false`.
         let inner = finish_connect(FinishConnect {
             conn,
             registrar,
             input_profile,
-            child: None,
+            child: ChildSlot::default(),
+            // We attached to a Chrome we did not spawn. Confining someone
+            // else's browser to our job would kill it — and every tab they had
+            // open — when this process exits.
+            job: ProcessJob::none(),
             owned_tmp: None,
             extension_dirs: Vec::new(),
             debug_host_port: debug_host_port_from_ws(&ws_url),
@@ -2957,13 +3504,22 @@ impl Browser {
 
     /// Graceful shutdown of the Chrome subprocess.
     ///
-    /// Cancels the transport, sends SIGTERM to Chrome, waits up to 5s, then
-    /// SIGKILLs on timeout. Cleans up the `user_data_dir` tempdir if one was
+    /// Asks Chrome to quit over CDP (`Browser.close`) first, then falls back to
+    /// SIGTERM / wait 5s / SIGKILL if it refuses, never answers, or answers but
+    /// does not exit. Cleans up the `user_data_dir` tempdir if one was
     /// allocated at launch time.
+    ///
+    /// The CDP quit matters because the signal path only ever targets the
+    /// single `chrome.exe` PID we tracked at spawn. Any *other* window Chrome
+    /// opened (a first-run window, a `chrome://newtab/`) is not that PID's
+    /// business on Windows, where there is no SIGTERM to cascade — so it
+    /// survives `close()` and orphans forever. `Browser.close` is Chrome's
+    /// protocol-native quit: it closes every window and exits the whole tree.
     ///
     /// For a browser produced by [`BrowserBuilder::connect`] (we did not spawn
     /// Chrome) this shuts down only the transport and leaves the attached
-    /// process running.
+    /// process running — `Browser.close` is never sent, since quitting a
+    /// browser we merely attached to would take the user's windows with it.
     ///
     /// # Examples
     ///
@@ -2975,14 +3531,74 @@ impl Browser {
     /// # Ok(()) }
     /// ```
     pub async fn close(self) -> Result<(), ZendriverError> {
-        self.inner.conn.shutdown();
+        self.close_within(BROWSER_CLOSE_TIMEOUT).await
+    }
+
+    /// [`Browser::close`] with an injectable budget for the `Browser.close`
+    /// round-trip, so tests can exercise the timeout→hard-kill fallback
+    /// without waiting out the real [`BROWSER_CLOSE_TIMEOUT`].
+    pub(crate) async fn close_within(
+        self,
+        browser_close_budget: Duration,
+    ) -> Result<(), ZendriverError> {
         // Attached (non-owning) sessions must never terminate the process we
-        // connected to — only the transport is torn down above. Spawn-only.
+        // connected to — only the transport is torn down. Spawn-only below.
         if !self.inner.owns_process {
+            self.inner.conn.shutdown();
             return Ok(());
         }
+
+        // Ask Chrome to quit over the protocol first. This must precede
+        // `conn.shutdown()` — that tears down the very transport the command
+        // travels over.
+        let quit = timeout(
+            browser_close_budget,
+            self.inner.conn.call_raw("Browser.close", json!({}), None),
+        )
+        .await;
+        let acked = match quit {
+            // Chrome acknowledged the quit.
+            Ok(Ok(_)) => true,
+            // Chrome commonly drops the socket on quit instead of replying;
+            // the transport dying here means the quit landed.
+            Ok(Err(zendriver_transport::CallError::Transport(_))) => true,
+            // Chrome never answered. Unreachable while `browser_close_budget`
+            // (3s) stays far tighter than the transport's per-call default
+            // (180s) — the outer timeout below wins — but matched explicitly
+            // so a retuned budget can never make this report "refused", which
+            // it categorically is not: nothing was heard, let alone declined.
+            Ok(Err(e @ zendriver_transport::CallError::Timeout { .. })) => {
+                warn!(error = %e, "Browser.close went unanswered; falling back to signal shutdown");
+                false
+            }
+            // An RPC refusal means Chrome heard us and declined — nothing to
+            // wait for, go straight to signals.
+            Ok(Err(e)) => {
+                warn!(error = %e, "Browser.close was refused; falling back to signal shutdown");
+                false
+            }
+            Err(_elapsed) => {
+                warn!(
+                    budget = ?browser_close_budget,
+                    "Browser.close went unanswered; falling back to signal shutdown",
+                );
+                false
+            }
+        };
+
+        self.inner.conn.shutdown();
+
         let mut child_guard = self.inner.child.lock().await;
         if let Some(mut child) = child_guard.take() {
+            if acked {
+                // Chrome took the quit — give it the same grace to actually
+                // exit. If it does, no signal is ever sent and the whole
+                // process tree went down with it.
+                if let Ok(Ok(_status)) = timeout(SHUTDOWN_GRACE, child.wait()).await {
+                    return Ok(());
+                }
+                warn!("chrome accepted Browser.close but did not exit; hard-killing");
+            }
             // Try graceful exit first. On Unix, tokio's `start_kill` is
             // `kill(pid, SIGKILL)` — too aggressive for graceful shutdown.
             // We send SIGTERM ourselves and fall back to SIGKILL on timeout.
@@ -2999,7 +3615,19 @@ impl Browser {
             }
             #[cfg(not(unix))]
             {
-                let _ = child.start_kill(); // best-effort on non-Unix
+                // Close the job first: on Windows this is the only step that
+                // reaches Chrome's renderer/GPU/utility/crashpad children.
+                // `start_kill` is a `TerminateProcess` against the one tracked
+                // `chrome.exe`, and nothing on Windows cascades that to the
+                // tree, so on its own it orphans every helper.
+                if self.inner.job.kill_tree() {
+                    debug!("closed chrome's job object; its whole process tree is terminating");
+                }
+                // Still sent unconditionally. When a job exists this is
+                // redundant (the OS has already terminated this pid); when
+                // confinement was refused it is the entire kill, exactly as
+                // before this fix. The `wait`/`kill` fallback below covers both.
+                let _ = child.start_kill();
             }
             match timeout(SHUTDOWN_GRACE, child.wait()).await {
                 Ok(Ok(_status)) => {}
@@ -3149,6 +3777,15 @@ impl Drop for BrowserInner {
         // causes tokio to SIGKILL the child when the Child is dropped.
         // The TempDir for user_data_dir is dropped here too.
         //
+        // On Windows `kill_on_drop` has the same blind spot as every other
+        // single-pid kill — it does not reach Chrome's helper processes. The
+        // `job` field covers them without needing a line of code here: dropping
+        // it closes the last handle to a `KILL_ON_JOB_CLOSE` job, which is
+        // itself the syscall that terminates the tree. That is also why it
+        // survives paths that never run Drop at all (a `SIGKILL`, an end-task
+        // from Task Manager): Windows closes our handles as it tears us down,
+        // and the tree dies with them.
+        //
         // Attached (`connect`) browsers hold no `Child` — `owns_process` is
         // false and the field is `None` — so nothing is killed here.
         debug_assert!(
@@ -3167,6 +3804,24 @@ mod tests {
     fn candidate_paths_is_nonempty() {
         let v = candidate_paths_for_channel(Channel::Auto);
         assert!(!v.is_empty());
+    }
+
+    /// A [`ProcessJob::none`] confines nothing, so it must report that it
+    /// killed nothing — that `false` is what tells `close()` to fall back to
+    /// the single-PID kill instead of assuming the tree is already dying.
+    ///
+    /// This is the whole of what a non-Windows host can assert about the type:
+    /// the real `CreateJobObjectW` / `AssignProcessToJobObject` path is
+    /// `#[cfg(windows)]` and is not compiled here. It does lock the contract
+    /// that the graceful-degradation path depends on, on every platform.
+    #[test]
+    fn a_job_that_confines_nothing_reports_no_kill_and_is_idempotent() {
+        let job = ProcessJob::none();
+        assert!(
+            !job.kill_tree(),
+            "an empty ProcessJob must report false so close() falls back to the single-PID kill",
+        );
+        assert!(!job.kill_tree(), "kill_tree must be idempotent");
     }
 
     #[test]
@@ -3567,6 +4222,49 @@ mod tests {
         );
     }
 
+    /// A non-admin Chrome installs itself under `%LOCALAPPDATA%`, which the
+    /// candidate table never checked — so discovery found nothing on such a
+    /// box and `launch()` failed unless an explicit path was configured.
+    ///
+    /// Ordering is the other half of the contract: callers take the first
+    /// candidate that *exists*, so the machine-wide `Program Files` entries
+    /// must stay ahead of the per-user one. This is purely a fallback for
+    /// machines that had no answer before; it must never re-point a machine
+    /// that already resolves a system-wide install.
+    ///
+    /// Reads the ambient `LOCALAPPDATA` rather than setting it: `set_var` is
+    /// `unsafe` in edition 2024 and the workspace denies `unsafe_code`. Windows
+    /// always defines it, so the guard is a formality there.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_chrome_candidates_include_the_per_user_install_after_program_files() {
+        let Some(local) = std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()) else {
+            return;
+        };
+        let local = PathBuf::from(local);
+
+        let paths = candidate_paths_for_channel(Channel::Chrome);
+        let per_user = local.join(r"Google\Chrome\Application\chrome.exe");
+
+        let per_user_at = paths.iter().position(|p| *p == per_user);
+        assert!(
+            per_user_at.is_some(),
+            "the per-user %LOCALAPPDATA% chrome.exe must be a candidate: {paths:?}",
+        );
+
+        let program_files_at = paths
+            .iter()
+            .position(|p| p.to_string_lossy().contains(r"Program Files\Google"));
+        if let (Some(system), Some(user)) = (program_files_at, per_user_at) {
+            assert!(
+                system < user,
+                "machine-wide Program Files must be tried before the per-user \
+                 install, or a box with both would change which binary it \
+                 launches: {paths:?}",
+            );
+        }
+    }
+
     #[test]
     fn channel_auto_includes_chrome_family_candidates() {
         // Auto preserves the historical first-found behavior: it offers both
@@ -3646,6 +4344,7 @@ mod tests {
                 conn: conn.clone(),
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
+                job: ProcessJob::none(),
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
@@ -3739,6 +4438,7 @@ mod tests {
                 conn: conn.clone(),
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
+                job: ProcessJob::none(),
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
@@ -3848,6 +4548,7 @@ mod tests {
                 conn: conn.clone(),
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
+                job: ProcessJob::none(),
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
@@ -3950,6 +4651,7 @@ mod tests {
                 conn: conn.clone(),
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
+                job: ProcessJob::none(),
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
@@ -4019,6 +4721,7 @@ mod tests {
                 conn: conn.clone(),
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
+                job: ProcessJob::none(),
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
@@ -4090,6 +4793,7 @@ mod tests {
                 conn: conn.clone(),
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
+                job: ProcessJob::none(),
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
@@ -4151,6 +4855,7 @@ mod tests {
                 conn: conn.clone(),
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
+                job: ProcessJob::none(),
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
@@ -4289,6 +4994,7 @@ mod tests {
                 conn: conn.clone(),
                 main_tab,
                 child: tokio::sync::Mutex::new(None),
+                job: ProcessJob::none(),
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
@@ -4644,7 +5350,8 @@ mod tests {
                 conn,
                 registrar,
                 input_profile,
-                child: None,
+                child: ChildSlot::default(),
+                job: ProcessJob::none(),
                 owned_tmp: None,
                 extension_dirs: Vec::new(),
                 debug_host_port: debug_host_port_from_ws(
@@ -4714,7 +5421,8 @@ mod tests {
                 conn,
                 registrar,
                 input_profile,
-                child: None,
+                child: ChildSlot::default(),
+                job: ProcessJob::none(),
                 owned_tmp: None,
                 extension_dirs: Vec::new(),
                 debug_host_port: None,
@@ -4744,6 +5452,628 @@ mod tests {
         // close() on a non-owning browser: shuts the transport, skips the
         // kill path entirely. No panic, no hang, returns Ok.
         browser.close().await.unwrap();
+    }
+
+    /// Build a `finish_connect` future wired to a mock Chrome that never
+    /// answers a single CDP command — the exact shape of the symptom-1 stall
+    /// (Chrome printed its WS endpoint, then its CDP responder went silent).
+    /// Returns the mock, which the caller MUST hold alive: dropping it closes
+    /// the transport and drains in-flight calls, turning the hang into a
+    /// prompt `Disconnected` and defeating the test.
+    fn never_answering_handshake(
+        child: ChildSlot,
+    ) -> (
+        zendriver_transport::testing::MockConnection,
+        impl std::future::Future<Output = Result<Arc<BrowserInner>, ZendriverError>>,
+    ) {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+        let fut = finish_connect(FinishConnect {
+            conn,
+            registrar,
+            input_profile,
+            child,
+            job: ProcessJob::none(),
+            owned_tmp: None,
+            extension_dirs: Vec::new(),
+            debug_host_port: None,
+            ws_url: None,
+            owns_process: true,
+            #[cfg(feature = "tracker-blocking")]
+            tracker_matcher: None,
+        });
+        (mock, fut)
+    }
+
+    /// T1: a handshake that never completes must surface the dedicated
+    /// `HandshakeTimeout` — NOT `WsTimeout` (the endpoint was fine) and not an
+    /// infinite hang, which is the bug this replaces.
+    #[tokio::test]
+    async fn handshake_timeout_reports_handshake_timeout_within_budget() {
+        let slot: ChildSlot = ChildSlot::default();
+        let (_mock, fut) = never_answering_handshake(slot.clone());
+
+        let budget = Duration::from_millis(150);
+        let started = std::time::Instant::now();
+        let err = guard_handshake(budget, &slot, fut).await.unwrap_err();
+
+        assert!(
+            matches!(err, ZendriverError::Browser(BrowserError::HandshakeTimeout)),
+            "expected HandshakeTimeout, got {err:?}",
+        );
+        assert!(
+            started.elapsed() < budget * 20,
+            "must fail inside the budget, took {:?}",
+            started.elapsed(),
+        );
+    }
+
+    /// T1, the load-bearing half: a launch whose handshake times out must
+    /// leave **no orphan `chrome.exe`**. The child is spawned exactly the way
+    /// `launch` spawns Chrome (`kill_on_drop(true)`), parked in the same
+    /// `ChildSlot` the real handshake uses, and must be dead — not merely
+    /// dropped-and-maybe-reaped-later — by the time the guard returns.
+    ///
+    /// Unix-only because the liveness probe is `kill(pid, 0)`; the
+    /// slot-drained assertion above covers the cross-platform contract.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn handshake_timeout_leaves_no_orphan_child() {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("300")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let child = cmd.spawn().expect("spawn stand-in child");
+        let pid = child.id().expect("child has a pid") as i32;
+
+        // Sanity: the stand-in is actually running before we start.
+        #[allow(unsafe_code)]
+        let alive_before = unsafe { libc::kill(pid, 0) } == 0;
+        assert!(alive_before, "stand-in child should be alive pre-handshake");
+
+        let slot: ChildSlot = Arc::new(std::sync::Mutex::new(Some(child)));
+        let (_mock, fut) = never_answering_handshake(slot.clone());
+
+        let err = guard_handshake(Duration::from_millis(150), &slot, fut)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ZendriverError::Browser(BrowserError::HandshakeTimeout)
+        ));
+
+        // The guard must have taken the child out of the slot...
+        assert!(
+            slot.lock().unwrap().is_none(),
+            "guard must drain the child slot",
+        );
+        // ...and reaped it, so the pid is gone (ESRCH), not a live orphan and
+        // not a zombie waiting on tokio's orphan queue.
+        #[allow(unsafe_code)]
+        let alive_after = unsafe { libc::kill(pid, 0) } == 0;
+        assert!(
+            !alive_after,
+            "handshake timeout must leave no orphan chrome process (pid {pid} still alive)",
+        );
+    }
+
+    /// T1: the guard is transparent on the happy path — a handshake that
+    /// completes inside the budget returns its `BrowserInner` untouched, and
+    /// `finish_connect` (not the guard) owns the child by then.
+    #[tokio::test]
+    async fn guard_handshake_passes_through_a_successful_handshake() {
+        let slot: ChildSlot = ChildSlot::default();
+        let (mut mock, fut) = never_answering_handshake(slot.clone());
+
+        let guarded = tokio::spawn({
+            let slot = slot.clone();
+            async move { guard_handshake(Duration::from_secs(30), &slot, fut).await }
+        });
+
+        let id = mock.expect_cmd("Target.setAutoAttach").await;
+        mock.reply(id, json!({})).await;
+        let id = mock.expect_cmd("Target.getTargets").await;
+        mock.reply(
+            id,
+            json!({ "targetInfos": [{ "targetId": "T1", "type": "page", "url": "about:blank" }] }),
+        )
+        .await;
+        let id = mock.expect_cmd("Target.attachToTarget").await;
+        mock.reply(id, json!({ "sessionId": "S1" })).await;
+
+        let inner = guarded.await.unwrap().expect("handshake should succeed");
+        assert!(inner.tabs.read().await.contains_key("S1"));
+        inner.conn.shutdown();
+    }
+
+    /// Build an *owning* `Browser` (as `launch` produces) wired to a mock
+    /// Chrome, with `child` standing in for the spawned `chrome.exe`. Drives
+    /// the post-connect handshake to completion and hands back the mock so the
+    /// test can keep asserting on CDP traffic — notably what `close()` sends.
+    ///
+    /// Unix-only to match its callers, which need a stand-in child process
+    /// (`sleep 300`) and `libc::kill` to observe the close ordering.
+    #[cfg(unix)]
+    async fn owning_browser_with_child(
+        child: Option<Child>,
+    ) -> (zendriver_transport::testing::MockConnection, Browser) {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+        let fut = tokio::spawn(finish_connect(FinishConnect {
+            conn,
+            registrar,
+            input_profile,
+            child: Arc::new(std::sync::Mutex::new(child)),
+            job: ProcessJob::none(),
+            owned_tmp: None,
+            extension_dirs: Vec::new(),
+            debug_host_port: None,
+            ws_url: None,
+            owns_process: true,
+            #[cfg(feature = "tracker-blocking")]
+            tracker_matcher: None,
+        }));
+
+        let id = mock.expect_cmd("Target.setAutoAttach").await;
+        mock.reply(id, json!({})).await;
+        let id = mock.expect_cmd("Target.getTargets").await;
+        mock.reply(
+            id,
+            json!({ "targetInfos": [{ "targetId": "T1", "type": "page", "url": "about:blank" }] }),
+        )
+        .await;
+        let id = mock.expect_cmd("Target.attachToTarget").await;
+        mock.reply(id, json!({ "sessionId": "S1" })).await;
+
+        let inner = fut.await.unwrap().unwrap();
+        (mock, Browser { inner })
+    }
+
+    /// Spawn a long-lived stand-in for `chrome.exe`, spawned the way `launch`
+    /// spawns Chrome. Returns the child and its pid.
+    #[cfg(unix)]
+    fn spawn_stand_in_chrome() -> (Child, i32) {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("300")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let child = cmd.spawn().expect("spawn stand-in child");
+        let pid = child.id().expect("child has a pid") as i32;
+        (child, pid)
+    }
+
+    #[cfg(unix)]
+    fn pid_alive(pid: i32) -> bool {
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::kill(pid, 0) == 0
+        }
+    }
+
+    /// T2: `close()` must ask Chrome to quit over CDP **before** it reaches for
+    /// an OS signal. `Browser.close` closes every window and exits the whole
+    /// process tree; the signal path only ever targets the single tracked PID,
+    /// which is how a second Chrome window survives `close()` and orphans.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn close_sends_browser_close_before_any_process_kill() {
+        let (child, pid) = spawn_stand_in_chrome();
+        let (mut mock, browser) = owning_browser_with_child(Some(child)).await;
+
+        let closing = tokio::spawn(async move { browser.close().await });
+
+        // If close() killed the process first (the old behavior), this would
+        // hang — nothing would ever be sent.
+        let id = mock.expect_cmd("Browser.close").await;
+        assert!(
+            mock.last_sent().get("sessionId").is_none(),
+            "Browser.close is browser-scope, not session-scope",
+        );
+        // The graceful request went out while the process was still alive:
+        // ordering proven, not just presence.
+        assert!(
+            pid_alive(pid),
+            "Browser.close must be sent before the process is killed",
+        );
+
+        mock.reply(id, json!({})).await;
+        closing.await.unwrap().expect("close should succeed");
+
+        // The stand-in never exits on its own, so the hard-kill safety net
+        // still had to finish the job — close() must not leave it running.
+        assert!(!pid_alive(pid), "close() must leave no surviving process");
+    }
+
+    /// T2: the hard-kill fallback is the safety net for a wedged renderer that
+    /// never answers `Browser.close`. It must still fire when the graceful
+    /// request times out — a browser that ignores CDP must not become
+    /// un-closable.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn close_hard_kills_when_browser_close_times_out() {
+        let (child, pid) = spawn_stand_in_chrome();
+        let (mut mock, browser) = owning_browser_with_child(Some(child)).await;
+
+        // Never reply: Chrome heard nothing back. Hold the mock so the
+        // transport stays up and the call genuinely hangs rather than draining.
+        let closing =
+            tokio::spawn(async move { browser.close_within(Duration::from_millis(150)).await });
+        let _id = mock.expect_cmd("Browser.close").await;
+
+        closing
+            .await
+            .unwrap()
+            .expect("close must succeed via the fallback");
+        assert!(
+            !pid_alive(pid),
+            "a Browser.close timeout must still hard-kill the process (pid {pid} alive)",
+        );
+        drop(mock);
+    }
+
+    /// T2 safety: a browser produced by `connect()` was attached to, not
+    /// spawned. `Browser.close` would quit *the user's* Chrome — every window,
+    /// not just ours. It must never be sent on a non-owning handle.
+    #[tokio::test]
+    async fn close_never_sends_browser_close_on_a_non_owning_browser() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+        let fut = tokio::spawn(finish_connect(FinishConnect {
+            conn,
+            registrar,
+            input_profile,
+            child: ChildSlot::default(),
+            job: ProcessJob::none(),
+            owned_tmp: None,
+            extension_dirs: Vec::new(),
+            debug_host_port: None,
+            ws_url: None,
+            owns_process: false,
+            #[cfg(feature = "tracker-blocking")]
+            tracker_matcher: None,
+        }));
+        let id = mock.expect_cmd("Target.setAutoAttach").await;
+        mock.reply(id, json!({})).await;
+        let id = mock.expect_cmd("Target.getTargets").await;
+        mock.reply(
+            id,
+            json!({ "targetInfos": [{ "targetId": "T1", "type": "page", "url": "about:blank" }] }),
+        )
+        .await;
+        let id = mock.expect_cmd("Target.attachToTarget").await;
+        mock.reply(id, json!({ "sessionId": "S1" })).await;
+        let inner = fut.await.unwrap().unwrap();
+
+        Browser { inner }.close().await.unwrap();
+
+        // Drain everything still queued from the handshake (tab setup emits
+        // e.g. `Network.enable`) and assert the quit is not among it.
+        let mut sent = Vec::new();
+        while let Some((method, _id)) = mock.try_recv_cmd() {
+            sent.push(method);
+        }
+        assert!(
+            !sent.iter().any(|m| m == "Browser.close"),
+            "close() on an attached browser must never quit the user's Chrome; sent: {sent:?}",
+        );
+    }
+
+    /// T3: when Chrome hands back more than one page target, `finish_connect`
+    /// used to `.find()` the first and silently discard the rest — leaving
+    /// every extra window open, untracked by `Browser::tabs()`, and closable by
+    /// nothing. Exactly one attach, and every other page swept.
+    #[tokio::test]
+    async fn finish_connect_attaches_one_page_and_closes_every_other() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+        let fut = tokio::spawn(finish_connect(FinishConnect {
+            conn,
+            registrar,
+            input_profile,
+            child: ChildSlot::default(),
+            job: ProcessJob::none(),
+            owned_tmp: None,
+            extension_dirs: Vec::new(),
+            debug_host_port: None,
+            ws_url: None,
+            owns_process: true,
+            #[cfg(feature = "tracker-blocking")]
+            tracker_matcher: None,
+        }));
+
+        let id = mock.expect_cmd("Target.setAutoAttach").await;
+        mock.reply(id, json!({})).await;
+
+        // Two page targets — the double-window symptom.
+        let id = mock.expect_cmd("Target.getTargets").await;
+        mock.reply(
+            id,
+            json!({ "targetInfos": [
+                { "targetId": "T1", "type": "page", "url": "about:blank" },
+                { "targetId": "T2", "type": "page", "url": "chrome://newtab/" },
+            ] }),
+        )
+        .await;
+
+        // The preference rule is unchanged: the first page wins.
+        let id = mock.expect_cmd("Target.attachToTarget").await;
+        assert_eq!(mock.last_sent()["params"]["targetId"], "T1");
+        mock.reply(id, json!({ "sessionId": "S1" })).await;
+
+        // The loser is closed, not abandoned.
+        let id = mock.expect_cmd("Target.closeTarget").await;
+        assert_eq!(
+            mock.last_sent()["params"]["targetId"],
+            "T2",
+            "the non-chosen page target must be swept",
+        );
+        mock.reply(id, json!({ "success": true })).await;
+
+        let inner = fut.await.unwrap().unwrap();
+        assert!(inner.tabs.read().await.contains_key("S1"));
+
+        // Exactly one attach and one close — no second attach, no sweep of the
+        // target we are driving.
+        let mut attaches = 0;
+        let mut closes = 0;
+        while let Some((method, _)) = mock.try_recv_cmd() {
+            match method.as_str() {
+                "Target.attachToTarget" => attaches += 1,
+                "Target.closeTarget" => closes += 1,
+                _ => {}
+            }
+        }
+        assert_eq!(attaches, 0, "no attach beyond the chosen target");
+        assert_eq!(closes, 0, "no close beyond the single extra page");
+
+        inner.conn.shutdown();
+    }
+
+    /// T3: a lone page target is the normal case — nothing to sweep, and the
+    /// sweep must not close the target we just attached to.
+    #[tokio::test]
+    async fn finish_connect_sweeps_nothing_when_there_is_one_page() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+        let fut = tokio::spawn(finish_connect(FinishConnect {
+            conn,
+            registrar,
+            input_profile,
+            child: ChildSlot::default(),
+            job: ProcessJob::none(),
+            owned_tmp: None,
+            extension_dirs: Vec::new(),
+            debug_host_port: None,
+            ws_url: None,
+            owns_process: true,
+            #[cfg(feature = "tracker-blocking")]
+            tracker_matcher: None,
+        }));
+
+        let id = mock.expect_cmd("Target.setAutoAttach").await;
+        mock.reply(id, json!({})).await;
+        let id = mock.expect_cmd("Target.getTargets").await;
+        mock.reply(
+            id,
+            json!({ "targetInfos": [
+                { "targetId": "T1", "type": "page", "url": "about:blank" },
+                // A non-page target must never be swept — it is not a window.
+                { "targetId": "W1", "type": "service_worker", "url": "https://x.test/sw.js" },
+            ] }),
+        )
+        .await;
+        let id = mock.expect_cmd("Target.attachToTarget").await;
+        mock.reply(id, json!({ "sessionId": "S1" })).await;
+
+        // Bounded for the same reason: sweeping the worker (or the page we just
+        // attached to) would block on a reply that never comes.
+        let inner = timeout(Duration::from_secs(5), fut)
+            .await
+            .expect("finish_connect must not block sweeping a non-page target")
+            .unwrap()
+            .unwrap();
+
+        let mut closes = Vec::new();
+        while let Some((method, _)) = mock.try_recv_cmd() {
+            if method == "Target.closeTarget" {
+                closes.push(mock.last_sent()["params"]["targetId"].clone());
+            }
+        }
+        assert!(
+            closes.is_empty(),
+            "a single page (plus a worker) must trigger no sweep; closed: {closes:?}",
+        );
+        inner.conn.shutdown();
+    }
+
+    /// T3 safety: the sweep must never run on the `connect` path. Those extra
+    /// pages are the user's own tabs in their own browser — closing them would
+    /// be destructive and is not ours to do. `finish_connect` is shared between
+    /// `launch` and `connect`, so this is gated on `owns_process`, not implied.
+    #[tokio::test]
+    async fn finish_connect_never_sweeps_tabs_of_a_browser_it_did_not_spawn() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+        let fut = tokio::spawn(finish_connect(FinishConnect {
+            conn,
+            registrar,
+            input_profile,
+            child: ChildSlot::default(),
+            job: ProcessJob::none(),
+            owned_tmp: None,
+            extension_dirs: Vec::new(),
+            debug_host_port: None,
+            ws_url: None,
+            // Attached, not spawned — this is the user's Chrome.
+            owns_process: false,
+            #[cfg(feature = "tracker-blocking")]
+            tracker_matcher: None,
+        }));
+
+        let id = mock.expect_cmd("Target.setAutoAttach").await;
+        mock.reply(id, json!({})).await;
+        let id = mock.expect_cmd("Target.getTargets").await;
+        mock.reply(
+            id,
+            json!({ "targetInfos": [
+                { "targetId": "T1", "type": "page", "url": "https://mail.test/" },
+                { "targetId": "T2", "type": "page", "url": "https://docs.test/" },
+                { "targetId": "T3", "type": "page", "url": "https://news.test/" },
+            ] }),
+        )
+        .await;
+        let id = mock.expect_cmd("Target.attachToTarget").await;
+        mock.reply(id, json!({ "sessionId": "S1" })).await;
+
+        // Bounded: a sweep here would block on a `closeTarget` reply the mock
+        // never sends, so a regression must fail cleanly rather than hang.
+        let inner = timeout(Duration::from_secs(5), fut)
+            .await
+            .expect("finish_connect must not block sweeping tabs it does not own")
+            .unwrap()
+            .unwrap();
+
+        let mut closes = Vec::new();
+        while let Some((method, _)) = mock.try_recv_cmd() {
+            if method == "Target.closeTarget" {
+                closes.push(mock.last_sent()["params"]["targetId"].clone());
+            }
+        }
+        assert!(
+            closes.is_empty(),
+            "connect() must not close the user's tabs; closed: {closes:?}",
+        );
+        inner.conn.shutdown();
+    }
+
+    /// T3: no targets at all still fails cleanly — the sweep rework must not
+    /// turn "nothing to attach to" into a panic or a hang.
+    #[tokio::test]
+    async fn finish_connect_errors_cleanly_on_empty_get_targets() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+        let fut = tokio::spawn(finish_connect(FinishConnect {
+            conn,
+            registrar,
+            input_profile,
+            child: ChildSlot::default(),
+            job: ProcessJob::none(),
+            owned_tmp: None,
+            extension_dirs: Vec::new(),
+            debug_host_port: None,
+            ws_url: None,
+            owns_process: true,
+            #[cfg(feature = "tracker-blocking")]
+            tracker_matcher: None,
+        }));
+
+        let id = mock.expect_cmd("Target.setAutoAttach").await;
+        mock.reply(id, json!({})).await;
+        let id = mock.expect_cmd("Target.getTargets").await;
+        mock.reply(id, json!({ "targetInfos": [] })).await;
+
+        let err = fut.await.unwrap().unwrap_err();
+        assert!(
+            matches!(err, ZendriverError::Navigation(ref m) if m.contains("no initial target")),
+            "expected a clean Navigation error, got {err:?}",
+        );
+    }
+
+    /// T6: Chrome writes the port it actually bound plus the browser target
+    /// path into `DevToolsActivePort`. That file is a second, independent
+    /// source for the endpoint — it does not depend on reading this exact
+    /// child's piped stderr.
+    #[test]
+    fn parse_devtools_active_port_builds_a_ws_url() {
+        assert_eq!(
+            parse_devtools_active_port("54321\n/devtools/browser/abc-def-123\n").as_deref(),
+            Some("ws://127.0.0.1:54321/devtools/browser/abc-def-123"),
+        );
+        // No trailing newline is still valid.
+        assert_eq!(
+            parse_devtools_active_port("9222\n/devtools/browser/x").as_deref(),
+            Some("ws://127.0.0.1:9222/devtools/browser/x"),
+        );
+    }
+
+    /// T6: the file is read while Chrome may still be writing it. A partial or
+    /// malformed read must yield nothing so the poll keeps waiting, rather than
+    /// resolving a bogus endpoint we would then fail to dial.
+    #[test]
+    fn parse_devtools_active_port_rejects_partial_or_malformed_files() {
+        for bad in [
+            "",                              // not created yet / empty
+            "54321",                         // port written, path not yet
+            "54321\n",                       // ...still no path
+            "\n/devtools/browser/x",         // no port
+            "notaport\n/devtools/browser/x", // garbage port
+            "54321\ndevtools/browser/x",     // path is not absolute
+            "99999999\n/devtools/browser/x", // port out of range
+        ] {
+            assert!(
+                parse_devtools_active_port(bad).is_none(),
+                "must reject {bad:?}",
+            );
+        }
+    }
+
+    /// T6: the poll resolves as soon as Chrome writes the file, and tolerates
+    /// the file not existing yet (the normal case — we start polling before
+    /// Chrome has created it).
+    #[tokio::test]
+    async fn poll_devtools_active_port_waits_for_the_file_then_resolves() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+
+        let poll = tokio::spawn(async move { poll_devtools_active_port(&path).await });
+
+        // Nothing there yet: the poll must still be waiting, not resolved.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!poll.is_finished(), "must wait while the file is absent");
+
+        std::fs::write(
+            dir.path().join("DevToolsActivePort"),
+            "45678\n/devtools/browser/from-file\n",
+        )
+        .unwrap();
+
+        let url = timeout(Duration::from_secs(5), poll)
+            .await
+            .expect("poll should resolve once the file lands")
+            .unwrap();
+        assert_eq!(url, "ws://127.0.0.1:45678/devtools/browser/from-file");
     }
 
     #[test]

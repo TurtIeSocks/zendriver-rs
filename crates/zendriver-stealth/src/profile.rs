@@ -275,9 +275,12 @@ impl StealthProfile {
     /// auto-detected baseline, with per-field tweaks (`platform`, `locale`,
     /// `memory_gb`, …) applied on top.
     ///
-    /// `chrome_exe` is invoked with `--version` to probe the Chrome major;
-    /// the probe failing falls back to a baked-in default so the resolver
-    /// never errors solely on Chrome being unavailable.
+    /// `chrome_exe` is probed for its Chrome major: by reading the binary's PE
+    /// version resource on Windows, and by running `--version` on Unix (Windows
+    /// Chrome answers `--version` by launching a browser that never exits, so it
+    /// must not be executed there). Either probe failing falls back to a
+    /// baked-in default, so the resolver never errors solely on Chrome being
+    /// unavailable.
     ///
     /// # Errors
     /// Returns [`StealthError::ChromeVersionDetect`] when the Chrome probe

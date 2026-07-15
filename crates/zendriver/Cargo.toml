@@ -95,10 +95,17 @@ dirs        = { workspace = true, optional = true }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(windows)'.dependencies]
+win32job = "2.0"
+
 [dev-dependencies]
 tokio-test.workspace          = true
 insta.workspace               = true
 tracing-subscriber.workspace  = true
+# Cross-platform process enumeration for the orphan-process leak audit in
+# tests/prerelease_verification.rs (previously shelled out to `ps`, which
+# confined that regression lock to Unix).
+sysinfo.workspace             = true
 zendriver-transport = { workspace = true, features = ["testing"] }
 
 [[test]]

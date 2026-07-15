@@ -18,3 +18,25 @@ test-threads = 1
 # Surface every failure in a single run instead of stopping at the first.
 # CI reruns are expensive; one job pass should report the full picture.
 fail-fast = false
+
+# Bound every individual test, and report progress while it runs.
+#
+# Without this a hung test hangs FOREVER: nextest has no default test
+# timeout, `test-threads = 1` means one stuck test blocks the whole run,
+# and the job had no `timeout-minutes`, so the failure mode was a silent
+# 6-hour stall that reported nothing. The first `windows-latest` run hit
+# exactly that -- 2h+ inside one `cargo nextest run` with no way to tell
+# which test was stuck, or even whether it was stuck at all vs. still
+# compiling.
+#
+# `period` is the SLOW-warning interval, not a failure: nextest prints
+# `SLOW [> 60.000s] <test>` each period, so the log names the offender in
+# real time even when the run is later killed. `terminate-after = 6`
+# hard-kills a test at 6 periods (6 min) and reports it as a timeout.
+#
+# Sizing: the slowest known test is the orphan-process leak audit at ~33s
+# on macOS (25 real launch/close cycles), so 6 min leaves ~11x headroom
+# even on a slower Windows runner under load. With `retries = 2` a
+# persistently hung test costs at most 3 x 6 = 18 min before failing
+# loudly, instead of stalling until the job's ceiling.
+slow-timeout = { period = "60s", terminate-after = 6 }

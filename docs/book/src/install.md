@@ -90,13 +90,16 @@ policy.
 
 ## Platform support
 
-| Platform        | Supported | Notes                                                             |
-|-----------------|-----------|-------------------------------------------------------------------|
-| Linux (x86_64)  | yes       | Tested in CI on Ubuntu 22.04. Recommended for headless scraping. |
-| Linux (aarch64) | yes       | Builds + passes; CI coverage is x86_64-only.                      |
-| macOS (x86_64)  | yes       | Tested in CI on macOS 14.                                         |
-| macOS (Apple Si)| yes       | Builds + passes locally; CI coverage is x86_64-only.              |
-| Windows         | yes       | Tested in CI on `windows-latest`. Path semantics differ slightly. |
+"Tested in CI" below means a CI job actually runs the test suite on that
+platform — not that a binary merely compiles for it.
+
+| Platform         | Supported | Notes                                                                                                                                        |
+|------------------|-----------|----------------------------------------------------------------------------------------------------------------------------------------------|
+| Linux (x86_64)   | yes       | Fully tested in CI on `ubuntu-latest`: fmt, clippy, unit, doc and real-Chrome integration tests. Recommended for headless scraping.           |
+| Linux (aarch64)  | yes       | Release binary is cross-built in CI; no tests run on this target.                                                                             |
+| macOS (x86_64)   | yes       | Release binary is built in CI; no tests run on this target. Tested locally by maintainers.                                                    |
+| macOS (Apple Si) | yes       | Release binary is built in CI; no tests run on this target. Tested locally by maintainers.                                                    |
+| Windows          | yes       | Real-Chrome integration tests run in CI on `windows-latest`; fmt/clippy/unit/doc jobs are Linux-only. Path semantics differ slightly.         |
 
 Chrome (or Chromium / Edge / any Chromium-derived browser) must be on
 `$PATH`, or you must pass an explicit `chrome_path` to the builder, or
