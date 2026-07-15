@@ -1455,11 +1455,27 @@ impl TargetObserver for TabRegistrar {
 
     async fn on_target_attached(&self, session: PausedSession<'_>) -> Result<(), ObserverError> {
         let Some(weak) = self.browser.get() else {
-            // Registrar wired into observer chain before `set_browser` ran.
-            // Should not happen in practice because launch wires the weak
-            // before any observer can fire — log + bail gracefully if it
-            // ever does.
-            warn!("TabRegistrar fired before browser weak ref was wired; skipping");
+            // EXPECTED on the launch path, exactly once per browser: the
+            // initial target is attached during `finish_connect`, which is
+            // upstream of the `Arc::new_cyclic` that produces the
+            // `Weak<BrowserInner>` this observer needs. So the first attach
+            // always lands here and bails — and `finish_connect` compensates
+            // by inserting the main tab into the registry by hand right after
+            // it calls `set_browser` (see the call site).
+            //
+            // This was a `warn!` claiming it "should not happen in practice".
+            // It happens on every single launch, which made real registrar
+            // warnings (the chrome-scheme page below) impossible to spot in a
+            // log — so it is `debug!`. If it ever fires for a target OTHER
+            // than the initial one, that target is genuinely unregistered:
+            // the tab is then invisible to `Browser::tabs()` and closeable by
+            // nothing, which is worth the noise it costs to find.
+            debug!(
+                target_id = %session.target_info.target_id,
+                url = %session.target_info.url,
+                "tab-registrar: target attached before the browser weak ref was wired; skipping \
+                 registration (expected exactly once, for the initial target)"
+            );
             return Ok(());
         };
         let Some(browser) = weak.upgrade() else {
@@ -2020,9 +2036,9 @@ pub(crate) async fn finish_connect(
     //
     // The `TabRegistrar` observer (in the chain) will try to insert into
     // `BrowserInner.tabs` for the main tab too. That insertion is a no-op
-    // because the weak ref isn't wired yet (`OnceLock` empty → observer warns
-    // + skips). We re-insert the main tab manually below so the registry is
-    // consistent post-connect.
+    // because the weak ref isn't wired yet (`OnceLock` empty → observer logs
+    // at debug and skips). We re-insert the main tab manually below so the
+    // registry is consistent post-connect.
     let attach = conn
         .call_raw(
             "Target.attachToTarget",
