@@ -283,6 +283,51 @@ pub(crate) fn parse_devtools_line(line: &str) -> Option<String> {
     }
 }
 
+/// Chrome's own record of the debug port it bound, written into the
+/// `user_data_dir`. A second, independent source for the WS endpoint.
+const DEVTOOLS_ACTIVE_PORT_FILE: &str = "DevToolsActivePort";
+
+/// How often [`poll_devtools_active_port`] re-reads the file while waiting for
+/// Chrome to create it.
+const DEVTOOLS_PORT_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+/// Parse Chrome's `DevToolsActivePort` file into a `ws://` endpoint.
+///
+/// The file is two lines: the port Chrome actually bound (which is the only way
+/// to learn it when launched with `--remote-debugging-port=0`), then the
+/// browser target's path (`/devtools/browser/<uuid>`).
+///
+/// Both lines are required. The file is polled while Chrome may still be
+/// creating it, so a partial read must yield `None` and let the caller keep
+/// waiting rather than resolve an endpoint that will not dial.
+pub(crate) fn parse_devtools_active_port(contents: &str) -> Option<String> {
+    let mut lines = contents.lines();
+    let port: u16 = lines.next()?.trim().parse().ok()?;
+    let path = lines.next()?.trim();
+    // Guard a torn read: the path line must at least look like a path.
+    if !path.starts_with('/') {
+        return None;
+    }
+    Some(format!("ws://127.0.0.1:{port}{path}"))
+}
+
+/// Wait for Chrome to write `<user_data_dir>/DevToolsActivePort`, then return
+/// the `ws://` endpoint it describes.
+///
+/// Never returns until the file exists and parses — callers bound it with a
+/// timeout (and race it against the stderr read).
+pub(crate) async fn poll_devtools_active_port(user_data_dir: &Path) -> String {
+    let path = user_data_dir.join(DEVTOOLS_ACTIVE_PORT_FILE);
+    loop {
+        if let Ok(contents) = tokio::fs::read_to_string(&path).await {
+            if let Some(url) = parse_devtools_active_port(&contents) {
+                return url;
+            }
+        }
+        tokio::time::sleep(DEVTOOLS_PORT_POLL_INTERVAL).await;
+    }
+}
+
 /// Load (or first-time generate + persist) the fingerprint [`Seed`] bound to a
 /// `user_data_dir`.
 ///
@@ -2200,6 +2245,13 @@ impl BrowserBuilder {
         }
         info!(executable = %exe.display(), "launching chrome");
 
+        // Drop any `DevToolsActivePort` left behind by a previous run before we
+        // spawn. The default `user_data_dir` is a fresh tempdir so there is
+        // nothing to find, but a caller-supplied dir can carry a stale file
+        // naming a long-dead port — which the poll below would otherwise
+        // resolve instantly and hand us an endpoint that dials nothing.
+        let _ = std::fs::remove_file(user_data_path.join(DEVTOOLS_ACTIVE_PORT_FILE));
+
         // 6. Spawn chrome + parse WS URL.
         let mut cmd = Command::new(&exe);
         cmd.args(&flags)
@@ -2214,14 +2266,37 @@ impl BrowserBuilder {
         let stderr = child.stderr.take().ok_or(BrowserError::DevtoolsParse)?;
         let mut lines = BufReader::new(stderr).lines();
 
+        // Race two independent sources for the endpoint, inside one
+        // `WS_ENDPOINT_TIMEOUT` budget; first to resolve wins.
+        //
+        // Reading the `DevTools listening on` line off *this* child's piped
+        // stderr is the historical path and stays primary. But it couples
+        // "learn the debug port" to "this exact process writes to the pipe we
+        // handed it", which is a stronger assumption than it looks on Windows.
+        // `DevToolsActivePort` is Chrome's own record of the port it bound and
+        // does not depend on the pipe at all.
+        //
+        // Deliberately additive: an stderr EOF still fails fast with
+        // `DevtoolsParse` exactly as before (a closed pipe means the child
+        // exited — a bad flag, a profile lock — and no port file is coming), so
+        // a genuinely failed launch does not start waiting out the budget. The
+        // poll can only ever win *earlier*; it never delays a failure.
         let ws_url = timeout(WS_ENDPOINT_TIMEOUT, async {
-            while let Ok(Some(line)) = lines.next_line().await {
-                debug!(line = %line, "chrome stderr");
-                if let Some(url) = parse_devtools_line(&line) {
-                    return Ok::<String, ZendriverError>(url);
+            tokio::select! {
+                res = async {
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        debug!(line = %line, "chrome stderr");
+                        if let Some(url) = parse_devtools_line(&line) {
+                            return Ok::<String, ZendriverError>(url);
+                        }
+                    }
+                    Err(BrowserError::DevtoolsParse.into())
+                } => res,
+                url = poll_devtools_active_port(&user_data_path) => {
+                    debug!(ws_url = %url, "resolved endpoint from DevToolsActivePort");
+                    Ok(url)
                 }
             }
-            Err(BrowserError::DevtoolsParse.into())
         })
         .await
         .map_err(|_| BrowserError::WsTimeout)??;
@@ -5516,6 +5591,71 @@ mod tests {
             matches!(err, ZendriverError::Navigation(ref m) if m.contains("no initial target")),
             "expected a clean Navigation error, got {err:?}",
         );
+    }
+
+    /// T6: Chrome writes the port it actually bound plus the browser target
+    /// path into `DevToolsActivePort`. That file is a second, independent
+    /// source for the endpoint — it does not depend on reading this exact
+    /// child's piped stderr.
+    #[test]
+    fn parse_devtools_active_port_builds_a_ws_url() {
+        assert_eq!(
+            parse_devtools_active_port("54321\n/devtools/browser/abc-def-123\n").as_deref(),
+            Some("ws://127.0.0.1:54321/devtools/browser/abc-def-123"),
+        );
+        // No trailing newline is still valid.
+        assert_eq!(
+            parse_devtools_active_port("9222\n/devtools/browser/x").as_deref(),
+            Some("ws://127.0.0.1:9222/devtools/browser/x"),
+        );
+    }
+
+    /// T6: the file is read while Chrome may still be writing it. A partial or
+    /// malformed read must yield nothing so the poll keeps waiting, rather than
+    /// resolving a bogus endpoint we would then fail to dial.
+    #[test]
+    fn parse_devtools_active_port_rejects_partial_or_malformed_files() {
+        for bad in [
+            "",                              // not created yet / empty
+            "54321",                         // port written, path not yet
+            "54321\n",                       // ...still no path
+            "\n/devtools/browser/x",         // no port
+            "notaport\n/devtools/browser/x", // garbage port
+            "54321\ndevtools/browser/x",     // path is not absolute
+            "99999999\n/devtools/browser/x", // port out of range
+        ] {
+            assert!(
+                parse_devtools_active_port(bad).is_none(),
+                "must reject {bad:?}",
+            );
+        }
+    }
+
+    /// T6: the poll resolves as soon as Chrome writes the file, and tolerates
+    /// the file not existing yet (the normal case — we start polling before
+    /// Chrome has created it).
+    #[tokio::test]
+    async fn poll_devtools_active_port_waits_for_the_file_then_resolves() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+
+        let poll = tokio::spawn(async move { poll_devtools_active_port(&path).await });
+
+        // Nothing there yet: the poll must still be waiting, not resolved.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!poll.is_finished(), "must wait while the file is absent");
+
+        std::fs::write(
+            dir.path().join("DevToolsActivePort"),
+            "45678\n/devtools/browser/from-file\n",
+        )
+        .unwrap();
+
+        let url = timeout(Duration::from_secs(5), poll)
+            .await
+            .expect("poll should resolve once the file lands")
+            .unwrap();
+        assert_eq!(url, "ws://127.0.0.1:45678/devtools/browser/from-file");
     }
 
     #[test]
