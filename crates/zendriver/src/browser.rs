@@ -1494,6 +1494,14 @@ impl TargetObserver for TabRegistrar {
 
 const WS_ENDPOINT_TIMEOUT: Duration = Duration::from_secs(15);
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+/// How long [`Browser::close`] waits for Chrome to answer the CDP
+/// `Browser.close` quit before giving up and falling back to the signal path.
+///
+/// Deliberately short: this is a local-socket round-trip to a browser that is
+/// about to exit, and a wedged renderer — the exact case the signal fallback
+/// exists for — must not stall teardown for long. `SHUTDOWN_GRACE` still
+/// governs how long Chrome then gets to actually exit.
+const BROWSER_CLOSE_TIMEOUT: Duration = Duration::from_secs(3);
 /// How long [`resolve_ws_from_http`] waits for the `/json/version` round-trip.
 const JSON_VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -3062,13 +3070,22 @@ impl Browser {
 
     /// Graceful shutdown of the Chrome subprocess.
     ///
-    /// Cancels the transport, sends SIGTERM to Chrome, waits up to 5s, then
-    /// SIGKILLs on timeout. Cleans up the `user_data_dir` tempdir if one was
+    /// Asks Chrome to quit over CDP (`Browser.close`) first, then falls back to
+    /// SIGTERM / wait 5s / SIGKILL if it refuses, never answers, or answers but
+    /// does not exit. Cleans up the `user_data_dir` tempdir if one was
     /// allocated at launch time.
+    ///
+    /// The CDP quit matters because the signal path only ever targets the
+    /// single `chrome.exe` PID we tracked at spawn. Any *other* window Chrome
+    /// opened (a first-run window, a `chrome://newtab/`) is not that PID's
+    /// business on Windows, where there is no SIGTERM to cascade — so it
+    /// survives `close()` and orphans forever. `Browser.close` is Chrome's
+    /// protocol-native quit: it closes every window and exits the whole tree.
     ///
     /// For a browser produced by [`BrowserBuilder::connect`] (we did not spawn
     /// Chrome) this shuts down only the transport and leaves the attached
-    /// process running.
+    /// process running — `Browser.close` is never sent, since quitting a
+    /// browser we merely attached to would take the user's windows with it.
     ///
     /// # Examples
     ///
@@ -3080,14 +3097,65 @@ impl Browser {
     /// # Ok(()) }
     /// ```
     pub async fn close(self) -> Result<(), ZendriverError> {
-        self.inner.conn.shutdown();
+        self.close_within(BROWSER_CLOSE_TIMEOUT).await
+    }
+
+    /// [`Browser::close`] with an injectable budget for the `Browser.close`
+    /// round-trip, so tests can exercise the timeout→hard-kill fallback
+    /// without waiting out the real [`BROWSER_CLOSE_TIMEOUT`].
+    pub(crate) async fn close_within(
+        self,
+        browser_close_budget: Duration,
+    ) -> Result<(), ZendriverError> {
         // Attached (non-owning) sessions must never terminate the process we
-        // connected to — only the transport is torn down above. Spawn-only.
+        // connected to — only the transport is torn down. Spawn-only below.
         if !self.inner.owns_process {
+            self.inner.conn.shutdown();
             return Ok(());
         }
+
+        // Ask Chrome to quit over the protocol first. This must precede
+        // `conn.shutdown()` — that tears down the very transport the command
+        // travels over.
+        let quit = timeout(
+            browser_close_budget,
+            self.inner.conn.call_raw("Browser.close", json!({}), None),
+        )
+        .await;
+        let acked = match quit {
+            // Chrome acknowledged the quit.
+            Ok(Ok(_)) => true,
+            // Chrome commonly drops the socket on quit instead of replying;
+            // the transport dying here means the quit landed.
+            Ok(Err(zendriver_transport::CallError::Transport(_))) => true,
+            // An RPC refusal means Chrome heard us and declined — nothing to
+            // wait for, go straight to signals.
+            Ok(Err(e)) => {
+                warn!(error = %e, "Browser.close was refused; falling back to signal shutdown");
+                false
+            }
+            Err(_elapsed) => {
+                warn!(
+                    budget = ?browser_close_budget,
+                    "Browser.close went unanswered; falling back to signal shutdown",
+                );
+                false
+            }
+        };
+
+        self.inner.conn.shutdown();
+
         let mut child_guard = self.inner.child.lock().await;
         if let Some(mut child) = child_guard.take() {
+            if acked {
+                // Chrome took the quit — give it the same grace to actually
+                // exit. If it does, no signal is ever sent and the whole
+                // process tree went down with it.
+                if let Ok(Ok(_status)) = timeout(SHUTDOWN_GRACE, child.wait()).await {
+                    return Ok(());
+                }
+                warn!("chrome accepted Browser.close but did not exit; hard-killing");
+            }
             // Try graceful exit first. On Unix, tokio's `start_kill` is
             // `kill(pid, SIGKILL)` — too aggressive for graceful shutdown.
             // We send SIGTERM ourselves and fall back to SIGKILL on timeout.
@@ -4986,6 +5054,182 @@ mod tests {
         let inner = guarded.await.unwrap().expect("handshake should succeed");
         assert!(inner.tabs.read().await.contains_key("S1"));
         inner.conn.shutdown();
+    }
+
+    /// Build an *owning* `Browser` (as `launch` produces) wired to a mock
+    /// Chrome, with `child` standing in for the spawned `chrome.exe`. Drives
+    /// the post-connect handshake to completion and hands back the mock so the
+    /// test can keep asserting on CDP traffic — notably what `close()` sends.
+    async fn owning_browser_with_child(
+        child: Option<Child>,
+    ) -> (zendriver_transport::testing::MockConnection, Browser) {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+        let fut = tokio::spawn(finish_connect(FinishConnect {
+            conn,
+            registrar,
+            input_profile,
+            child: Arc::new(std::sync::Mutex::new(child)),
+            owned_tmp: None,
+            extension_dirs: Vec::new(),
+            debug_host_port: None,
+            ws_url: None,
+            owns_process: true,
+            #[cfg(feature = "tracker-blocking")]
+            tracker_matcher: None,
+        }));
+
+        let id = mock.expect_cmd("Target.setAutoAttach").await;
+        mock.reply(id, json!({})).await;
+        let id = mock.expect_cmd("Target.getTargets").await;
+        mock.reply(
+            id,
+            json!({ "targetInfos": [{ "targetId": "T1", "type": "page", "url": "about:blank" }] }),
+        )
+        .await;
+        let id = mock.expect_cmd("Target.attachToTarget").await;
+        mock.reply(id, json!({ "sessionId": "S1" })).await;
+
+        let inner = fut.await.unwrap().unwrap();
+        (mock, Browser { inner })
+    }
+
+    /// Spawn a long-lived stand-in for `chrome.exe`, spawned the way `launch`
+    /// spawns Chrome. Returns the child and its pid.
+    #[cfg(unix)]
+    fn spawn_stand_in_chrome() -> (Child, i32) {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("300")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let child = cmd.spawn().expect("spawn stand-in child");
+        let pid = child.id().expect("child has a pid") as i32;
+        (child, pid)
+    }
+
+    #[cfg(unix)]
+    fn pid_alive(pid: i32) -> bool {
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::kill(pid, 0) == 0
+        }
+    }
+
+    /// T2: `close()` must ask Chrome to quit over CDP **before** it reaches for
+    /// an OS signal. `Browser.close` closes every window and exits the whole
+    /// process tree; the signal path only ever targets the single tracked PID,
+    /// which is how a second Chrome window survives `close()` and orphans.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn close_sends_browser_close_before_any_process_kill() {
+        let (child, pid) = spawn_stand_in_chrome();
+        let (mut mock, browser) = owning_browser_with_child(Some(child)).await;
+
+        let closing = tokio::spawn(async move { browser.close().await });
+
+        // If close() killed the process first (the old behavior), this would
+        // hang — nothing would ever be sent.
+        let id = mock.expect_cmd("Browser.close").await;
+        assert!(
+            mock.last_sent().get("sessionId").is_none(),
+            "Browser.close is browser-scope, not session-scope",
+        );
+        // The graceful request went out while the process was still alive:
+        // ordering proven, not just presence.
+        assert!(
+            pid_alive(pid),
+            "Browser.close must be sent before the process is killed",
+        );
+
+        mock.reply(id, json!({})).await;
+        closing.await.unwrap().expect("close should succeed");
+
+        // The stand-in never exits on its own, so the hard-kill safety net
+        // still had to finish the job — close() must not leave it running.
+        assert!(!pid_alive(pid), "close() must leave no surviving process");
+    }
+
+    /// T2: the hard-kill fallback is the safety net for a wedged renderer that
+    /// never answers `Browser.close`. It must still fire when the graceful
+    /// request times out — a browser that ignores CDP must not become
+    /// un-closable.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn close_hard_kills_when_browser_close_times_out() {
+        let (child, pid) = spawn_stand_in_chrome();
+        let (mut mock, browser) = owning_browser_with_child(Some(child)).await;
+
+        // Never reply: Chrome heard nothing back. Hold the mock so the
+        // transport stays up and the call genuinely hangs rather than draining.
+        let closing =
+            tokio::spawn(async move { browser.close_within(Duration::from_millis(150)).await });
+        let _id = mock.expect_cmd("Browser.close").await;
+
+        closing
+            .await
+            .unwrap()
+            .expect("close must succeed via the fallback");
+        assert!(
+            !pid_alive(pid),
+            "a Browser.close timeout must still hard-kill the process (pid {pid} alive)",
+        );
+        drop(mock);
+    }
+
+    /// T2 safety: a browser produced by `connect()` was attached to, not
+    /// spawned. `Browser.close` would quit *the user's* Chrome — every window,
+    /// not just ours. It must never be sent on a non-owning handle.
+    #[tokio::test]
+    async fn close_never_sends_browser_close_on_a_non_owning_browser() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+        let fut = tokio::spawn(finish_connect(FinishConnect {
+            conn,
+            registrar,
+            input_profile,
+            child: ChildSlot::default(),
+            owned_tmp: None,
+            extension_dirs: Vec::new(),
+            debug_host_port: None,
+            ws_url: None,
+            owns_process: false,
+            #[cfg(feature = "tracker-blocking")]
+            tracker_matcher: None,
+        }));
+        let id = mock.expect_cmd("Target.setAutoAttach").await;
+        mock.reply(id, json!({})).await;
+        let id = mock.expect_cmd("Target.getTargets").await;
+        mock.reply(
+            id,
+            json!({ "targetInfos": [{ "targetId": "T1", "type": "page", "url": "about:blank" }] }),
+        )
+        .await;
+        let id = mock.expect_cmd("Target.attachToTarget").await;
+        mock.reply(id, json!({ "sessionId": "S1" })).await;
+        let inner = fut.await.unwrap().unwrap();
+
+        Browser { inner }.close().await.unwrap();
+
+        // Drain everything still queued from the handshake (tab setup emits
+        // e.g. `Network.enable`) and assert the quit is not among it.
+        let mut sent = Vec::new();
+        while let Some((method, _id)) = mock.try_recv_cmd() {
+            sent.push(method);
+        }
+        assert!(
+            !sent.iter().any(|m| m == "Browser.close"),
+            "close() on an attached browser must never quit the user's Chrome; sent: {sent:?}",
+        );
     }
 
     #[test]
