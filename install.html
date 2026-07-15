@@ -247,12 +247,14 @@ a Rust version bump counts as a minor change in the 0.x series and a
 major change post-1.0. See <a href="https://github.com/TurtIeSocks/zendriver-rs/blob/main/SEMVER.md">SEMVER.md</a> in the repository for the full
 policy.</p>
 <h2 id="platform-support"><a class="header" href="#platform-support">Platform support</a></h2>
+<p>"Tested in CI" below means a CI job actually runs the test suite on that
+platform — not that a binary merely compiles for it.</p>
 <div class="table-wrapper"><table><thead><tr><th>Platform</th><th>Supported</th><th>Notes</th></tr></thead><tbody>
-<tr><td>Linux (x86_64)</td><td>yes</td><td>Tested in CI on Ubuntu 22.04. Recommended for headless scraping.</td></tr>
-<tr><td>Linux (aarch64)</td><td>yes</td><td>Builds + passes; CI coverage is x86_64-only.</td></tr>
-<tr><td>macOS (x86_64)</td><td>yes</td><td>Tested in CI on macOS 14.</td></tr>
-<tr><td>macOS (Apple Si)</td><td>yes</td><td>Builds + passes locally; CI coverage is x86_64-only.</td></tr>
-<tr><td>Windows</td><td>yes</td><td>Tested in CI on <code>windows-latest</code>. Path semantics differ slightly.</td></tr>
+<tr><td>Linux (x86_64)</td><td>yes</td><td>Fully tested in CI on <code>ubuntu-latest</code>: fmt, clippy, unit, doc and real-Chrome integration tests. Recommended for headless scraping.</td></tr>
+<tr><td>Linux (aarch64)</td><td>yes</td><td>Release binary is cross-built in CI; no tests run on this target.</td></tr>
+<tr><td>macOS (x86_64)</td><td>yes</td><td>Release binary is built in CI; no tests run on this target. Tested locally by maintainers.</td></tr>
+<tr><td>macOS (Apple Si)</td><td>yes</td><td>Release binary is built in CI; no tests run on this target. Tested locally by maintainers.</td></tr>
+<tr><td>Windows</td><td>yes</td><td>Real-Chrome integration tests run in CI on <code>windows-latest</code>; fmt/clippy/unit/doc jobs are Linux-only. Path semantics differ slightly.</td></tr>
 </tbody></table>
 </div>
 <p>Chrome (or Chromium / Edge / any Chromium-derived browser) must be on

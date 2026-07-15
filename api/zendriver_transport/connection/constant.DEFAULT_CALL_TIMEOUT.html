@@ -1,0 +1,42 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Default ceiling on how long `Connection::call_raw` waits for Chrome to answer a single CDP command."><title>DEFAULT_CALL_TIMEOUT in zendriver_transport::connection - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="zendriver_transport" data-themes="" data-resource-suffix="" data-rustdoc-version="1.97.0 (2d8144b78 2026-07-07)" data-channel="1.97.0" data-search-js="search-fd9372ac.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../static.files/main-fcd733ba.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc constant"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">DEFAULT_CALL_TIMEOUT</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../zendriver_transport/index.html">zendriver_<wbr>transport</a><span class="version">0.1.6</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">DEFAULT_<wbr>CALL_<wbr>TIMEOUT</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#why-this-exists" title="Why this exists">Why this exists</a></li><li><a href="#why-180s" title="Why 180s">Why 180s</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="index.html">In zendriver_<wbr>transport::<wbr>connection</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">zendriver_transport</a>::<wbr><a href="index.html">connection</a></div><h1>Constant <span class="constant">DEFAULT_<wbr>CALL_<wbr>TIMEOUT</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/zendriver_transport/connection.rs.html#70">Source</a> </span></div><pre class="rust item-decl"><code>pub const DEFAULT_CALL_TIMEOUT: <a class="struct" href="https://doc.rust-lang.org/1.97.0/core/time/struct.Duration.html" title="struct core::time::Duration">Duration</a>;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Default ceiling on how long <a href="struct.Connection.html#method.call_raw" title="method zendriver_transport::connection::Connection::call_raw"><code>Connection::call_raw</code></a> waits for Chrome to
+answer a single CDP command.</p>
+<h2 id="why-this-exists"><a class="doc-anchor" href="#why-this-exists">§</a>Why this exists</h2>
+<p>Without it, <code>call_raw</code> awaited its reply oneshot bare, and the <strong>only</strong>
+thing that could resolve a pending call early was the websocket dying. A
+Chrome that accepted a command and never answered hung the caller forever
+— no error, no retry, nothing in the log naming the stuck method. That is
+not a hypothetical: it is what stalled <code>goto</code> on the windows-latest CI
+runner for 83 minutes, and it is the same disease as the unbounded launch
+handshake fixed in b5705aa9 — that fix just happened to bound only the
+handshake.</p>
+<h2 id="why-180s"><a class="doc-anchor" href="#why-180s">§</a>Why 180s</h2>
+<p>This is a <strong>backstop against a wedged browser</strong>, not a latency policy.
+Sizing is bounded from both directions:</p>
+<ul>
+<li><strong>Floor — must not break legitimately slow work.</strong> A single CDP
+round-trip against a local socket is sub-millisecond warm. The slow
+cases are <code>Page.navigate</code> to a tarpit origin and a heavy
+<code>Runtime.evaluate</code> with <code>awaitPromise</code>; both are far under 3 minutes in
+practice, and Chrome’s own network stack surfaces <code>net::ERR_*</code> for a
+dead origin well inside that — so a legitimately slow navigation still
+gets Chrome’s real error rather than ours. A tighter blanket default
+would convert working code into flaky failures, which is strictly worse
+than the hang: a false timeout is a silent behavior change in every
+consumer, while the hang at least only bites a wedged browser.</li>
+<li><strong>Ceiling — must stay well under <code>.config/nextest.toml</code>’s
+<code>terminate-after = 6</code> (6 x 60s).</strong> A default at or above that is
+unreachable in CI: nextest hard-kills the test first, and we learn
+nothing. At 180s the call errors with ~3 minutes left for the test to
+unwind and report — the whole point being that a stuck call produces a
+<em>diagnosable</em> error rather than a stall.</li>
+<li><strong>Must not preempt tighter, more specific guards.</strong> <code>HANDSHAKE_TIMEOUT</code>
+(30s) in the <code>zendriver</code> crate wraps the launch handshake’s CDP calls,
+and <code>BROWSER_CLOSE_TIMEOUT</code> (3s) wraps the quit. Both are far tighter,
+so both still fire first and report their own typed errors; this default
+only catches calls nobody else bounded. Locked by
+<code>default_call_timeout_does_not_preempt_the_launch_handshake_guard</code>.</li>
+</ul>
+<p>Callers needing something else use
+<a href="struct.Connection.html#method.call_raw_with_timeout" title="method zendriver_transport::connection::Connection::call_raw_with_timeout"><code>Connection::call_raw_with_timeout</code></a> (per-call) or
+<a href="struct.Connection.html#method.set_call_timeout" title="method zendriver_transport::connection::Connection::set_call_timeout"><code>Connection::set_call_timeout</code></a> (per-connection).</p>
+</div></details></section></div></main></body></html>

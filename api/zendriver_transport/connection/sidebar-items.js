@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["connect","connect_with_observers","spawn_actor","spawn_actor_with_observers","spawn_actor_with_observers_and_timeout"],"struct":["Connection"]};
+window.SIDEBAR_ITEMS = {"constant":["DEFAULT_CALL_TIMEOUT"],"fn":["connect","connect_with_observers","spawn_actor","spawn_actor_with_observers","spawn_actor_with_observers_and_timeout"],"struct":["Connection"]};

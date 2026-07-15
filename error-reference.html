@@ -246,7 +246,7 @@ directly in the public surface.</p>
 <p>Sub-error returned wrapped in <code>ZendriverError::Stealth</code>.</p>
 <div class="table-wrapper"><table><thead><tr><th>Variant</th><th>Common cause</th><th>Fix</th></tr></thead><tbody>
 <tr><td><code>PatchFailed { patch, source }</code></td><td>A specific stealth patch CDP call failed.</td><td>Read the source <code>CallError</code>; usually means the target page navigated mid-patch. Retry the launch.</td></tr>
-<tr><td><code>ChromeVersionDetect(String)</code></td><td>Probe of <code>chrome --version</code> failed.</td><td>Confirm the binary path; pass <code>.chrome_version(N)</code> to the stealth profile to skip the probe.</td></tr>
+<tr><td><code>ChromeVersionDetect(String)</code></td><td>The Chrome version probe failed — reading the binary's PE version resource on Windows, or running <code>chrome --version</code> on Unix. Non-fatal on its own: the probe falls back to a baked-in version.</td><td>Confirm the binary path; pass <code>.chrome_version(N)</code> to the stealth profile to skip the probe.</td></tr>
 <tr><td><code>SystemInfo(String)</code></td><td><code>sysinfo</code> couldn't read RAM / CPU count.</td><td>Pass <code>.memory_gb(N).cpu_count(N)</code> overrides to skip the auto-detect.</td></tr>
 <tr><td><code>InvalidOverride(String)</code></td><td>A fingerprint override value was outside the validated range (e.g. <code>memory_gb = 0</code>).</td><td>Read the message; fix the override.</td></tr>
 </tbody></table>
