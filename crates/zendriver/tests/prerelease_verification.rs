@@ -87,6 +87,84 @@ async fn ua_override_persists_across_new_tabs() {
     browser.close().await.expect("close");
 }
 
+/// Parse the Chrome major out of a UA string; handles both `Chrome/150.0.x.y`
+/// and headless's `HeadlessChrome/150.0.x.y` (the latter contains the former).
+fn chrome_major_from_ua(ua: &str) -> u32 {
+    let rest = ua
+        .find("Chrome/")
+        .map(|i| &ua[i + "Chrome/".len()..])
+        .unwrap_or_else(|| panic!("no `Chrome/` token in UA: {ua:?}"));
+    rest.split('.')
+        .next()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| panic!("no numeric major in UA: {ua:?}"))
+}
+
+/// The stealth UA must claim the Chrome major the real binary actually is.
+///
+/// This locks the Chrome *version probe* against a real Chrome binary — which
+/// nothing else in the suite did, and that gap is exactly how two bugs shipped
+/// together:
+///
+/// 1. The probe exec'd `chrome.exe --version`, which on Windows starts a
+///    browser that never exits, hanging `launch()` forever and *silently*
+///    (a blocking call inside the future starves every tokio timeout).
+/// 2. Where it did *not* hang — a dev box with Chrome already open — Windows
+///    Chrome answered `--version` with "Opening in existing browser session.",
+///    which carries no version token, so the probe silently fell back to a
+///    baked-in major and shipped a UA claiming Chrome 148 on a real Chrome 150.
+///
+/// Bug 2 is the insidious one: a UA that contradicts the browser rendering it is
+/// precisely the inconsistency stealth exists to avoid, and it failed *open*.
+/// Asserting against the fallback constant would not catch it (the constant gets
+/// bumped); asserting against the real browser does.
+///
+/// Non-circular by construction: the real major comes from a `stealth(off)`
+/// browser reporting its own UA, the claimed major from a `native()` profile
+/// whose UA is composed from the probe. Network-free — `about:blank` only.
+#[tokio::test]
+#[serial]
+async fn stealth_ua_major_matches_the_real_chrome_binary() {
+    let real_major = {
+        let browser = Browser::builder()
+            .headless(true)
+            .stealth(StealthProfile::off())
+            .launch()
+            .await
+            .expect("launch with stealth off");
+        let ua: String = browser
+            .main_tab()
+            .evaluate("navigator.userAgent")
+            .await
+            .expect("read real UA");
+        browser.close().await.expect("close");
+        chrome_major_from_ua(&ua)
+    };
+
+    let claimed_major = {
+        let browser = Browser::builder()
+            .headless(true)
+            .stealth(StealthProfile::native())
+            .launch()
+            .await
+            .expect("launch with stealth native");
+        let ua: String = browser
+            .main_tab()
+            .evaluate("navigator.userAgent")
+            .await
+            .expect("read stealth UA");
+        browser.close().await.expect("close");
+        chrome_major_from_ua(&ua)
+    };
+
+    assert_eq!(
+        claimed_major, real_major,
+        "stealth UA claims Chrome {claimed_major} but the real binary is Chrome \
+         {real_major}; the version probe is falling back instead of detecting \
+         the installed Chrome",
+    );
+}
+
 /// True if `s` names a Chrome/Chromium binary, case-insensitively.
 ///
 /// `chromium` is tested separately rather than folded into a `chrom` prefix:
