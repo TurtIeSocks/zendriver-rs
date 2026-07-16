@@ -5,6 +5,20 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.21] - 2026-07-16
+
+### Added
+
+- Add split_proxy_url helper for per-context proxy config
+- Add BrowserContextBuilder with per-context proxy credentials
+- Auto-install per-context proxy auth on each context tab
+- Unregister proxy credentials on BrowserContext drop
+
+### Fixed
+
+- Decode + redact proxy userinfo, default socks port, guard one-actor invariant
+
+
 ## [0.2.20] - 2026-07-16
 
 
