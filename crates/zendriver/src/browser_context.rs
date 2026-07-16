@@ -91,6 +91,103 @@ impl BrowserContext {
     }
 }
 
+/// Builder for an isolated [`BrowserContext`] with an optional proxy and
+/// per-context proxy credentials. Created via [`crate::Browser::browser_context`].
+pub struct BrowserContextBuilder {
+    browser: Arc<BrowserInner>,
+    proxy: Option<String>,
+    bypass: Option<String>,
+    #[cfg(feature = "interception")]
+    explicit_auth: Option<(String, String)>,
+}
+
+impl BrowserContextBuilder {
+    pub(crate) fn new(browser: Arc<BrowserInner>) -> Self {
+        Self {
+            browser,
+            proxy: None,
+            bypass: None,
+            #[cfg(feature = "interception")]
+            explicit_auth: None,
+        }
+    }
+
+    /// Upstream proxy `scheme://[user[:pass]@]host:port`. Embedded userinfo is
+    /// used as the auth credentials (and stripped from the `proxyServer` sent
+    /// to Chrome, which ignores it there) unless overridden by
+    /// [`Self::proxy_auth`].
+    #[must_use]
+    pub fn proxy(mut self, proxy: impl Into<String>) -> Self {
+        self.proxy = Some(proxy.into());
+        self
+    }
+
+    /// Hosts matching this pattern bypass the proxy (e.g. `"<-loopback>"`).
+    #[must_use]
+    pub fn proxy_bypass(mut self, bypass: impl Into<String>) -> Self {
+        self.bypass = Some(bypass.into());
+        self
+    }
+
+    /// Explicit proxy credentials; overrides any userinfo embedded in
+    /// [`Self::proxy`].
+    #[cfg(feature = "interception")]
+    #[must_use]
+    pub fn proxy_auth(mut self, user: impl Into<String>, pass: impl Into<String>) -> Self {
+        self.explicit_auth = Some((user.into(), pass.into()));
+        self
+    }
+
+    /// Create the context: sends `Target.createBrowserContext` with a
+    /// userinfo-free `proxyServer`, registers credentials (if any), and
+    /// returns the [`BrowserContext`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Navigation`] on an invalid proxy URL or a
+    /// response missing `browserContextId`.
+    pub async fn build(self) -> Result<BrowserContext, ZendriverError> {
+        let (proxy_server, embedded_creds) = match self.proxy.as_deref() {
+            Some(p) => {
+                let parsed = crate::proxy::split_proxy_url(p)?;
+                (Some(parsed.server), parsed.credentials)
+            }
+            None => (None, None),
+        };
+
+        let id = self
+            .browser
+            .create_browser_context_raw(proxy_server.as_deref(), self.bypass.as_deref())
+            .await?;
+
+        #[cfg(feature = "interception")]
+        {
+            if let Some(creds) = self.explicit_auth.or(embedded_creds) {
+                self.browser
+                    .context_proxy_auth
+                    .lock()
+                    .await
+                    .insert(id.clone(), creds);
+            }
+        }
+        #[cfg(not(feature = "interception"))]
+        {
+            if embedded_creds.is_some() {
+                tracing::warn!(
+                    context_id = %id,
+                    "proxy credentials supplied but the `interception` feature is off; \
+                     per-context proxy auth is inactive"
+                );
+            }
+        }
+
+        Ok(BrowserContext {
+            browser: self.browser,
+            id,
+        })
+    }
+}
+
 impl Drop for BrowserContext {
     fn drop(&mut self) {
         let browser = self.browser.clone();
@@ -188,6 +285,102 @@ mod new_tab_tests {
         // mock won't fire; bound the test with a short timeout.
         let _ = tokio::time::timeout(std::time::Duration::from_millis(200), fut).await;
 
+        conn.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod builder_tests {
+    use zendriver_transport::testing::MockConnection;
+
+    /// `.proxy("http://user:pass@host:port")` sends a **userinfo-free**
+    /// `proxyServer` to `Target.createBrowserContext`.
+    #[tokio::test]
+    async fn build_strips_userinfo_from_proxy_server() {
+        let (mut mock, conn) = MockConnection::pair();
+        let inner = crate::browser::test_only_inner_from_conn(conn.clone());
+        let browser = crate::Browser::test_only_from_inner(inner);
+
+        let fut = tokio::spawn(async move {
+            browser
+                .browser_context()
+                .proxy("http://bob:s3cret@proxy.example:8080")
+                .proxy_bypass("<-loopback>")
+                .build()
+                .await
+        });
+
+        let id = mock.expect_cmd("Target.createBrowserContext").await;
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["proxyServer"], "http://proxy.example:8080");
+        assert_eq!(sent["params"]["proxyBypassList"], "<-loopback>");
+        mock.reply(id, serde_json::json!({ "browserContextId": "CTX1" }))
+            .await;
+
+        let ctx = tokio::time::timeout(std::time::Duration::from_secs(2), fut)
+            .await
+            .expect("build timed out")
+            .unwrap()
+            .unwrap();
+        assert_eq!(ctx.id(), "CTX1");
+        conn.shutdown();
+    }
+
+    /// Under `interception`, embedded userinfo is registered as the context's
+    /// proxy credentials.
+    #[cfg(feature = "interception")]
+    #[tokio::test]
+    async fn build_registers_embedded_credentials() {
+        let (mut mock, conn) = MockConnection::pair();
+        let inner = crate::browser::test_only_inner_from_conn(conn.clone());
+        let browser = crate::Browser::test_only_from_inner(inner.clone());
+
+        let fut = tokio::spawn(async move {
+            browser
+                .browser_context()
+                .proxy("http://bob:s3cret@proxy.example:8080")
+                .build()
+                .await
+        });
+
+        let id = mock.expect_cmd("Target.createBrowserContext").await;
+        mock.reply(id, serde_json::json!({ "browserContextId": "CTX1" }))
+            .await;
+        let _ctx = tokio::time::timeout(std::time::Duration::from_secs(2), fut)
+            .await
+            .expect("build timed out")
+            .unwrap()
+            .unwrap();
+
+        let creds = inner.context_proxy_auth.lock().await.get("CTX1").cloned();
+        assert_eq!(creds, Some(("bob".into(), "s3cret".into())));
+        conn.shutdown();
+    }
+
+    /// Explicit `.proxy_auth()` overrides embedded userinfo.
+    #[cfg(feature = "interception")]
+    #[tokio::test]
+    async fn explicit_proxy_auth_overrides_userinfo() {
+        let (mut mock, conn) = MockConnection::pair();
+        let inner = crate::browser::test_only_inner_from_conn(conn.clone());
+        let browser = crate::Browser::test_only_from_inner(inner.clone());
+
+        let fut = tokio::spawn(async move {
+            browser
+                .browser_context()
+                .proxy("http://bob:s3cret@proxy.example:8080")
+                .proxy_auth("alice", "hunter2")
+                .build()
+                .await
+        });
+
+        let id = mock.expect_cmd("Target.createBrowserContext").await;
+        mock.reply(id, serde_json::json!({ "browserContextId": "CTX1" }))
+            .await;
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), fut).await;
+
+        let creds = inner.context_proxy_auth.lock().await.get("CTX1").cloned();
+        assert_eq!(creds, Some(("alice".into(), "hunter2".into())));
         conn.shutdown();
     }
 }

@@ -1320,6 +1320,12 @@ pub(crate) struct BrowserInner {
     #[cfg(feature = "interception")]
     #[allow(dead_code)]
     pub(crate) proxy_auth_handle: std::sync::OnceLock<zendriver_interception::InterceptHandle>,
+    /// Per-`browserContextId` proxy credentials, registered by
+    /// [`crate::BrowserContextBuilder::build`] and read by the `TabRegistrar`
+    /// to install a `Fetch.authRequired` handler on each tab opened in that
+    /// context. Removed on `BrowserContext` drop.
+    #[cfg(feature = "interception")]
+    pub(crate) context_proxy_auth: tokio::sync::Mutex<HashMap<String, (String, String)>>,
     /// Combined tracker/fingerprinter [`HostMatcher`] (bundled + custom),
     /// built once at launch. `None` when blocking is not configured. Read by
     /// the [`TabRegistrar`] to install a `BlockHosts` interception on each new
@@ -1354,6 +1360,51 @@ impl BrowserInner {
             )
             .await?;
         Ok(())
+    }
+
+    /// Send `Target.createBrowserContext` with an optional (verbatim)
+    /// `proxyServer` + `proxyBypassList` and return the new
+    /// `browserContextId`. Callers that need userinfo stripping do it before
+    /// calling; this method sends whatever `proxy_server` it is given.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Navigation`] if the response lacks
+    /// `browserContextId`; bubbles transport errors from `call_raw`.
+    pub(crate) async fn create_browser_context_raw(
+        &self,
+        proxy_server: Option<&str>,
+        bypass: Option<&str>,
+    ) -> Result<String, ZendriverError> {
+        let mut params = serde_json::Map::new();
+        if let Some(p) = proxy_server {
+            params.insert(
+                "proxyServer".into(),
+                serde_json::Value::String(p.to_string()),
+            );
+        }
+        if let Some(b) = bypass {
+            params.insert(
+                "proxyBypassList".into(),
+                serde_json::Value::String(b.to_string()),
+            );
+        }
+        let res = self
+            .conn
+            .call_raw(
+                "Target.createBrowserContext",
+                serde_json::Value::Object(params),
+                None,
+            )
+            .await?;
+        res.get("browserContextId")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                ZendriverError::Navigation(
+                    "Target.createBrowserContext returned no browserContextId".into(),
+                )
+            })
     }
 }
 
@@ -1401,6 +1452,8 @@ pub(crate) fn test_only_inner_from_conn(conn: Connection) -> Arc<BrowserInner> {
             tabs_changed: tokio::sync::Notify::new(),
             #[cfg(feature = "interception")]
             proxy_auth_handle: std::sync::OnceLock::new(),
+            #[cfg(feature = "interception")]
+            context_proxy_auth: tokio::sync::Mutex::new(HashMap::new()),
             #[cfg(feature = "tracker-blocking")]
             tracker_matcher: None,
             #[cfg(feature = "tracker-blocking")]
@@ -2106,6 +2159,8 @@ pub(crate) async fn finish_connect(
             tabs_changed: tokio::sync::Notify::new(),
             #[cfg(feature = "interception")]
             proxy_auth_handle: std::sync::OnceLock::new(),
+            #[cfg(feature = "interception")]
+            context_proxy_auth: tokio::sync::Mutex::new(HashMap::new()),
             #[cfg(feature = "tracker-blocking")]
             tracker_matcher,
             #[cfg(feature = "tracker-blocking")]
@@ -3011,6 +3066,13 @@ impl Browser {
         BrowserBuilder::new()
     }
 
+    /// Test-only constructor that wraps a caller-built [`BrowserInner`] in a
+    /// [`Browser`] handle without going through [`BrowserBuilder::launch`].
+    #[cfg(test)]
+    pub(crate) fn test_only_from_inner(inner: std::sync::Arc<BrowserInner>) -> Self {
+        Browser { inner }
+    }
+
     /// Attach to an already-running Chrome debug session instead of spawning.
     ///
     /// Shortcut for [`Browser::builder().connect(endpoint)`][BrowserBuilder::connect]
@@ -3158,40 +3220,10 @@ impl Browser {
         proxy_server: Option<&str>,
         proxy_bypass_list: Option<&str>,
     ) -> Result<crate::BrowserContext, ZendriverError> {
-        let mut params = serde_json::Map::new();
-        if let Some(p) = proxy_server {
-            params.insert(
-                "proxyServer".into(),
-                serde_json::Value::String(p.to_string()),
-            );
-        }
-        if let Some(b) = proxy_bypass_list {
-            params.insert(
-                "proxyBypassList".into(),
-                serde_json::Value::String(b.to_string()),
-            );
-        }
-
-        let res = self
+        let id = self
             .inner
-            .conn
-            .call_raw(
-                "Target.createBrowserContext",
-                serde_json::Value::Object(params),
-                None,
-            )
+            .create_browser_context_raw(proxy_server, proxy_bypass_list)
             .await?;
-
-        let id = res
-            .get("browserContextId")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                ZendriverError::Navigation(
-                    "Target.createBrowserContext returned no browserContextId".into(),
-                )
-            })?
-            .to_string();
-
         Ok(crate::BrowserContext {
             browser: self.inner.clone(),
             id,
@@ -3208,6 +3240,26 @@ impl Browser {
     /// Same as [`Browser::create_browser_context_with`].
     pub async fn create_browser_context(&self) -> Result<crate::BrowserContext, ZendriverError> {
         self.create_browser_context_with(None, None).await
+    }
+
+    /// Start building an isolated [`crate::BrowserContext`] with an optional
+    /// proxy and per-context credentials.
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// let browser = zendriver::Browser::builder().launch().await?;
+    /// let ctx = browser
+    ///     .browser_context()
+    ///     .proxy("http://user:pass@host:3128")
+    ///     .proxy_bypass("<-loopback>")
+    ///     .build()
+    ///     .await?;
+    /// let tab = ctx.new_tab().await?;
+    /// # Ok(()) }
+    /// ```
+    #[must_use]
+    pub fn browser_context(&self) -> crate::BrowserContextBuilder {
+        crate::BrowserContextBuilder::new(self.inner.clone())
     }
 
     /// Open a new tab navigated to `about:blank`.
@@ -4355,6 +4407,8 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "interception")]
+                context_proxy_auth: tokio::sync::Mutex::new(HashMap::new()),
                 #[cfg(feature = "tracker-blocking")]
                 tracker_matcher: None,
                 #[cfg(feature = "tracker-blocking")]
@@ -4449,6 +4503,8 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "interception")]
+                context_proxy_auth: tokio::sync::Mutex::new(HashMap::new()),
                 #[cfg(feature = "tracker-blocking")]
                 tracker_matcher: None,
                 #[cfg(feature = "tracker-blocking")]
@@ -4559,6 +4615,8 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "interception")]
+                context_proxy_auth: tokio::sync::Mutex::new(HashMap::new()),
                 #[cfg(feature = "tracker-blocking")]
                 tracker_matcher: None,
                 #[cfg(feature = "tracker-blocking")]
@@ -4662,6 +4720,8 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "interception")]
+                context_proxy_auth: tokio::sync::Mutex::new(HashMap::new()),
                 #[cfg(feature = "tracker-blocking")]
                 tracker_matcher: None,
                 #[cfg(feature = "tracker-blocking")]
@@ -4732,6 +4792,8 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "interception")]
+                context_proxy_auth: tokio::sync::Mutex::new(HashMap::new()),
                 #[cfg(feature = "tracker-blocking")]
                 tracker_matcher: None,
                 #[cfg(feature = "tracker-blocking")]
@@ -4804,6 +4866,8 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "interception")]
+                context_proxy_auth: tokio::sync::Mutex::new(HashMap::new()),
                 #[cfg(feature = "tracker-blocking")]
                 tracker_matcher: None,
                 #[cfg(feature = "tracker-blocking")]
@@ -4866,6 +4930,8 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "interception")]
+                context_proxy_auth: tokio::sync::Mutex::new(HashMap::new()),
                 #[cfg(feature = "tracker-blocking")]
                 tracker_matcher: None,
                 #[cfg(feature = "tracker-blocking")]
@@ -5005,6 +5071,8 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "interception")]
+                context_proxy_auth: tokio::sync::Mutex::new(HashMap::new()),
                 #[cfg(feature = "tracker-blocking")]
                 tracker_matcher: None,
                 #[cfg(feature = "tracker-blocking")]

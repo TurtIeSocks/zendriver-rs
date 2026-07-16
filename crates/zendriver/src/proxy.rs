@@ -9,9 +9,6 @@ use crate::error::ZendriverError;
 
 /// A proxy split into the CDP `proxyServer` string (no credentials) and the
 /// optional auth credentials answered separately via `Fetch.authRequired`.
-// TODO(Task 2): remove this `allow` once `BrowserContextBuilder::build` calls
-// `split_proxy_url` as a real (non-test) caller.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ParsedProxy {
     /// `scheme://host:port` with any userinfo stripped.
@@ -26,9 +23,6 @@ pub(crate) struct ParsedProxy {
 ///
 /// Returns [`ZendriverError::Navigation`] if the URL is unparseable or is
 /// missing a host or port.
-// TODO(Task 2): remove this `allow` once `BrowserContextBuilder::build` calls
-// this as a real (non-test) caller.
-#[allow(dead_code)]
 pub(crate) fn split_proxy_url(url: &str) -> Result<ParsedProxy, ZendriverError> {
     let u = url::Url::parse(url)
         .map_err(|e| ZendriverError::Navigation(format!("invalid proxy URL {url:?}: {e}")))?;

@@ -3672,6 +3672,8 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "interception")]
+                context_proxy_auth: tokio::sync::Mutex::new(HashMap::new()),
                 #[cfg(feature = "tracker-blocking")]
                 tracker_matcher: None,
                 #[cfg(feature = "tracker-blocking")]
@@ -4578,6 +4580,8 @@ mod tests {
                     tabs_changed: tokio::sync::Notify::new(),
                     #[cfg(feature = "interception")]
                     proxy_auth_handle: std::sync::OnceLock::new(),
+                    #[cfg(feature = "interception")]
+                    context_proxy_auth: tokio::sync::Mutex::new(HashMap::new()),
                     #[cfg(feature = "tracker-blocking")]
                     tracker_matcher: None,
                     #[cfg(feature = "tracker-blocking")]
