@@ -51,6 +51,33 @@ pub struct OpenInput {
     /// to also include the bundled list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracker_blocklist: Option<TrackerBlocklist>,
+    /// Route the browser through an upstream proxy
+    /// (`scheme://[user:pass@]host:port`). Userinfo is auto-split into proxy
+    /// auth credentials and answered via the `Fetch.authRequired` handshake
+    /// (requires the `interception` feature — without it the credentials are
+    /// simply not auto-wired). See `BrowserBuilder::proxy`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<String>,
+    /// Auto-derive `locale`/`languages` from the exit IP's country via a
+    /// proxied probe to an IP-geolocation service (default `ip-api.com`).
+    /// Opt-in; makes at most ONE outbound HTTP request, at launch, and only
+    /// when this is `true`. Mirrors `proxy` above when both are set, so the
+    /// probe reports the same exit IP Chrome will actually use. Overridden by
+    /// an explicit `persona`/locale, which also skips the probe. Always
+    /// present in the schema so the wire shape is feature-stable; only takes
+    /// effect when the server is built with the `geo` feature (otherwise
+    /// ignored — a warning is logged).
+    #[serde(default)]
+    pub geo_auto: bool,
+    /// Override the geo-probe endpoint (default `http://ip-api.com/json`).
+    /// Only meaningful together with `geo_auto: true`; ignored otherwise.
+    /// Same feature gating as `geo_auto`. Note: this bypasses proxy
+    /// mirroring — the probe against a custom endpoint is NOT routed through
+    /// `proxy` above (the underlying `IpApiResolver::with_proxy` wiring is
+    /// crate-private to `zendriver`); only the bundled default endpoint gets
+    /// proxy mirroring.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geo_endpoint: Option<String>,
 }
 
 /// A custom tracker-blocklist source for `browser_open`.
@@ -109,6 +136,26 @@ pub async fn open(
         let persona = zendriver::Persona::try_from_json(&p.to_string())
             .map_err(|e| ErrorData::invalid_params(format!("invalid persona JSON: {e}"), None))?;
         builder = builder.persona(persona);
+    }
+    if let Some(proxy) = &input.proxy {
+        builder = builder.proxy(proxy.clone());
+    }
+    #[cfg(feature = "geo")]
+    {
+        if input.geo_auto {
+            builder = match &input.geo_endpoint {
+                Some(endpoint) => {
+                    builder.geo_resolver(zendriver::IpApiResolver::new().endpoint(endpoint.clone()))
+                }
+                None => builder.geo_auto(),
+            };
+        }
+    }
+    #[cfg(not(feature = "geo"))]
+    if input.geo_auto || input.geo_endpoint.is_some() {
+        tracing::warn!(
+            "geo_auto/geo_endpoint requested but this server was built without the `geo` feature; ignoring"
+        );
     }
     #[cfg(feature = "tracker-blocking")]
     {

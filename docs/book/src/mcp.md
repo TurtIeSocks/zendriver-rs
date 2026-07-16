@@ -123,6 +123,23 @@ The stealth-profile override accepts `geo_country` (ISO 3166-1 alpha-2, e.g.
 `"DE"`) to derive a coherent `locale` + `Accept-Language`. The field is always
 present in the schema but only takes effect when the `geo` feature is enabled.
 
+`browser_open` also accepts:
+
+- `proxy: string` — route the browser through an upstream proxy
+  (`scheme://[user:pass@]host:port`); userinfo is auto-split into proxy-auth
+  credentials (requires the default `interception` feature to actually answer
+  the `Fetch.authRequired` challenge). Always present in the schema.
+- `geo_auto: bool` — auto-derive `locale`/`languages` from the exit IP's
+  country via a proxied probe to `ip-api.com` (mirrors `proxy` above), instead
+  of naming a country explicitly via `geo_country`. Makes at most one outbound
+  request, only at launch, only when `true`. An explicit `persona` locale wins
+  and skips the probe. Requires the opt-in `geo` feature; always present in
+  the schema (ignored with a logged warning on a non-`geo` build).
+- `geo_endpoint: string` — override the probe endpoint (default
+  `http://ip-api.com/json`); only meaningful with `geo_auto: true`. Note this
+  bypasses proxy mirroring — only the bundled default endpoint routes through
+  `proxy`.
+
 ## Stealth
 
 Stealth is on by default (matching the `zendriver` library). Configure

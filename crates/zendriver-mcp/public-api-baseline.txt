@@ -270,7 +270,9 @@ pub fn zendriver::browser::BrowserBuilder::executable(self, impl core::convert::
 pub fn zendriver::browser::BrowserBuilder::expert(self, bool) -> Self
 pub fn zendriver::browser::BrowserBuilder::extensions(self, impl core::iter::traits::collect::IntoIterator<Item = std::path::PathBuf>) -> Self
 pub fn zendriver::browser::BrowserBuilder::force_open_shadow_roots(self, bool) -> Self
+pub fn zendriver::browser::BrowserBuilder::geo_auto(self) -> Self
 pub fn zendriver::browser::BrowserBuilder::geo_locale(self, impl core::convert::TryInto<zendriver_stealth::geo::Country>) -> Self
+pub fn zendriver::browser::BrowserBuilder::geo_resolver(self, impl zendriver_stealth::geo::GeoResolver + 'static) -> Self
 pub fn zendriver::browser::BrowserBuilder::headless(self, bool) -> Self
 pub fn zendriver::browser::BrowserBuilder::lang(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::browser::BrowserBuilder::new() -> Self
@@ -278,6 +280,7 @@ pub fn zendriver::browser::BrowserBuilder::observer(self, alloc::sync::Arc<dyn z
 pub fn zendriver::browser::BrowserBuilder::persona(self, zendriver_stealth::persona::Persona) -> Self
 pub fn zendriver::browser::BrowserBuilder::persona_overlay(self, zendriver_stealth::persona::Persona) -> Self
 pub fn zendriver::browser::BrowserBuilder::preference(self, impl core::convert::Into<alloc::string::String>, serde_json::value::Value) -> Self
+pub fn zendriver::browser::BrowserBuilder::proxy(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::browser::BrowserBuilder::proxy_auth(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::browser::BrowserBuilder::resolved_persona(&self) -> zendriver_stealth::persona::Persona
 pub fn zendriver::browser::BrowserBuilder::sandbox(self, bool) -> Self
@@ -5625,7 +5628,9 @@ pub fn zendriver::browser::BrowserBuilder::executable(self, impl core::convert::
 pub fn zendriver::browser::BrowserBuilder::expert(self, bool) -> Self
 pub fn zendriver::browser::BrowserBuilder::extensions(self, impl core::iter::traits::collect::IntoIterator<Item = std::path::PathBuf>) -> Self
 pub fn zendriver::browser::BrowserBuilder::force_open_shadow_roots(self, bool) -> Self
+pub fn zendriver::browser::BrowserBuilder::geo_auto(self) -> Self
 pub fn zendriver::browser::BrowserBuilder::geo_locale(self, impl core::convert::TryInto<zendriver_stealth::geo::Country>) -> Self
+pub fn zendriver::browser::BrowserBuilder::geo_resolver(self, impl zendriver_stealth::geo::GeoResolver + 'static) -> Self
 pub fn zendriver::browser::BrowserBuilder::headless(self, bool) -> Self
 pub fn zendriver::browser::BrowserBuilder::lang(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::browser::BrowserBuilder::new() -> Self
@@ -5633,6 +5638,7 @@ pub fn zendriver::browser::BrowserBuilder::observer(self, alloc::sync::Arc<dyn z
 pub fn zendriver::browser::BrowserBuilder::persona(self, zendriver_stealth::persona::Persona) -> Self
 pub fn zendriver::browser::BrowserBuilder::persona_overlay(self, zendriver_stealth::persona::Persona) -> Self
 pub fn zendriver::browser::BrowserBuilder::preference(self, impl core::convert::Into<alloc::string::String>, serde_json::value::Value) -> Self
+pub fn zendriver::browser::BrowserBuilder::proxy(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::browser::BrowserBuilder::proxy_auth(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::browser::BrowserBuilder::resolved_persona(&self) -> zendriver_stealth::persona::Persona
 pub fn zendriver::browser::BrowserBuilder::sandbox(self, bool) -> Self
@@ -6418,6 +6424,47 @@ impl<T> typenum::type_operators::Same for zendriver::tab::IdleOptions
 pub type zendriver::tab::IdleOptions::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for zendriver::tab::IdleOptions where V: ppv_lite86::types::MultiLane<T>
 pub fn zendriver::tab::IdleOptions::vzip(self) -> V
+pub struct zendriver::IpApiResolver
+impl zendriver::IpApiResolver
+pub fn zendriver::IpApiResolver::endpoint(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn zendriver::IpApiResolver::new() -> Self
+pub fn zendriver::IpApiResolver::timeout(self, core::time::Duration) -> Self
+impl core::default::Default for zendriver::IpApiResolver
+pub fn zendriver::IpApiResolver::default() -> Self
+impl zendriver_stealth::geo::GeoResolver for zendriver::IpApiResolver
+pub fn zendriver::IpApiResolver::country<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<zendriver_stealth::geo::Country>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl core::marker::Freeze for zendriver::IpApiResolver
+impl core::marker::Send for zendriver::IpApiResolver
+impl core::marker::Sync for zendriver::IpApiResolver
+impl core::marker::Unpin for zendriver::IpApiResolver
+impl core::marker::UnsafeUnpin for zendriver::IpApiResolver
+impl core::panic::unwind_safe::RefUnwindSafe for zendriver::IpApiResolver
+impl core::panic::unwind_safe::UnwindSafe for zendriver::IpApiResolver
+impl<T, U> core::convert::Into<U> for zendriver::IpApiResolver where U: core::convert::From<T>
+pub fn zendriver::IpApiResolver::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for zendriver::IpApiResolver where U: core::convert::Into<T>
+pub type zendriver::IpApiResolver::Error = core::convert::Infallible
+pub fn zendriver::IpApiResolver::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for zendriver::IpApiResolver where U: core::convert::TryFrom<T>
+pub type zendriver::IpApiResolver::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn zendriver::IpApiResolver::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for zendriver::IpApiResolver where T: 'static + ?core::marker::Sized
+pub fn zendriver::IpApiResolver::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for zendriver::IpApiResolver where T: ?core::marker::Sized
+pub fn zendriver::IpApiResolver::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for zendriver::IpApiResolver where T: ?core::marker::Sized
+pub fn zendriver::IpApiResolver::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for zendriver::IpApiResolver
+pub fn zendriver::IpApiResolver::from(T) -> T
+impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::IpApiResolver where T: ?core::marker::Sized
+pub fn zendriver::IpApiResolver::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::IpApiResolver::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for zendriver::IpApiResolver
+impl<T> tracing::instrument::WithSubscriber for zendriver::IpApiResolver
+impl<T> typenum::type_operators::Same for zendriver::IpApiResolver
+pub type zendriver::IpApiResolver::Output = T
+impl<V, T> ppv_lite86::types::VZip<V> for zendriver::IpApiResolver where V: ppv_lite86::types::MultiLane<T>
+pub fn zendriver::IpApiResolver::vzip(self) -> V
 pub struct zendriver::KeyModifiers(_)
 impl zendriver::input::keyboard::KeyModifiers
 pub const zendriver::input::keyboard::KeyModifiers::ALT: Self

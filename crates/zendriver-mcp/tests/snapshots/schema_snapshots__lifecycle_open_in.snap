@@ -12,6 +12,15 @@ properties:
     type:
       - boolean
       - "null"
+  geo_auto:
+    description: "Auto-derive `locale`/`languages` from the exit IP's country via a\nproxied probe to an IP-geolocation service (default `ip-api.com`).\nOpt-in; makes at most ONE outbound HTTP request, at launch, and only\nwhen this is `true`. Mirrors `proxy` above when both are set, so the\nprobe reports the same exit IP Chrome will actually use. Overridden by\nan explicit `persona`/locale, which also skips the probe. Always\npresent in the schema so the wire shape is feature-stable; only takes\neffect when the server is built with the `geo` feature (otherwise\nignored — a warning is logged)."
+    type: boolean
+    default: false
+  geo_endpoint:
+    description: "Override the geo-probe endpoint (default `http://ip-api.com/json`).\nOnly meaningful together with `geo_auto: true`; ignored otherwise.\nSame feature gating as `geo_auto`. Note: this bypasses proxy\nmirroring — the probe against a custom endpoint is NOT routed through\n`proxy` above (the underlying `IpApiResolver::with_proxy` wiring is\ncrate-private to `zendriver`); only the bundled default endpoint gets\nproxy mirroring."
+    type:
+      - string
+      - "null"
   headless:
     description: "Run Chrome with `--headless=new` (default: `true`)."
     type: boolean
@@ -24,6 +33,11 @@ properties:
       - object
       - "null"
     additionalProperties: true
+  proxy:
+    description: "Route the browser through an upstream proxy\n(`scheme://[user:pass@]host:port`). Userinfo is auto-split into proxy\nauth credentials and answered via the `Fetch.authRequired` handshake\n(requires the `interception` feature — without it the credentials are\nsimply not auto-wired). See `BrowserBuilder::proxy`."
+    type:
+      - string
+      - "null"
   stealth_profile:
     description: "Override the session's default stealth profile for this launch.\nWhen `None`, the session-wide default (set via CLI / construct time)\nis used."
     anyOf:

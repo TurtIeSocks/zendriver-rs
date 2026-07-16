@@ -34,8 +34,7 @@ Legend: 🐞 shipped-but-broken · 🔧 actionable tail · 🎯 intentional non-
 - **Full attribute-coverage expansion** (screen metrics, navigator extras) + matching Persona/JS-patch growth. `persona_from_assignment` maps only platform/deviceMemory/hardwareConcurrency/videoCard/fonts; `Persona` has no screen-metric/navigator-extra fields. (Commit `402a427c` added *static* screen.js/mouse.js patches — coherent surface — but did **not** grow the BN or Persona.) — `crates/zendriver-fingerprints/src/generative/mapping.rs:41-83`, `crates/zendriver-stealth/src/persona/mod.rs:36-61`
 
 ### Geo / locale
-- **timezone-from-geo derivation** (country → IANA tz, sharing the `geo` module). `geo::persona()` derives locale+languages only, leaves timezone `None`. — `crates/zendriver-stealth/src/geo/mod.rs:34-50`
-- **Auto IP-geo resolution / Option B exit-IP probe.** Only the empty `GeoResolver` seam ships; zero `impl`; `geo_locale` still needs an explicit country. — `crates/zendriver-stealth/src/geo/mod.rs:52-62`, `browser.rs:1012`
+- **timezone-from-geo derivation** (country → IANA tz, sharing the `geo` module). `geo::persona()` derives locale+languages only, leaves timezone `None`. Still open — `geo_auto`/`IpApiResolver` (below) only close the country→locale/languages half. — `crates/zendriver-stealth/src/geo/mod.rs:34-50`
 
 ### Network / cookies / tabs / frames
 - **Transparent handle-preserving reconnect** (session-id remap so live `Tab` handles survive) + feature re-arm. `reconnect` clears the tab map (new sessionIds → invalidated handles). — `crates/zendriver/src/browser.rs:3479` (doc `:3436-3438`)
@@ -98,6 +97,7 @@ Legend: 🐞 shipped-but-broken · 🔧 actionable tail · 🎯 intentional non-
 - **Nightly real-Chrome anti-detection CI** → **exists**. `nightly-stealth-tests` (cron `0 6 * * *`, real Chrome) runs `--test stealth_phase2`, which hits `bot.sannysoft.com` and `arh.antoinevastel.com/bots/areyouheadless`. — `.github/workflows/ci.yml:200-224`
 - **OOPIF bootstrap "placeholder Frame"** → **was already done**; the backlog mis-cited test-fixture setup. Real impl: `crates/zendriver/src/frame/oopif.rs:49` `register_oopif_frame`, wired at `browser.rs:1497` for `kind=="iframe"` (commit `b13fdbd3`).
 - **Per-context proxy auth — first-class API** → **shipped** via `Browser::browser_context()` → `BrowserContextBuilder` (`.proxy()`/`.proxy_bypass()`/`.proxy_auth()`/`.build()`), auto-installing per-tab `Fetch.authRequired` chained into the one per-session interception actor (2026-07-16 plan).
+- **Auto IP-geo resolution / Option B exit-IP probe** → **shipped** via `BrowserBuilder::geo_auto()` (bundled `IpApiResolver`, a proxied `ip-api.com` GET, opt-in) + `BrowserBuilder::geo_resolver()` for a custom `GeoResolver` impl, plus a structured `BrowserBuilder::proxy(url)` (reusing `crate::proxy::split_proxy_url`) so the probe mirrors the browser's own proxy. Exposed over MCP as `browser_open.geo_auto` / `.geo_endpoint` / `.proxy`. Explicit `geo_locale`/persona locale still wins and skips the probe; fail-soft on probe failure. (2026-07-16 `geo-auto-resolver` plan.) Note: **timezone-from-geo derivation remains open** (see §1 Geo/locale above) — this closes only the country→locale/languages half.
 
 ---
 

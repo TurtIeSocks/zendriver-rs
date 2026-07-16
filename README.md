@@ -54,7 +54,7 @@ More working examples in [`crates/zendriver/examples/`](crates/zendriver/example
 | `imperva`      | no       | Imperva WAF / Incapsula bypass (reese84 / legacy / CAPTCHA)   | `zendriver-imperva`                   |
 | `datadome`     | no       | DataDome bypass (device-check / CAPTCHA / block) + `Surface::Webgpu` coherence | `zendriver-datadome` |
 | `monitor`      | no       | Passive network monitor — buffered HTTP / WebSocket / SSE events via `tab.monitor()` | (in-tree, no extra crate)             |
-| `geo`          | no       | Country code → coherent `locale` + `languages` (Accept-Language) persona overlay | (via `zendriver-stealth`)             |
+| `geo`          | no       | Country code → coherent `locale` + `languages` (Accept-Language) persona overlay, plus opt-in `geo_auto()` exit-IP auto-resolution | `reqwest` (via `zendriver-stealth`) |
 | `tracker-blocking` | no   | Opt-in third-party tracker / fingerprinter host blocklist (curated bundled list + BYO file / URL) | `reqwest` + `dirs`         |
 | `fetcher`      | no       | Auto-download a pinned Chrome for Testing build               | `zendriver-fetcher` + `reqwest`/`zip` |
 
@@ -90,7 +90,7 @@ Same as above — only spell out the feature if you want it visible in `Cargo.to
 cargo add zendriver --features "interception expect cloudflare imperva datadome monitor geo tracker-blocking fetcher"
 ```
 
-Adds request interception, `expect()` matchers, Cloudflare Turnstile bypass, Imperva WAF / Incapsula bypass, DataDome bypass, the passive network monitor, country→locale geo overlay, the opt-in tracker/fingerprinter blocklist, and the Chrome for Testing fetcher.
+Adds request interception, `expect()` matchers, Cloudflare Turnstile bypass, Imperva WAF / Incapsula bypass, DataDome bypass, the passive network monitor, country→locale geo overlay (explicit `geo_locale()` or auto-resolved via `geo_auto()`), the opt-in tracker/fingerprinter blocklist, and the Chrome for Testing fetcher.
 
 ## Drive a stealth browser from your AI agent
 
