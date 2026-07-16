@@ -1,9 +1,13 @@
-//! Country -> locale/languages derivation from a vendored Unicode CLDR table.
+//! Country -> locale/languages/timezone derivation from a vendored Unicode
+//! CLDR table and a vendored IANA tz-database table.
 //!
 //! Opt-in (`--features geo`). The single user-facing entry point is
 //! [`persona`], which returns a [`Persona`](crate::Persona) overlay carrying a
-//! coherent `locale` + `languages` for the given [`Country`]. Everything stays
-//! overridable; an unknown country leaves the persona untouched.
+//! coherent `locale` + `languages` and a representative `timezone` for the
+//! given [`Country`]. Everything stays overridable; an unknown country leaves
+//! the persona untouched. Multi-timezone countries (US, RU, CA, AU, BR, ...)
+//! resolve to one representative IANA zone, not a precise per-visitor zone —
+//! see [`persona`].
 
 mod table;
 
@@ -41,10 +45,17 @@ pub(crate) fn timezone_for(cc: &str) -> Option<&'static str> {
         .map(|i| table::TIMEZONES[i].1)
 }
 
-/// Build a [`Persona`] overlay carrying a coherent `locale` + `languages` for
-/// `country`. Default policy: the country's dominant language only, formed as
-/// `lang-COUNTRY` with its base subtag (e.g. `CH` -> `de-CH` + `["de-CH","de"]`).
-/// An unknown country yields an empty overlay and a warning — never locks a value.
+/// Build a [`Persona`] overlay carrying a coherent `locale` + `languages` +
+/// representative `timezone` for `country`. Default locale policy: the
+/// country's dominant language only, formed as `lang-COUNTRY` with its base
+/// subtag (e.g. `CH` -> `de-CH` + `["de-CH","de"]`). The timezone is a single
+/// representative IANA zone per country (`zone1970.tab` first-occurrence,
+/// with curated overrides for large multi-zone countries, e.g. `RU` ->
+/// `Europe/Moscow` rather than `Europe/Kaliningrad`) — for genuinely
+/// multi-timezone countries this is an approximation, not the visitor's
+/// actual zone; set `Persona.timezone` explicitly (`.persona(..)` /
+/// `.persona_overlay(..)`) when precision matters. An unknown country yields
+/// an empty overlay and a warning — never locks a value.
 pub fn persona(country: Country) -> Persona {
     let cc = country.as_str();
     match languages_for(cc) {
