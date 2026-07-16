@@ -1083,7 +1083,12 @@ impl BrowserBuilder {
             Ok(c) => {
                 let derived = zendriver_stealth::geo::persona(c);
                 self.persona_overlay = Some(match self.persona_overlay.take() {
-                    Some(existing) => existing.overlay(derived),
+                    // `Persona::overlay(self, over)` — `over`'s `Some` fields
+                    // win. `existing` must be the ARG so its explicit fields
+                    // (e.g. a pinned `.timezone`) survive; `derived` only
+                    // fills gaps `existing` left `None` (locale/languages/
+                    // timezone the caller didn't pin).
+                    Some(existing) => derived.overlay(existing),
                     None => derived,
                 });
             }
@@ -1147,11 +1152,14 @@ impl BrowserBuilder {
         if let Some(country) = resolver.country().await {
             let derived = zendriver_stealth::geo::persona(country);
             self.persona_overlay = Some(match self.persona_overlay.take() {
-                // Same direction as `geo_locale` above: `existing.overlay(derived)`
-                // (derived's `Some` fields win where existing didn't already
-                // set them — the early return above guarantees `existing.locale`
-                // is `None` here, so precedence matches `geo_locale` exactly).
-                Some(existing) => existing.overlay(derived),
+                // Same direction as `geo_locale` above: `derived.overlay(existing)`
+                // — `existing` is the ARG so its explicit fields (e.g. a
+                // pinned `.timezone` with no locale) win; `derived` only
+                // fills gaps. The early return above guarantees
+                // `existing.locale` is `None` here, so the derived locale
+                // always comes through — this only changes precedence for
+                // OTHER fields (e.g. `timezone`) that `existing` may have set.
+                Some(existing) => derived.overlay(existing),
                 None => derived,
             });
         }
@@ -4125,6 +4133,26 @@ mod tests {
         assert_eq!(p.locale.as_deref(), Some("en-US"));
     }
 
+    #[cfg(feature = "geo")]
+    #[test]
+    fn geo_locale_preserves_explicit_timezone() {
+        // Precedence regression guard: `geo::persona` now derives a
+        // `.timezone` in addition to locale/languages. An explicit
+        // `.persona_overlay(..)` timezone (with no locale) must survive
+        // `.geo_locale(..)` merging in — the merge must be
+        // `derived.overlay(existing)`, not `existing.overlay(derived)`,
+        // or the derived timezone clobbers the pinned one.
+        let overlay = Persona::builder().timezone("Asia/Tokyo").build();
+        let builder = Browser::builder().persona_overlay(overlay).geo_locale("US");
+        let p = builder.resolved_persona();
+        assert_eq!(
+            p.timezone.as_deref(),
+            Some("Asia/Tokyo"),
+            "explicit timezone must win over the geo-derived one"
+        );
+        assert_eq!(p.locale.as_deref(), Some("en-US"));
+    }
+
     /// A [`zendriver_stealth::geo::GeoResolver`] stub that always resolves to
     /// a fixed country and counts how many times it was probed, so tests can
     /// assert the probe fired (or, for the explicit-locale-wins case, did
@@ -4248,6 +4276,37 @@ mod tests {
         builder.apply_geo_overlay().await;
         let p = builder.resolved_persona();
         assert_eq!(p.device_memory_gb, Some(16));
+        assert_eq!(p.locale.as_deref(), Some("de-DE"));
+        assert!(p.languages.is_some());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[cfg(feature = "geo")]
+    #[tokio::test]
+    async fn geo_overlay_preserves_explicit_timezone_while_filling_locale() {
+        // Precedence regression guard for the auto-probe path (mirrors
+        // `geo_locale_preserves_explicit_timezone` above): a
+        // `.persona_overlay(..)` that pins only `.timezone` (no locale) must
+        // keep that timezone after `apply_geo_overlay` resolves — the
+        // geo-derived persona (which now also carries a `.timezone`) must
+        // only fill the locale/languages gap, never clobber an explicit
+        // field the caller already set.
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let overlay = Persona::builder().timezone("Asia/Tokyo").build();
+        let mut builder =
+            Browser::builder()
+                .persona_overlay(overlay)
+                .geo_resolver(StubCountryResolver {
+                    cc: "DE",
+                    calls: calls.clone(),
+                });
+        builder.apply_geo_overlay().await;
+        let p = builder.resolved_persona();
+        assert_eq!(
+            p.timezone.as_deref(),
+            Some("Asia/Tokyo"),
+            "explicit timezone must survive the geo-derived overlay merge"
+        );
         assert_eq!(p.locale.as_deref(), Some("de-DE"));
         assert!(p.languages.is_some());
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
