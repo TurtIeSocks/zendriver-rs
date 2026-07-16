@@ -508,6 +508,7 @@ mod profile_tests {
             timezone: None,
             locale: None,
             languages: None,
+            screen: None,
         };
         let p = StealthProfile::native()
             .fingerprint(fp.clone())
@@ -533,6 +534,7 @@ mod profile_tests {
             timezone: None,
             locale: None,
             languages: None,
+            screen: None,
         };
         let profile = profile.fingerprint(fp);
         let resolved = profile

@@ -345,6 +345,7 @@ mod tests {
             timezone: None,
             locale: Some("en-US".into()),
             languages: None,
+            screen: None,
         }
     }
 

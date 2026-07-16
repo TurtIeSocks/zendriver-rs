@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::surface::Strategy;
+use crate::fingerprint::{Brand, UserAgentMetadata};
 
 /// Noise-surface config (canvas, audio, clientRects).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -17,6 +18,109 @@ pub struct UaSpec {
     pub ua_string: Option<String>,
     /// Free-form UA-CH overrides; merged onto realistic() output at resolve.
     pub platform: Option<String>,
+    /// Full UA-CH (`Emulation.setUserAgentOverride.userAgentMetadata`)
+    /// override, field-wise. Any sub-field left `None` falls back to the
+    /// fingerprint-derived value at resolve (see [`UaMetadata::resolve`]).
+    /// JSON key is `userAgentMetadata` to match the wire shape callers
+    /// harvest it from (e.g. `navigator.userAgentData.getHighEntropyValues`).
+    #[serde(rename = "userAgentMetadata")]
+    pub ua_metadata: Option<UaMetadata>,
+}
+
+impl UaSpec {
+    /// Field-wise merge: `Some` in `over` wins, `None` inherits from `self`.
+    /// `ua_metadata` recurses into [`UaMetadata::overlay`] when both sides
+    /// carry one, so layering two personas composes UA-CH sub-fields instead
+    /// of one side wholesale-replacing the other.
+    #[must_use]
+    pub fn overlay(self, over: UaSpec) -> UaSpec {
+        UaSpec {
+            ua_string: over.ua_string.or(self.ua_string),
+            platform: over.platform.or(self.platform),
+            ua_metadata: match (self.ua_metadata, over.ua_metadata) {
+                (Some(base), Some(add)) => Some(base.overlay(add)),
+                (base, add) => add.or(base),
+            },
+        }
+    }
+}
+
+/// Field-wise `userAgentMetadata` (UA-CH) override. Mirrors
+/// [`UserAgentMetadata`] but every field is optional: unset fields fall back
+/// to the fingerprint-derived value at resolve (see [`Self::resolve`]).
+/// `wow64` is intentionally absent — it has no independent override surface
+/// here and always comes from the derived base.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct UaMetadata {
+    pub brands: Option<Vec<Brand>>,
+    #[serde(rename = "fullVersionList")]
+    pub full_version_list: Option<Vec<Brand>>,
+    pub platform: Option<String>,
+    #[serde(rename = "platformVersion")]
+    pub platform_version: Option<String>,
+    pub architecture: Option<String>,
+    pub bitness: Option<String>,
+    pub mobile: Option<bool>,
+    pub model: Option<String>,
+}
+
+impl UaMetadata {
+    /// Field-wise merge: `Some` in `over` wins, `None` inherits from `self`.
+    #[must_use]
+    pub fn overlay(self, over: UaMetadata) -> UaMetadata {
+        UaMetadata {
+            brands: over.brands.or(self.brands),
+            full_version_list: over.full_version_list.or(self.full_version_list),
+            platform: over.platform.or(self.platform),
+            platform_version: over.platform_version.or(self.platform_version),
+            architecture: over.architecture.or(self.architecture),
+            bitness: over.bitness.or(self.bitness),
+            mobile: over.mobile.or(self.mobile),
+            model: over.model.or(self.model),
+        }
+    }
+
+    /// Resolve into a complete [`UserAgentMetadata`], filling any unset
+    /// sub-field from `base` (the fingerprint-derived value). `wow64` always
+    /// comes from `base` — it has no override surface on [`UaMetadata`].
+    #[must_use]
+    pub fn resolve(&self, base: &UserAgentMetadata) -> UserAgentMetadata {
+        UserAgentMetadata {
+            brands: self.brands.clone().unwrap_or_else(|| base.brands.clone()),
+            full_version_list: self
+                .full_version_list
+                .clone()
+                .unwrap_or_else(|| base.full_version_list.clone()),
+            platform: self
+                .platform
+                .clone()
+                .unwrap_or_else(|| base.platform.clone()),
+            platform_version: self
+                .platform_version
+                .clone()
+                .unwrap_or_else(|| base.platform_version.clone()),
+            architecture: self
+                .architecture
+                .clone()
+                .unwrap_or_else(|| base.architecture.clone()),
+            bitness: self.bitness.clone().unwrap_or_else(|| base.bitness.clone()),
+            wow64: base.wow64,
+            mobile: self.mobile.unwrap_or(base.mobile),
+            model: self.model.clone().unwrap_or_else(|| base.model.clone()),
+        }
+    }
+}
+
+/// Screen / device-metrics override (`Emulation.setDeviceMetricsOverride`).
+/// Whole-value at [`Persona::overlay`](super::Persona::overlay) — composing
+/// two personas has the higher-priority persona's screen win outright when
+/// set, same as every other spec field (a screen is one coherent artifact,
+/// not sub-field patchable the way [`UaMetadata`] is).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ScreenSpec {
+    pub width: u32,
+    pub height: u32,
+    pub device_pixel_ratio: f64,
 }
 
 /// WebGL value substitution.
@@ -53,6 +157,7 @@ pub struct HardwareSpec {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -66,6 +171,127 @@ mod tests {
         let s = serde_json::to_string(&w).unwrap();
         let back: WebglSpec = serde_json::from_str(&s).unwrap();
         assert_eq!(w, back);
+    }
+
+    #[test]
+    fn ua_metadata_round_trips_json_camelcase() {
+        let m = UaMetadata {
+            brands: Some(vec![Brand {
+                brand: "Not_A Brand".into(),
+                version: "8".into(),
+            }]),
+            full_version_list: Some(vec![Brand {
+                brand: "Chromium".into(),
+                version: "150.0.7500.0".into(),
+            }]),
+            platform: Some("Windows".into()),
+            platform_version: Some("15.0.0".into()),
+            architecture: Some("x86".into()),
+            bitness: Some("64".into()),
+            mobile: Some(false),
+            model: Some(String::new()),
+        };
+        let s = serde_json::to_string(&m).unwrap();
+        assert!(
+            s.contains("\"fullVersionList\""),
+            "expected camelCase key, got: {s}"
+        );
+        assert!(
+            s.contains("\"platformVersion\""),
+            "expected camelCase key, got: {s}"
+        );
+        let back: UaMetadata = serde_json::from_str(&s).unwrap();
+        assert_eq!(m, back);
+    }
+
+    #[test]
+    fn ua_spec_round_trips_ua_metadata_under_camelcase_key() {
+        let spec = UaSpec {
+            ua_string: Some("Mozilla/5.0 (Windows NT 10.0; Win64; x64)".into()),
+            platform: Some("Windows".into()),
+            ua_metadata: Some(UaMetadata {
+                platform_version: Some("15.0.0".into()),
+                architecture: Some("arm".into()),
+                ..Default::default()
+            }),
+        };
+        let s = serde_json::to_string(&spec).unwrap();
+        assert!(
+            s.contains("\"userAgentMetadata\""),
+            "expected camelCase field key, got: {s}"
+        );
+        let back: UaSpec = serde_json::from_str(&s).unwrap();
+        assert_eq!(spec, back);
+    }
+
+    #[test]
+    fn ua_spec_overlay_composes_ua_metadata_field_wise() {
+        let base = UaSpec {
+            platform: Some("Windows".into()),
+            ua_metadata: Some(UaMetadata {
+                brands: Some(vec![Brand {
+                    brand: "X".into(),
+                    version: "1".into(),
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let over = UaSpec {
+            ua_metadata: Some(UaMetadata {
+                platform_version: Some("11.0.0".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let merged = base.overlay(over);
+        // Non-`ua` top-level field inherited unchanged (`over` didn't set it).
+        assert_eq!(merged.platform.as_deref(), Some("Windows"));
+        let uam = merged.ua_metadata.expect("ua_metadata merged");
+        assert!(uam.brands.is_some(), "brands inherited from base");
+        assert_eq!(uam.platform_version.as_deref(), Some("11.0.0")); // over wins
+    }
+
+    #[test]
+    fn ua_spec_overlay_one_sided_is_a_no_op_merge() {
+        let base = UaSpec {
+            ua_string: Some("base-ua".into()),
+            ..Default::default()
+        };
+        let merged = base.clone().overlay(UaSpec::default());
+        assert_eq!(merged, base);
+    }
+
+    #[test]
+    fn ua_metadata_resolve_fills_unset_fields_from_base() {
+        let base = UserAgentMetadata::realistic(crate::Platform::Win32, 150, "150.0.7500.0");
+        let custom = UaMetadata {
+            platform_version: Some("11.0.0".into()),
+            ..Default::default()
+        };
+        let resolved = custom.resolve(&base);
+        assert_eq!(resolved.platform_version, "11.0.0"); // custom wins
+        assert_eq!(resolved.brands, base.brands); // fell back to base
+        assert_eq!(resolved.wow64, base.wow64); // no override surface, always base
+    }
+
+    #[test]
+    fn ua_metadata_resolve_empty_equals_base_exactly() {
+        let base = UserAgentMetadata::realistic(crate::Platform::MacIntel, 148, "148.0.7778.181");
+        let resolved = UaMetadata::default().resolve(&base);
+        assert_eq!(resolved, base);
+    }
+
+    #[test]
+    fn screen_spec_round_trips_json() {
+        let s = ScreenSpec {
+            width: 1536,
+            height: 864,
+            device_pixel_ratio: 1.25,
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let back: ScreenSpec = serde_json::from_str(&json).unwrap();
+        assert_eq!(s, back);
     }
 
     #[test]

@@ -75,6 +75,7 @@ mod tests {
             timezone: None,
             locale: None,
             languages: None,
+            screen: None,
         }
     }
 
