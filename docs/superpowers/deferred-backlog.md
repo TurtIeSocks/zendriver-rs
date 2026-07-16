@@ -42,6 +42,7 @@ Legend: 🐞 shipped-but-broken · 🔧 actionable tail · 🎯 intentional non-
 - **`partition_key` as a structured object** (currently flat `Option<String>` top-level-site). — `crates/zendriver/src/cookies/mod.rs:154-159`
 - **Streaming response bodies** (monitor + HTTP `request()`); whole-body only, needs a Fetch-interception path. — `crates/zendriver/src/monitor/mod.rs:188`, `request.rs:346-380`
 - **Frame OOPIF placeholder** — *resolved, see §-closed* (backlog previously mis-cited a test fixture).
+- **🐞 Frame-scoped `.text()`/`.text_exact()` selectors ignore CDP `contextId`** → a text selector scoped to a child frame silently queries the **main** document instead. Found 2026-07-16 while wiring `visible_only` across `include_frames()`. — `resolve_text_many` in `crates/zendriver/src/query/selectors.rs` (never sets `contextId`). (Related: cross-frame result ordering is non-deterministic — `Tab::frames()` is an unordered `HashMap`; a stable order would need sorting by `Frame::id`.)
 
 ### Elements / input
 - **Button-triggered file pickers** via `Page.fileChooserOpened`; today `upload_files` uses `DOM.setFileInputFiles` on direct `<input type=file>` only. — `crates/zendriver/src/element/actions.rs:585,600`
