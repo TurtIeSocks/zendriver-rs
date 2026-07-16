@@ -5,6 +5,19 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.23] - 2026-07-16
+
+### Added
+
+- Structured BrowserBuilder::proxy reusing split_proxy_url
+- Add IpApiResolver (proxied exit-IP country probe)
+- Geo_auto/geo_resolver builder + launch-time exit-IP resolution
+
+### Fixed
+
+- Authenticate the exit-IP probe through the proxy + honor base-persona locale
+
+
 ## [0.2.22] - 2026-07-16
 
 ### Fixed
