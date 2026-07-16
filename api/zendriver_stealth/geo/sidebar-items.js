@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["cldr_version","persona"],"struct":["Country","InvalidCountry"],"trait":["GeoResolver"]};
+window.SIDEBAR_ITEMS = {"fn":["cldr_version","persona","tzdata_version"],"struct":["Country","InvalidCountry"],"trait":["GeoResolver"]};

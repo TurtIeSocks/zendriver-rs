@@ -305,13 +305,22 @@ let browser = Browser::builder()
     .surface(Surface::Canvas, Strategy::Random)  // max entropy
     .launch().await?;
 <span class="boring">}</span></code></pre></pre>
-<h2 id="country--locale-overlay-geo_locale"><a class="header" href="#country--locale-overlay-geo_locale">Country → locale overlay (<code>geo_locale</code>)</a></h2>
+<h2 id="country--locale--timezone-overlay-geo_locale"><a class="header" href="#country--locale--timezone-overlay-geo_locale">Country → locale + timezone overlay (<code>geo_locale</code>)</a></h2>
 <p>The optional <code>geo</code> feature adds <a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.geo_locale"><code>BrowserBuilder::geo_locale</code></a>, which maps an
 ISO 3166-1 alpha-2 country code (e.g. <code>"US"</code>, <code>"de"</code>) to a coherent <code>locale</code> +
-<code>languages</code> (Accept-Language) set drawn from a bundled CLDR-derived table. It
-is layered as a <strong>persona overlay</strong>, so it composes with <code>.persona(..)</code> and is
-overridden by an explicit <code>.persona_overlay(..)</code> locale. An invalid / unknown
-country code is ignored (logged) — the value is never locked.</p>
+<code>languages</code> (Accept-Language) set drawn from a bundled CLDR-derived table,
+<strong>plus a representative IANA <code>timezone</code></strong> drawn from a bundled tz-database
+table (wired through to <code>Emulation.setTimezoneOverride</code>). It is layered as a
+<strong>persona overlay</strong>, so it composes with <code>.persona(..)</code> and is overridden by
+an explicit <code>.persona_overlay(..)</code> locale. An invalid / unknown country code
+is ignored (logged) — the value is never locked.</p>
+<p><strong>Representative-zone caveat:</strong> countries spanning multiple timezones (the
+US, Russia, Canada, Australia, Brazil, ...) resolve to a single representative
+zone (the country's first <code>zone1970.tab</code> entry, with a few curated overrides
+— e.g. <code>RU</code> → <code>Europe/Moscow</code>, not <code>Europe/Kaliningrad</code>), not any particular
+visitor's actual local zone. Treat it as a coherent default, not a precise
+one — set <code>.persona(Persona::builder().timezone("America/Los_Angeles").build())</code>
+(or <code>.persona_overlay(..)</code>) when a specific zone within the country matters.</p>
 <pre><code class="language-toml">[dependencies]
 zendriver = { version = "0.1", features = ["geo"] }
 </code></pre>
@@ -329,9 +338,11 @@ browser is routed through a rotating or third-party proxy pool and you want
 the locale to match wherever that proxy happens to exit — use
 <a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.geo_auto"><code>BrowserBuilder::geo_auto</code></a> instead. It probes the exit IP through a bundled
 <a href="https://docs.rs/zendriver/latest/zendriver/struct.IpApiResolver.html"><code>IpApiResolver</code></a> (a proxied GET against <code>ip-api.com</code>) and folds the resulting
-country's locale/languages into the persona overlay, with the exact same
-precedence as <code>geo_locale</code>: an explicit <code>.persona(..)</code>/<code>.persona_overlay(..)</code>
-locale always wins and skips the probe entirely.</p>
+country's locale/languages/timezone into the persona overlay, with the exact
+same precedence as <code>geo_locale</code>: an explicit <code>.persona(..)</code>/<code>.persona_overlay(..)</code>
+locale always wins and skips the probe entirely. The same representative-zone
+caveat above applies — the resolved country's timezone is a single
+representative IANA zone, not the exit IP's precise local zone.</p>
 <pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use zendriver::Browser;

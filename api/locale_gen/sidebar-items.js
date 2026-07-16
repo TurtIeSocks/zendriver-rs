@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["emit_rust","rows_from_cldr"],"struct":["CountryRow"]};
+window.SIDEBAR_ITEMS = {"fn":["emit_rust","rows_from_cldr","tz_rows_from_zone_tab"],"struct":["CountryRow"]};
