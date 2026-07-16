@@ -49,7 +49,6 @@ Legend: 🐞 shipped-but-broken · 🔧 actionable tail · 🎯 intentional non-
 - **Custom mouse pressure / pen / touch input.** Mouse dispatch carries no pressure/pointerType; no `Input.dispatchTouchEvent` anywhere. — `crates/zendriver/src/input/mouse.rs:152-175`
 
 ### Launch / context / fetcher
-- **Per-context proxy auth — first-class API.** 🟡 *Functionally works today* via per-tab handlers (`tab.intercept().handle_auth()`, see `examples/browser_context_isolation.rs:49-53`), but there is **no dedicated per-context-auth API**: `create_browser_context_with` takes `proxy_server` but no credentials; `BrowserBuilder::proxy_auth` is browser-wide/main-tab-only. **Brainstorming underway (2026-07-16) to design the first-class API.** — `crates/zendriver/src/browser.rs:3156,608`, `book/browser-context.md:73,173`
 - **Fetcher Beta/Dev/Canary channels not wired** (return `UnsupportedPlatform`; only Stable/Latest). — `crates/zendriver-fetcher/src/resolver.rs:37-39`, `version.rs:13-18`
 
 ### MCP surface
@@ -97,6 +96,7 @@ Legend: 🐞 shipped-but-broken · 🔧 actionable tail · 🎯 intentional non-
 - **Frame-session `Runtime.evaluate`** → **shipped** (commit `5440066b`). `QueryScope::session()` returns the frame's session; `execution_context_id()` pins eval to the frame's isolated-world context; test `in_frame_override_routes_dispatch_to_frame_session` asserts it. (Backlog's old `query/mod.rs:1873` citation is now just a comment inside that test.)
 - **Nightly real-Chrome anti-detection CI** → **exists**. `nightly-stealth-tests` (cron `0 6 * * *`, real Chrome) runs `--test stealth_phase2`, which hits `bot.sannysoft.com` and `arh.antoinevastel.com/bots/areyouheadless`. — `.github/workflows/ci.yml:200-224`
 - **OOPIF bootstrap "placeholder Frame"** → **was already done**; the backlog mis-cited test-fixture setup. Real impl: `crates/zendriver/src/frame/oopif.rs:49` `register_oopif_frame`, wired at `browser.rs:1497` for `kind=="iframe"` (commit `b13fdbd3`).
+- **Per-context proxy auth — first-class API** → **shipped** via `Browser::browser_context()` → `BrowserContextBuilder` (`.proxy()`/`.proxy_bypass()`/`.proxy_auth()`/`.build()`), auto-installing per-tab `Fetch.authRequired` chained into the one per-session interception actor (2026-07-16 plan).
 
 ---
 
