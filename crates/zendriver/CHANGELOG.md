@@ -5,6 +5,9 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.20] - 2026-07-16
+
+
 ## [0.2.19] - 2026-07-15
 
 ### Added

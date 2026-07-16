@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.5.0] - 2026-07-16
+
+### Added
+
+- Wire Persona.geolocation to Emulation.setGeolocationOverride
+
+
 ## [0.4.6] - 2026-07-15
 
 ### Fixed
