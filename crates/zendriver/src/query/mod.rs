@@ -170,6 +170,7 @@ use tokio::time::Instant;
 use crate::element::Element;
 use crate::error::{Result, ZendriverError};
 use crate::frame::Frame;
+use crate::query::actionability::check_visible;
 use crate::query::predicate::{AttrPred, PredicateSet, TextPred};
 use crate::query::selectors::{QueryScope, RemoteRef, SelectorKind, text_len_of};
 use crate::tab::Tab;
@@ -898,15 +899,38 @@ impl<'scope> FindBuilder<'scope> {
         loop {
             let candidates = resolver.resolve(&scope).await?;
 
-            // Visible-only filter: TODO(T16) — depends on
-            // `actionability::check_visible`, which depends on
-            // `Element::call_on_main`. Until that lands, treat every
-            // candidate as visible so the wider FindBuilder API can ship.
-            let _ = self.visible_only;
-            let filtered = candidates;
+            // nth-of-visible: `want_nth` counts only candidates that pass
+            // `check_visible` when `visible_only` is set (every candidate
+            // counts otherwise). Synthesize each candidate with its
+            // ORIGINAL document-order index, not its visible-rank —
+            // `Element::refresh` re-runs `resolve()` without
+            // re-applying `visible_only` and picks by stored index, so
+            // keeping the original position is what makes the handle
+            // survive visibility drift across a refresh. Synthesize each
+            // candidate once and reuse it for both the visibility probe
+            // and the return value; stop at the first match so later
+            // candidates are never synthesized/probed.
+            // ponytail: O(n) sequential visibility probes, only when visible_only is set
+            let mut picked: Option<Element> = None;
+            let mut visible_count = 0usize;
+            for (i, r) in candidates.into_iter().enumerate() {
+                let el = resolver.synthesize(r, &scope, i);
+                let is_match = if self.visible_only {
+                    check_visible(&el).await?
+                } else {
+                    true
+                };
+                if is_match {
+                    if visible_count == want_nth {
+                        picked = Some(el);
+                        break;
+                    }
+                    visible_count += 1;
+                }
+            }
 
-            if let Some(picked) = filtered.into_iter().nth(want_nth) {
-                return Ok(resolver.synthesize(picked, &scope, want_nth));
+            if let Some(picked) = picked {
+                return Ok(picked);
             }
             if Instant::now() >= deadline {
                 return Err(ZendriverError::ElementNotFound {
@@ -1273,20 +1297,26 @@ impl<'scope> FindAllBuilder<'scope> {
         loop {
             let candidates = resolver.resolve(&scope).await?;
 
-            // Visible-only filter: TODO(T16) — depends on
-            // `actionability::check_visible`, which depends on
-            // `Element::call_on_main`. Until that lands, treat every
-            // candidate as visible so the wider FindAllBuilder API can
-            // ship.
-            let _ = self.visible_only;
-            let filtered = candidates;
+            // Synthesize each candidate with its original enumerate index
+            // (same refresh-origin rationale as `FindBuilder::one`), then
+            // keep it iff `!visible_only || check_visible(&el)`.
+            // Synthesize each candidate once and reuse it for both the
+            // visibility probe and the kept vec.
+            // ponytail: O(n) sequential visibility probes, only when visible_only is set
+            let mut elements: Vec<Element> = Vec::new();
+            for (i, r) in candidates.into_iter().enumerate() {
+                let el = resolver.synthesize(r, &scope, i);
+                let keep = if self.visible_only {
+                    check_visible(&el).await?
+                } else {
+                    true
+                };
+                if keep {
+                    elements.push(el);
+                }
+            }
 
-            if !filtered.is_empty() {
-                let elements: Vec<Element> = filtered
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, r)| resolver.synthesize(r, &scope, i))
-                    .collect();
+            if !elements.is_empty() {
                 return Ok(elements);
             }
             if Instant::now() >= deadline {
