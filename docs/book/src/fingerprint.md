@@ -185,15 +185,23 @@ use zendriver::Browser;
 
 let browser = Browser::builder()
     .proxy("http://user:pass@residential-proxy.example:8000")
-    .geo_auto()   // probes the exit IP through the proxy above
+    .geo_auto()   // probes the exit IP through the proxy above, credentials included
     .launch().await?;
 ```
+
+`geo_auto()` mirrors the proxy's credentials into the probe too (via
+`reqwest::Proxy::basic_auth`, never embedded in a URL string), so an
+authenticated proxy like the one above is probed authenticated — the probe
+would otherwise 407 silently and fail soft with no overlay.
 
 **Privacy:** the bundled `ip-api.com` probe fires ONLY when `.geo_auto()` (or
 `.geo_resolver()`) is called — it is fully opt-in, never implicit. Failure
 (no network, proxy down, unrecognized country) is fail-soft: a
 `tracing::warn!` is logged and `launch()` proceeds with no overlay; it never
-blocks or fails the launch.
+blocks or fails the launch. The default endpoint (`http://ip-api.com/json`)
+is **plaintext HTTP** — a proxy operator can observe or tamper with the
+response in transit; override [`IpApiResolver::endpoint`] to an HTTPS service
+if response integrity matters for your threat model.
 
 ### Structured `proxy(..)`
 
@@ -239,6 +247,7 @@ called wins — both set the same underlying resolver slot).
 [`BrowserBuilder::geo_resolver`]: https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.geo_resolver
 [`BrowserBuilder::proxy`]: https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.proxy
 [`IpApiResolver`]: https://docs.rs/zendriver/latest/zendriver/struct.IpApiResolver.html
+[`IpApiResolver::endpoint`]: https://docs.rs/zendriver/latest/zendriver/struct.IpApiResolver.html#method.endpoint
 [`zendriver_stealth::geo::GeoResolver`]: https://docs.rs/zendriver-stealth/latest/zendriver_stealth/geo/trait.GeoResolver.html
 
 ## JSON persona (`try_from_json`)

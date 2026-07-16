@@ -55,6 +55,7 @@ Legend: 🐞 shipped-but-broken · 🔧 actionable tail · 🎯 intentional non-
 - **Per-action `version` accessor not exposed.** `chrome_version` hardcoded `String::new()`; core lib has no version getter. — `crates/zendriver-mcp/src/tools/lifecycle.rs:146` (doc `:78-80`)
 - **Intercept `method` / `post-data` reserved for follow-up.** `ModifyRequest` exposes only `headers`. — `crates/zendriver-mcp/src/tools/intercept.rs:29-30,87-95`
 - **Tab-scoped expectations/rules leak** until manual cancel or full `browser_close`. `browser_tab_close` never drains `s.expectations`/`s.rules`; handles carry no `tab_id`. — `crates/zendriver-mcp/src/tools/tabs.rs:244,264-311`, `state.rs:150,166`
+- **MCP `geo_endpoint` override is not proxy-mirrored** (`IpApiResolver`'s proxy setter is `pub(crate)` to `zendriver`, so `zendriver-mcp` can't thread `input.proxy` into a custom-endpoint resolver the way `geo_auto()`'s bundled default gets mirrored). Currently only a `tracing::warn!` when both are set. Proper fix: expose the setter (or a builder arg) and wire `input.proxy` through in `lifecycle.rs::open`. — `crates/zendriver-mcp/src/tools/lifecycle.rs:143-159`, `crates/zendriver/src/geo_resolver.rs` (`with_proxy`)
 
 ---
 

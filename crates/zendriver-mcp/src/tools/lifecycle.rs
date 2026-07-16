@@ -145,6 +145,11 @@ pub async fn open(
         if input.geo_auto {
             builder = match &input.geo_endpoint {
                 Some(endpoint) => {
+                    if input.proxy.is_some() {
+                        tracing::warn!(
+                            "geo_endpoint overrides the default ip-api.com probe but is NOT proxy-mirrored (unlike geo_auto's bundled default) — the probe will hit this endpoint directly from the host, not through `proxy`, so its exit IP may not match the browser's"
+                        );
+                    }
                     builder.geo_resolver(zendriver::IpApiResolver::new().endpoint(endpoint.clone()))
                 }
                 None => builder.geo_auto(),

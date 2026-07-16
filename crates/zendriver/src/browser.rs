@@ -454,10 +454,11 @@ pub struct BrowserBuilder {
     pub(crate) proxy_auth: Option<(String, String)>,
     /// Custom or auto-derived exit-IP -> country resolver. Set via
     /// [`BrowserBuilder::geo_auto`] (wraps [`crate::IpApiResolver`], mirroring
-    /// `self.proxy`) or [`BrowserBuilder::geo_resolver`] (bring your own).
-    /// Probed once, asynchronously, by `apply_geo_overlay` in `launch()` /
-    /// `connect()` — before an explicit `persona_overlay`/`geo_locale` locale,
-    /// which wins and skips the probe entirely.
+    /// `self.proxy` including its credentials) or [`BrowserBuilder::geo_resolver`]
+    /// (bring your own). Probed once, asynchronously, by `apply_geo_overlay`
+    /// in `launch()` / `connect()` — before an explicit base `.persona(..)`
+    /// locale or `persona_overlay`/`geo_locale` locale, either of which wins
+    /// and skips the probe entirely.
     #[cfg(feature = "geo")]
     pub(crate) geo_resolver: Option<Arc<dyn zendriver_stealth::geo::GeoResolver>>,
     /// Enable the bundled curated tracker/fingerprinter blocklist.
@@ -1093,14 +1094,18 @@ impl BrowserBuilder {
 
     /// Auto-derive locale/languages from the exit IP's country via a proxied
     /// probe to `ip-api.com`. Opt-in; makes ONE outbound request at launch
-    /// only when set. Overridden by an explicit `geo_locale`/`persona_overlay`
-    /// locale (which also skips the probe). Mirrors the proxy set via
-    /// [`Self::proxy`].
+    /// only when set. Overridden by an explicit `geo_locale`/`persona`/
+    /// `persona_overlay` locale (which also skips the probe). Mirrors the
+    /// proxy set via [`Self::proxy`], including its credentials — the probe
+    /// authenticates the same way the browser itself will.
     #[cfg(feature = "geo")]
     #[must_use]
     pub fn geo_auto(mut self) -> Self {
-        let proxy = self.proxy.as_ref().map(|p| p.server.clone());
-        self.geo_resolver = Some(Arc::new(crate::IpApiResolver::new().with_proxy(proxy)));
+        let server = self.proxy.as_ref().map(|p| p.server.clone());
+        let auth = self.proxy.as_ref().and_then(|p| p.credentials.clone());
+        self.geo_resolver = Some(Arc::new(
+            crate::IpApiResolver::new().with_proxy(server, auth),
+        ));
         self
     }
 
@@ -1126,14 +1131,17 @@ impl BrowserBuilder {
         let Some(resolver) = self.geo_resolver.clone() else {
             return;
         };
-        // An explicit locale (via `.persona_overlay(..)` or `.geo_locale(..)`)
-        // already set → skip the probe entirely; the auto-derived overlay
-        // must never outrank it.
-        if self
+        // An explicit locale already set — via `.persona_overlay(..)` /
+        // `.geo_locale(..)` (both land in `persona_overlay`) or via the base
+        // `.persona(..)` (how the MCP layer sets a caller-supplied persona)
+        // — skips the probe entirely; the auto-derived overlay must never
+        // outrank it.
+        let explicit_locale = self
             .persona_overlay
             .as_ref()
             .is_some_and(|p| p.locale.is_some())
-        {
+            || self.persona.as_ref().is_some_and(|p| p.locale.is_some());
+        if explicit_locale {
             return;
         }
         if let Some(country) = resolver.country().await {
@@ -4171,6 +4179,110 @@ mod tests {
             calls.load(std::sync::atomic::Ordering::SeqCst),
             0,
             "explicit locale must skip the geo probe entirely"
+        );
+    }
+
+    #[cfg(feature = "geo")]
+    #[tokio::test]
+    async fn base_persona_locale_wins_and_skips_probe() {
+        // I2: the MCP layer sets the base `.persona(..)`, not the overlay.
+        // A locale-bearing base persona must skip the geo probe exactly like
+        // an explicit `.persona_overlay(..)`/`.geo_locale(..)` locale does —
+        // otherwise geo_auto both fires an unwanted request AND clobbers the
+        // caller's chosen locale.
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut builder = Browser::builder()
+            .persona(Persona::builder().locale("ja-JP").build())
+            .geo_resolver(StubCountryResolver {
+                cc: "DE",
+                calls: calls.clone(),
+            });
+        builder.apply_geo_overlay().await;
+        let p = builder.resolved_persona();
+        assert_eq!(p.locale.as_deref(), Some("ja-JP"));
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "a locale-bearing base persona must skip the geo probe entirely"
+        );
+    }
+
+    #[cfg(feature = "geo")]
+    #[tokio::test]
+    async fn failed_probe_leaves_existing_overlay_untouched() {
+        // M4(a): a resolver reporting `None` (network down, bad proxy,
+        // unrecognized country, ...) must fail soft — an already-set overlay
+        // is left exactly as the caller wrote it.
+        struct NoneResolver;
+        #[async_trait::async_trait]
+        impl zendriver_stealth::geo::GeoResolver for NoneResolver {
+            async fn country(&self) -> Option<zendriver_stealth::geo::Country> {
+                None
+            }
+        }
+        let overlay = Persona::builder().timezone("UTC").build();
+        let mut builder = Browser::builder()
+            .persona_overlay(overlay)
+            .geo_resolver(NoneResolver);
+        builder.apply_geo_overlay().await;
+        let p = builder.resolved_persona();
+        assert_eq!(p.timezone.as_deref(), Some("UTC"));
+        assert_eq!(p.locale, None);
+    }
+
+    #[cfg(feature = "geo")]
+    #[tokio::test]
+    async fn geo_overlay_merges_with_existing_overlay_fields() {
+        // M4(b): a `.persona_overlay(..)` with no locale set (e.g. just
+        // `device_memory_gb`) must be preserved AND have the geo-derived
+        // locale/languages folded in — the two must compose, not clobber.
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let overlay = Persona::builder().device_memory_gb(16).build();
+        let mut builder =
+            Browser::builder()
+                .persona_overlay(overlay)
+                .geo_resolver(StubCountryResolver {
+                    cc: "DE",
+                    calls: calls.clone(),
+                });
+        builder.apply_geo_overlay().await;
+        let p = builder.resolved_persona();
+        assert_eq!(p.device_memory_gb, Some(16));
+        assert_eq!(p.locale.as_deref(), Some("de-DE"));
+        assert!(p.languages.is_some());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[cfg(feature = "geo")]
+    #[tokio::test]
+    async fn geo_auto_mirrors_proxy_and_credentials_into_resolver() {
+        // M4(c) / C1: `geo_auto()` must thread BOTH the userinfo-stripped
+        // server AND its credentials into the `IpApiResolver` it builds, end
+        // to end — a wiremock server standing in for the upstream proxy
+        // only responds when it sees a `Proxy-Authorization` header. Before
+        // the C1 fix, `geo_auto()` only mirrored `p.server` and dropped
+        // `p.credentials`, so this probe would have gone out unauthenticated
+        // and (against a real auth-requiring proxy) failed with a silent
+        // 407.
+        let proxy = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::header_exists("Proxy-Authorization"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_string(r#"{"countryCode":"DE"}"#),
+            )
+            .mount(&proxy)
+            .await;
+
+        let builder = Browser::builder()
+            .proxy(format!("http://bob:s3cret@{}", proxy.address()))
+            .geo_auto();
+        let resolver = builder
+            .geo_resolver
+            .clone()
+            .expect("geo_auto sets a resolver");
+        assert_eq!(
+            resolver.country().await,
+            Some(zendriver_stealth::geo::Country::try_from("DE").unwrap())
         );
     }
 
