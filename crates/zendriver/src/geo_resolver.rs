@@ -53,10 +53,8 @@ impl IpApiResolver {
     /// Route the probe through `proxy` (mirrors the browser's own proxy so
     /// the resolved country matches the exit IP Chrome will actually use).
     ///
-    /// Not yet called anywhere in-tree — `BrowserBuilder::geo_auto` (a
-    /// follow-up task) is the only planned caller, wiring `self.proxy` from
+    /// Called by `BrowserBuilder::geo_auto`, wiring `self.proxy` from
     /// [`crate::browser::BrowserBuilder::proxy`] through here.
-    #[allow(dead_code)]
     #[must_use]
     pub(crate) fn with_proxy(mut self, proxy: Option<String>) -> Self {
         self.proxy = proxy;
