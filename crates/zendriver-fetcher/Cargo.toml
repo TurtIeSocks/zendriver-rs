@@ -1,7 +1,7 @@
 [package]
 name = "zendriver-fetcher"
 description = "Chrome binary downloader for zendriver"
-version = "0.1.6"
+version = "0.1.7"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
