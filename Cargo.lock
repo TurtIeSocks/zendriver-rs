@@ -3418,6 +3418,7 @@ dependencies = [
  "futures",
  "insta",
  "libc",
+ "percent-encoding",
  "rand 0.8.6",
  "regex",
  "reqwest 0.12.28",

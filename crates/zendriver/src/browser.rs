@@ -4608,6 +4608,99 @@ mod tests {
         conn.shutdown();
     }
 
+    /// Regression lock for cdpdriver/zendriver#208: a page tab whose context
+    /// has BOTH tracker-blocking (`tracker_matcher`) AND per-context proxy
+    /// auth (`context_proxy_auth`) configured must get exactly ONE chained
+    /// `InterceptBuilder` / actor — never two competing actors that could
+    /// double-resolve the same `Fetch.requestPaused` event. Asserts exactly
+    /// one `Fetch.enable` is sent for the attached session.
+    #[cfg(all(test, feature = "tracker-blocking"))]
+    #[tokio::test]
+    async fn tab_registrar_chains_tracker_and_auth_into_one_actor() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+
+        let inner = Arc::new_cyclic(|weak: &Weak<BrowserInner>| {
+            let main_session = SessionHandle::new(conn.clone(), "S1");
+            let main_input = InputController::new(input_profile.clone());
+            let main_tab = Tab::new(main_session, weak.clone(), main_input, "T1".to_string());
+            let mut map = HashMap::new();
+            map.insert("S1".to_string(), main_tab.clone());
+            // Seed BOTH a tracker matcher and proxy credentials for CTX1.
+            let mut auth = HashMap::new();
+            auth.insert(
+                "CTX1".to_string(),
+                ("bob".to_string(), "s3cret".to_string()),
+            );
+            BrowserInner {
+                conn: conn.clone(),
+                main_tab,
+                child: tokio::sync::Mutex::new(None),
+                job: ProcessJob::none(),
+                _user_data: None,
+                _extension_dirs: Vec::new(),
+                owns_process: false,
+                stealth_input_profile: input_profile.clone(),
+                tabs: tokio::sync::RwLock::new(map),
+                debug_host_port: None,
+                ws_url: None,
+                tabs_changed: tokio::sync::Notify::new(),
+                #[cfg(feature = "interception")]
+                proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "interception")]
+                context_proxy_auth: tokio::sync::Mutex::new(auth),
+                #[cfg(feature = "tracker-blocking")]
+                tracker_matcher: Some(std::sync::Arc::new(crate::HostMatcher::new([
+                    "evil.example".to_string(),
+                ]))),
+                #[cfg(feature = "interception")]
+                session_intercept_handles: tokio::sync::Mutex::new(HashMap::new()),
+            }
+        });
+        registrar.set_browser(Arc::downgrade(&inner));
+
+        // Attach a page target that belongs to CTX1 — both tracker-blocking
+        // and context proxy auth apply to this tab.
+        mock.emit_event(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": "S2",
+                "targetInfo": {
+                    "targetId": "T2",
+                    "type": "page",
+                    "url": "about:blank",
+                    "attached": true,
+                    "browserContextId": "CTX1",
+                },
+                "waitingForDebugger": true,
+            }),
+        )
+        .await;
+
+        let enable_id = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            mock.expect_cmd("Fetch.enable"),
+        )
+        .await
+        .expect("Fetch.enable not sent");
+        mock.reply(enable_id, json!({})).await;
+
+        // Give the registrar a moment to finish installing, then confirm no
+        // SECOND actor also sent its own `Fetch.enable` for this session —
+        // chaining tracker-blocking + auth into ONE `InterceptBuilder` means
+        // exactly one `Fetch.enable`, never two (cdpdriver/zendriver#208).
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        if let Some((method, _id)) = mock.try_recv_cmd() {
+            panic!("expected no further CDP calls after the single install, got `{method}`");
+        }
+
+        conn.shutdown();
+    }
+
     // ----- Browser::new_tab + tabs + tab_count (P4 T3) -------------------
 
     /// End-to-end mock-drive of [`Browser::new_tab`]: send `Target.createTarget`,

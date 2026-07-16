@@ -419,7 +419,14 @@ mod builder_tests {
         let id = mock.expect_cmd("Target.createBrowserContext").await;
         mock.reply(id, serde_json::json!({ "browserContextId": "CTX1" }))
             .await;
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), fut).await;
+        // Bind (rather than discard) the built context: dropping it fires a
+        // background task that unregisters its `context_proxy_auth` entry,
+        // which would race the assertion below if it fired immediately.
+        let _ctx = tokio::time::timeout(std::time::Duration::from_secs(2), fut)
+            .await
+            .expect("build timed out")
+            .unwrap()
+            .unwrap();
 
         let creds = inner.context_proxy_auth.lock().await.get("CTX1").cloned();
         assert_eq!(creds, Some(("alice".into(), "hunter2".into())));
