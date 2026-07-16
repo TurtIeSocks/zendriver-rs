@@ -1,0 +1,16 @@
+# tzdb timezone descriptions
+#
+# This file is in the public domain.
+#
+# From Paul Eggert (2025-05-15):
+# This file contains a table where each row stands for a timezone where
+# civil timestamps have agreed since 1970.  Columns are separated by
+# a single tab.  Lines beginning with '#' are comments.
+#
+# Mini fixture: a handful of real-format rows for locale-gen tests. Not the
+# full zone1970.tab -- just enough to exercise first-occurrence + overrides.
+RU	+5443+02030	Europe/Kaliningrad	MSK-01 - Kaliningrad
+RU	+554521+0373704	Europe/Moscow	MSK+00 - Moscow area
+US	+404251-0740023	America/New_York	Eastern (most areas)
+US	+415100-0873900	America/Chicago	Central (most areas)
+FR,MC	+4852+00220	Europe/Paris

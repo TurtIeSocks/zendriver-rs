@@ -51,6 +51,38 @@ jobs:
       - name: Sanity-guard test
         run: cargo test -p zendriver-stealth --features geo cldr_table_invariants --locked
 
+      - name: Timezone table sanity guard
+        run: |
+          # The same regen (`cargo run -p locale-gen`) also emits the
+          # country -> IANA timezone TIMEZONES table + TZDATA_VERSION
+          # (crates/zendriver-stealth/src/geo/table.rs). Guard it the same
+          # way as the CLDR table above, since it has no dedicated `cargo
+          # test` invariant check.
+          tz_count=$(grep -cE '^\s*\("[A-Z]{2}", "[^"]+"\),?$' crates/zendriver-stealth/src/geo/table.rs || echo 0)
+          echo "timezone rows: $tz_count"
+          if [ "$tz_count" -lt 100 ] || [ "$tz_count" -gt 300 ]; then
+            echo "::error::TIMEZONES row count $tz_count out of sane bounds [100,300]"
+            exit 1
+          fi
+
+          # Every TIMEZONES value must look like an IANA `Area/Location` zone.
+          bad=$(grep -oE '\("[A-Z]{2}", "[^"]+"\)' crates/zendriver-stealth/src/geo/table.rs \
+            | sed -E 's/^\("[A-Z]{2}", "([^"]+)"\)$/\1/' \
+            | grep -vE '^[A-Za-z_]+/[A-Za-z0-9_+/-]+$' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::TIMEZONES contains malformed zone value(s):"
+            echo "$bad"
+            exit 1
+          fi
+
+          version=$(grep -oE 'TZDATA_VERSION: &str = "[^"]*"' crates/zendriver-stealth/src/geo/table.rs \
+            | grep -oE '"[^"]*"' | tr -d '"')
+          if [ -z "$version" ]; then
+            echo "::error::TZDATA_VERSION is empty"
+            exit 1
+          fi
+          echo "TZDATA_VERSION: $version"
+
       - name: Create PR
         id: cpr
         uses: peter-evans/create-pull-request@v6

@@ -1,9 +1,13 @@
-//! Country -> locale/languages derivation from a vendored Unicode CLDR table.
+//! Country -> locale/languages/timezone derivation from a vendored Unicode
+//! CLDR table and a vendored IANA tz-database table.
 //!
 //! Opt-in (`--features geo`). The single user-facing entry point is
 //! [`persona`], which returns a [`Persona`](crate::Persona) overlay carrying a
-//! coherent `locale` + `languages` for the given [`Country`]. Everything stays
-//! overridable; an unknown country leaves the persona untouched.
+//! coherent `locale` + `languages` and a representative `timezone` for the
+//! given [`Country`]. Everything stays overridable; an unknown country leaves
+//! the persona untouched. Multi-timezone countries (US, RU, CA, AU, BR, ...)
+//! resolve to one representative IANA zone, not a precise per-visitor zone —
+//! see [`persona`].
 
 mod table;
 
@@ -27,20 +31,46 @@ pub fn cldr_version() -> &'static str {
     table::CLDR_VERSION
 }
 
-/// Build a [`Persona`] overlay carrying a coherent `locale` + `languages` for
-/// `country`. Default policy: the country's dominant language only, formed as
-/// `lang-COUNTRY` with its base subtag (e.g. `CH` -> `de-CH` + `["de-CH","de"]`).
-/// An unknown country yields an empty overlay and a warning — never locks a value.
+/// The IANA tz-database release the vendored `TIMEZONES` table was generated
+/// from. Keeps `TZDATA_VERSION` a live symbol (no generated-file `#[allow]`).
+pub fn tzdata_version() -> &'static str {
+    table::TZDATA_VERSION
+}
+
+/// Representative IANA timezone for a country, or `None` if unmapped.
+pub(crate) fn timezone_for(cc: &str) -> Option<&'static str> {
+    table::TIMEZONES
+        .binary_search_by(|(c, _)| (*c).cmp(cc))
+        .ok()
+        .map(|i| table::TIMEZONES[i].1)
+}
+
+/// Build a [`Persona`] overlay carrying a coherent `locale` + `languages` +
+/// representative `timezone` for `country`. Default locale policy: the
+/// country's dominant language only, formed as `lang-COUNTRY` with its base
+/// subtag (e.g. `CH` -> `de-CH` + `["de-CH","de"]`). The timezone is a single
+/// representative IANA zone per country (`zone1970.tab` first-occurrence,
+/// with curated overrides for large multi-zone countries, e.g. `RU` ->
+/// `Europe/Moscow` rather than `Europe/Kaliningrad`) — for genuinely
+/// multi-timezone countries this is an approximation, not the visitor's
+/// actual zone; set `Persona.timezone` explicitly (`.persona(..)` /
+/// `.persona_overlay(..)`) when precision matters. An unknown country yields
+/// an empty overlay and a warning — never locks a value.
 pub fn persona(country: Country) -> Persona {
     let cc = country.as_str();
     match languages_for(cc) {
         Some([primary, ..]) => {
             let locale = format!("{primary}-{cc}");
-            Persona {
+            let mut p = Persona {
                 locale: Some(locale.clone()),
                 languages: Some(vec![locale, (*primary).to_string()]),
                 ..Default::default()
+            };
+            p.timezone = timezone_for(cc).map(str::to_string);
+            if p.locale.is_some() && p.timezone.is_none() {
+                tracing::debug!("geo: no timezone mapping for country {cc}");
             }
+            p
         }
         _ => {
             tracing::warn!("geo: no locale mapping for country {cc}; leaving locale unset");
@@ -127,6 +157,33 @@ mod tests {
         assert!(Country::try_from("u").is_err());
         assert!(Country::try_from("u1").is_err());
         assert!("ch".parse::<Country>().is_ok());
+    }
+
+    #[test]
+    fn persona_sets_timezone_from_country() {
+        assert_eq!(
+            persona(Country::try_from("US").unwrap())
+                .timezone
+                .as_deref(),
+            Some("America/New_York")
+        );
+    }
+
+    #[test]
+    fn persona_timezone_uses_override() {
+        assert_eq!(
+            persona(Country::try_from("RU").unwrap())
+                .timezone
+                .as_deref(),
+            Some("Europe/Moscow")
+        );
+    }
+
+    #[test]
+    fn persona_locale_unchanged() {
+        // existing locale/languages assertions still hold (regression)
+        let p = persona(Country::try_from("US").unwrap());
+        assert_eq!(p.locale.as_deref(), Some("en-US"));
     }
 
     #[test]

@@ -145,14 +145,24 @@ let browser = Browser::builder()
     .launch().await?;
 ```
 
-## Country → locale overlay (`geo_locale`)
+## Country → locale + timezone overlay (`geo_locale`)
 
 The optional `geo` feature adds [`BrowserBuilder::geo_locale`], which maps an
 ISO 3166-1 alpha-2 country code (e.g. `"US"`, `"de"`) to a coherent `locale` +
-`languages` (Accept-Language) set drawn from a bundled CLDR-derived table. It
-is layered as a **persona overlay**, so it composes with `.persona(..)` and is
-overridden by an explicit `.persona_overlay(..)` locale. An invalid / unknown
-country code is ignored (logged) — the value is never locked.
+`languages` (Accept-Language) set drawn from a bundled CLDR-derived table,
+**plus a representative IANA `timezone`** drawn from a bundled tz-database
+table (wired through to `Emulation.setTimezoneOverride`). It is layered as a
+**persona overlay**, so it composes with `.persona(..)` and is overridden by
+an explicit `.persona_overlay(..)` locale. An invalid / unknown country code
+is ignored (logged) — the value is never locked.
+
+**Representative-zone caveat:** countries spanning multiple timezones (the
+US, Russia, Canada, Australia, Brazil, ...) resolve to a single representative
+zone (the country's first `zone1970.tab` entry, with a few curated overrides
+— e.g. `RU` → `Europe/Moscow`, not `Europe/Kaliningrad`), not any particular
+visitor's actual local zone. Treat it as a coherent default, not a precise
+one — set `.persona(Persona::builder().timezone("America/Los_Angeles").build())`
+(or `.persona_overlay(..)`) when a specific zone within the country matters.
 
 ```toml
 [dependencies]
@@ -176,9 +186,11 @@ browser is routed through a rotating or third-party proxy pool and you want
 the locale to match wherever that proxy happens to exit — use
 [`BrowserBuilder::geo_auto`] instead. It probes the exit IP through a bundled
 [`IpApiResolver`] (a proxied GET against `ip-api.com`) and folds the resulting
-country's locale/languages into the persona overlay, with the exact same
-precedence as `geo_locale`: an explicit `.persona(..)`/`.persona_overlay(..)`
-locale always wins and skips the probe entirely.
+country's locale/languages/timezone into the persona overlay, with the exact
+same precedence as `geo_locale`: an explicit `.persona(..)`/`.persona_overlay(..)`
+locale always wins and skips the probe entirely. The same representative-zone
+caveat above applies — the resolved country's timezone is a single
+representative IANA zone, not the exit IP's precise local zone.
 
 ```rust,no_run
 use zendriver::Browser;

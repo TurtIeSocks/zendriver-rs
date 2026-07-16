@@ -4,15 +4,15 @@
 >
 > **Method (to regenerate):** grep specs/plans for deferral language (`deferred`, `out of scope`, `later`, `follow-up`, `future`, `not yet`, `for now`, `Option B`, `post-1.0`, `TODO`, unchecked `- [ ]` that aren't TDD steps) + code for `TODO`/`FIXME`/`todo!()`/`#[ignore]`/`#[allow(dead_code)]`/prose deferrals + the MCP ledger `excluded` entries. Cross-check each against shipped code.
 >
-> **Big picture:** the 6-phase port + parity A–E + fingerprints PR2 + MCP all shipped; most "deferred to phase N" items were since built. The genuine remaining tail is small and concentrated in stealth depth + a few convenience/limitation tails. The one item that is a *live failure* (not a niceties-deferral) is the fingerprint-pool asset URL — see §0.
+> **Big picture:** the 6-phase port + parity A–E + fingerprints PR2 + MCP all shipped; most "deferred to phase N" items were since built. The genuine remaining tail is small and concentrated in stealth depth + a few convenience/limitation tails. One item is parked on an external decision rather than a niceties-deferral — the fingerprint-pool asset URL — see §0; it fails soft with a clear, actionable error today, not a crash.
 
-Legend: 🐞 shipped-but-broken · 🔧 actionable tail · 🎯 intentional non-goal (recorded decision — *not* a gap) · 🧹 cleanup / stale-doc / code-residue · ✅ closed since snapshot
+Legend: ⏸ parked (blocked on an external decision, not a bug) · 🐞 shipped-but-broken · 🔧 actionable tail · 🎯 intentional non-goal (recorded decision — *not* a gap) · 🧹 cleanup / stale-doc / code-residue · ✅ closed since snapshot
 
 ---
 
-## §0 — 🐞 Live failure (fix first)
+## §0 — ⏸ Parked (blocked on a decision, not a live failure)
 
-- **Fingerprint pool asset URL is still a placeholder** → real-device pool sampling **errors at runtime**, it is not merely deferred. `TODO(#25)` above the placeholder `POOL_URL` at `crates/zendriver-mcp/src/tools/fingerprints.rs:42` (lines 83-90 confirm the asset "does not exist yet" and fails). Blocked on publishing the fingerprint-pool release asset. Until then the generative path is the only working persona source.
+- **Fingerprint pool asset URL is still a placeholder** → `source: pool` in `zendriver-mcp`'s `fingerprints_generate` returns a clear, actionable `internal_error` ("pool load failed (the pool asset may not be published yet — see issue #25): ...") rather than crashing or failing silently; `generative` remains the working default persona source. Parked on the #25 dataset-curation decision (extract + host a real-device fingerprint pool as a release asset) — not something to "fix" locally. `TODO(#25)` above the placeholder `POOL_URL` at `crates/zendriver-mcp/src/tools/fingerprints.rs:42-43` (lines 82-94 show the clear-error path).
 
 ---
 
@@ -28,13 +28,13 @@ Legend: 🐞 shipped-but-broken · 🔧 actionable tail · 🎯 intentional non-
 - **Sec-CH-UA for non-Chrome browsers** (Brave/Edge/Vivaldi); "post-1.0". `UserAgentMetadata::realistic()` hardcodes Chrome branding only; `Channel::Brave/Edge` picks the executable, not the brands. — `crates/zendriver-stealth/src/fingerprint.rs:35-62`
 
 ### Fingerprints
-- (pool asset URL moved to §0 — it's a live failure, not a nicety)
+- (pool asset URL moved to §0 — parked on the #25 dataset-curation decision, not a nicety, and not a crash)
 - **Mobile personas** (desktop-only). `Platform` enum = Win32/MacIntel/LinuxX86_64 only; generative sampler filters out mobile UAs; `mobile` hardcoded false. — `crates/zendriver-stealth/src/profile.rs:24-28`, `crates/zendriver-fingerprints/src/generative/mapping.rs:23-38`
 - **Auto-refreshing pool on a schedule** + `force_refresh` / cache-TTL knob. Pure download-on-first-use with permanent cache; any cache hit short-circuits. — `crates/zendriver-fingerprints/src/pool/mod.rs:76-101`, `generative/download.rs:17-34`
 - **Full attribute-coverage expansion** (screen metrics, navigator extras) + matching Persona/JS-patch growth. `persona_from_assignment` maps only platform/deviceMemory/hardwareConcurrency/videoCard/fonts; `Persona` has no screen-metric/navigator-extra fields. (Commit `402a427c` added *static* screen.js/mouse.js patches — coherent surface — but did **not** grow the BN or Persona.) — `crates/zendriver-fingerprints/src/generative/mapping.rs:41-83`, `crates/zendriver-stealth/src/persona/mod.rs:36-61`
 
 ### Geo / locale
-- **timezone-from-geo derivation** (country → IANA tz, sharing the `geo` module). `geo::persona()` derives locale+languages only, leaves timezone `None`. Still open — `geo_auto`/`IpApiResolver` (below) only close the country→locale/languages half. — `crates/zendriver-stealth/src/geo/mod.rs:34-50`
+- **`geo_auto` exact timezone from ip-api's `timezone` field** (more precise than the country-representative zone; needs a `GeoResolver` contract change to return a tz). `geo::persona()` (and `geo_auto`/`geo_locale` through it) sets a single representative IANA zone per country — multi-timezone countries (US, RU, CA, AU, BR, ...) don't get the visitor's actual local zone. `IpApiResolver`'s underlying `ip-api.com` response already carries a `timezone` field that isn't threaded through. — `crates/zendriver-stealth/src/geo/mod.rs`, `crates/zendriver/src/geo_resolver.rs`
 
 ### Network / cookies / tabs / frames
 - **Transparent handle-preserving reconnect** (session-id remap so live `Tab` handles survive) + feature re-arm. `reconnect` clears the tab map (new sessionIds → invalidated handles). — `crates/zendriver/src/browser.rs:3479` (doc `:3436-3438`)
@@ -98,7 +98,8 @@ Legend: 🐞 shipped-but-broken · 🔧 actionable tail · 🎯 intentional non-
 - **Nightly real-Chrome anti-detection CI** → **exists**. `nightly-stealth-tests` (cron `0 6 * * *`, real Chrome) runs `--test stealth_phase2`, which hits `bot.sannysoft.com` and `arh.antoinevastel.com/bots/areyouheadless`. — `.github/workflows/ci.yml:200-224`
 - **OOPIF bootstrap "placeholder Frame"** → **was already done**; the backlog mis-cited test-fixture setup. Real impl: `crates/zendriver/src/frame/oopif.rs:49` `register_oopif_frame`, wired at `browser.rs:1497` for `kind=="iframe"` (commit `b13fdbd3`).
 - **Per-context proxy auth — first-class API** → **shipped** via `Browser::browser_context()` → `BrowserContextBuilder` (`.proxy()`/`.proxy_bypass()`/`.proxy_auth()`/`.build()`), auto-installing per-tab `Fetch.authRequired` chained into the one per-session interception actor (2026-07-16 plan).
-- **Auto IP-geo resolution / Option B exit-IP probe** → **shipped** via `BrowserBuilder::geo_auto()` (bundled `IpApiResolver`, a proxied `ip-api.com` GET, opt-in) + `BrowserBuilder::geo_resolver()` for a custom `GeoResolver` impl, plus a structured `BrowserBuilder::proxy(url)` (reusing `crate::proxy::split_proxy_url`) so the probe mirrors the browser's own proxy. Exposed over MCP as `browser_open.geo_auto` / `.geo_endpoint` / `.proxy`. Explicit `geo_locale`/persona locale still wins and skips the probe; fail-soft on probe failure. (2026-07-16 `geo-auto-resolver` plan.) Note: **timezone-from-geo derivation remains open** (see §1 Geo/locale above) — this closes only the country→locale/languages half.
+- **Auto IP-geo resolution / Option B exit-IP probe** → **shipped** via `BrowserBuilder::geo_auto()` (bundled `IpApiResolver`, a proxied `ip-api.com` GET, opt-in) + `BrowserBuilder::geo_resolver()` for a custom `GeoResolver` impl, plus a structured `BrowserBuilder::proxy(url)` (reusing `crate::proxy::split_proxy_url`) so the probe mirrors the browser's own proxy. Exposed over MCP as `browser_open.geo_auto` / `.geo_endpoint` / `.proxy`. Explicit `geo_locale`/persona locale still wins and skips the probe; fail-soft on probe failure. (2026-07-16 `geo-auto-resolver` plan.) Note: this closed only the country→locale/languages half — timezone-from-geo derivation was the remaining half, since closed below.
+- **timezone-from-geo derivation** → **shipped** via `geo::persona(country)` now also setting `Persona.timezone` to a representative IANA zone, drawn from a generated `TIMEZONES` table (country → zone, from IANA `zone1970.tab` tag `2026c`, first-occurrence-per-country + curated overrides for RU/UA/CA/AU/BR). `locale-gen` emits `TIMEZONES` + `TZDATA_VERSION` (mirroring the existing `COUNTRIES`/`CLDR_VERSION` pattern); `geo::tzdata_version()` exposes provenance. Wired through `geo_locale`/`geo_auto` for free (both terminate in `geo::persona`). Representative-zone caveat: multi-timezone countries get one zone, not the visitor's precise local zone — see the new `geo_auto` follow-up above. (2026-07-16 `timezone-from-geo` plan.) — `crates/zendriver-stealth/src/geo/mod.rs`, `crates/locale-gen/src/lib.rs`
 
 ---
 
