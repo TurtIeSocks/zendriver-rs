@@ -435,3 +435,20 @@ excluded = "builder for BrowserContext (proxy / proxy_bypass / proxy_auth / buil
 [[entry]]
 api = "zendriver::BrowserContextBuilder"
 excluded = "crate-root re-export of the above builder; same non-goal"
+
+# ── Auto IP-geo resolution (geo_auto / structured proxy) ────────────────────
+[[entry]]
+api = "zendriver::browser::BrowserBuilder::proxy"
+covered = "browser_open.proxy"
+
+[[entry]]
+api = "zendriver::browser::BrowserBuilder::geo_auto"
+covered = "browser_open.geo_auto / browser_open.geo_endpoint"
+
+[[entry]]
+api = "zendriver::browser::BrowserBuilder::geo_resolver"
+excluded = "accepts `impl GeoResolver + 'static` — a custom Rust trait implementation has no request/response wire form; browser_open.geo_auto covers the bundled IpApiResolver path (with an optional geo_endpoint override) instead"
+
+[[entry]]
+api = "zendriver::IpApiResolver"
+covered = "browser_open.geo_auto / browser_open.geo_endpoint"

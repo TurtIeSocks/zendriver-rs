@@ -47,7 +47,7 @@ datadome = ["interception", "dep:zendriver-datadome"]
 # Network-touching DataDome nightly tests (real protected sites).
 datadome-tests = ["datadome", "integration-tests"]
 # Country -> coherent locale/languages (BrowserBuilder::geo_locale).
-geo = ["zendriver-stealth/geo"]
+geo = ["zendriver-stealth/geo", "dep:reqwest"]
 # Chrome for Testing binary downloader.
 fetcher = ["dep:zendriver-fetcher"]
 # Network-touching fetcher tests (CfT manifest, real downloads).
@@ -90,7 +90,7 @@ zip.workspace                 = true
 # from `[features]`).
 wiremock    = { workspace = true, optional = true }
 serial_test = { workspace = true, optional = true }
-reqwest     = { workspace = true, optional = true }
+reqwest     = { workspace = true, optional = true, features = ["json"] }
 dirs        = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
@@ -108,6 +108,11 @@ tracing-subscriber.workspace  = true
 # confined that regression lock to Unix).
 sysinfo.workspace             = true
 zendriver-transport = { workspace = true, features = ["testing"] }
+# Unconditional (unlike the `dep:wiremock` optional entry above, which only
+# gates the real-Chrome `integration-tests` binaries): the `geo_resolver`
+# unit tests mock an HTTP server and must run under a plain
+# `--features geo` build, without pulling in all of `integration-tests`.
+wiremock.workspace = true
 
 [[test]]
 name = "datadome_v0"

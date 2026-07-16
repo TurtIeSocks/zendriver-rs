@@ -169,6 +169,87 @@ let browser = Browser::builder()
 
 [`BrowserBuilder::geo_locale`]: https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.geo_locale
 
+## Auto IP-geo resolution (`geo_auto`)
+
+`geo_locale` requires knowing the country up front. When you don't — e.g. the
+browser is routed through a rotating or third-party proxy pool and you want
+the locale to match wherever that proxy happens to exit — use
+[`BrowserBuilder::geo_auto`] instead. It probes the exit IP through a bundled
+[`IpApiResolver`] (a proxied GET against `ip-api.com`) and folds the resulting
+country's locale/languages into the persona overlay, with the exact same
+precedence as `geo_locale`: an explicit `.persona(..)`/`.persona_overlay(..)`
+locale always wins and skips the probe entirely.
+
+```rust,no_run
+use zendriver::Browser;
+
+let browser = Browser::builder()
+    .proxy("http://user:pass@residential-proxy.example:8000")
+    .geo_auto()   // probes the exit IP through the proxy above, credentials included
+    .launch().await?;
+```
+
+`geo_auto()` mirrors the proxy's credentials into the probe too (via
+`reqwest::Proxy::basic_auth`, never embedded in a URL string), so an
+authenticated proxy like the one above is probed authenticated — the probe
+would otherwise 407 silently and fail soft with no overlay.
+
+**Privacy:** the bundled `ip-api.com` probe fires ONLY when `.geo_auto()` (or
+`.geo_resolver()`) is called — it is fully opt-in, never implicit. Failure
+(no network, proxy down, unrecognized country) is fail-soft: a
+`tracing::warn!` is logged and `launch()` proceeds with no overlay; it never
+blocks or fails the launch. The default endpoint (`http://ip-api.com/json`)
+is **plaintext HTTP** — a proxy operator can observe or tamper with the
+response in transit; override [`IpApiResolver::endpoint`] to an HTTPS service
+if response integrity matters for your threat model.
+
+### Structured `proxy(..)`
+
+[`BrowserBuilder::proxy`] parses a `scheme://[user:pass@]host:port` URL,
+strips the userinfo before emitting `--proxy-server=` (Chrome ignores
+credentials there), and auto-wires `proxy_auth` from the userinfo when set
+(requires the `interception` feature to actually answer the
+`Fetch.authRequired` challenge). It also makes `geo_auto()`'s probe traffic
+mirror the same upstream proxy the browser itself will use, so the resolved
+country matches the exit IP Chrome actually sees.
+
+### Custom resolver (`geo_resolver`)
+
+Swap the bundled `ip-api.com` probe for your own service, an offline
+MaxMind-style DB, or a test double by implementing
+[`zendriver_stealth::geo::GeoResolver`] and passing it to
+[`BrowserBuilder::geo_resolver`]:
+
+```rust,no_run
+use async_trait::async_trait;
+use zendriver::Browser;
+use zendriver_stealth::geo::{Country, GeoResolver};
+
+struct MyResolver;
+
+#[async_trait]
+impl GeoResolver for MyResolver {
+    async fn country(&self) -> Option<Country> {
+        // Query your own service / offline DB instead of ip-api.com.
+        Country::try_from("DE").ok()
+    }
+}
+
+let browser = Browser::builder()
+    .geo_resolver(MyResolver)
+    .launch().await?;
+```
+
+Only ONE of `geo_auto()` / `geo_resolver(..)` takes effect (the last one
+called wins — both set the same underlying resolver slot).
+
+[`BrowserBuilder::geo_auto`]: https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.geo_auto
+[`BrowserBuilder::geo_resolver`]: https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.geo_resolver
+[`BrowserBuilder::proxy`]: https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.proxy
+[`IpApiResolver`]: https://docs.rs/zendriver/latest/zendriver/struct.IpApiResolver.html
+[`IpApiResolver::endpoint`]: https://docs.rs/zendriver/latest/zendriver/struct.IpApiResolver.html#method.endpoint
+[`zendriver_stealth::geo::GeoResolver`]: https://docs.rs/zendriver-stealth/latest/zendriver_stealth/geo/trait.GeoResolver.html
+
 ## JSON persona (`try_from_json`)
 
 Any `Persona` can be expressed as a JSON object and round-trips cleanly.
