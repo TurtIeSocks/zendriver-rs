@@ -855,6 +855,71 @@ let browser = Browser::builder()
     .geo_locale("DE")   // de-DE locale + matching Accept-Language
     .launch().await?;
 <span class="boring">}</span></code></pre></pre>
+<h2 id="auto-ip-geo-resolution-geo_auto"><a class="header" href="#auto-ip-geo-resolution-geo_auto">Auto IP-geo resolution (<code>geo_auto</code>)</a></h2>
+<p><code>geo_locale</code> requires knowing the country up front. When you don't — e.g. the
+browser is routed through a rotating or third-party proxy pool and you want
+the locale to match wherever that proxy happens to exit — use
+<a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.geo_auto"><code>BrowserBuilder::geo_auto</code></a> instead. It probes the exit IP through a bundled
+<a href="https://docs.rs/zendriver/latest/zendriver/struct.IpApiResolver.html"><code>IpApiResolver</code></a> (a proxied GET against <code>ip-api.com</code>) and folds the resulting
+country's locale/languages into the persona overlay, with the exact same
+precedence as <code>geo_locale</code>: an explicit <code>.persona(..)</code>/<code>.persona_overlay(..)</code>
+locale always wins and skips the probe entirely.</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::Browser;
+
+let browser = Browser::builder()
+    .proxy("http://user:pass@residential-proxy.example:8000")
+    .geo_auto()   // probes the exit IP through the proxy above, credentials included
+    .launch().await?;
+<span class="boring">}</span></code></pre></pre>
+<p><code>geo_auto()</code> mirrors the proxy's credentials into the probe too (via
+<code>reqwest::Proxy::basic_auth</code>, never embedded in a URL string), so an
+authenticated proxy like the one above is probed authenticated — the probe
+would otherwise 407 silently and fail soft with no overlay.</p>
+<p><strong>Privacy:</strong> the bundled <code>ip-api.com</code> probe fires ONLY when <code>.geo_auto()</code> (or
+<code>.geo_resolver()</code>) is called — it is fully opt-in, never implicit. Failure
+(no network, proxy down, unrecognized country) is fail-soft: a
+<code>tracing::warn!</code> is logged and <code>launch()</code> proceeds with no overlay; it never
+blocks or fails the launch. The default endpoint (<code>http://ip-api.com/json</code>)
+is <strong>plaintext HTTP</strong> — a proxy operator can observe or tamper with the
+response in transit; override <a href="https://docs.rs/zendriver/latest/zendriver/struct.IpApiResolver.html#method.endpoint"><code>IpApiResolver::endpoint</code></a> to an HTTPS service
+if response integrity matters for your threat model.</p>
+<h3 id="structured-proxy"><a class="header" href="#structured-proxy">Structured <code>proxy(..)</code></a></h3>
+<p><a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.proxy"><code>BrowserBuilder::proxy</code></a> parses a <code>scheme://[user:pass@]host:port</code> URL,
+strips the userinfo before emitting <code>--proxy-server=</code> (Chrome ignores
+credentials there), and auto-wires <code>proxy_auth</code> from the userinfo when set
+(requires the <code>interception</code> feature to actually answer the
+<code>Fetch.authRequired</code> challenge). It also makes <code>geo_auto()</code>'s probe traffic
+mirror the same upstream proxy the browser itself will use, so the resolved
+country matches the exit IP Chrome actually sees.</p>
+<h3 id="custom-resolver-geo_resolver"><a class="header" href="#custom-resolver-geo_resolver">Custom resolver (<code>geo_resolver</code>)</a></h3>
+<p>Swap the bundled <code>ip-api.com</code> probe for your own service, an offline
+MaxMind-style DB, or a test double by implementing
+<a href="https://docs.rs/zendriver-stealth/latest/zendriver_stealth/geo/trait.GeoResolver.html"><code>zendriver_stealth::geo::GeoResolver</code></a> and passing it to
+<a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.geo_resolver"><code>BrowserBuilder::geo_resolver</code></a>:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use async_trait::async_trait;
+use zendriver::Browser;
+use zendriver_stealth::geo::{Country, GeoResolver};
+
+struct MyResolver;
+
+#[async_trait]
+impl GeoResolver for MyResolver {
+    async fn country(&amp;self) -&gt; Option&lt;Country&gt; {
+        // Query your own service / offline DB instead of ip-api.com.
+        Country::try_from("DE").ok()
+    }
+}
+
+let browser = Browser::builder()
+    .geo_resolver(MyResolver)
+    .launch().await?;
+<span class="boring">}</span></code></pre></pre>
+<p>Only ONE of <code>geo_auto()</code> / <code>geo_resolver(..)</code> takes effect (the last one
+called wins — both set the same underlying resolver slot).</p>
 <h2 id="json-persona-try_from_json"><a class="header" href="#json-persona-try_from_json">JSON persona (<code>try_from_json</code>)</a></h2>
 <p>Any <code>Persona</code> can be expressed as a JSON object and round-trips cleanly.
 Fields are snake_case; all fields are optional. Useful for configuration files
@@ -3236,6 +3301,23 @@ Requires the default <code>tracker-blocking</code> feature.</li>
 <p>The stealth-profile override accepts <code>geo_country</code> (ISO 3166-1 alpha-2, e.g.
 <code>"DE"</code>) to derive a coherent <code>locale</code> + <code>Accept-Language</code>. The field is always
 present in the schema but only takes effect when the <code>geo</code> feature is enabled.</p>
+<p><code>browser_open</code> also accepts:</p>
+<ul>
+<li><code>proxy: string</code> — route the browser through an upstream proxy
+(<code>scheme://[user:pass@]host:port</code>); userinfo is auto-split into proxy-auth
+credentials (requires the default <code>interception</code> feature to actually answer
+the <code>Fetch.authRequired</code> challenge). Always present in the schema.</li>
+<li><code>geo_auto: bool</code> — auto-derive <code>locale</code>/<code>languages</code> from the exit IP's
+country via a proxied probe to <code>ip-api.com</code> (mirrors <code>proxy</code> above), instead
+of naming a country explicitly via <code>geo_country</code>. Makes at most one outbound
+request, only at launch, only when <code>true</code>. An explicit <code>persona</code> locale wins
+and skips the probe. Requires the opt-in <code>geo</code> feature; always present in
+the schema (ignored with a logged warning on a non-<code>geo</code> build).</li>
+<li><code>geo_endpoint: string</code> — override the probe endpoint (default
+<code>http://ip-api.com/json</code>); only meaningful with <code>geo_auto: true</code>. Note this
+bypasses proxy mirroring — only the bundled default endpoint routes through
+<code>proxy</code>.</li>
+</ul>
 <h2 id="stealth-1"><a class="header" href="#stealth-1">Stealth</a></h2>
 <p>Stealth is on by default (matching the <code>zendriver</code> library). Configure
 the default fingerprint via <code>--stealth-profile</code> at server start; switch

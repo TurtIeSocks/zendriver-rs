@@ -280,6 +280,23 @@ Requires the default <code>tracker-blocking</code> feature.</li>
 <p>The stealth-profile override accepts <code>geo_country</code> (ISO 3166-1 alpha-2, e.g.
 <code>"DE"</code>) to derive a coherent <code>locale</code> + <code>Accept-Language</code>. The field is always
 present in the schema but only takes effect when the <code>geo</code> feature is enabled.</p>
+<p><code>browser_open</code> also accepts:</p>
+<ul>
+<li><code>proxy: string</code> — route the browser through an upstream proxy
+(<code>scheme://[user:pass@]host:port</code>); userinfo is auto-split into proxy-auth
+credentials (requires the default <code>interception</code> feature to actually answer
+the <code>Fetch.authRequired</code> challenge). Always present in the schema.</li>
+<li><code>geo_auto: bool</code> — auto-derive <code>locale</code>/<code>languages</code> from the exit IP's
+country via a proxied probe to <code>ip-api.com</code> (mirrors <code>proxy</code> above), instead
+of naming a country explicitly via <code>geo_country</code>. Makes at most one outbound
+request, only at launch, only when <code>true</code>. An explicit <code>persona</code> locale wins
+and skips the probe. Requires the opt-in <code>geo</code> feature; always present in
+the schema (ignored with a logged warning on a non-<code>geo</code> build).</li>
+<li><code>geo_endpoint: string</code> — override the probe endpoint (default
+<code>http://ip-api.com/json</code>); only meaningful with <code>geo_auto: true</code>. Note this
+bypasses proxy mirroring — only the bundled default endpoint routes through
+<code>proxy</code>.</li>
+</ul>
 <h2 id="stealth"><a class="header" href="#stealth">Stealth</a></h2>
 <p>Stealth is on by default (matching the <code>zendriver</code> library). Configure
 the default fingerprint via <code>--stealth-profile</code> at server start; switch
