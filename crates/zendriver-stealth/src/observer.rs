@@ -13,6 +13,7 @@ use zendriver_transport::{ObserverError, PausedSession, TargetObserver};
 
 use crate::patches::bootstrap_script;
 use crate::persona::GeoPos;
+use crate::persona::specs::{ScreenSpec, UaMetadata};
 use crate::{Fingerprint, Persona, ProfileKind, StealthProfile};
 
 /// Observer that applies a [`StealthProfile`] + [`Fingerprint`] to every page
@@ -31,6 +32,16 @@ pub struct StealthObserver {
     /// on [`Fingerprint`]), geolocation has no `Fingerprint` counterpart, so
     /// it's captured here straight off the persona at construction time.
     geolocation: Option<GeoPos>,
+    /// Custom UA-CH from the resolved [`Persona`]'s `ua.ua_metadata`. When
+    /// set, [`UaMetadata::resolve`] fills any unset sub-field from
+    /// `fingerprint.ua_metadata` and the result drives
+    /// `Emulation.setUserAgentOverride.userAgentMetadata` in place of the
+    /// fingerprint-derived value outright.
+    ua_metadata: Option<UaMetadata>,
+    /// Custom screen / device-metrics from the resolved [`Persona`]. When
+    /// set, drives `Emulation.setDeviceMetricsOverride` in place of the
+    /// fixed 1920x1080 default.
+    screen: Option<ScreenSpec>,
 }
 
 impl StealthObserver {
@@ -61,11 +72,15 @@ impl StealthObserver {
             String::new()
         };
         let geolocation = persona.geolocation;
+        let ua_metadata = persona.ua.as_ref().and_then(|u| u.ua_metadata.clone());
+        let screen = persona.screen;
         Self {
             profile,
             fingerprint,
             bootstrap,
             geolocation,
+            ua_metadata,
+            screen,
         }
     }
 }
@@ -101,6 +116,14 @@ impl TargetObserver for StealthObserver {
             // list so the emitted header is a clean `en-US,en;q=0.9`.
             langs.join(",")
         };
+        // Persona UA-CH wins when supplied — field-wise, falling back to the
+        // fingerprint-derived value for any sub-field the persona left
+        // unset. Absent persona UA-CH → today's behavior (fingerprint's
+        // UAM verbatim).
+        let user_agent_metadata = match &self.ua_metadata {
+            Some(custom) => custom.resolve(&self.fingerprint.ua_metadata),
+            None => self.fingerprint.ua_metadata.clone(),
+        };
         session
             .call(
                 "Emulation.setUserAgentOverride",
@@ -108,24 +131,29 @@ impl TargetObserver for StealthObserver {
                     "userAgent": &self.fingerprint.ua_string,
                     "acceptLanguage": accept_language,
                     "platform": self.fingerprint.platform.ch_platform(),
-                    "userAgentMetadata": &self.fingerprint.ua_metadata,
+                    "userAgentMetadata": &user_agent_metadata,
                 }),
             )
             .await?;
 
         // Screen-size override + focus emulation: keeps headless from leaking
         // an oddly-shaped viewport and from reporting `document.hasFocus()`
-        // false for the (always-backgrounded) headless tab.
+        // false for the (always-backgrounded) headless tab. Persona screen
+        // wins when supplied; absent → today's fixed 1920x1080 default.
+        let (screen_width, screen_height, device_scale_factor) = match self.screen {
+            Some(s) => (s.width, s.height, s.device_pixel_ratio),
+            None => (1920, 1080, 1.0),
+        };
         session
             .call(
                 "Emulation.setDeviceMetricsOverride",
                 json!({
-                    "width": 1920,
-                    "height": 1080,
-                    "deviceScaleFactor": 1.0,
+                    "width": screen_width,
+                    "height": screen_height,
+                    "deviceScaleFactor": device_scale_factor,
                     "mobile": false,
-                    "screenWidth": 1920,
-                    "screenHeight": 1080,
+                    "screenWidth": screen_width,
+                    "screenHeight": screen_height,
                 }),
             )
             .await?;
@@ -346,6 +374,172 @@ mod tests {
                 assert_eq!(params["latitude"].as_f64(), Some(21.0285));
                 assert_eq!(params["longitude"].as_f64(), Some(105.8542));
                 assert_eq!(params["accuracy"].as_f64(), Some(50.0));
+            }
+            mock.reply(id, json!({})).await;
+        }
+
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn spoofed_observer_emits_persona_ua_metadata_and_screen_when_present() {
+        let fp = Fingerprint {
+            platform: Platform::MacIntel,
+            chrome_major: 120,
+            chrome_full: "120.0.6099.234".into(),
+            cpu_count: 10,
+            memory_gb: 8,
+            ua_string: crate::ua::compose_ua_string(Platform::MacIntel, "120.0.6099.234"),
+            ua_metadata: crate::UserAgentMetadata::realistic(
+                Platform::MacIntel,
+                120,
+                "120.0.6099.234",
+            ),
+            timezone: None,
+            locale: None,
+            languages: None,
+            screen: None,
+        };
+        let persona = crate::Persona {
+            ua: Some(crate::UaSpec {
+                ua_metadata: Some(crate::persona::specs::UaMetadata {
+                    platform_version: Some("15.0.0".into()),
+                    architecture: Some("arm".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            screen: Some(crate::persona::specs::ScreenSpec {
+                width: 1536,
+                height: 864,
+                device_pixel_ratio: 1.25,
+            }),
+            ..crate::Persona::default()
+        };
+        let profile = StealthProfile::spoofed();
+        let observer = std::sync::Arc::new(StealthObserver::with_persona(profile, fp, persona));
+
+        let (mut mock, conn) = MockConnection::pair_with_observers(vec![observer.clone()]);
+
+        mock.emit_event(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": "S1",
+                "targetInfo": {
+                    "targetId": "T1",
+                    "type": "page",
+                    "url": "about:blank",
+                    "attached": true,
+                },
+                "waitingForDebugger": true,
+            }),
+        )
+        .await;
+
+        for expected in [
+            "Page.enable",
+            "Emulation.setUserAgentOverride",
+            "Emulation.setDeviceMetricsOverride",
+            "Emulation.setFocusEmulationEnabled",
+            "Page.setBypassCSP",
+            "Page.addScriptToEvaluateOnNewDocument",
+            "Runtime.runIfWaitingForDebugger",
+        ] {
+            let id =
+                tokio::time::timeout(std::time::Duration::from_secs(2), mock.expect_cmd(expected))
+                    .await
+                    .unwrap_or_else(|_| panic!("did not see {expected} within 2s"));
+            if expected == "Emulation.setUserAgentOverride" {
+                let uam = mock.last_sent()["params"]["userAgentMetadata"].clone();
+                // Persona-set sub-fields win.
+                assert_eq!(uam["platformVersion"].as_str(), Some("15.0.0"));
+                assert_eq!(uam["architecture"].as_str(), Some("arm"));
+                // Unset sub-fields fall back to the fingerprint-derived UAM.
+                assert_eq!(uam["platform"].as_str(), Some("macOS"));
+                assert!(uam["brands"].is_array());
+            }
+            if expected == "Emulation.setDeviceMetricsOverride" {
+                let params = mock.last_sent()["params"].clone();
+                assert_eq!(params["width"].as_u64(), Some(1536));
+                assert_eq!(params["height"].as_u64(), Some(864));
+                assert_eq!(params["deviceScaleFactor"].as_f64(), Some(1.25));
+                assert_eq!(params["screenWidth"].as_u64(), Some(1536));
+                assert_eq!(params["screenHeight"].as_u64(), Some(864));
+            }
+            mock.reply(id, json!({})).await;
+        }
+
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn spoofed_observer_uses_fingerprint_uam_and_fixed_screen_when_persona_absent() {
+        let fp = Fingerprint {
+            platform: Platform::MacIntel,
+            chrome_major: 120,
+            chrome_full: "120.0.6099.234".into(),
+            cpu_count: 10,
+            memory_gb: 8,
+            ua_string: crate::ua::compose_ua_string(Platform::MacIntel, "120.0.6099.234"),
+            ua_metadata: crate::UserAgentMetadata::realistic(
+                Platform::MacIntel,
+                120,
+                "120.0.6099.234",
+            ),
+            timezone: None,
+            locale: None,
+            languages: None,
+            screen: None,
+        };
+        let expected_uam = fp.ua_metadata.clone();
+        let profile = StealthProfile::spoofed();
+        // `Persona::default()` — no ua_metadata, no screen.
+        let observer = std::sync::Arc::new(StealthObserver::new(profile, fp));
+
+        let (mut mock, conn) = MockConnection::pair_with_observers(vec![observer.clone()]);
+
+        mock.emit_event(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": "S1",
+                "targetInfo": {
+                    "targetId": "T1",
+                    "type": "page",
+                    "url": "about:blank",
+                    "attached": true,
+                },
+                "waitingForDebugger": true,
+            }),
+        )
+        .await;
+
+        for expected in [
+            "Page.enable",
+            "Emulation.setUserAgentOverride",
+            "Emulation.setDeviceMetricsOverride",
+            "Emulation.setFocusEmulationEnabled",
+            "Page.setBypassCSP",
+            "Page.addScriptToEvaluateOnNewDocument",
+            "Runtime.runIfWaitingForDebugger",
+        ] {
+            let id =
+                tokio::time::timeout(std::time::Duration::from_secs(2), mock.expect_cmd(expected))
+                    .await
+                    .unwrap_or_else(|_| panic!("did not see {expected} within 2s"));
+            if expected == "Emulation.setUserAgentOverride" {
+                let uam = mock.last_sent()["params"]["userAgentMetadata"].clone();
+                let expected_json = serde_json::to_value(&expected_uam).unwrap();
+                assert_eq!(
+                    uam, expected_json,
+                    "absent persona UAM → fingerprint's verbatim"
+                );
+            }
+            if expected == "Emulation.setDeviceMetricsOverride" {
+                let params = mock.last_sent()["params"].clone();
+                // Today's fixed default, unchanged.
+                assert_eq!(params["width"].as_u64(), Some(1920));
+                assert_eq!(params["height"].as_u64(), Some(1080));
+                assert_eq!(params["deviceScaleFactor"].as_f64(), Some(1.0));
             }
             mock.reply(id, json!({})).await;
         }
