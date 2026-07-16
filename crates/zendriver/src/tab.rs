@@ -3676,8 +3676,8 @@ mod tests {
                 context_proxy_auth: tokio::sync::Mutex::new(HashMap::new()),
                 #[cfg(feature = "tracker-blocking")]
                 tracker_matcher: None,
-                #[cfg(feature = "tracker-blocking")]
-                tracker_handles: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+                #[cfg(feature = "interception")]
+                session_intercept_handles: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             }
         });
         let tab = inner.main_tab.clone();
@@ -4584,8 +4584,10 @@ mod tests {
                     context_proxy_auth: tokio::sync::Mutex::new(HashMap::new()),
                     #[cfg(feature = "tracker-blocking")]
                     tracker_matcher: None,
-                    #[cfg(feature = "tracker-blocking")]
-                    tracker_handles: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+                    #[cfg(feature = "interception")]
+                    session_intercept_handles: tokio::sync::Mutex::new(
+                        std::collections::HashMap::new(),
+                    ),
                 }
             });
         let url = inner.main_tab.inspector_url().unwrap();
