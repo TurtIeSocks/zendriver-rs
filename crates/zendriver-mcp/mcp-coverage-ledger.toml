@@ -422,3 +422,16 @@ excluded = "error variant, not an operation; a CDP call going unanswered within 
 [[entry]]
 api = "zendriver::ZendriverError::CdpTimeout"
 excluded = "crate-root re-export of the above variant; same per-tool failure surface"
+
+# ── Per-context proxy auth — first-class API (BrowserContextBuilder) ───────
+[[entry]]
+api = "zendriver::browser::Browser::browser_context"
+excluded = "BrowserContext is a handle-returning lifecycle API; per-context proxy+auth is configured at Rust construction time and its tabs are driven through existing tab tools — no request/response MCP surface. Agent-facing per-context proxies would be a separate browser_context_open tool (out of scope)."
+
+[[entry]]
+api = "zendriver::browser_context::BrowserContextBuilder"
+excluded = "builder for BrowserContext (proxy / proxy_bypass / proxy_auth / build); same non-goal as Browser::browser_context above — construction-time Rust API, no MCP request/response shape"
+
+[[entry]]
+api = "zendriver::BrowserContextBuilder"
+excluded = "crate-root re-export of the above builder; same non-goal"

@@ -1320,18 +1320,25 @@ pub(crate) struct BrowserInner {
     #[cfg(feature = "interception")]
     #[allow(dead_code)]
     pub(crate) proxy_auth_handle: std::sync::OnceLock<zendriver_interception::InterceptHandle>,
+    /// Per-`browserContextId` proxy credentials, registered by
+    /// [`crate::BrowserContextBuilder::build`] and read by the `TabRegistrar`
+    /// to install a `Fetch.authRequired` handler on each tab opened in that
+    /// context. Removed on `BrowserContext` drop.
+    #[cfg(feature = "interception")]
+    pub(crate) context_proxy_auth: tokio::sync::Mutex<HashMap<String, (String, String)>>,
     /// Combined tracker/fingerprinter [`HostMatcher`] (bundled + custom),
     /// built once at launch. `None` when blocking is not configured. Read by
     /// the [`TabRegistrar`] to install a `BlockHosts` interception on each new
     /// page tab.
     #[cfg(feature = "tracker-blocking")]
     pub(crate) tracker_matcher: Option<std::sync::Arc<crate::HostMatcher>>,
-    /// Live tracker-blocking interception handles keyed by `sessionId`
-    /// (main tab + each page tab). Inserted on attach, removed on detach;
-    /// dropping a handle stops that tab's actor. Held here so the actors live
-    /// as long as the browser.
-    #[cfg(feature = "tracker-blocking")]
-    pub(crate) tracker_handles:
+    /// Live per-session interception handles keyed by `sessionId` (main tab +
+    /// each page tab). Holds the single chained actor per session — tracker
+    /// blocking and/or per-context proxy auth. Inserted on attach, removed on
+    /// detach; dropping a handle stops that tab's actor. One actor per session
+    /// so they never double-resolve `Fetch.requestPaused` (cdpdriver/zendriver#208).
+    #[cfg(feature = "interception")]
+    pub(crate) session_intercept_handles:
         tokio::sync::Mutex<HashMap<String, zendriver_interception::InterceptHandle>>,
 }
 
@@ -1354,6 +1361,51 @@ impl BrowserInner {
             )
             .await?;
         Ok(())
+    }
+
+    /// Send `Target.createBrowserContext` with an optional (verbatim)
+    /// `proxyServer` + `proxyBypassList` and return the new
+    /// `browserContextId`. Callers that need userinfo stripping do it before
+    /// calling; this method sends whatever `proxy_server` it is given.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Navigation`] if the response lacks
+    /// `browserContextId`; bubbles transport errors from `call_raw`.
+    pub(crate) async fn create_browser_context_raw(
+        &self,
+        proxy_server: Option<&str>,
+        bypass: Option<&str>,
+    ) -> Result<String, ZendriverError> {
+        let mut params = serde_json::Map::new();
+        if let Some(p) = proxy_server {
+            params.insert(
+                "proxyServer".into(),
+                serde_json::Value::String(p.to_string()),
+            );
+        }
+        if let Some(b) = bypass {
+            params.insert(
+                "proxyBypassList".into(),
+                serde_json::Value::String(b.to_string()),
+            );
+        }
+        let res = self
+            .conn
+            .call_raw(
+                "Target.createBrowserContext",
+                serde_json::Value::Object(params),
+                None,
+            )
+            .await?;
+        res.get("browserContextId")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                ZendriverError::Navigation(
+                    "Target.createBrowserContext returned no browserContextId".into(),
+                )
+            })
     }
 }
 
@@ -1401,10 +1453,12 @@ pub(crate) fn test_only_inner_from_conn(conn: Connection) -> Arc<BrowserInner> {
             tabs_changed: tokio::sync::Notify::new(),
             #[cfg(feature = "interception")]
             proxy_auth_handle: std::sync::OnceLock::new(),
+            #[cfg(feature = "interception")]
+            context_proxy_auth: tokio::sync::Mutex::new(HashMap::new()),
             #[cfg(feature = "tracker-blocking")]
             tracker_matcher: None,
-            #[cfg(feature = "tracker-blocking")]
-            tracker_handles: tokio::sync::Mutex::new(HashMap::new()),
+            #[cfg(feature = "interception")]
+            session_intercept_handles: tokio::sync::Mutex::new(HashMap::new()),
         }
     })
 }
@@ -1533,9 +1587,9 @@ impl TargetObserver for TabRegistrar {
                 let conn = session.connection().clone();
                 let new_session = SessionHandle::new(conn, session.session_id.to_string());
                 // Clone the session before it is moved into Tab::new so the
-                // tracker-blocking install can use it afterwards.
-                #[cfg(feature = "tracker-blocking")]
-                let new_session_for_tracker = new_session.clone();
+                // per-session interception install can use it afterwards.
+                #[cfg(feature = "interception")]
+                let new_session_for_intercept = new_session.clone();
                 let input = InputController::new(self.input_profile.clone());
                 let weak_inner = Arc::downgrade(&browser);
                 let tab = Tab::new(
@@ -1557,20 +1611,41 @@ impl TargetObserver for TabRegistrar {
                 // Wake any `new_tab_at` callers waiting on this insert.
                 browser.tabs_changed.notify_waiters();
 
-                // Tracker blocking: if configured, install a BlockHosts
-                // interception on this new page tab's session and park the
-                // handle (keyed by sessionId) so it lives with the browser.
-                #[cfg(feature = "tracker-blocking")]
-                if let Some(matcher) = browser.tracker_matcher.clone() {
-                    let handle =
-                        zendriver_interception::InterceptBuilder::new(&new_session_for_tracker)
-                            .block_hosts(matcher)
-                            .start();
-                    browser
-                        .tracker_handles
-                        .lock()
-                        .await
-                        .insert(new_session_for_tracker.session_id().to_string(), handle);
+                // Per-session interception: chain tracker-blocking (if a
+                // matcher is configured) and per-context proxy auth (if this
+                // tab's browser context registered credentials) into ONE
+                // actor, then park the handle keyed by sessionId so it lives
+                // with the browser. One actor per session — never two — so
+                // they don't double-resolve the same `Fetch.requestPaused`
+                // (cdpdriver/zendriver#208).
+                #[cfg(feature = "interception")]
+                {
+                    let mut builder =
+                        zendriver_interception::InterceptBuilder::new(&new_session_for_intercept);
+                    let mut needs_actor = false;
+
+                    #[cfg(feature = "tracker-blocking")]
+                    if let Some(matcher) = browser.tracker_matcher.clone() {
+                        builder = builder.block_hosts(matcher);
+                        needs_actor = true;
+                    }
+
+                    if let Some(ctx_id) = session.target_info.browser_context_id.as_deref() {
+                        let creds = browser.context_proxy_auth.lock().await.get(ctx_id).cloned();
+                        if let Some((user, pass)) = creds {
+                            builder = builder.handle_auth(user, pass);
+                            needs_actor = true;
+                        }
+                    }
+
+                    if needs_actor {
+                        let handle = builder.start();
+                        browser
+                            .session_intercept_handles
+                            .lock()
+                            .await
+                            .insert(new_session_for_intercept.session_id().to_string(), handle);
+                    }
                 }
 
                 Ok(())
@@ -1602,10 +1677,14 @@ impl TargetObserver for TabRegistrar {
         } else {
             let _ = crate::frame::oopif::deregister_oopif_frame(&browser, session_id).await;
         }
-        // Drop any tracker-blocking handle for this session (stops its actor).
-        #[cfg(feature = "tracker-blocking")]
+        // Drop any per-session interception handle (stops its actor).
+        #[cfg(feature = "interception")]
         {
-            browser.tracker_handles.lock().await.remove(session_id);
+            browser
+                .session_intercept_handles
+                .lock()
+                .await
+                .remove(session_id);
         }
     }
 }
@@ -2106,10 +2185,12 @@ pub(crate) async fn finish_connect(
             tabs_changed: tokio::sync::Notify::new(),
             #[cfg(feature = "interception")]
             proxy_auth_handle: std::sync::OnceLock::new(),
+            #[cfg(feature = "interception")]
+            context_proxy_auth: tokio::sync::Mutex::new(HashMap::new()),
             #[cfg(feature = "tracker-blocking")]
             tracker_matcher,
-            #[cfg(feature = "tracker-blocking")]
-            tracker_handles: tokio::sync::Mutex::new(HashMap::new()),
+            #[cfg(feature = "interception")]
+            session_intercept_handles: tokio::sync::Mutex::new(HashMap::new()),
         }
     });
 
@@ -3011,6 +3092,13 @@ impl Browser {
         BrowserBuilder::new()
     }
 
+    /// Test-only constructor that wraps a caller-built [`BrowserInner`] in a
+    /// [`Browser`] handle without going through [`BrowserBuilder::launch`].
+    #[cfg(test)]
+    pub(crate) fn test_only_from_inner(inner: std::sync::Arc<BrowserInner>) -> Self {
+        Browser { inner }
+    }
+
     /// Attach to an already-running Chrome debug session instead of spawning.
     ///
     /// Shortcut for [`Browser::builder().connect(endpoint)`][BrowserBuilder::connect]
@@ -3158,40 +3246,10 @@ impl Browser {
         proxy_server: Option<&str>,
         proxy_bypass_list: Option<&str>,
     ) -> Result<crate::BrowserContext, ZendriverError> {
-        let mut params = serde_json::Map::new();
-        if let Some(p) = proxy_server {
-            params.insert(
-                "proxyServer".into(),
-                serde_json::Value::String(p.to_string()),
-            );
-        }
-        if let Some(b) = proxy_bypass_list {
-            params.insert(
-                "proxyBypassList".into(),
-                serde_json::Value::String(b.to_string()),
-            );
-        }
-
-        let res = self
+        let id = self
             .inner
-            .conn
-            .call_raw(
-                "Target.createBrowserContext",
-                serde_json::Value::Object(params),
-                None,
-            )
+            .create_browser_context_raw(proxy_server, proxy_bypass_list)
             .await?;
-
-        let id = res
-            .get("browserContextId")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                ZendriverError::Navigation(
-                    "Target.createBrowserContext returned no browserContextId".into(),
-                )
-            })?
-            .to_string();
-
         Ok(crate::BrowserContext {
             browser: self.inner.clone(),
             id,
@@ -3208,6 +3266,26 @@ impl Browser {
     /// Same as [`Browser::create_browser_context_with`].
     pub async fn create_browser_context(&self) -> Result<crate::BrowserContext, ZendriverError> {
         self.create_browser_context_with(None, None).await
+    }
+
+    /// Start building an isolated [`crate::BrowserContext`] with an optional
+    /// proxy and per-context credentials.
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// let browser = zendriver::Browser::builder().launch().await?;
+    /// let ctx = browser
+    ///     .browser_context()
+    ///     .proxy("http://user:pass@host:3128")
+    ///     .proxy_bypass("<-loopback>")
+    ///     .build()
+    ///     .await?;
+    /// let tab = ctx.new_tab().await?;
+    /// # Ok(()) }
+    /// ```
+    #[must_use]
+    pub fn browser_context(&self) -> crate::BrowserContextBuilder {
+        crate::BrowserContextBuilder::new(self.inner.clone())
     }
 
     /// Open a new tab navigated to `about:blank`.
@@ -4355,10 +4433,12 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "interception")]
+                context_proxy_auth: tokio::sync::Mutex::new(HashMap::new()),
                 #[cfg(feature = "tracker-blocking")]
                 tracker_matcher: None,
-                #[cfg(feature = "tracker-blocking")]
-                tracker_handles: tokio::sync::Mutex::new(HashMap::new()),
+                #[cfg(feature = "interception")]
+                session_intercept_handles: tokio::sync::Mutex::new(HashMap::new()),
             }
         });
         registrar.set_browser(Arc::downgrade(&inner));
@@ -4411,6 +4491,216 @@ mod tests {
         conn.shutdown();
     }
 
+    /// The `TabRegistrar` auto-installs a `Fetch.authRequired` handler on a
+    /// page tab whose `browserContextId` has registered proxy credentials in
+    /// `BrowserInner.context_proxy_auth` — no per-tab boilerplate. Drives the
+    /// install (`Fetch.enable { handleAuthRequests: true }`) then a simulated
+    /// auth challenge, and asserts `Fetch.continueWithAuth` carries the
+    /// registered credentials (wire shape confirmed against
+    /// `zendriver-interception/src/actor.rs`).
+    #[cfg(feature = "interception")]
+    #[tokio::test]
+    async fn tab_registrar_installs_context_proxy_auth() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+
+        let inner = Arc::new_cyclic(|weak: &Weak<BrowserInner>| {
+            let main_session = SessionHandle::new(conn.clone(), "S1");
+            let main_input = InputController::new(input_profile.clone());
+            let main_tab = Tab::new(main_session, weak.clone(), main_input, "T1".to_string());
+            let mut map = HashMap::new();
+            map.insert("S1".to_string(), main_tab.clone());
+            // Seed credentials for context CTX1.
+            let mut auth = HashMap::new();
+            auth.insert(
+                "CTX1".to_string(),
+                ("bob".to_string(), "s3cret".to_string()),
+            );
+            BrowserInner {
+                conn: conn.clone(),
+                main_tab,
+                child: tokio::sync::Mutex::new(None),
+                job: ProcessJob::none(),
+                _user_data: None,
+                _extension_dirs: Vec::new(),
+                owns_process: false,
+                stealth_input_profile: input_profile.clone(),
+                tabs: tokio::sync::RwLock::new(map),
+                debug_host_port: None,
+                ws_url: None,
+                tabs_changed: tokio::sync::Notify::new(),
+                #[cfg(feature = "interception")]
+                proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "interception")]
+                context_proxy_auth: tokio::sync::Mutex::new(auth),
+                #[cfg(feature = "tracker-blocking")]
+                tracker_matcher: None,
+                #[cfg(feature = "interception")]
+                session_intercept_handles: tokio::sync::Mutex::new(HashMap::new()),
+            }
+        });
+        registrar.set_browser(Arc::downgrade(&inner));
+
+        // Attach a page target that belongs to CTX1.
+        mock.emit_event(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": "S2",
+                "targetInfo": {
+                    "targetId": "T2",
+                    "type": "page",
+                    "url": "about:blank",
+                    "attached": true,
+                    "browserContextId": "CTX1",
+                },
+                "waitingForDebugger": true,
+            }),
+        )
+        .await;
+
+        // The install sends `Fetch.enable { handleAuthRequests: true }`.
+        let enable_id = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            mock.expect_cmd("Fetch.enable"),
+        )
+        .await
+        .expect("Fetch.enable not sent");
+        let enable = mock.last_sent();
+        assert_eq!(enable["params"]["handleAuthRequests"], true);
+        mock.reply(enable_id, json!({})).await;
+
+        // Simulate an auth challenge; the actor must answer with the creds.
+        // Scoped to session S2 — `SessionHandle::subscribe` filters events by
+        // `sessionId`, so an unscoped `emit_event` would never reach the
+        // per-tab actor's `Fetch.authRequired` subscription.
+        mock.emit_event_for_session(
+            "Fetch.authRequired",
+            json!({
+                "requestId": "R1",
+                "authChallenge": { "source": "Proxy", "origin": "http://proxy", "scheme": "basic", "realm": "" },
+            }),
+            "S2",
+        )
+        .await;
+
+        let auth_id = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            mock.expect_cmd("Fetch.continueWithAuth"),
+        )
+        .await
+        .expect("Fetch.continueWithAuth not sent");
+        let sent = mock.last_sent();
+        assert_eq!(
+            sent["params"]["authChallengeResponse"]["response"],
+            "ProvideCredentials"
+        );
+        assert_eq!(sent["params"]["authChallengeResponse"]["username"], "bob");
+        assert_eq!(
+            sent["params"]["authChallengeResponse"]["password"],
+            "s3cret"
+        );
+        mock.reply(auth_id, json!({})).await;
+
+        conn.shutdown();
+    }
+
+    /// Regression lock for cdpdriver/zendriver#208: a page tab whose context
+    /// has BOTH tracker-blocking (`tracker_matcher`) AND per-context proxy
+    /// auth (`context_proxy_auth`) configured must get exactly ONE chained
+    /// `InterceptBuilder` / actor — never two competing actors that could
+    /// double-resolve the same `Fetch.requestPaused` event. Asserts exactly
+    /// one `Fetch.enable` is sent for the attached session.
+    #[cfg(all(test, feature = "tracker-blocking"))]
+    #[tokio::test]
+    async fn tab_registrar_chains_tracker_and_auth_into_one_actor() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+
+        let inner = Arc::new_cyclic(|weak: &Weak<BrowserInner>| {
+            let main_session = SessionHandle::new(conn.clone(), "S1");
+            let main_input = InputController::new(input_profile.clone());
+            let main_tab = Tab::new(main_session, weak.clone(), main_input, "T1".to_string());
+            let mut map = HashMap::new();
+            map.insert("S1".to_string(), main_tab.clone());
+            // Seed BOTH a tracker matcher and proxy credentials for CTX1.
+            let mut auth = HashMap::new();
+            auth.insert(
+                "CTX1".to_string(),
+                ("bob".to_string(), "s3cret".to_string()),
+            );
+            BrowserInner {
+                conn: conn.clone(),
+                main_tab,
+                child: tokio::sync::Mutex::new(None),
+                job: ProcessJob::none(),
+                _user_data: None,
+                _extension_dirs: Vec::new(),
+                owns_process: false,
+                stealth_input_profile: input_profile.clone(),
+                tabs: tokio::sync::RwLock::new(map),
+                debug_host_port: None,
+                ws_url: None,
+                tabs_changed: tokio::sync::Notify::new(),
+                #[cfg(feature = "interception")]
+                proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "interception")]
+                context_proxy_auth: tokio::sync::Mutex::new(auth),
+                #[cfg(feature = "tracker-blocking")]
+                tracker_matcher: Some(std::sync::Arc::new(crate::HostMatcher::new([
+                    "evil.example".to_string(),
+                ]))),
+                #[cfg(feature = "interception")]
+                session_intercept_handles: tokio::sync::Mutex::new(HashMap::new()),
+            }
+        });
+        registrar.set_browser(Arc::downgrade(&inner));
+
+        // Attach a page target that belongs to CTX1 — both tracker-blocking
+        // and context proxy auth apply to this tab.
+        mock.emit_event(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": "S2",
+                "targetInfo": {
+                    "targetId": "T2",
+                    "type": "page",
+                    "url": "about:blank",
+                    "attached": true,
+                    "browserContextId": "CTX1",
+                },
+                "waitingForDebugger": true,
+            }),
+        )
+        .await;
+
+        let enable_id = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            mock.expect_cmd("Fetch.enable"),
+        )
+        .await
+        .expect("Fetch.enable not sent");
+        mock.reply(enable_id, json!({})).await;
+
+        // Give the registrar a moment to finish installing, then confirm no
+        // SECOND actor also sent its own `Fetch.enable` for this session —
+        // chaining tracker-blocking + auth into ONE `InterceptBuilder` means
+        // exactly one `Fetch.enable`, never two (cdpdriver/zendriver#208).
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        if let Some((method, _id)) = mock.try_recv_cmd() {
+            panic!("expected no further CDP calls after the single install, got `{method}`");
+        }
+
+        conn.shutdown();
+    }
+
     // ----- Browser::new_tab + tabs + tab_count (P4 T3) -------------------
 
     /// End-to-end mock-drive of [`Browser::new_tab`]: send `Target.createTarget`,
@@ -4449,10 +4739,12 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "interception")]
+                context_proxy_auth: tokio::sync::Mutex::new(HashMap::new()),
                 #[cfg(feature = "tracker-blocking")]
                 tracker_matcher: None,
-                #[cfg(feature = "tracker-blocking")]
-                tracker_handles: tokio::sync::Mutex::new(HashMap::new()),
+                #[cfg(feature = "interception")]
+                session_intercept_handles: tokio::sync::Mutex::new(HashMap::new()),
             }
         });
         registrar.set_browser(Arc::downgrade(&inner));
@@ -4559,10 +4851,12 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "interception")]
+                context_proxy_auth: tokio::sync::Mutex::new(HashMap::new()),
                 #[cfg(feature = "tracker-blocking")]
                 tracker_matcher: None,
-                #[cfg(feature = "tracker-blocking")]
-                tracker_handles: tokio::sync::Mutex::new(HashMap::new()),
+                #[cfg(feature = "interception")]
+                session_intercept_handles: tokio::sync::Mutex::new(HashMap::new()),
             }
         });
         registrar.set_browser(Arc::downgrade(&inner));
@@ -4662,10 +4956,12 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "interception")]
+                context_proxy_auth: tokio::sync::Mutex::new(HashMap::new()),
                 #[cfg(feature = "tracker-blocking")]
                 tracker_matcher: None,
-                #[cfg(feature = "tracker-blocking")]
-                tracker_handles: tokio::sync::Mutex::new(HashMap::new()),
+                #[cfg(feature = "interception")]
+                session_intercept_handles: tokio::sync::Mutex::new(HashMap::new()),
             }
         });
         registrar.set_browser(Arc::downgrade(&inner));
@@ -4732,10 +5028,12 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "interception")]
+                context_proxy_auth: tokio::sync::Mutex::new(HashMap::new()),
                 #[cfg(feature = "tracker-blocking")]
                 tracker_matcher: None,
-                #[cfg(feature = "tracker-blocking")]
-                tracker_handles: tokio::sync::Mutex::new(HashMap::new()),
+                #[cfg(feature = "interception")]
+                session_intercept_handles: tokio::sync::Mutex::new(HashMap::new()),
             }
         });
         let browser = Browser { inner };
@@ -4804,10 +5102,12 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "interception")]
+                context_proxy_auth: tokio::sync::Mutex::new(HashMap::new()),
                 #[cfg(feature = "tracker-blocking")]
                 tracker_matcher: None,
-                #[cfg(feature = "tracker-blocking")]
-                tracker_handles: tokio::sync::Mutex::new(HashMap::new()),
+                #[cfg(feature = "interception")]
+                session_intercept_handles: tokio::sync::Mutex::new(HashMap::new()),
             }
         });
         let browser = Browser { inner };
@@ -4866,10 +5166,12 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "interception")]
+                context_proxy_auth: tokio::sync::Mutex::new(HashMap::new()),
                 #[cfg(feature = "tracker-blocking")]
                 tracker_matcher: None,
-                #[cfg(feature = "tracker-blocking")]
-                tracker_handles: tokio::sync::Mutex::new(HashMap::new()),
+                #[cfg(feature = "interception")]
+                session_intercept_handles: tokio::sync::Mutex::new(HashMap::new()),
             }
         });
         registrar.set_browser(Arc::downgrade(&inner));
@@ -5005,10 +5307,12 @@ mod tests {
                 tabs_changed: tokio::sync::Notify::new(),
                 #[cfg(feature = "interception")]
                 proxy_auth_handle: std::sync::OnceLock::new(),
+                #[cfg(feature = "interception")]
+                context_proxy_auth: tokio::sync::Mutex::new(HashMap::new()),
                 #[cfg(feature = "tracker-blocking")]
                 tracker_matcher: None,
-                #[cfg(feature = "tracker-blocking")]
-                tracker_handles: tokio::sync::Mutex::new(HashMap::new()),
+                #[cfg(feature = "interception")]
+                session_intercept_handles: tokio::sync::Mutex::new(HashMap::new()),
             }
         });
         registrar.set_browser(Arc::downgrade(&inner));

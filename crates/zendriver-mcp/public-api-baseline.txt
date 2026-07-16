@@ -196,6 +196,7 @@ impl<V, T> ppv_lite86::types::VZip<V> for zendriver::browser::PermissionType whe
 pub fn zendriver::browser::PermissionType::vzip(self) -> V
 pub struct zendriver::browser::Browser
 impl zendriver::browser::Browser
+pub fn zendriver::browser::Browser::browser_context(&self) -> zendriver::browser_context::BrowserContextBuilder
 pub fn zendriver::browser::Browser::builder() -> zendriver::browser::BrowserBuilder
 pub fn zendriver::browser::Browser::cdp(&self) -> &zendriver_transport::connection::Connection
 pub async fn zendriver::browser::Browser::close(self) -> core::result::Result<(), zendriver::error::ZendriverError>
@@ -378,6 +379,44 @@ impl<T> typenum::type_operators::Same for zendriver::browser_context::BrowserCon
 pub type zendriver::browser_context::BrowserContext::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for zendriver::browser_context::BrowserContext where V: ppv_lite86::types::MultiLane<T>
 pub fn zendriver::browser_context::BrowserContext::vzip(self) -> V
+pub struct zendriver::browser_context::BrowserContextBuilder
+impl zendriver::browser_context::BrowserContextBuilder
+pub async fn zendriver::browser_context::BrowserContextBuilder::build(self) -> core::result::Result<zendriver::browser_context::BrowserContext, zendriver::error::ZendriverError>
+pub fn zendriver::browser_context::BrowserContextBuilder::proxy(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn zendriver::browser_context::BrowserContextBuilder::proxy_auth(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn zendriver::browser_context::BrowserContextBuilder::proxy_bypass(self, impl core::convert::Into<alloc::string::String>) -> Self
+impl core::marker::Freeze for zendriver::browser_context::BrowserContextBuilder
+impl core::marker::Send for zendriver::browser_context::BrowserContextBuilder
+impl core::marker::Sync for zendriver::browser_context::BrowserContextBuilder
+impl core::marker::Unpin for zendriver::browser_context::BrowserContextBuilder
+impl core::marker::UnsafeUnpin for zendriver::browser_context::BrowserContextBuilder
+impl !core::panic::unwind_safe::RefUnwindSafe for zendriver::browser_context::BrowserContextBuilder
+impl !core::panic::unwind_safe::UnwindSafe for zendriver::browser_context::BrowserContextBuilder
+impl<T, U> core::convert::Into<U> for zendriver::browser_context::BrowserContextBuilder where U: core::convert::From<T>
+pub fn zendriver::browser_context::BrowserContextBuilder::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for zendriver::browser_context::BrowserContextBuilder where U: core::convert::Into<T>
+pub type zendriver::browser_context::BrowserContextBuilder::Error = core::convert::Infallible
+pub fn zendriver::browser_context::BrowserContextBuilder::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for zendriver::browser_context::BrowserContextBuilder where U: core::convert::TryFrom<T>
+pub type zendriver::browser_context::BrowserContextBuilder::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn zendriver::browser_context::BrowserContextBuilder::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for zendriver::browser_context::BrowserContextBuilder where T: 'static + ?core::marker::Sized
+pub fn zendriver::browser_context::BrowserContextBuilder::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for zendriver::browser_context::BrowserContextBuilder where T: ?core::marker::Sized
+pub fn zendriver::browser_context::BrowserContextBuilder::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for zendriver::browser_context::BrowserContextBuilder where T: ?core::marker::Sized
+pub fn zendriver::browser_context::BrowserContextBuilder::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for zendriver::browser_context::BrowserContextBuilder
+pub fn zendriver::browser_context::BrowserContextBuilder::from(T) -> T
+impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::browser_context::BrowserContextBuilder where T: ?core::marker::Sized
+pub fn zendriver::browser_context::BrowserContextBuilder::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::browser_context::BrowserContextBuilder::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for zendriver::browser_context::BrowserContextBuilder
+impl<T> tracing::instrument::WithSubscriber for zendriver::browser_context::BrowserContextBuilder
+impl<T> typenum::type_operators::Same for zendriver::browser_context::BrowserContextBuilder
+pub type zendriver::browser_context::BrowserContextBuilder::Output = T
+impl<V, T> ppv_lite86::types::VZip<V> for zendriver::browser_context::BrowserContextBuilder where V: ppv_lite86::types::MultiLane<T>
+pub fn zendriver::browser_context::BrowserContextBuilder::vzip(self) -> V
 pub mod zendriver::cookies
 pub mod zendriver::cookies::persistence
 pub enum zendriver::cookies::CookiePriority
@@ -5512,6 +5551,7 @@ impl<V, T> ppv_lite86::types::VZip<V> for zendriver::query::BoundingBox where V:
 pub fn zendriver::query::BoundingBox::vzip(self) -> V
 pub struct zendriver::Browser
 impl zendriver::browser::Browser
+pub fn zendriver::browser::Browser::browser_context(&self) -> zendriver::browser_context::BrowserContextBuilder
 pub fn zendriver::browser::Browser::builder() -> zendriver::browser::BrowserBuilder
 pub fn zendriver::browser::Browser::cdp(&self) -> &zendriver_transport::connection::Connection
 pub async fn zendriver::browser::Browser::close(self) -> core::result::Result<(), zendriver::error::ZendriverError>
@@ -5691,6 +5731,44 @@ impl<T> typenum::type_operators::Same for zendriver::browser_context::BrowserCon
 pub type zendriver::browser_context::BrowserContext::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for zendriver::browser_context::BrowserContext where V: ppv_lite86::types::MultiLane<T>
 pub fn zendriver::browser_context::BrowserContext::vzip(self) -> V
+pub struct zendriver::BrowserContextBuilder
+impl zendriver::browser_context::BrowserContextBuilder
+pub async fn zendriver::browser_context::BrowserContextBuilder::build(self) -> core::result::Result<zendriver::browser_context::BrowserContext, zendriver::error::ZendriverError>
+pub fn zendriver::browser_context::BrowserContextBuilder::proxy(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn zendriver::browser_context::BrowserContextBuilder::proxy_auth(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn zendriver::browser_context::BrowserContextBuilder::proxy_bypass(self, impl core::convert::Into<alloc::string::String>) -> Self
+impl core::marker::Freeze for zendriver::browser_context::BrowserContextBuilder
+impl core::marker::Send for zendriver::browser_context::BrowserContextBuilder
+impl core::marker::Sync for zendriver::browser_context::BrowserContextBuilder
+impl core::marker::Unpin for zendriver::browser_context::BrowserContextBuilder
+impl core::marker::UnsafeUnpin for zendriver::browser_context::BrowserContextBuilder
+impl !core::panic::unwind_safe::RefUnwindSafe for zendriver::browser_context::BrowserContextBuilder
+impl !core::panic::unwind_safe::UnwindSafe for zendriver::browser_context::BrowserContextBuilder
+impl<T, U> core::convert::Into<U> for zendriver::browser_context::BrowserContextBuilder where U: core::convert::From<T>
+pub fn zendriver::browser_context::BrowserContextBuilder::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for zendriver::browser_context::BrowserContextBuilder where U: core::convert::Into<T>
+pub type zendriver::browser_context::BrowserContextBuilder::Error = core::convert::Infallible
+pub fn zendriver::browser_context::BrowserContextBuilder::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for zendriver::browser_context::BrowserContextBuilder where U: core::convert::TryFrom<T>
+pub type zendriver::browser_context::BrowserContextBuilder::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn zendriver::browser_context::BrowserContextBuilder::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for zendriver::browser_context::BrowserContextBuilder where T: 'static + ?core::marker::Sized
+pub fn zendriver::browser_context::BrowserContextBuilder::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for zendriver::browser_context::BrowserContextBuilder where T: ?core::marker::Sized
+pub fn zendriver::browser_context::BrowserContextBuilder::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for zendriver::browser_context::BrowserContextBuilder where T: ?core::marker::Sized
+pub fn zendriver::browser_context::BrowserContextBuilder::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for zendriver::browser_context::BrowserContextBuilder
+pub fn zendriver::browser_context::BrowserContextBuilder::from(T) -> T
+impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::browser_context::BrowserContextBuilder where T: ?core::marker::Sized
+pub fn zendriver::browser_context::BrowserContextBuilder::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::browser_context::BrowserContextBuilder::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for zendriver::browser_context::BrowserContextBuilder
+impl<T> tracing::instrument::WithSubscriber for zendriver::browser_context::BrowserContextBuilder
+impl<T> typenum::type_operators::Same for zendriver::browser_context::BrowserContextBuilder
+pub type zendriver::browser_context::BrowserContextBuilder::Output = T
+impl<V, T> ppv_lite86::types::VZip<V> for zendriver::browser_context::BrowserContextBuilder where V: ppv_lite86::types::MultiLane<T>
+pub fn zendriver::browser_context::BrowserContextBuilder::vzip(self) -> V
 pub struct zendriver::ClickOptions
 pub zendriver::ClickOptions::button: zendriver::input::mouse::MouseButton
 pub zendriver::ClickOptions::click_count: u32

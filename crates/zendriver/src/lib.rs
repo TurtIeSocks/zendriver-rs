@@ -86,6 +86,7 @@ pub mod monitor;
 pub mod network_idle;
 pub mod pdf;
 pub(crate) mod preferences;
+mod proxy;
 pub mod query;
 pub mod request;
 pub mod screenshot;
@@ -98,7 +99,7 @@ pub(crate) mod url_matcher;
 pub mod window;
 
 pub use browser::{Browser, BrowserBuilder, Channel, PermissionType};
-pub use browser_context::BrowserContext;
+pub use browser_context::{BrowserContext, BrowserContextBuilder};
 pub use cookies::{Cookie, CookieJar, CookiePriority, CookieSourceScheme, SameSite};
 pub use element::Element;
 pub use element::actions::ClickOptions;

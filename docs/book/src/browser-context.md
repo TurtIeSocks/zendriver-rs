@@ -67,10 +67,61 @@ tab.goto("https://api.ipify.org").await?;
 `--proxy-server` command-line flag (`http://`, `socks5://`,
 `host:port` without scheme). `proxy_bypass_list` defaults to none.
 
-Note: proxy authentication is **not** carried by `proxyServer` — Chrome
-will issue a 407 if the upstream requires Basic auth. Pair the per-
-context proxy with `BrowserBuilder::proxy_auth` at launch time (the
-auth applies browser-wide; per-context auth is on the roadmap).
+Note: `proxyServer` alone does **not** carry proxy authentication —
+Chrome will issue a 407 if the upstream requires Basic auth. For that,
+use the first-class builder below instead.
+
+## Per-context proxy authentication
+
+[`Browser::browser_context`](https://docs.rs/zendriver/latest/zendriver/struct.Browser.html#method.browser_context)
+returns a [`BrowserContextBuilder`](https://docs.rs/zendriver/latest/zendriver/struct.BrowserContextBuilder.html)
+that binds a proxy *and* its credentials to the context, so every tab
+it opens is transparently authenticated — no per-tab handle to hold:
+
+```rust,no_run
+# use zendriver::Browser;
+# async fn ex(browser: &Browser) -> zendriver::Result<()> {
+let ctx = browser
+    .browser_context()
+    .proxy("http://user:pass@proxy.example.com:8080")
+    .proxy_bypass("<-loopback>")
+    .build()
+    .await?;
+let tab = ctx.new_tab().await?;
+tab.goto("https://api.ipify.org").await?;
+# Ok(()) }
+```
+
+Userinfo embedded in `.proxy()` (`user:pass@host:port`) is auto-split
+into credentials and stripped from the `proxyServer` sent to Chrome
+(which would otherwise ignore it). Call `.proxy_auth(user, pass)`
+(requires the `interception` feature) to supply — or override —
+credentials explicitly:
+
+```rust,no_run
+# use zendriver::Browser;
+# async fn ex(browser: &Browser) -> zendriver::Result<()> {
+let ctx = browser
+    .browser_context()
+    .proxy("http://proxy.example.com:8080")
+    .proxy_auth("user", "pass")
+    .build()
+    .await?;
+# let _ = ctx; Ok(()) }
+```
+
+Under the hood, `build()` registers the credentials in the browser's
+per-context registry; each tab opened in that context has a
+`Fetch.authRequired` handler auto-installed, chained into the same
+per-session interception actor used for tracker blocking (never two
+actors on one session). Without the `interception` feature, `.proxy()`
+and `.proxy_bypass()` still work (proxy routing only); embedded or
+explicit credentials are logged as inactive since there is no actor to
+install them into.
+
+`create_browser_context_with` (proxy, no auth) and
+`create_browser_context` (no proxy) remain available as lighter-weight
+convenience constructors when authentication isn't needed.
 
 ## Tabs in a context
 
@@ -161,8 +212,9 @@ async fn main() -> zendriver::Result<()> {
 ```
 
 See `examples/browser_context_isolation.rs` in the source tree for a
-runnable variant exercising the full round-trip against a local mock
-proxy.
+runnable variant exercising the full round-trip — including
+`BrowserContextBuilder`'s auth — against a real rotating upstream proxy
+(set `ZD_PROXY`).
 
 ## Limitations
 
@@ -170,10 +222,14 @@ proxy.
   process, GPU cache, and the user-data-dir. A compromised renderer
   in one context can in principle observe shared state. If process-
   level isolation matters, launch a second `Browser`.
-- **No per-context auth yet.** `create_browser_context_with` accepts a
-  `proxy_server` but not a username/password. Pair with
-  `BrowserBuilder::proxy_auth` browser-wide, or use a per-tab
-  [interception handler](./interception.md) for finer control.
+- **Per-context auth requires `interception`.** `Browser::browser_context().proxy_auth(...)`
+  (or embedded `.proxy("http://user:pass@host:port")` userinfo) needs the
+  `interception` feature to install the per-tab `Fetch.authRequired`
+  handler; without it, proxy routing still works but credentials are
+  inactive (a warning is logged). See
+  [Per-context proxy authentication](#per-context-proxy-authentication)
+  above, or use a per-tab [interception handler](./interception.md) for
+  finer control.
 - **Extension scoping.** Chrome only loads `--load-extension` content
   scripts into the default context. Tabs opened in a non-default
   `BrowserContext` will not see your extensions. Workaround: stay on
