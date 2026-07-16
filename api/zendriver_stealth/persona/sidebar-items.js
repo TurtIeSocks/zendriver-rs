@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["seed","specs","surface"],"struct":["Persona","PersonaBuilder"],"trait":["JsProbe"]};
+window.SIDEBAR_ITEMS = {"mod":["seed","specs","surface"],"struct":["GeoPos","Persona","PersonaBuilder"],"trait":["JsProbe"]};
