@@ -12,6 +12,7 @@ use serde_json::json;
 use zendriver_transport::{ObserverError, PausedSession, TargetObserver};
 
 use crate::patches::bootstrap_script;
+use crate::persona::GeoPos;
 use crate::{Fingerprint, Persona, ProfileKind, StealthProfile};
 
 /// Observer that applies a [`StealthProfile`] + [`Fingerprint`] to every page
@@ -25,6 +26,11 @@ pub struct StealthObserver {
     /// `Page.addScriptToEvaluateOnNewDocument` in those modes, so there is no
     /// need to pay the patches-bundle cost for them.
     bootstrap: String,
+    /// Mock geolocation coordinates from the resolved [`Persona`], sent via
+    /// `Emulation.setGeolocationOverride`. Unlike `timezone`/`locale` (carried
+    /// on [`Fingerprint`]), geolocation has no `Fingerprint` counterpart, so
+    /// it's captured here straight off the persona at construction time.
+    geolocation: Option<GeoPos>,
 }
 
 impl StealthObserver {
@@ -54,10 +60,12 @@ impl StealthObserver {
         } else {
             String::new()
         };
+        let geolocation = persona.geolocation;
         Self {
             profile,
             fingerprint,
             bootstrap,
+            geolocation,
         }
     }
 }
@@ -137,6 +145,23 @@ impl TargetObserver for StealthObserver {
         if let Some(ref locale) = self.fingerprint.locale {
             session
                 .call("Emulation.setLocaleOverride", json!({ "locale": locale }))
+                .await?;
+        }
+        if let Some(ref geo) = self.geolocation {
+            // Sets the value the Geolocation API *would* return — it does
+            // NOT grant the `geolocation` permission. Chrome still gates the
+            // API behind a permission prompt/grant; auto-granting it here
+            // would be a separate (and itself suspicious) signal, so we
+            // deliberately leave permissioning to the caller.
+            let mut params = json!({
+                "latitude": geo.latitude,
+                "longitude": geo.longitude,
+            });
+            if let Some(accuracy) = geo.accuracy {
+                params["accuracy"] = json!(accuracy);
+            }
+            session
+                .call("Emulation.setGeolocationOverride", params)
                 .await?;
         }
 
@@ -246,6 +271,151 @@ mod tests {
                 assert!(
                     !al.contains(";q="),
                     "acceptLanguage must be a bare locale list (no q-weights); got: {al}"
+                );
+            }
+            mock.reply(id, json!({})).await;
+        }
+
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn spoofed_observer_emits_geolocation_override_when_persona_has_geo() {
+        let fp = Fingerprint {
+            platform: Platform::MacIntel,
+            chrome_major: 120,
+            chrome_full: "120.0.6099.234".into(),
+            cpu_count: 10,
+            memory_gb: 8,
+            ua_string: crate::ua::compose_ua_string(Platform::MacIntel, "120.0.6099.234"),
+            ua_metadata: crate::UserAgentMetadata::realistic(
+                Platform::MacIntel,
+                120,
+                "120.0.6099.234",
+            ),
+            timezone: None,
+            locale: None,
+            languages: None,
+        };
+        let persona = crate::Persona {
+            geolocation: Some(crate::persona::GeoPos {
+                latitude: 21.0285,
+                longitude: 105.8542,
+                accuracy: Some(50.0),
+            }),
+            ..crate::Persona::default()
+        };
+        let profile = StealthProfile::spoofed();
+        let observer = std::sync::Arc::new(StealthObserver::with_persona(profile, fp, persona));
+
+        let (mut mock, conn) = MockConnection::pair_with_observers(vec![observer.clone()]);
+
+        mock.emit_event(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": "S1",
+                "targetInfo": {
+                    "targetId": "T1",
+                    "type": "page",
+                    "url": "about:blank",
+                    "attached": true,
+                },
+                "waitingForDebugger": true,
+            }),
+        )
+        .await;
+
+        for expected in [
+            "Page.enable",
+            "Emulation.setUserAgentOverride",
+            "Emulation.setDeviceMetricsOverride",
+            "Emulation.setFocusEmulationEnabled",
+            "Emulation.setGeolocationOverride",
+            "Page.setBypassCSP",
+            "Page.addScriptToEvaluateOnNewDocument",
+            "Runtime.runIfWaitingForDebugger",
+        ] {
+            let id =
+                tokio::time::timeout(std::time::Duration::from_secs(2), mock.expect_cmd(expected))
+                    .await
+                    .unwrap_or_else(|_| panic!("did not see {expected} within 2s"));
+            if expected == "Emulation.setGeolocationOverride" {
+                let params = mock.last_sent()["params"].clone();
+                assert_eq!(params["latitude"].as_f64(), Some(21.0285));
+                assert_eq!(params["longitude"].as_f64(), Some(105.8542));
+                assert_eq!(params["accuracy"].as_f64(), Some(50.0));
+            }
+            mock.reply(id, json!({})).await;
+        }
+
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn geolocation_override_omits_accuracy_when_unset() {
+        let fp = Fingerprint {
+            platform: Platform::MacIntel,
+            chrome_major: 120,
+            chrome_full: "120.0.6099.234".into(),
+            cpu_count: 10,
+            memory_gb: 8,
+            ua_string: crate::ua::compose_ua_string(Platform::MacIntel, "120.0.6099.234"),
+            ua_metadata: crate::UserAgentMetadata::realistic(
+                Platform::MacIntel,
+                120,
+                "120.0.6099.234",
+            ),
+            timezone: None,
+            locale: None,
+            languages: None,
+        };
+        let persona = crate::Persona {
+            geolocation: Some(crate::persona::GeoPos {
+                latitude: 1.0,
+                longitude: 2.0,
+                accuracy: None,
+            }),
+            ..crate::Persona::default()
+        };
+        let profile = StealthProfile::native();
+        let observer = std::sync::Arc::new(StealthObserver::with_persona(profile, fp, persona));
+
+        let (mut mock, conn) = MockConnection::pair_with_observers(vec![observer.clone()]);
+
+        mock.emit_event(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": "S1",
+                "targetInfo": {
+                    "targetId": "T1",
+                    "type": "page",
+                    "url": "about:blank",
+                    "attached": true,
+                },
+                "waitingForDebugger": true,
+            }),
+        )
+        .await;
+
+        for expected in [
+            "Page.enable",
+            "Emulation.setUserAgentOverride",
+            "Emulation.setDeviceMetricsOverride",
+            "Emulation.setFocusEmulationEnabled",
+            "Emulation.setGeolocationOverride",
+            "Runtime.runIfWaitingForDebugger",
+        ] {
+            let id =
+                tokio::time::timeout(std::time::Duration::from_secs(2), mock.expect_cmd(expected))
+                    .await
+                    .unwrap_or_else(|_| panic!("did not see {expected} within 2s"));
+            if expected == "Emulation.setGeolocationOverride" {
+                let params = mock.last_sent()["params"].clone();
+                assert_eq!(params["latitude"].as_f64(), Some(1.0));
+                assert_eq!(params["longitude"].as_f64(), Some(2.0));
+                assert!(
+                    params.get("accuracy").is_none(),
+                    "accuracy must be omitted when unset, got: {params}"
                 );
             }
             mock.reply(id, json!({})).await;

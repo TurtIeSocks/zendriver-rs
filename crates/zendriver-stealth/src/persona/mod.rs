@@ -16,6 +16,21 @@ use crate::Platform;
 
 static SYSTEM: OnceLock<Persona> = OnceLock::new();
 
+/// Mock geolocation coordinates, sent verbatim as
+/// `Emulation.setGeolocationOverride` params. Field names match the CDP
+/// params exactly (`latitude`, `longitude`, `accuracy`) so `GeoPos` can be
+/// deserialized straight out of `persona_overlay` JSON, e.g.
+/// `{"geolocation":{"latitude":21.0285,"longitude":105.8542}}`.
+///
+/// `accuracy` is optional — CDP accepts the override without it — and is
+/// omitted from the CDP call entirely (not sent as `null`) when unset.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct GeoPos {
+    pub latitude: f64,
+    pub longitude: f64,
+    pub accuracy: Option<f64>,
+}
+
 /// Unified fingerprint configuration. Every field optional → overlay semantics.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Persona {
@@ -29,6 +44,11 @@ pub struct Persona {
     /// `navigator.languages` and the q-weighted `Accept-Language`. When unset,
     /// derived from [`locale`](Self::locale).
     pub languages: Option<Vec<String>>,
+    /// Mock coordinates for the Geolocation API (`Emulation.setGeolocationOverride`).
+    /// Coherence axis alongside [`timezone`](Self::timezone) /
+    /// [`locale`](Self::locale) — keeps `navigator.geolocation` in step with
+    /// the exit IP's real location instead of leaking the host's.
+    pub geolocation: Option<GeoPos>,
     pub webgl: Option<WebglSpec>,
     pub webgpu: Option<SurfaceCfg>,
     pub canvas: Option<SurfaceCfg>,
@@ -106,6 +126,7 @@ impl Persona {
             timezone: over.timezone.or(self.timezone),
             locale: over.locale.or(self.locale),
             languages: over.languages.or(self.languages),
+            geolocation: over.geolocation.or(self.geolocation),
             webgl: over.webgl.or(self.webgl),
             webgpu: over.webgpu.or(self.webgpu),
             canvas: over.canvas.or(self.canvas),
@@ -475,5 +496,77 @@ mod persona_tests {
         assert_eq!(merged.timezone.as_deref(), Some("Asia/Tokyo")); // some wins
         assert_eq!(merged.device_memory_gb, Some(8)); // none inherits
         assert_eq!(merged.seed, Some(Seed::from_u64(1)));
+    }
+
+    #[test]
+    fn persona_round_trips_geolocation_json() {
+        let p = Persona {
+            geolocation: Some(GeoPos {
+                latitude: 21.0285,
+                longitude: 105.8542,
+                accuracy: Some(50.0),
+            }),
+            ..Persona::default()
+        };
+        let s = serde_json::to_string(&p).unwrap();
+        let back: Persona = serde_json::from_str(&s).unwrap();
+        assert_eq!(
+            back.geolocation,
+            Some(GeoPos {
+                latitude: 21.0285,
+                longitude: 105.8542,
+                accuracy: Some(50.0),
+            })
+        );
+    }
+
+    #[test]
+    fn geolocation_parses_without_accuracy() {
+        // `persona_overlay` accepts parsed JSON (BrowserBuilder doc example);
+        // accuracy is optional and must default to None when omitted.
+        let json = r#"{"geolocation":{"latitude":10.0,"longitude":20.0}}"#;
+        let p: Persona = json.parse().unwrap();
+        let geo = p.geolocation.expect("geolocation parsed");
+        assert_eq!(geo.latitude, 10.0);
+        assert_eq!(geo.longitude, 20.0);
+        assert_eq!(geo.accuracy, None);
+    }
+
+    #[test]
+    fn overlay_geolocation_some_wins_none_inherits() {
+        let base = Persona {
+            geolocation: Some(GeoPos {
+                latitude: 1.0,
+                longitude: 2.0,
+                accuracy: None,
+            }),
+            ..Persona::default()
+        };
+        let over = Persona {
+            geolocation: Some(GeoPos {
+                latitude: 9.0,
+                longitude: 8.0,
+                accuracy: Some(5.0),
+            }),
+            ..Persona::default()
+        };
+        let merged = base.clone().overlay(over);
+        assert_eq!(
+            merged.geolocation,
+            Some(GeoPos {
+                latitude: 9.0,
+                longitude: 8.0,
+                accuracy: Some(5.0),
+            })
+        ); // some wins
+        let merged2 = base.overlay(Persona::default());
+        assert_eq!(
+            merged2.geolocation,
+            Some(GeoPos {
+                latitude: 1.0,
+                longitude: 2.0,
+                accuracy: None,
+            })
+        ); // none inherits
     }
 }
