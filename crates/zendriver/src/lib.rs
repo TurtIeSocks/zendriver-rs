@@ -86,6 +86,7 @@ pub mod monitor;
 pub mod network_idle;
 pub mod pdf;
 pub(crate) mod preferences;
+mod proxy;
 pub mod query;
 pub mod request;
 pub mod screenshot;
