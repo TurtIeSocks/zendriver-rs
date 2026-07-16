@@ -68,7 +68,9 @@ impl ActionabilityCheck {
 /// non-`null` `offsetParent` (catches `display: none` ancestors), a
 /// positive bbox, computed `visibility !== 'hidden'`, and computed
 /// `opacity !== '0'`.
-#[allow(dead_code)] // First callers (`is_visible` + `wait_actionable`) land in T15/T18.
+///
+/// Live callers: `Element::is_visible` and the `visible_only` filter in
+/// `FindBuilder`/`FindAllBuilder` (`query::mod`).
 pub(crate) async fn check_visible(el: &Element) -> Result<bool> {
     let js = r#"
         function(el) {

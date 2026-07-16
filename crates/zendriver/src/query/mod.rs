@@ -170,6 +170,7 @@ use tokio::time::Instant;
 use crate::element::Element;
 use crate::error::{Result, ZendriverError};
 use crate::frame::Frame;
+use crate::query::actionability::check_visible;
 use crate::query::predicate::{AttrPred, PredicateSet, TextPred};
 use crate::query::selectors::{QueryScope, RemoteRef, SelectorKind, text_len_of};
 use crate::tab::Tab;
@@ -873,7 +874,7 @@ impl<'scope> FindBuilder<'scope> {
             && self.frame.is_none();
 
         if let (true, Some(tab)) = (fan_frames, self.tab) {
-            return one_across_frames(tab, &resolver, want_nth, deadline).await;
+            return one_across_frames(tab, &resolver, want_nth, deadline, self.visible_only).await;
         }
 
         // Precedence: Element > in_frame override > Frame > Tab.
@@ -898,15 +899,38 @@ impl<'scope> FindBuilder<'scope> {
         loop {
             let candidates = resolver.resolve(&scope).await?;
 
-            // Visible-only filter: TODO(T16) — depends on
-            // `actionability::check_visible`, which depends on
-            // `Element::call_on_main`. Until that lands, treat every
-            // candidate as visible so the wider FindBuilder API can ship.
-            let _ = self.visible_only;
-            let filtered = candidates;
+            // nth-of-visible: `want_nth` counts only candidates that pass
+            // `check_visible` when `visible_only` is set (every candidate
+            // counts otherwise). Synthesize each candidate with its
+            // ORIGINAL document-order index, not its visible-rank —
+            // `Element::refresh` re-runs `resolve()` without
+            // re-applying `visible_only` and picks by stored index, so
+            // keeping the original position is what makes the handle
+            // survive visibility drift across a refresh. Synthesize each
+            // candidate once and reuse it for both the visibility probe
+            // and the return value; stop at the first match so later
+            // candidates are never synthesized/probed.
+            // ponytail: O(n) sequential visibility probes, only when visible_only is set
+            let mut picked: Option<Element> = None;
+            let mut visible_count = 0usize;
+            for (i, r) in candidates.into_iter().enumerate() {
+                let el = resolver.synthesize(r, &scope, i);
+                let is_match = if self.visible_only {
+                    check_visible(&el).await?
+                } else {
+                    true
+                };
+                if is_match {
+                    if visible_count == want_nth {
+                        picked = Some(el);
+                        break;
+                    }
+                    visible_count += 1;
+                }
+            }
 
-            if let Some(picked) = filtered.into_iter().nth(want_nth) {
-                return Ok(resolver.synthesize(picked, &scope, want_nth));
+            if let Some(picked) = picked {
+                return Ok(picked);
             }
             if Instant::now() >= deadline {
                 return Err(ZendriverError::ElementNotFound {
@@ -1255,7 +1279,7 @@ impl<'scope> FindAllBuilder<'scope> {
             && self.frame.is_none();
 
         if let (true, Some(tab)) = (fan_frames, self.tab) {
-            return many_across_frames(tab, &resolver, deadline).await;
+            return many_across_frames(tab, &resolver, deadline, self.visible_only).await;
         }
 
         // See `FindBuilder::one` for the precedence rationale.
@@ -1273,20 +1297,26 @@ impl<'scope> FindAllBuilder<'scope> {
         loop {
             let candidates = resolver.resolve(&scope).await?;
 
-            // Visible-only filter: TODO(T16) — depends on
-            // `actionability::check_visible`, which depends on
-            // `Element::call_on_main`. Until that lands, treat every
-            // candidate as visible so the wider FindAllBuilder API can
-            // ship.
-            let _ = self.visible_only;
-            let filtered = candidates;
+            // Synthesize each candidate with its original enumerate index
+            // (same refresh-origin rationale as `FindBuilder::one`), then
+            // keep it iff `!visible_only || check_visible(&el)`.
+            // Synthesize each candidate once and reuse it for both the
+            // visibility probe and the kept vec.
+            // ponytail: O(n) sequential visibility probes, only when visible_only is set
+            let mut elements: Vec<Element> = Vec::new();
+            for (i, r) in candidates.into_iter().enumerate() {
+                let el = resolver.synthesize(r, &scope, i);
+                let keep = if self.visible_only {
+                    check_visible(&el).await?
+                } else {
+                    true
+                };
+                if keep {
+                    elements.push(el);
+                }
+            }
 
-            if !filtered.is_empty() {
-                let elements: Vec<Element> = filtered
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, r)| resolver.synthesize(r, &scope, i))
-                    .collect();
+            if !elements.is_empty() {
                 return Ok(elements);
             }
             if Instant::now() >= deadline {
@@ -1358,30 +1388,46 @@ fn effective_best_match(requested: bool, sel: &SelectorKind) -> bool {
 }
 
 /// One poll of a cross-frame `.one()`: resolve the main document scope
-/// first, then descend into each [`Frame`] from [`Tab::frames`].
+/// first, then descend into each child [`Frame`] from [`Tab::frames`].
+/// [`Tab::frames`] includes the top-level frame alongside every sub-frame,
+/// so it is filtered to `!f.is_main()` here — the main document is already
+/// covered by the explicit `main_scope` query below, and iterating it a
+/// second time via `QueryScope::Frame` would double-dispatch (and, for
+/// `many_across_frames`, double-count) the main document's own matches.
 ///
 /// Without `best_match`, the first hit wins (main, then frames in
-/// registry order) — early-return keeps the common case cheap. With
-/// `best_match`, every scope's top candidate is read for its text length
-/// (one extra `Runtime.callFunctionOn` per scope) and the global
-/// closest-length winner is returned; ties resolve to the earliest scope
-/// (main before frames, frames in registry order).
+/// registry order) — early-return keeps the common case cheap, and with
+/// `visible_only` set, "hit" means nth-of-VISIBLE, counted across scopes
+/// (see the `else` branch below). With `best_match`, every scope's
+/// visibility-filtered nth candidate is read for its text length (one
+/// extra `Runtime.callFunctionOn` per scope) and the global closest-length
+/// winner is returned; ties resolve to the earliest scope (main before
+/// frames, frames in registry order).
 async fn one_across_frames(
     tab: &Tab,
     resolver: &Resolver<'_>,
     want_nth: usize,
     deadline: Instant,
+    visible_only: bool,
 ) -> Result<Element> {
     loop {
-        let frames = tab.frames().await?;
+        let frames: Vec<Frame> = tab
+            .frames()
+            .await?
+            .into_iter()
+            .filter(|f| !f.is_main())
+            .collect();
 
         if let Some(selector) = resolver.best_match_selector() {
-            // Gather each scope's nth candidate + its text-length distance
-            // to the needle, then pick the global minimum. The per-scope
-            // JS sort already puts the closest-length candidate at index
-            // `want_nth`; we re-read its raw length here and recompute the
-            // distance to compare *across* scopes. Only text selectors
-            // with `best_match` reach here (see `best_match_selector`).
+            // Gather each scope's nth-of-visible candidate + its
+            // text-length distance to the needle, then pick the global
+            // minimum. The per-scope JS sort already puts the
+            // closest-length candidate first; `consider_scope_best`
+            // filters to visible candidates (when `visible_only`) BEFORE
+            // picking `want_nth`, then we re-read the picked candidate's
+            // raw length here and recompute the distance to compare
+            // *across* scopes. Only text selectors with `best_match`
+            // reach here (see `best_match_selector`).
             let needle_len = needle_len_of(selector).unwrap_or(0);
             let mut best: Option<(usize, RemoteRef, ScopeTag)> = None;
             let main_scope = QueryScope::Tab(tab);
@@ -1391,6 +1437,7 @@ async fn one_across_frames(
                 want_nth,
                 needle_len,
                 ScopeTag::Main,
+                visible_only,
                 &mut best,
             )
             .await?;
@@ -1402,6 +1449,7 @@ async fn one_across_frames(
                     want_nth,
                     needle_len,
                     ScopeTag::Frame(i),
+                    visible_only,
                     &mut best,
                 )
                 .await?;
@@ -1411,25 +1459,63 @@ async fn one_across_frames(
                     ScopeTag::Main => QueryScope::Tab(tab),
                     ScopeTag::Frame(i) => QueryScope::Frame(&frames[i]),
                 };
+                // best_match's cross-scope refresh index is already
+                // approximate (it re-synthesizes with `want_nth` rather
+                // than the picked candidate's own position) — unchanged
+                // by this fix, not reworked here.
                 return Ok(Element::synthesize_query(
                     picked, &scope, selector, want_nth,
                 ));
             }
         } else {
-            // First hit wins: main first, then frames in registry order.
-            // Covers both plain selectors and the predicate path (which
-            // never uses best_match). `resolver.resolve` dispatches the
-            // per-scope query — predicate or selector — against each scope.
+            // nth-of-visible across scopes: main first, then frames in
+            // registry order. Covers both plain selectors and the
+            // predicate path (which never uses best_match).
+            // `resolver.resolve` dispatches the per-scope query —
+            // predicate or selector — against each scope. `visible_count`
+            // carries across scopes so `want_nth` counts only visible
+            // candidates (or all, when `visible_only` is off) globally,
+            // not per scope. Synthesize each candidate once, with its
+            // ORIGINAL per-scope enumerate index (same refresh-origin
+            // rationale as the single-scope `FindBuilder::one`), and
+            // reuse it for both the visibility probe and the return
+            // value; stop at the first match so later candidates are
+            // never synthesized/probed.
+            let mut visible_count = 0usize;
             let main_scope = QueryScope::Tab(tab);
             let main_hits = resolver.resolve(&main_scope).await?;
-            if let Some(picked) = main_hits.into_iter().nth(want_nth) {
-                return Ok(resolver.synthesize(picked, &main_scope, want_nth));
+            // ponytail: O(n) sequential visibility probes, only when visible_only is set
+            for (i, r) in main_hits.into_iter().enumerate() {
+                let el = resolver.synthesize(r, &main_scope, i);
+                let is_match = if visible_only {
+                    check_visible(&el).await?
+                } else {
+                    true
+                };
+                if is_match {
+                    if visible_count == want_nth {
+                        return Ok(el);
+                    }
+                    visible_count += 1;
+                }
             }
             for frame in &frames {
                 let scope = QueryScope::Frame(frame);
                 let hits = resolver.resolve(&scope).await?;
-                if let Some(picked) = hits.into_iter().nth(want_nth) {
-                    return Ok(resolver.synthesize(picked, &scope, want_nth));
+                // ponytail: O(n) sequential visibility probes, only when visible_only is set
+                for (i, r) in hits.into_iter().enumerate() {
+                    let el = resolver.synthesize(r, &scope, i);
+                    let is_match = if visible_only {
+                        check_visible(&el).await?
+                    } else {
+                        true
+                    };
+                    if is_match {
+                        if visible_count == want_nth {
+                            return Ok(el);
+                        }
+                        visible_count += 1;
+                    }
                 }
             }
         }
@@ -1444,26 +1530,59 @@ async fn one_across_frames(
 }
 
 /// One poll of a cross-frame `.many()`: gather matches from the main
-/// document **and** every [`Frame`], concatenated main-first then
-/// per-frame in registry order. Polls until the aggregate is non-empty
-/// or the deadline passes (mirroring the single-scope `many()` loop).
+/// document **and** every child [`Frame`], concatenated main-first then
+/// per-frame in registry order, keeping a candidate iff `!visible_only ||
+/// check_visible(&el)`. Polls until the aggregate is non-empty or the
+/// deadline passes (mirroring the single-scope `many()` loop).
 async fn many_across_frames(
     tab: &Tab,
     resolver: &Resolver<'_>,
     deadline: Instant,
+    visible_only: bool,
 ) -> Result<Vec<Element>> {
     loop {
-        let frames = tab.frames().await?;
+        // See `one_across_frames`'s doc comment: `Tab::frames` includes
+        // the main frame, so it is filtered out here to avoid
+        // double-counting the main document (already queried explicitly
+        // below) as if it were also one of its own child frames.
+        let frames: Vec<Frame> = tab
+            .frames()
+            .await?
+            .into_iter()
+            .filter(|f| !f.is_main())
+            .collect();
         let mut elements: Vec<Element> = Vec::new();
 
+        // Synthesize each candidate once (original per-scope enumerate
+        // index — same refresh-origin rationale as the single-scope
+        // `many()`), then keep it iff `!visible_only ||
+        // check_visible(&el)`.
         let main_scope = QueryScope::Tab(tab);
+        // ponytail: O(n) sequential visibility probes, only when visible_only is set
         for (i, r) in resolver.resolve(&main_scope).await?.into_iter().enumerate() {
-            elements.push(resolver.synthesize(r, &main_scope, i));
+            let el = resolver.synthesize(r, &main_scope, i);
+            let keep = if visible_only {
+                check_visible(&el).await?
+            } else {
+                true
+            };
+            if keep {
+                elements.push(el);
+            }
         }
         for frame in &frames {
             let scope = QueryScope::Frame(frame);
+            // ponytail: O(n) sequential visibility probes, only when visible_only is set
             for (i, r) in resolver.resolve(&scope).await?.into_iter().enumerate() {
-                elements.push(resolver.synthesize(r, &scope, i));
+                let el = resolver.synthesize(r, &scope, i);
+                let keep = if visible_only {
+                    check_visible(&el).await?
+                } else {
+                    true
+                };
+                if keep {
+                    elements.push(el);
+                }
             }
         }
 
@@ -1488,21 +1607,46 @@ enum ScopeTag {
     Frame(usize),
 }
 
-/// Resolve `selector` against `scope`, take its `nth` candidate, read
-/// that candidate's text-length distance to `needle_len`, and update
-/// `best` if this scope beats the current global minimum. Strictly-less
-/// comparison keeps ties on the earliest scope (callers invoke main
-/// first, then frames in order). The stored key is `abs(len -
-/// needle_len)`, matching the per-scope JS sort.
+/// Resolve `selector` against `scope`, filter to visible candidates (when
+/// `visible_only`), take the `nth` candidate of what remains, read that
+/// candidate's text-length distance to `needle_len`, and update `best` if
+/// this scope beats the current global minimum. Strictly-less comparison
+/// keeps ties on the earliest scope (callers invoke main first, then
+/// frames in order). The stored key is `abs(len - needle_len)`, matching
+/// the per-scope JS sort.
+///
+/// Filtering happens BEFORE the `nth` pick, not after: `want_nth` selects
+/// the nth-closest-length candidate among VISIBLE candidates in this
+/// scope, so a closer-but-hidden candidate never shadows a farther but
+/// visible one. The cross-scope distance comparison itself is unchanged.
 async fn consider_scope_best(
     scope: &QueryScope<'_>,
     selector: &SelectorKind,
     want_nth: usize,
     needle_len: usize,
     tag: ScopeTag,
+    visible_only: bool,
     best: &mut Option<(usize, RemoteRef, ScopeTag)>,
 ) -> Result<()> {
     let hits = selector.resolve_many_inner(scope, true).await?;
+    // ponytail: O(n) sequential visibility probes, only when visible_only is set
+    let hits = if visible_only {
+        let mut visible = Vec::new();
+        for r in hits {
+            // Throwaway Element just to probe visibility; the refresh
+            // `nth` baked into it (`0`) is irrelevant here — this Element
+            // is discarded right after the check, and the Element
+            // actually returned to the caller is re-synthesized with
+            // `want_nth` at the `one_across_frames` call site.
+            let probe = Element::synthesize_query(r.clone(), scope, selector, 0);
+            if check_visible(&probe).await? {
+                visible.push(r);
+            }
+        }
+        visible
+    } else {
+        hits
+    };
     let Some(candidate) = hits.into_iter().nth(want_nth) else {
         return Ok(());
     };
