@@ -5,6 +5,14 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.22] - 2026-07-16
+
+### Fixed
+
+- Honor visible_only by filtering finds through check_visible
+- Honor visible_only across include_frames() fan-out paths
+
+
 ## [0.2.21] - 2026-07-16
 
 ### Added
