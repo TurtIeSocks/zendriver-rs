@@ -79,6 +79,8 @@ pub mod error;
 pub mod expect;
 pub(crate) mod expert;
 pub mod frame;
+#[cfg(feature = "geo")]
+mod geo_resolver;
 pub mod input;
 pub(crate) mod isolated_world;
 #[cfg(feature = "monitor")]
@@ -225,6 +227,15 @@ pub use zendriver_fetcher::{
     Channel as FetcherChannel, Fetcher, FetcherError, FetcherPhase, FetcherProgress, Platform,
     VersionSpec,
 };
+
+/// Proxied exit-IP -> country resolver, derived from the browser's proxy.
+///
+/// Gated by the `geo` cargo feature (pulls in `reqwest`). Implements
+/// [`zendriver_stealth::geo::GeoResolver`] via a GET against an IP-geolocation
+/// service (default `ip-api.com`); swap in your own resolver if that doesn't
+/// fit.
+#[cfg(feature = "geo")]
+pub use geo_resolver::IpApiResolver;
 
 /// Stealth profile + fingerprint configuration re-exported from `zendriver-stealth`.
 pub mod stealth {
