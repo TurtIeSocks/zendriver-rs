@@ -442,6 +442,10 @@ pub struct BrowserBuilder {
     /// profile's `Default/Preferences` at launch. User entries override the
     /// default suppression set. See [`BrowserBuilder::preference`].
     pub(crate) preferences: Vec<(String, serde_json::Value)>,
+    /// Structured browser-wide proxy (userinfo-stripped server + optional
+    /// credentials), set via [`BrowserBuilder::proxy`]. Emitted as
+    /// `--proxy-server=` at launch and mirrored by `geo_auto`'s probe.
+    pub(crate) proxy: Option<crate::proxy::ParsedProxy>,
     /// Optional `(username, password)` for proxy / HTTP basic-auth handling.
     /// Only honored when the `interception` feature is enabled; when present
     /// at launch, an interception actor is spawned on the main tab session
@@ -488,7 +492,21 @@ impl std::fmt::Debug for BrowserBuilder {
                 "extra_observers",
                 &format_args!("<{} observers>", self.extra_observers.len()),
             )
-            .field("preferences", &self.preferences);
+            .field("preferences", &self.preferences)
+            .field(
+                "proxy",
+                &self.proxy.as_ref().map(|p| {
+                    format!(
+                        "ParsedProxy {{ server: {:?}, credentials: {} }}",
+                        p.server,
+                        if p.credentials.is_some() {
+                            "Some(<redacted>)"
+                        } else {
+                            "None"
+                        }
+                    )
+                }),
+            );
         #[cfg(feature = "interception")]
         s.field(
             "proxy_auth",
@@ -607,6 +625,39 @@ impl BrowserBuilder {
     #[must_use]
     pub fn proxy_auth(mut self, user: impl Into<String>, pass: impl Into<String>) -> Self {
         self.proxy_auth = Some((user.into(), pass.into()));
+        self
+    }
+
+    /// Route the browser through `proxy` (`scheme://[user:pass@]host:port`).
+    /// Emits `--proxy-server=<host:port>` (Chrome ignores userinfo there) and,
+    /// when the URL carries credentials and `proxy_auth` is unset, auto-wires
+    /// them. The structured form lets `geo_auto()` probe the exit IP through
+    /// the same proxy.
+    ///
+    /// # Errors
+    /// Silently ignores an unparseable URL (logs a warning) to keep the
+    /// builder chainable; the bad value simply isn't applied.
+    #[must_use]
+    pub fn proxy(mut self, proxy: impl Into<String>) -> Self {
+        let raw = proxy.into();
+        match crate::proxy::split_proxy_url(&raw) {
+            Ok(parsed) => {
+                // Auto-wiring `proxy_auth` from the URL's userinfo only makes
+                // sense when that field exists at all, which requires the
+                // `interception` feature (it drives the `Fetch.authRequired`
+                // auto-reply actor at launch).
+                #[cfg(feature = "interception")]
+                {
+                    if self.proxy_auth.is_none() {
+                        if let Some((u, p)) = parsed.credentials.clone() {
+                            self.proxy_auth = Some((u, p));
+                        }
+                    }
+                }
+                self.proxy = Some(parsed);
+            }
+            Err(e) => tracing::warn!(error = %e, "proxy: ignoring invalid proxy URL"),
+        }
         self
     }
 
@@ -1180,6 +1231,19 @@ impl BrowserBuilder {
         // root should opt in explicitly with `.sandbox(false)`.
         if self.sandbox == Some(false) {
             v.push("--no-sandbox".to_string());
+        }
+        // Structured browser-wide proxy set via `BrowserBuilder::proxy`.
+        // Emits the userinfo-stripped `--proxy-server=` flag unless the
+        // caller already supplied their own via `.arg`/`.args` — an explicit
+        // flag wins over the structured form.
+        if let Some(parsed) = self.proxy.as_ref() {
+            let explicit = self
+                .extra_args
+                .iter()
+                .any(|a| a.starts_with("--proxy-server="));
+            if !explicit {
+                v.push(format!("--proxy-server={}", parsed.server));
+            }
         }
         v.extend(self.extra_args.iter().cloned());
         // Start the initial tab on `about:blank` instead of Chrome's default
@@ -4060,6 +4124,22 @@ mod tests {
             .unwrap();
         let lang = flags.iter().position(|f| f == "--lang=en-US").unwrap();
         assert!(proxy < lang);
+    }
+
+    #[test]
+    fn proxy_stores_parsed_and_strips_userinfo_arg() {
+        let b = Browser::builder().proxy("http://bob:pw@host:3128");
+        let p = b.proxy.as_ref().unwrap();
+        assert_eq!(p.server, "http://host:3128");
+        assert_eq!(p.credentials, Some(("bob".into(), "pw".into())));
+        // proxy_auth auto-wired from userinfo (field only exists under the
+        // `interception` feature, which drives the auth-reply actor).
+        #[cfg(feature = "interception")]
+        assert_eq!(b.proxy_auth, Some(("bob".into(), "pw".into())));
+
+        // At launch, the userinfo-stripped `--proxy-server=` flag is emitted.
+        let flags = b.build_flags(Path::new("/tmp/x"));
+        assert!(flags.contains(&"--proxy-server=http://host:3128".to_string()));
     }
 
     #[test]
