@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["BrowserContext"]};
+window.SIDEBAR_ITEMS = {"struct":["BrowserContext","BrowserContextBuilder"]};

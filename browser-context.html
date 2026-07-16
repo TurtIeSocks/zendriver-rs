@@ -241,10 +241,56 @@ tab.goto("https://api.ipify.org").await?;
 <code>proxyServer</code> field. Chrome accepts the same URL shapes as the
 <code>--proxy-server</code> command-line flag (<code>http://</code>, <code>socks5://</code>,
 <code>host:port</code> without scheme). <code>proxy_bypass_list</code> defaults to none.</p>
-<p>Note: proxy authentication is <strong>not</strong> carried by <code>proxyServer</code> — Chrome
-will issue a 407 if the upstream requires Basic auth. Pair the per-
-context proxy with <code>BrowserBuilder::proxy_auth</code> at launch time (the
-auth applies browser-wide; per-context auth is on the roadmap).</p>
+<p>Note: <code>proxyServer</code> alone does <strong>not</strong> carry proxy authentication —
+Chrome will issue a 407 if the upstream requires Basic auth. For that,
+use the first-class builder below instead.</p>
+<h2 id="per-context-proxy-authentication"><a class="header" href="#per-context-proxy-authentication">Per-context proxy authentication</a></h2>
+<p><a href="https://docs.rs/zendriver/latest/zendriver/struct.Browser.html#method.browser_context"><code>Browser::browser_context</code></a>
+returns a <a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserContextBuilder.html"><code>BrowserContextBuilder</code></a>
+that binds a proxy <em>and</em> its credentials to the context, so every tab
+it opens is transparently authenticated — no per-tab handle to hold:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">use zendriver::Browser;
+</span><span class="boring">async fn ex(browser: &amp;Browser) -&gt; zendriver::Result&lt;()&gt; {
+</span>let ctx = browser
+    .browser_context()
+    .proxy("http://user:pass@proxy.example.com:8080")
+    .proxy_bypass("&lt;-loopback&gt;")
+    .build()
+    .await?;
+let tab = ctx.new_tab().await?;
+tab.goto("https://api.ipify.org").await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p>Userinfo embedded in <code>.proxy()</code> (<code>user:pass@host:port</code>) is auto-split
+into credentials and stripped from the <code>proxyServer</code> sent to Chrome
+(which would otherwise ignore it). Call <code>.proxy_auth(user, pass)</code>
+(requires the <code>interception</code> feature) to supply — or override —
+credentials explicitly:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">use zendriver::Browser;
+</span><span class="boring">async fn ex(browser: &amp;Browser) -&gt; zendriver::Result&lt;()&gt; {
+</span>let ctx = browser
+    .browser_context()
+    .proxy("http://proxy.example.com:8080")
+    .proxy_auth("user", "pass")
+    .build()
+    .await?;
+<span class="boring">let _ = ctx; Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p>Under the hood, <code>build()</code> registers the credentials in the browser's
+per-context registry; each tab opened in that context has a
+<code>Fetch.authRequired</code> handler auto-installed, chained into the same
+per-session interception actor used for tracker blocking (never two
+actors on one session). Without the <code>interception</code> feature, <code>.proxy()</code>
+and <code>.proxy_bypass()</code> still work (proxy routing only); embedded or
+explicit credentials are logged as inactive since there is no actor to
+install them into.</p>
+<p><code>create_browser_context_with</code> (proxy, no auth) and
+<code>create_browser_context</code> (no proxy) remain available as lighter-weight
+convenience constructors when authentication isn't needed.</p>
 <h2 id="tabs-in-a-context"><a class="header" href="#tabs-in-a-context">Tabs in a context</a></h2>
 <pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -325,18 +371,23 @@ async fn main() -&gt; zendriver::Result&lt;()&gt; {
     Ok(())
 }</code></pre></pre>
 <p>See <code>examples/browser_context_isolation.rs</code> in the source tree for a
-runnable variant exercising the full round-trip against a local mock
-proxy.</p>
+runnable variant exercising the full round-trip — including
+<code>BrowserContextBuilder</code>'s auth — against a real rotating upstream proxy
+(set <code>ZD_PROXY</code>).</p>
 <h2 id="limitations"><a class="header" href="#limitations">Limitations</a></h2>
 <ul>
 <li><strong>Single Chrome process.</strong> Contexts share Chromium binaries, GPU
 process, GPU cache, and the user-data-dir. A compromised renderer
 in one context can in principle observe shared state. If process-
 level isolation matters, launch a second <code>Browser</code>.</li>
-<li><strong>No per-context auth yet.</strong> <code>create_browser_context_with</code> accepts a
-<code>proxy_server</code> but not a username/password. Pair with
-<code>BrowserBuilder::proxy_auth</code> browser-wide, or use a per-tab
-<a href="./interception.html">interception handler</a> for finer control.</li>
+<li><strong>Per-context auth requires <code>interception</code>.</strong> <code>Browser::browser_context().proxy_auth(...)</code>
+(or embedded <code>.proxy("http://user:pass@host:port")</code> userinfo) needs the
+<code>interception</code> feature to install the per-tab <code>Fetch.authRequired</code>
+handler; without it, proxy routing still works but credentials are
+inactive (a warning is logged). See
+<a href="#per-context-proxy-authentication">Per-context proxy authentication</a>
+above, or use a per-tab <a href="./interception.html">interception handler</a> for
+finer control.</li>
 <li><strong>Extension scoping.</strong> Chrome only loads <code>--load-extension</code> content
 scripts into the default context. Tabs opened in a non-default
 <code>BrowserContext</code> will not see your extensions. Workaround: stay on
