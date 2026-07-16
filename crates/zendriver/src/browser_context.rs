@@ -196,6 +196,8 @@ impl Drop for BrowserContext {
             return; // already disposed (explicit dispose() will exist in a later task)
         }
         tokio::spawn(async move {
+            #[cfg(feature = "interception")]
+            browser.context_proxy_auth.lock().await.remove(&id);
             if let Err(e) = browser.dispose_browser_context(&id).await {
                 tracing::warn!(context_id = %id, error = %e, "BrowserContext dispose failed");
             }
@@ -285,6 +287,46 @@ mod new_tab_tests {
         // mock won't fire; bound the test with a short timeout.
         let _ = tokio::time::timeout(std::time::Duration::from_millis(200), fut).await;
 
+        conn.shutdown();
+    }
+}
+
+#[cfg(all(test, feature = "interception"))]
+mod auth_cleanup_tests {
+    use super::*;
+    use zendriver_transport::testing::MockConnection;
+
+    /// Dropping a `BrowserContext` removes its entry from the browser's
+    /// `context_proxy_auth` registry.
+    #[tokio::test]
+    async fn drop_unregisters_context_credentials() {
+        let (mut mock, conn) = MockConnection::pair();
+        let inner = crate::browser::test_only_inner_from_conn(conn.clone());
+        inner
+            .context_proxy_auth
+            .lock()
+            .await
+            .insert("CTX1".to_string(), ("bob".into(), "s3cret".into()));
+
+        {
+            let _ctx = BrowserContext {
+                browser: inner.clone(),
+                id: "CTX1".into(),
+            };
+        } // drop here
+
+        // Drop spawns a task; wait for the dispose call to confirm it ran.
+        let id = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            mock.expect_cmd("Target.disposeBrowserContext"),
+        )
+        .await
+        .expect("dispose did not fire");
+        mock.reply(id, serde_json::json!({})).await;
+
+        // Give the spawned task a moment to complete the removal.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(inner.context_proxy_auth.lock().await.get("CTX1").is_none());
         conn.shutdown();
     }
 }
