@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.7.0] - 2026-07-17
+
+### Added
+
+- Geo_auto uses the exact timezone from the exit-IP probe
+
+
 ## [0.6.0] - 2026-07-17
 
 ### Added

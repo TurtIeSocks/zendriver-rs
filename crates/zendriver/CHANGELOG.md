@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.29] - 2026-07-17
+
+### Added
+
+- Geo_auto uses the exact timezone from the exit-IP probe
+
+
 ## [0.2.28] - 2026-07-17
 
 ### Fixed
