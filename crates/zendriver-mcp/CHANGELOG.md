@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.7.7] - 2026-07-17
+
+### Added
+
+- Model partition_key as a structured CookiePartitionKey (CDP M119+)
+
+
 ## [0.7.6] - 2026-07-17
 
 

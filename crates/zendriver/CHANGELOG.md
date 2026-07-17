@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.30] - 2026-07-17
+
+### Added
+
+- Model partition_key as a structured CookiePartitionKey (CDP M119+)
+
+
 ## [0.2.29] - 2026-07-17
 
 ### Added
