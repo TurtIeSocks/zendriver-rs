@@ -3,6 +3,15 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.6.0] - 2026-07-17
+
+### Added
+
+- Persona carries custom UA-CH metadata + screen spec
+- Resolve custom UA-CH + screen from persona over the derived defaults
+- Observer emits custom UA-CH + device-metrics from persona
+
+
 ## [0.5.3] - 2026-07-17
 
 ### Added
