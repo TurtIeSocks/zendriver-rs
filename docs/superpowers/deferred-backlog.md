@@ -57,6 +57,7 @@ Legend: ⏸ parked (blocked on an external decision, not a bug) · 🐞 shipped-
 - **Intercept `method` / `post-data` reserved for follow-up.** `ModifyRequest` exposes only `headers`. — `crates/zendriver-mcp/src/tools/intercept.rs:29-30,87-95`
 - **Tab-scoped expectations/rules leak** until manual cancel or full `browser_close`. `browser_tab_close` never drains `s.expectations`/`s.rules`; handles carry no `tab_id`. — `crates/zendriver-mcp/src/tools/tabs.rs:244,264-311`, `state.rs:150,166`
 - **MCP `geo_endpoint` override is not proxy-mirrored** (`IpApiResolver`'s proxy setter is `pub(crate)` to `zendriver`, so `zendriver-mcp` can't thread `input.proxy` into a custom-endpoint resolver the way `geo_auto()`'s bundled default gets mirrored). Currently only a `tracing::warn!` when both are set. Proper fix: expose the setter (or a builder arg) and wire `input.proxy` through in `lifecycle.rs::open`. — `crates/zendriver-mcp/src/tools/lifecycle.rs:143-159`, `crates/zendriver/src/geo_resolver.rs` (`with_proxy`)
+- **MCP `CookieDto` omits extended cookie fields.** The MCP cookie tool's `CookieDto` models only the core fields — it does not expose `partition_key` (CHIPS), `priority`, `same_party`, `source_scheme`, or `source_port`, all of which the core `zendriver::Cookie` carries. Agents can't set/read partitioned or priority cookies over MCP. Found 2026-07-17 during the `partition_key` struct work. — `crates/zendriver-mcp/src/tools/cookies.rs` (`CookieDto`)
 
 ---
 
