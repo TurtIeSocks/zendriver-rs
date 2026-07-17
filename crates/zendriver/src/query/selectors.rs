@@ -192,6 +192,38 @@ impl SelectorKind {
 }
 
 // ---------------------------------------------------------------------
+// Shared eval-in-scope helper
+// ---------------------------------------------------------------------
+
+/// Evaluate `expression` via `Runtime.evaluate`, pinned to `scope`'s
+/// execution context.
+///
+/// For a `Frame` scope this sets `contextId` to the frame's isolated-world
+/// context (see [`QueryScope::execution_context_id`]) so a bare
+/// `document`/`document.querySelectorAll(...)` inside `expression`
+/// resolves against the *frame's* document rather than the parent tab's
+/// default context — the bug this helper exists to prevent recurring.
+/// For `Tab`/`Element` scope `execution_context_id()` is always `None`,
+/// so `contextId` is omitted and CDP falls back to the session's default
+/// (main-frame main-world) context, matching prior behavior exactly.
+///
+/// Every `Tab`/`Frame` match arm below (css/xpath/text/text_regex/
+/// predicate, both `_one` and `_many`) routes through this one function
+/// instead of hand-rolling the `contextId` dance per resolver.
+async fn eval_expr_in_scope(scope: &QueryScope<'_>, expression: String) -> Result<Value> {
+    let session = scope.session();
+    let ctx = scope.execution_context_id().await?;
+    let mut params = json!({
+        "expression": expression,
+        "returnByValue": false,
+    });
+    if let Some(id) = ctx {
+        params["contextId"] = json!(id);
+    }
+    Ok(session.call("Runtime.evaluate", params).await?)
+}
+
+// ---------------------------------------------------------------------
 // CSS
 // ---------------------------------------------------------------------
 
@@ -200,15 +232,11 @@ async fn resolve_css_one(scope: &QueryScope<'_>, selector: &str) -> Result<Optio
     let session = scope.session();
     let result = match scope {
         QueryScope::Tab(_) | QueryScope::Frame(_) => {
-            session
-                .call(
-                    "Runtime.evaluate",
-                    json!({
-                        "expression": format!("document.querySelector({})", json!(selector)),
-                        "returnByValue": false,
-                    }),
-                )
-                .await?
+            eval_expr_in_scope(
+                scope,
+                format!("document.querySelector({})", json!(selector)),
+            )
+            .await?
         }
         QueryScope::Element(el) => {
             let object_id = el.remote_object_id_cloned().await?;
@@ -231,20 +259,13 @@ async fn resolve_css_one(scope: &QueryScope<'_>, selector: &str) -> Result<Optio
 #[allow(dead_code)] // Called via `SelectorKind::resolve_many`; gated until T12.
 async fn resolve_css_many(scope: &QueryScope<'_>, selector: &str) -> Result<Vec<RemoteRef>> {
     let session = scope.session();
-    let ctx = scope.execution_context_id().await?;
     let result = match scope {
         QueryScope::Tab(_) | QueryScope::Frame(_) => {
-            let mut params = json!({
-                "expression": format!(
-                    "Array.from(document.querySelectorAll({}))",
-                    json!(selector)
-                ),
-                "returnByValue": false,
-            });
-            if let Some(id) = ctx {
-                params["contextId"] = json!(id);
-            }
-            session.call("Runtime.evaluate", params).await?
+            eval_expr_in_scope(
+                scope,
+                format!("Array.from(document.querySelectorAll({}))", json!(selector)),
+            )
+            .await?
         }
         QueryScope::Element(el) => {
             let object_id = el.remote_object_id_cloned().await?;
@@ -287,7 +308,6 @@ pub(crate) async fn resolve_predicate_many(
     pred: &PredicateSet,
 ) -> Result<Vec<RemoteRef>> {
     let session = scope.session();
-    let ctx = scope.execution_context_id().await?;
     let css = pred.to_css_selector();
     let filter = pred.to_js_filter();
     let result = match scope {
@@ -297,14 +317,7 @@ pub(crate) async fn resolve_predicate_many(
                 json!(css),
                 filter,
             );
-            let mut params = json!({
-                "expression": expr,
-                "returnByValue": false,
-            });
-            if let Some(id) = ctx {
-                params["contextId"] = json!(id);
-            }
-            session.call("Runtime.evaluate", params).await?
+            eval_expr_in_scope(scope, expr).await?
         }
         QueryScope::Element(el) => {
             let object_id = el.remote_object_id_cloned().await?;
@@ -337,18 +350,14 @@ async fn resolve_xpath_one(scope: &QueryScope<'_>, expr: &str) -> Result<Option<
     let session = scope.session();
     let result = match scope {
         QueryScope::Tab(_) | QueryScope::Frame(_) => {
-            session
-                .call(
-                    "Runtime.evaluate",
-                    json!({
-                        "expression": format!(
-                            "document.evaluate({}, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue",
-                            json!(expr)
-                        ),
-                        "returnByValue": false,
-                    }),
-                )
-                .await?
+            eval_expr_in_scope(
+                scope,
+                format!(
+                    "document.evaluate({}, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue",
+                    json!(expr)
+                ),
+            )
+            .await?
         }
         QueryScope::Element(el) => {
             let object_id = el.remote_object_id_cloned().await?;
@@ -376,18 +385,14 @@ async fn resolve_xpath_many(scope: &QueryScope<'_>, expr: &str) -> Result<Vec<Re
     let session = scope.session();
     let result = match scope {
         QueryScope::Tab(_) | QueryScope::Frame(_) => {
-            session
-                .call(
-                    "Runtime.evaluate",
-                    json!({
-                        "expression": format!(
-                            "(function(){{var r=document.evaluate({}, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);var a=[];for(var i=0;i<r.snapshotLength;i++)a.push(r.snapshotItem(i));return a;}})()",
-                            json!(expr)
-                        ),
-                        "returnByValue": false,
-                    }),
-                )
-                .await?
+            eval_expr_in_scope(
+                scope,
+                format!(
+                    "(function(){{var r=document.evaluate({}, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);var a=[];for(var i=0;i<r.snapshotLength;i++)a.push(r.snapshotItem(i));return a;}})()",
+                    json!(expr)
+                ),
+            )
+            .await?
         }
         QueryScope::Element(el) => {
             let object_id = el.remote_object_id_cloned().await?;
@@ -570,15 +575,14 @@ async fn resolve_text_one(
         if best_match {
             let result = match scope {
                 QueryScope::Tab(_) | QueryScope::Frame(_) => {
-                    session
-                        .call(
-                            "Runtime.evaluate",
-                            json!({
-                                "expression": format!("({})[0] || null", build_text_exact_xpath_js_tab(needle, true, true)),
-                                "returnByValue": false,
-                            }),
-                        )
-                        .await?
+                    eval_expr_in_scope(
+                        scope,
+                        format!(
+                            "({})[0] || null",
+                            build_text_exact_xpath_js_tab(needle, true, true)
+                        ),
+                    )
+                    .await?
                 }
                 QueryScope::Element(el) => {
                     let object_id = el.remote_object_id_cloned().await?;
@@ -603,14 +607,7 @@ async fn resolve_text_one(
         // Single-node form (no best_match): returns a single node or null.
         let result = match scope {
             QueryScope::Tab(_) | QueryScope::Frame(_) => {
-                session
-                    .call(
-                        "Runtime.evaluate",
-                        json!({
-                            "expression": build_text_exact_xpath_js_tab(needle, false, false),
-                            "returnByValue": false,
-                        }),
-                    )
+                eval_expr_in_scope(scope, build_text_exact_xpath_js_tab(needle, false, false))
                     .await?
             }
             QueryScope::Element(el) => {
@@ -634,15 +631,14 @@ async fn resolve_text_one(
         // first match.
         let result = match scope {
             QueryScope::Tab(_) | QueryScope::Frame(_) => {
-                session
-                    .call(
-                        "Runtime.evaluate",
-                        json!({
-                            "expression": format!("({})[0] || null", build_text_substring_js_tab(needle, best_match)),
-                            "returnByValue": false,
-                        }),
-                    )
-                    .await?
+                eval_expr_in_scope(
+                    scope,
+                    format!(
+                        "({})[0] || null",
+                        build_text_substring_js_tab(needle, best_match)
+                    ),
+                )
+                .await?
             }
             QueryScope::Element(el) => {
                 let object_id = el.remote_object_id_cloned().await?;
@@ -679,15 +675,11 @@ async fn resolve_text_many(
     let result = if exact {
         match scope {
             QueryScope::Tab(_) | QueryScope::Frame(_) => {
-                session
-                    .call(
-                        "Runtime.evaluate",
-                        json!({
-                            "expression": build_text_exact_xpath_js_tab(needle, true, best_match),
-                            "returnByValue": false,
-                        }),
-                    )
-                    .await?
+                eval_expr_in_scope(
+                    scope,
+                    build_text_exact_xpath_js_tab(needle, true, best_match),
+                )
+                .await?
             }
             QueryScope::Element(el) => {
                 let object_id = el.remote_object_id_cloned().await?;
@@ -707,15 +699,7 @@ async fn resolve_text_many(
     } else {
         match scope {
             QueryScope::Tab(_) | QueryScope::Frame(_) => {
-                session
-                    .call(
-                        "Runtime.evaluate",
-                        json!({
-                            "expression": build_text_substring_js_tab(needle, best_match),
-                            "returnByValue": false,
-                        }),
-                    )
-                    .await?
+                eval_expr_in_scope(scope, build_text_substring_js_tab(needle, best_match)).await?
             }
             QueryScope::Element(el) => {
                 let object_id = el.remote_object_id_cloned().await?;
@@ -795,15 +779,14 @@ async fn resolve_text_regex_one(
     let session = scope.session();
     let result = match scope {
         QueryScope::Tab(_) | QueryScope::Frame(_) => {
-            session
-                .call(
-                    "Runtime.evaluate",
-                    json!({
-                        "expression": format!("({})[0] || null", build_text_regex_js_tab(pattern, flags, best_match)),
-                        "returnByValue": false,
-                    }),
-                )
-                .await?
+            eval_expr_in_scope(
+                scope,
+                format!(
+                    "({})[0] || null",
+                    build_text_regex_js_tab(pattern, flags, best_match)
+                ),
+            )
+            .await?
         }
         QueryScope::Element(el) => {
             let object_id = el.remote_object_id_cloned().await?;
@@ -836,15 +819,7 @@ async fn resolve_text_regex_many(
     let session = scope.session();
     let result = match scope {
         QueryScope::Tab(_) | QueryScope::Frame(_) => {
-            session
-                .call(
-                    "Runtime.evaluate",
-                    json!({
-                        "expression": build_text_regex_js_tab(pattern, flags, best_match),
-                        "returnByValue": false,
-                    }),
-                )
-                .await?
+            eval_expr_in_scope(scope, build_text_regex_js_tab(pattern, flags, best_match)).await?
         }
         QueryScope::Element(el) => {
             let object_id = el.remote_object_id_cloned().await?;
@@ -877,6 +852,10 @@ async fn resolve_role_one(
     // Always go through `resolve_css_many` (rather than `resolve_css_one`)
     // so that name-filter and no-filter paths share the same candidate
     // enumeration. With no name filter we just return the first match.
+    // This delegation also means role queries already inherit
+    // `resolve_css_many`'s `contextId` pinning for free — a Frame-scoped
+    // role query correctly enumerates candidates from the frame's own
+    // document, not the parent tab's.
     let css = role.to_css();
     let candidates = resolve_css_many(scope, &css).await?;
     let Some(needle) = name else {
@@ -1291,6 +1270,181 @@ mod tests {
         let r = fut.await.unwrap().unwrap().unwrap();
         assert_eq!(r.remote_object_id, "RN0");
         assert_eq!(r.backend_node_id, 42);
+        conn.shutdown();
+    }
+
+    // -------------------------------------------------------------------
+    // Frame-scope `contextId` pinning (regression coverage for the bug
+    // where xpath/text/text_regex `_many` resolvers silently queried the
+    // main-frame document instead of the scoped frame's).
+    // -------------------------------------------------------------------
+
+    /// Build a synthetic `Frame` whose session sits on the supplied mock
+    /// connection, with no parent tab/frame — sufficient for exercising
+    /// `QueryScope::Frame` dispatch without a real `Tab`.
+    fn frame_on(session: SessionHandle, frame_id: &str) -> Frame {
+        Frame::new(
+            frame_id.to_string(),
+            None,
+            String::new(),
+            None,
+            session,
+            std::sync::Weak::new(),
+        )
+    }
+
+    #[tokio::test]
+    async fn xpath_many_frame_scope_pins_context_id() {
+        // Frame scope must allocate/reuse the frame's isolated-world
+        // context via `Page.createIsolatedWorld` and pin the follow-up
+        // `Runtime.evaluate` to it via `contextId` — otherwise
+        // `document.evaluate(...)` inside the expression walks the
+        // parent tab's document instead of the frame's.
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let frame = frame_on(sess, "F1");
+
+        let fut = tokio::spawn(async move {
+            let scope = QueryScope::Frame(&frame);
+            SelectorKind::Xpath("//button".into())
+                .resolve_many(&scope)
+                .await
+        });
+
+        let id_iso = mock.expect_cmd("Page.createIsolatedWorld").await;
+        assert_eq!(mock.last_sent()["params"]["frameId"], "F1");
+        mock.reply(id_iso, json!({ "executionContextId": 777 }))
+            .await;
+
+        let id_q = mock.expect_cmd("Runtime.evaluate").await;
+        assert_eq!(
+            mock.last_sent()["params"]["contextId"],
+            777,
+            "xpath_many must pin Runtime.evaluate to the frame's isolated-world contextId"
+        );
+        mock.reply(
+            id_q,
+            json!({ "result": { "type": "object", "subtype": "null" } }),
+        )
+        .await;
+
+        let r = fut.await.unwrap().unwrap();
+        assert!(r.is_empty(), "null subtype must yield an empty Vec");
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn text_many_frame_scope_pins_context_id() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let frame = frame_on(sess, "F1");
+
+        let fut = tokio::spawn(async move {
+            let scope = QueryScope::Frame(&frame);
+            SelectorKind::Text {
+                needle: "hello".into(),
+                exact: false,
+            }
+            .resolve_many(&scope)
+            .await
+        });
+
+        let id_iso = mock.expect_cmd("Page.createIsolatedWorld").await;
+        assert_eq!(mock.last_sent()["params"]["frameId"], "F1");
+        mock.reply(id_iso, json!({ "executionContextId": 778 }))
+            .await;
+
+        let id_q = mock.expect_cmd("Runtime.evaluate").await;
+        assert_eq!(
+            mock.last_sent()["params"]["contextId"],
+            778,
+            "text_many must pin Runtime.evaluate to the frame's isolated-world contextId"
+        );
+        mock.reply(
+            id_q,
+            json!({ "result": { "type": "object", "subtype": "null" } }),
+        )
+        .await;
+
+        let r = fut.await.unwrap().unwrap();
+        assert!(r.is_empty(), "null subtype must yield an empty Vec");
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn text_regex_many_frame_scope_pins_context_id() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let frame = frame_on(sess, "F1");
+
+        let fut = tokio::spawn(async move {
+            let scope = QueryScope::Frame(&frame);
+            SelectorKind::TextRegex {
+                pattern: "hello.*world".into(),
+                flags: "i".into(),
+            }
+            .resolve_many(&scope)
+            .await
+        });
+
+        let id_iso = mock.expect_cmd("Page.createIsolatedWorld").await;
+        assert_eq!(mock.last_sent()["params"]["frameId"], "F1");
+        mock.reply(id_iso, json!({ "executionContextId": 779 }))
+            .await;
+
+        let id_q = mock.expect_cmd("Runtime.evaluate").await;
+        assert_eq!(
+            mock.last_sent()["params"]["contextId"],
+            779,
+            "text_regex_many must pin Runtime.evaluate to the frame's isolated-world contextId"
+        );
+        mock.reply(
+            id_q,
+            json!({ "result": { "type": "object", "subtype": "null" } }),
+        )
+        .await;
+
+        let r = fut.await.unwrap().unwrap();
+        assert!(r.is_empty(), "null subtype must yield an empty Vec");
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn role_many_frame_scope_pins_context_id_via_css_many_delegation() {
+        // resolve_role_many delegates to resolve_css_many, which already
+        // set contextId correctly before this fix. This test locks that
+        // (already-correct) transitive behavior so a future refactor of
+        // the role path can't silently drop it.
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let frame = frame_on(sess, "F1");
+
+        let fut = tokio::spawn(async move {
+            let scope = QueryScope::Frame(&frame);
+            SelectorKind::Role(AriaRole::Button, None)
+                .resolve_many(&scope)
+                .await
+        });
+
+        let id_iso = mock.expect_cmd("Page.createIsolatedWorld").await;
+        assert_eq!(mock.last_sent()["params"]["frameId"], "F1");
+        mock.reply(id_iso, json!({ "executionContextId": 780 }))
+            .await;
+
+        let id_q = mock.expect_cmd("Runtime.evaluate").await;
+        assert_eq!(
+            mock.last_sent()["params"]["contextId"],
+            780,
+            "role_many must pin Runtime.evaluate to the frame's isolated-world contextId"
+        );
+        mock.reply(
+            id_q,
+            json!({ "result": { "type": "object", "subtype": "null" } }),
+        )
+        .await;
+
+        let r = fut.await.unwrap().unwrap();
+        assert!(r.is_empty(), "null subtype must yield an empty Vec");
         conn.shutdown();
     }
 }
