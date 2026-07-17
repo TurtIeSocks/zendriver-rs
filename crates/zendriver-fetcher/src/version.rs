@@ -2,20 +2,34 @@
 
 /// Release channel.
 ///
-/// Currently only `Stable` is wired end-to-end; `Beta`/`Dev`/`Canary`
-/// require a separate CFT endpoint and return
-/// [`FetcherError::UnsupportedPlatform`](crate::FetcherError::UnsupportedPlatform)
-/// at resolve time.
+/// `Stable` resolves through the flat `known-good-versions-with-downloads.json`
+/// manifest (same as [`VersionSpec::Latest`]); `Beta`/`Dev`/`Canary` resolve
+/// through Chrome for Testing's per-channel
+/// `last-known-good-versions-with-downloads.json` endpoint instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Channel {
-    /// Chrome's stable channel — the only fully-wired channel as of v0.1.
+    /// Chrome's stable channel.
     Stable,
-    /// Beta channel (not yet wired).
+    /// Beta channel.
     Beta,
-    /// Dev channel (not yet wired).
+    /// Dev channel.
     Dev,
-    /// Canary channel (not yet wired).
+    /// Canary channel.
     Canary,
+}
+
+impl Channel {
+    /// Channel name as used by Chrome for Testing's per-channel manifest
+    /// (`last-known-good-versions-with-downloads.json`'s `channels` map
+    /// keys: `"Stable"`, `"Beta"`, `"Dev"`, `"Canary"`).
+    pub(crate) fn as_cft_str(self) -> &'static str {
+        match self {
+            Channel::Stable => "Stable",
+            Channel::Beta => "Beta",
+            Channel::Dev => "Dev",
+            Channel::Canary => "Canary",
+        }
+    }
 }
 
 /// How to resolve a Chrome for Testing version.
@@ -42,6 +56,14 @@ mod tests {
         let _ = Channel::Beta;
         let _ = Channel::Dev;
         let _ = Channel::Canary;
+    }
+
+    #[test]
+    fn channel_as_cft_str_matches_manifest_keys() {
+        assert_eq!(Channel::Stable.as_cft_str(), "Stable");
+        assert_eq!(Channel::Beta.as_cft_str(), "Beta");
+        assert_eq!(Channel::Dev.as_cft_str(), "Dev");
+        assert_eq!(Channel::Canary.as_cft_str(), "Canary");
     }
 
     #[test]

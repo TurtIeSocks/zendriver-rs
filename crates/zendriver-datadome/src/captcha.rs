@@ -141,9 +141,22 @@ pub(crate) async fn apply_solution(
     Ok(())
 }
 
-/// Derive the `.eTLD+1` cookie domain from a URL. Best-effort: take the host,
-/// drop the leftmost label when there are ≥3 labels, prefix with `.`.
-/// (`shop.example.com` → `.example.com`; `example.com` → `.example.com`.)
+/// Derive the `.eTLD+1` cookie domain from a URL: take the host, then look
+/// up its registrable domain (public suffix + one label) against the
+/// compiled-in Mozilla Public Suffix List via the [`psl`] crate, prefixing
+/// the result with `.`.
+///
+/// (`shop.example.com` → `.example.com`; `example.com` → `.example.com`;
+/// `shop.example.co.uk` → `.example.co.uk` — multi-label public suffixes
+/// like `co.uk` resolve correctly instead of the old naive "drop one
+/// label" heuristic, which mistook `co.uk` itself for the registrable
+/// domain.)
+///
+/// Falls back to the bare host — no leading dot — when `psl` finds no
+/// registrable domain: bare IP addresses (`psl` has no suffix entries for
+/// numeric labels, so treating them as a domain tree would misparse
+/// `127.0.0.1` as suffix `1` under the PSL's default "unlisted TLD" rule)
+/// and single-label hosts like `localhost`.
 fn cookie_domain(site_url: &str) -> String {
     let host = site_url
         .split("://")
@@ -155,13 +168,14 @@ fn cookie_domain(site_url: &str) -> String {
         .split(':')
         .next()
         .unwrap_or("");
-    let labels: Vec<&str> = host.split('.').collect();
-    if labels.len() >= 3 {
-        format!(".{}", labels[labels.len() - 2..].join("."))
-    } else if labels.len() == 2 {
-        format!(".{host}")
-    } else {
-        host.to_string()
+
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return host.to_string();
+    }
+
+    match psl::domain_str(host) {
+        Some(registrable) => format!(".{registrable}"),
+        None => host.to_string(),
     }
 }
 
@@ -181,9 +195,39 @@ mod tests {
             ".example.com"
         );
         assert_eq!(cookie_domain("http://localhost:8080/"), "localhost");
-        // Known v1 limitation: no public-suffix list, so multi-label TLDs
-        // degrade to the wrong parent (documented). Must never panic.
-        assert_eq!(cookie_domain("https://shop.example.co.uk/"), ".co.uk");
+    }
+
+    /// Multi-label public suffixes (`co.uk`, `uk.com`, ...) resolve to the
+    /// correct registrable domain via the compiled-in public suffix list,
+    /// fixing the v1 naive "drop one label" heuristic that mistook `co.uk`
+    /// itself for the registrable domain (previously asserted here as the
+    /// documented-wrong `.co.uk`).
+    #[test]
+    fn cookie_domain_handles_multi_label_public_suffixes() {
+        assert_eq!(
+            cookie_domain("https://shop.example.co.uk/"),
+            ".example.co.uk"
+        );
+        assert_eq!(
+            cookie_domain("https://a.b.shop.example.co.uk/p?q=1"),
+            ".example.co.uk"
+        );
+        // "uk.com" is a private-section PSL entry (not ICANN-delegated),
+        // covered the same way as an ICANN multi-label suffix.
+        assert_eq!(
+            cookie_domain("https://a.example.uk.com/"),
+            ".example.uk.com"
+        );
+    }
+
+    /// Bare IP addresses have no registrable domain under the public
+    /// suffix list (numeric labels never match a PSL rule, so the PSL's
+    /// default "unlisted TLD" rule would otherwise misparse `127.0.0.1` as
+    /// suffix `1` / domain `0.1`) — must fall back to the exact host, no
+    /// leading dot.
+    #[test]
+    fn cookie_domain_falls_back_to_exact_host_for_ip_addresses() {
+        assert_eq!(cookie_domain("http://127.0.0.1:8080/"), "127.0.0.1");
     }
 
     #[tokio::test]

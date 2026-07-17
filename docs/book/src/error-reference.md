@@ -117,7 +117,7 @@ Gated `fetcher`. Sub-error returned wrapped in `ZendriverError::Fetcher`.
 | `Io(io::Error)` | Local FS write failed (cache, extract). | Check cache-dir permissions / free space. |
 | `Manifest(serde_json::Error)` | Manifest JSON didn't parse. | Should not happen with the canonical URL; means the CFT side changed format — file an issue. |
 | `VersionNotFound(version)` | `VersionSpec::Explicit("...")` string not present in manifest. | Drop a version (CFT only keeps the last N); use `VersionSpec::Latest` or a known version from the manifest. |
-| `UnsupportedPlatform` | `Platform::auto_detect` returned `None`, or a non-`Stable` channel was requested. | Currently no fix for unsupported platforms (Linux arm64, BSDs); install Chrome out-of-band. |
+| `UnsupportedPlatform` | `Platform::auto_detect` returned `None`, or the resolved manifest/channel has no download for the requested platform. | Currently no fix for unsupported platforms (Linux arm64, BSDs); install Chrome out-of-band. |
 | `IntegrityFailed { expected, actual }` | SHA256 of the downloaded zip doesn't match the manifest. | Delete the partial download under the cache dir; retry. |
 | `Extraction(String)` | Zip extraction failed. | Free disk space; check for filesystem corruption. |
 

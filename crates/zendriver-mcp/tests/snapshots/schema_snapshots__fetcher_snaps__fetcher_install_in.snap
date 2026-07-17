@@ -13,7 +13,7 @@ properties:
       - string
       - "null"
   channel:
-    description: "Release channel selector. Accepted (case-insensitive): `stable`,\n`beta`, `dev`, `canary`. Used only when `version` is unset. As of\nv0 only `stable` is wired end-to-end in the lib — the others\nsurface `UnsupportedPlatform` at resolve time. Unknown strings\nsurface [`McpServerError`] without reaching the fetcher."
+    description: "Release channel selector. Accepted (case-insensitive): `stable`,\n`beta`, `dev`, `canary`. Used only when `version` is unset. All four\nchannels are wired end-to-end in the lib. Unknown strings surface\n[`McpServerError`] without reaching the fetcher."
     type:
       - string
       - "null"

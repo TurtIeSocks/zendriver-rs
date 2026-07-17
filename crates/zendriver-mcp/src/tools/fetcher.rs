@@ -11,11 +11,14 @@
 //! `canary`) maps to [`VersionSpec::Channel`]; if neither is set the
 //! fetcher falls back to its own [`VersionSpec::Latest`] default.
 //!
-//! Only `Channel::Stable` is wired end-to-end in the lib today; the other
-//! channels surface [`FetcherError::UnsupportedPlatform`] at resolve time.
-//! The MCP layer doesn't reject them at validation — let the lib's own
-//! error tell the caller, because the wire surface should naturally widen
-//! when the lib lands the other channels.
+//! All four channels (`stable` / `beta` / `dev` / `canary`) are wired
+//! end-to-end in the lib: `stable` resolves through the flat
+//! known-good-versions manifest, the other three through Chrome for
+//! Testing's separate per-channel manifest. An unsupported combination
+//! (e.g. a channel with no download for the resolved platform) still
+//! surfaces [`FetcherError::UnsupportedPlatform`] at resolve time — the MCP
+//! layer doesn't pre-reject it, it just lets the lib's own error tell the
+//! caller.
 //!
 //! ## "list installed" intentionally dropped
 //!
@@ -61,10 +64,9 @@ pub struct InstallInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// Release channel selector. Accepted (case-insensitive): `stable`,
-    /// `beta`, `dev`, `canary`. Used only when `version` is unset. As of
-    /// v0 only `stable` is wired end-to-end in the lib — the others
-    /// surface `UnsupportedPlatform` at resolve time. Unknown strings
-    /// surface [`McpServerError`] without reaching the fetcher.
+    /// `beta`, `dev`, `canary`. Used only when `version` is unset. All four
+    /// channels are wired end-to-end in the lib. Unknown strings surface
+    /// [`McpServerError`] without reaching the fetcher.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
     /// Override the cache directory root. Defaults to the OS cache dir

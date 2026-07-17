@@ -230,18 +230,16 @@ conditions) and add the rest as you hit them.
 
 ## Known gaps in v0.1.0
 
+Canvas / WebGL / audio / font fingerprint spoofing and a browserforge
+equivalent have shipped since this section was first written — see the
+[Fingerprint spoofing](./fingerprint.md) chapter, including
+[pool + generative sources](./fingerprint.md#pool--generative-sources-zendriver-fingerprints)
+for the `zendriver-fingerprints` crate (real-device persona dataset /
+Bayesian-network sampler) that plays the same role as nodriver's pairing
+with the `browserforge` library.
+
 Things nodriver supports that zendriver-rs **doesn't yet**:
 
-- **Canvas / WebGL / audio / font fingerprint spoofing.** nodriver's
-  bootstrap injects JS randomizers for each of these per launch. The
-  Rust port currently ships protocol-level stealth (UA scrub,
-  `webdriver` flag, hardware overrides) plus the `spoofed()` profile
-  that patches the Navigator prototype — but not canvas-noise
-  injection. On the post-v0.1 roadmap.
-- **browserforge fingerprint generation.** nodriver pairs with the
-  `browserforge` library for pre-canned realistic fingerprints. Not
-  ported; build a `StealthProfile` from explicit `UserAgentMetadata`
-  fields by hand.
 - **OCR helpers.** nodriver bundles `easyocr` / `tesseract` wrappers
   for text-in-image extraction. Not ported; pair `tab.screenshot()`
   with the `tesseract-rs` or `leptess` crate.

@@ -180,18 +180,17 @@ end up wanting `expect_response` for network assertions) and add
 
 ## Known gaps in v0.1.0
 
+Canvas / WebGL / font / audio fingerprint spoofing and a browserforge
+equivalent have shipped since this section was first written — see the
+[Fingerprint spoofing](./fingerprint.md) chapter, including
+[pool + generative sources](./fingerprint.md#pool--generative-sources-zendriver-fingerprints)
+for the `zendriver-fingerprints` crate (real-device persona dataset /
+Bayesian-network sampler) that plays the same role as Python's optional
+`browserforge` dependency.
+
 Capabilities the Python `zendriver` ships that are **not yet** in the
 Rust port:
 
-- **Canvas / WebGL / font / audio fingerprint spoofing.** Python's
-  stealth layer randomizes these per-launch via JS bootstrap injection;
-  the Rust port only ships the protocol-level patches (UA scrub,
-  `webdriver` removal, hardware overrides) plus the optional
-  `spoofed()` profile that patches the Navigator prototype. Active
-  canvas-noise injection is on the post-v0.1 roadmap.
-- **browserforge integration.** Python's optional dep for
-  pre-canned realistic fingerprints isn't ported. Build a
-  `StealthProfile` from explicit `UserAgentMetadata` fields instead.
 - **OCR helpers.** Python's bundled OCR wrappers (`tesseract` /
   `easyocr`) for text-in-image extraction aren't ported. Pair Rust's
   `tab.screenshot()` with the `tesseract-rs` or `leptess` crate.

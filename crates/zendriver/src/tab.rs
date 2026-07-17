@@ -703,8 +703,11 @@ impl Tab {
     /// every same-origin sub-frame. Out-of-process iframes (OOPIFs) land in
     /// this map via the [`crate::frame::oopif`] observer path.
     ///
-    /// Order is unspecified ([`HashMap`] iteration); callers that need a
-    /// stable order should sort by [`Frame::id`] or [`Frame::url`].
+    /// Sorted by [`Frame::id`] for a deterministic, run-to-run-stable order
+    /// (the backing registry is a [`HashMap`], whose iteration order is not
+    /// stable on its own) — callers relying on cross-frame result ordering
+    /// (e.g. `FindBuilder::include_frames`) get consistent results across
+    /// calls with the same frame set.
     ///
     /// # Examples
     ///
@@ -719,7 +722,9 @@ impl Tab {
     /// # Ok(()) }
     /// ```
     pub async fn frames(&self) -> Result<Vec<Frame>> {
-        Ok(self.inner.frames.read().await.values().cloned().collect())
+        let mut frames: Vec<Frame> = self.inner.frames.read().await.values().cloned().collect();
+        frames.sort_by(|a, b| a.id().cmp(b.id()));
+        Ok(frames)
     }
 
     /// First frame in [`Tab::frames`] whose URL contains `url_substr`.
@@ -3787,6 +3792,57 @@ mod tests {
         assert!(
             frames_after.is_empty(),
             "expected registry to drain after detach event",
+        );
+
+        conn.shutdown();
+    }
+
+    /// `Tab::frames()` sorts by [`Frame::id`] regardless of registry
+    /// (insertion/`HashMap`) order, so cross-frame callers like
+    /// `FindBuilder::include_frames` see a deterministic, run-to-run-stable
+    /// order instead of `HashMap::values()`'s unspecified iteration order.
+    #[tokio::test]
+    async fn frames_are_sorted_by_id_regardless_of_attach_order() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let id_enable =
+            tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Page.enable"))
+                .await
+                .expect("frame lifecycle did not send Page.enable within 2s");
+        mock.reply(id_enable, json!({})).await;
+
+        // Attach frames out of lexical order: "FC", "FA", "FB". Each gets
+        // its own `parentFrameId` — sharing one would trip the lifecycle
+        // subscriber's same-parent/empty-url "stale provisional sibling"
+        // sweep (see `frame::lifecycle::run`), which is unrelated to what
+        // this test is exercising.
+        for (frame_id, parent_id) in [("FC", "FROOT1"), ("FA", "FROOT2"), ("FB", "FROOT3")] {
+            mock.emit_event_for_session(
+                "Page.frameAttached",
+                json!({
+                    "frameId": frame_id,
+                    "parentFrameId": parent_id,
+                }),
+                "S1",
+            )
+            .await;
+        }
+
+        for _ in 0..50 {
+            if tab.inner.frames.read().await.len() == 3 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let frames = tab.frames().await.unwrap();
+        let ids: Vec<&str> = frames.iter().map(Frame::id).collect();
+        assert_eq!(
+            ids,
+            vec!["FA", "FB", "FC"],
+            "frames() should be sorted by id, not HashMap/attach order"
         );
 
         conn.shutdown();

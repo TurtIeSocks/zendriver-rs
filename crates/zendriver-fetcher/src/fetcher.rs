@@ -12,15 +12,21 @@ use crate::cache::{binary_path, default_cache_dir};
 use crate::download::download;
 use crate::error::FetcherError;
 use crate::extract::extract;
-use crate::manifest::fetch_manifest_from;
+use crate::manifest::{fetch_channels_manifest_from, fetch_manifest_from};
 use crate::platform::Platform;
-use crate::resolver::resolve_download_url;
-use crate::version::VersionSpec;
+use crate::resolver::{resolve_channel_download_url, resolve_download_url};
+use crate::version::{Channel, VersionSpec};
 use crate::{FetcherPhase, FetcherProgress};
 
-/// Canonical Chrome for Testing manifest URL.
+/// Canonical Chrome for Testing manifest URL — flat version history,
+/// stable channel only.
 pub(crate) const DEFAULT_CFT_URL: &str =
     "https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json";
+
+/// Canonical Chrome for Testing per-channel manifest URL — used to resolve
+/// [`VersionSpec::Channel`] for the `Beta`/`Dev`/`Canary` channels (`Stable`
+/// resolves through [`DEFAULT_CFT_URL`] like [`VersionSpec::Latest`]).
+pub(crate) const DEFAULT_CFT_CHANNELS_URL: &str = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json";
 
 /// Chrome for Testing binary downloader.
 ///
@@ -119,6 +125,13 @@ impl Fetcher {
 
     /// Override the CFT manifest URL. Test seam — `#[doc(hidden)]` so users
     /// don't accidentally point at a fork.
+    ///
+    /// Used for whichever manifest [`Fetcher::version`] resolves against:
+    /// the flat `known-good-versions-with-downloads.json` shape for
+    /// [`VersionSpec::Latest`]/[`VersionSpec::Stable`]/
+    /// [`VersionSpec::Explicit`]/[`VersionSpec::Channel(Channel::Stable)`](VersionSpec::Channel),
+    /// or the per-channel `last-known-good-versions-with-downloads.json`
+    /// shape for [`VersionSpec::Channel`]'s `Beta`/`Dev`/`Canary` variants.
     #[doc(hidden)]
     pub fn manifest_url(mut self, url: impl Into<String>) -> Self {
         self.manifest_url = Some(url.into());
@@ -177,12 +190,26 @@ impl Fetcher {
             .or_else(Platform::auto_detect)
             .ok_or(FetcherError::UnsupportedPlatform)?;
         let progress_cb = self.progress_cb;
-        let manifest_url = self.manifest_url.unwrap_or_else(|| DEFAULT_CFT_URL.into());
 
-        // Phase 1: resolve.
+        // Phase 1: resolve. `Beta`/`Dev`/`Canary` track their own latest
+        // known-good build, so they resolve through the per-channel
+        // manifest instead of the flat stable-only one; every other spec
+        // (including `Channel::Stable`) uses the flat manifest.
         emit(&progress_cb, FetcherPhase::Resolving, 0, None);
-        let manifest = fetch_manifest_from(&manifest_url).await?;
-        let (version, url) = resolve_download_url(&manifest, &self.version, platform).await?;
+        let (version, url) = match self.version {
+            VersionSpec::Channel(channel @ (Channel::Beta | Channel::Dev | Channel::Canary)) => {
+                let manifest_url = self
+                    .manifest_url
+                    .unwrap_or_else(|| DEFAULT_CFT_CHANNELS_URL.into());
+                let manifest = fetch_channels_manifest_from(&manifest_url).await?;
+                resolve_channel_download_url(&manifest, channel, platform).await?
+            }
+            ref spec => {
+                let manifest_url = self.manifest_url.unwrap_or_else(|| DEFAULT_CFT_URL.into());
+                let manifest = fetch_manifest_from(&manifest_url).await?;
+                resolve_download_url(&manifest, spec, platform).await?
+            }
+        };
 
         // Compute final layout + cache hit check.
         tokio::fs::create_dir_all(&cache_dir).await?;
@@ -503,5 +530,72 @@ mod tests {
         // Tmp zip cleaned up; extraction never ran so no version dir.
         assert!(!cache_root.path().join("120.0.6099.234.tmp.zip").exists());
         assert!(!cache_root.path().join("120.0.6099.234").exists());
+    }
+
+    /// End-to-end for a non-stable channel: `VersionSpec::Channel(Channel::Beta)`
+    /// should resolve through the per-channel manifest shape (`channels: {
+    /// "Beta": {...} }`) — not the flat `versions: [...]` manifest — then
+    /// download + extract exactly like the `Latest`/`Stable` path.
+    #[tokio::test]
+    async fn ensure_chrome_resolves_beta_channel_from_channels_manifest() {
+        let server = MockServer::start().await;
+        let sentinel = b"#!/bin/sh\necho stub-chrome-beta\n";
+        let zip_bytes = build_stub_chrome_zip(sentinel);
+
+        let channels_json = format!(
+            r#"{{
+                "timestamp": "2026-07-16T00:00:00.000Z",
+                "channels": {{
+                    "Beta": {{
+                        "channel": "Beta",
+                        "version": "121.0.6100.10",
+                        "revision": "1235",
+                        "downloads": {{
+                            "chrome": [
+                                {{"platform": "linux64", "url": "{server}/chrome-beta.zip"}}
+                            ]
+                        }}
+                    }}
+                }}
+            }}"#,
+            server = server.uri()
+        );
+
+        Mock::given(method("GET"))
+            .and(path("/channels.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(channels_json))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/chrome-beta.zip"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Content-Length", zip_bytes.len().to_string().as_str())
+                    .set_body_bytes(zip_bytes),
+            )
+            .mount(&server)
+            .await;
+
+        let cache_root = tempfile::tempdir().unwrap();
+        let channels_url = format!("{}/channels.json", server.uri());
+
+        let bin_path = Fetcher::new()
+            .cache_dir(cache_root.path())
+            .platform(Platform::LinuxX64)
+            .version(VersionSpec::Channel(Channel::Beta))
+            .manifest_url(&channels_url)
+            .ensure_chrome()
+            .await
+            .unwrap();
+
+        assert_eq!(
+            bin_path,
+            cache_root
+                .path()
+                .join("121.0.6100.10/chrome-linux64/chrome")
+        );
+        let extracted = tokio::fs::read(&bin_path).await.unwrap();
+        assert_eq!(extracted, sentinel);
     }
 }
