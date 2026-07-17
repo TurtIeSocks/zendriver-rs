@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.5.3] - 2026-07-17
+
+### Added
+
+- Derive representative timezone from country in geo::persona
+
+
 ## [0.5.2] - 2026-07-16
 
 

@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.24] - 2026-07-17
+
+### Fixed
+
+- Explicit persona fields win over geo-derived (locale + timezone)
+
+
 ## [0.2.23] - 2026-07-16
 
 ### Added
