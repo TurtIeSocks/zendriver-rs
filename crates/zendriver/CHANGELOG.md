@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.27] - 2026-07-17
+
+### Fixed
+
+- Narrow text_regex matches to the innermost element (was returning ancestors)
+
+
 ## [0.2.26] - 2026-07-17
 
 ### Fixed
