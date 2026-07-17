@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.1.11] - 2026-07-17
+
+### Fixed
+
+- Use public-suffix list for cookie_domain (co.uk etc.)
+
+
 ## [0.1.10] - 2026-07-17
 
 
