@@ -6432,7 +6432,7 @@ pub fn zendriver::IpApiResolver::timeout(self, core::time::Duration) -> Self
 impl core::default::Default for zendriver::IpApiResolver
 pub fn zendriver::IpApiResolver::default() -> Self
 impl zendriver_stealth::geo::GeoResolver for zendriver::IpApiResolver
-pub fn zendriver::IpApiResolver::country<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<zendriver_stealth::geo::Country>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn zendriver::IpApiResolver::resolve<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::option::Option<zendriver_stealth::geo::ResolvedGeo>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 impl core::marker::Freeze for zendriver::IpApiResolver
 impl core::marker::Send for zendriver::IpApiResolver
 impl core::marker::Sync for zendriver::IpApiResolver

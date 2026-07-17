@@ -186,11 +186,19 @@ browser is routed through a rotating or third-party proxy pool and you want
 the locale to match wherever that proxy happens to exit — use
 [`BrowserBuilder::geo_auto`] instead. It probes the exit IP through a bundled
 [`IpApiResolver`] (a proxied GET against `ip-api.com`) and folds the resulting
-country's locale/languages/timezone into the persona overlay, with the exact
-same precedence as `geo_locale`: an explicit `.persona(..)`/`.persona_overlay(..)`
-locale always wins and skips the probe entirely. The same representative-zone
-caveat above applies — the resolved country's timezone is a single
-representative IANA zone, not the exit IP's precise local zone.
+country's locale/languages into the persona overlay, with the exact same
+precedence as `geo_locale`: an explicit `.persona(..)`/`.persona_overlay(..)`
+locale always wins and skips the probe entirely.
+
+**Timezone precision beats `geo_locale` here:** `ip-api.com`'s response
+carries the exit IP's exact IANA `timezone`, not just its country, so
+`geo_auto` uses that EXACT zone instead of the country-representative one —
+multi-timezone countries (US, RU, CA, AU, BR, ...) get the visitor's real
+local zone, not an approximation. (A custom [`GeoResolver`] that can't
+determine an exact zone returns `timezone: None`, and `geo_auto` falls back to
+the same country-representative zone `geo_locale` uses.) Precedence:
+explicit `.persona(..)`/`.persona_overlay(..)` timezone > exact probe
+timezone > country-representative timezone.
 
 ```rust,no_run
 use zendriver::Browser;
@@ -230,20 +238,26 @@ country matches the exit IP Chrome actually sees.
 Swap the bundled `ip-api.com` probe for your own service, an offline
 MaxMind-style DB, or a test double by implementing
 [`zendriver_stealth::geo::GeoResolver`] and passing it to
-[`BrowserBuilder::geo_resolver`]:
+[`BrowserBuilder::geo_resolver`]. `resolve()` returns a
+[`ResolvedGeo`][`zendriver_stealth::geo::ResolvedGeo`] — the country plus an
+optional exact `timezone`; return `timezone: None` if your source can't
+determine one more precise than the country-representative zone:
 
 ```rust,no_run
 use async_trait::async_trait;
 use zendriver::Browser;
-use zendriver_stealth::geo::{Country, GeoResolver};
+use zendriver_stealth::geo::{Country, GeoResolver, ResolvedGeo};
 
 struct MyResolver;
 
 #[async_trait]
 impl GeoResolver for MyResolver {
-    async fn country(&self) -> Option<Country> {
+    async fn resolve(&self) -> Option<ResolvedGeo> {
         // Query your own service / offline DB instead of ip-api.com.
-        Country::try_from("DE").ok()
+        Some(ResolvedGeo {
+            country: Country::try_from("DE").ok()?,
+            timezone: Some("Europe/Berlin".to_string()),
+        })
     }
 }
 
@@ -261,6 +275,7 @@ called wins — both set the same underlying resolver slot).
 [`IpApiResolver`]: https://docs.rs/zendriver/latest/zendriver/struct.IpApiResolver.html
 [`IpApiResolver::endpoint`]: https://docs.rs/zendriver/latest/zendriver/struct.IpApiResolver.html#method.endpoint
 [`zendriver_stealth::geo::GeoResolver`]: https://docs.rs/zendriver-stealth/latest/zendriver_stealth/geo/trait.GeoResolver.html
+[`zendriver_stealth::geo::ResolvedGeo`]: https://docs.rs/zendriver-stealth/latest/zendriver_stealth/geo/struct.ResolvedGeo.html
 
 ## JSON persona (`try_from_json`)
 

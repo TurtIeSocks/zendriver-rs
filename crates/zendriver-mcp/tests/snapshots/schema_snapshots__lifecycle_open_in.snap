@@ -13,7 +13,7 @@ properties:
       - boolean
       - "null"
   geo_auto:
-    description: "Auto-derive `locale`/`languages` from the exit IP's country via a\nproxied probe to an IP-geolocation service (default `ip-api.com`).\nOpt-in; makes at most ONE outbound HTTP request, at launch, and only\nwhen this is `true`. Mirrors `proxy` above when both are set, so the\nprobe reports the same exit IP Chrome will actually use. Overridden by\nan explicit `persona`/locale, which also skips the probe. Always\npresent in the schema so the wire shape is feature-stable; only takes\neffect when the server is built with the `geo` feature (otherwise\nignored — a warning is logged)."
+    description: "Auto-derive `locale`/`languages`/`timezone` from the exit IP via a\nproxied probe to an IP-geolocation service (default `ip-api.com`).\nOpt-in; makes at most ONE outbound HTTP request, at launch, and only\nwhen this is `true`. Mirrors `proxy` above when both are set, so the\nprobe reports the same exit IP Chrome will actually use. The resolved\ntimezone is the EXACT IANA zone the probe reports for the exit IP\n(not a country-representative one), so multi-timezone countries (US,\nRU, CA, AU, BR, ...) get the visitor's real local zone. Overridden by\nan explicit `persona`/locale, which also skips the probe. Always\npresent in the schema so the wire shape is feature-stable; only takes\neffect when the server is built with the `geo` feature (otherwise\nignored — a warning is logged)."
     type: boolean
     default: false
   geo_endpoint:
