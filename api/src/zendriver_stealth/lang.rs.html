@@ -75,60 +75,61 @@
 <a href=#75 id=75 data-nosnippet>75</a>            timezone: <span class="prelude-val">None</span>,
 <a href=#76 id=76 data-nosnippet>76</a>            locale: <span class="prelude-val">None</span>,
 <a href=#77 id=77 data-nosnippet>77</a>            languages: <span class="prelude-val">None</span>,
-<a href=#78 id=78 data-nosnippet>78</a>        }
-<a href=#79 id=79 data-nosnippet>79</a>    }
-<a href=#80 id=80 data-nosnippet>80</a>
-<a href=#81 id=81 data-nosnippet>81</a>    <span class="attr">#[test]
-<a href=#82 id=82 data-nosnippet>82</a>    </span><span class="kw">fn </span>resolve_precedence() {
-<a href=#83 id=83 data-nosnippet>83</a>        <span class="kw">let </span>fp = bare_fingerprint();
-<a href=#84 id=84 data-nosnippet>84</a>
-<a href=#85 id=85 data-nosnippet>85</a>        <span class="comment">// persona.languages wins
-<a href=#86 id=86 data-nosnippet>86</a>        </span><span class="kw">let </span>p = <span class="kw">crate</span>::Persona {
-<a href=#87 id=87 data-nosnippet>87</a>            languages: <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="string">"es-ES"</span>.into(), <span class="string">"es"</span>.into()]),
-<a href=#88 id=88 data-nosnippet>88</a>            ..Default::default()
-<a href=#89 id=89 data-nosnippet>89</a>        };
-<a href=#90 id=90 data-nosnippet>90</a>        <span class="macro">assert_eq!</span>(<span class="kw">super</span>::resolve_languages(<span class="kw-2">&amp;</span>p, <span class="kw-2">&amp;</span>fp), <span class="macro">vec!</span>[<span class="string">"es-ES"</span>, <span class="string">"es"</span>]);
-<a href=#91 id=91 data-nosnippet>91</a>
-<a href=#92 id=92 data-nosnippet>92</a>        <span class="comment">// derive from locale: the fr-FR regression (was hardcoded "en")
-<a href=#93 id=93 data-nosnippet>93</a>        </span><span class="kw">let </span>p = <span class="kw">crate</span>::Persona {
-<a href=#94 id=94 data-nosnippet>94</a>            locale: <span class="prelude-val">Some</span>(<span class="string">"fr-FR"</span>.into()),
-<a href=#95 id=95 data-nosnippet>95</a>            ..Default::default()
-<a href=#96 id=96 data-nosnippet>96</a>        };
-<a href=#97 id=97 data-nosnippet>97</a>        <span class="macro">assert_eq!</span>(<span class="kw">super</span>::resolve_languages(<span class="kw-2">&amp;</span>p, <span class="kw-2">&amp;</span>fp), <span class="macro">vec!</span>[<span class="string">"fr-FR"</span>, <span class="string">"fr"</span>]);
-<a href=#98 id=98 data-nosnippet>98</a>
-<a href=#99 id=99 data-nosnippet>99</a>        <span class="comment">// bare locale -&gt; single entry
-<a href=#100 id=100 data-nosnippet>100</a>        </span><span class="kw">let </span>p = <span class="kw">crate</span>::Persona {
-<a href=#101 id=101 data-nosnippet>101</a>            locale: <span class="prelude-val">Some</span>(<span class="string">"en"</span>.into()),
-<a href=#102 id=102 data-nosnippet>102</a>            ..Default::default()
-<a href=#103 id=103 data-nosnippet>103</a>        };
-<a href=#104 id=104 data-nosnippet>104</a>        <span class="macro">assert_eq!</span>(<span class="kw">super</span>::resolve_languages(<span class="kw-2">&amp;</span>p, <span class="kw-2">&amp;</span>fp), <span class="macro">vec!</span>[<span class="string">"en"</span>]);
-<a href=#105 id=105 data-nosnippet>105</a>
-<a href=#106 id=106 data-nosnippet>106</a>        <span class="comment">// nothing set -&gt; default
-<a href=#107 id=107 data-nosnippet>107</a>        </span><span class="kw">let </span>p = <span class="kw">crate</span>::Persona::default();
-<a href=#108 id=108 data-nosnippet>108</a>        <span class="macro">assert_eq!</span>(<span class="kw">super</span>::resolve_languages(<span class="kw-2">&amp;</span>p, <span class="kw-2">&amp;</span>fp), <span class="macro">vec!</span>[<span class="string">"en-US"</span>, <span class="string">"en"</span>]);
-<a href=#109 id=109 data-nosnippet>109</a>    }
-<a href=#110 id=110 data-nosnippet>110</a>
-<a href=#111 id=111 data-nosnippet>111</a>    <span class="attr">#[test]
-<a href=#112 id=112 data-nosnippet>112</a>    </span><span class="kw">fn </span>formats_q_weights() {
-<a href=#113 id=113 data-nosnippet>113</a>        <span class="macro">assert_eq!</span>(accept_language(<span class="kw-2">&amp;</span>v(<span class="kw-2">&amp;</span>[<span class="string">"en-US"</span>, <span class="string">"en"</span>])), <span class="string">"en-US,en;q=0.9"</span>);
-<a href=#114 id=114 data-nosnippet>114</a>        <span class="macro">assert_eq!</span>(
-<a href=#115 id=115 data-nosnippet>115</a>            accept_language(<span class="kw-2">&amp;</span>v(<span class="kw-2">&amp;</span>[<span class="string">"de-DE"</span>, <span class="string">"de"</span>, <span class="string">"en"</span>])),
-<a href=#116 id=116 data-nosnippet>116</a>            <span class="string">"de-DE,de;q=0.9,en;q=0.8"
-<a href=#117 id=117 data-nosnippet>117</a>        </span>);
-<a href=#118 id=118 data-nosnippet>118</a>    }
-<a href=#119 id=119 data-nosnippet>119</a>
-<a href=#120 id=120 data-nosnippet>120</a>    <span class="attr">#[test]
-<a href=#121 id=121 data-nosnippet>121</a>    </span><span class="kw">fn </span>single_and_empty() {
-<a href=#122 id=122 data-nosnippet>122</a>        <span class="macro">assert_eq!</span>(accept_language(<span class="kw-2">&amp;</span>v(<span class="kw-2">&amp;</span>[<span class="string">"fr-FR"</span>])), <span class="string">"fr-FR"</span>);
-<a href=#123 id=123 data-nosnippet>123</a>        <span class="macro">assert_eq!</span>(accept_language(<span class="kw-2">&amp;</span>[]), <span class="string">""</span>);
-<a href=#124 id=124 data-nosnippet>124</a>    }
-<a href=#125 id=125 data-nosnippet>125</a>
-<a href=#126 id=126 data-nosnippet>126</a>    <span class="attr">#[test]
-<a href=#127 id=127 data-nosnippet>127</a>    </span><span class="kw">fn </span>dedups_and_floors_q() {
-<a href=#128 id=128 data-nosnippet>128</a>        <span class="macro">assert_eq!</span>(accept_language(<span class="kw-2">&amp;</span>v(<span class="kw-2">&amp;</span>[<span class="string">"en"</span>, <span class="string">"en"</span>, <span class="string">"fr"</span>])), <span class="string">"en,fr;q=0.9"</span>);
-<a href=#129 id=129 data-nosnippet>129</a>        <span class="kw">let </span>many: Vec&lt;String&gt; = (<span class="number">0</span>..<span class="number">12</span>).map(|i| <span class="macro">format!</span>(<span class="string">"l{i}"</span>)).collect();
-<a href=#130 id=130 data-nosnippet>130</a>        <span class="kw">let </span>out = accept_language(<span class="kw-2">&amp;</span>many);
-<a href=#131 id=131 data-nosnippet>131</a>        <span class="macro">assert!</span>(out.ends_with(<span class="string">"l11;q=0.1"</span>), <span class="string">"q must floor at 0.1: {out}"</span>);
-<a href=#132 id=132 data-nosnippet>132</a>    }
-<a href=#133 id=133 data-nosnippet>133</a>}
+<a href=#78 id=78 data-nosnippet>78</a>            screen: <span class="prelude-val">None</span>,
+<a href=#79 id=79 data-nosnippet>79</a>        }
+<a href=#80 id=80 data-nosnippet>80</a>    }
+<a href=#81 id=81 data-nosnippet>81</a>
+<a href=#82 id=82 data-nosnippet>82</a>    <span class="attr">#[test]
+<a href=#83 id=83 data-nosnippet>83</a>    </span><span class="kw">fn </span>resolve_precedence() {
+<a href=#84 id=84 data-nosnippet>84</a>        <span class="kw">let </span>fp = bare_fingerprint();
+<a href=#85 id=85 data-nosnippet>85</a>
+<a href=#86 id=86 data-nosnippet>86</a>        <span class="comment">// persona.languages wins
+<a href=#87 id=87 data-nosnippet>87</a>        </span><span class="kw">let </span>p = <span class="kw">crate</span>::Persona {
+<a href=#88 id=88 data-nosnippet>88</a>            languages: <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="string">"es-ES"</span>.into(), <span class="string">"es"</span>.into()]),
+<a href=#89 id=89 data-nosnippet>89</a>            ..Default::default()
+<a href=#90 id=90 data-nosnippet>90</a>        };
+<a href=#91 id=91 data-nosnippet>91</a>        <span class="macro">assert_eq!</span>(<span class="kw">super</span>::resolve_languages(<span class="kw-2">&amp;</span>p, <span class="kw-2">&amp;</span>fp), <span class="macro">vec!</span>[<span class="string">"es-ES"</span>, <span class="string">"es"</span>]);
+<a href=#92 id=92 data-nosnippet>92</a>
+<a href=#93 id=93 data-nosnippet>93</a>        <span class="comment">// derive from locale: the fr-FR regression (was hardcoded "en")
+<a href=#94 id=94 data-nosnippet>94</a>        </span><span class="kw">let </span>p = <span class="kw">crate</span>::Persona {
+<a href=#95 id=95 data-nosnippet>95</a>            locale: <span class="prelude-val">Some</span>(<span class="string">"fr-FR"</span>.into()),
+<a href=#96 id=96 data-nosnippet>96</a>            ..Default::default()
+<a href=#97 id=97 data-nosnippet>97</a>        };
+<a href=#98 id=98 data-nosnippet>98</a>        <span class="macro">assert_eq!</span>(<span class="kw">super</span>::resolve_languages(<span class="kw-2">&amp;</span>p, <span class="kw-2">&amp;</span>fp), <span class="macro">vec!</span>[<span class="string">"fr-FR"</span>, <span class="string">"fr"</span>]);
+<a href=#99 id=99 data-nosnippet>99</a>
+<a href=#100 id=100 data-nosnippet>100</a>        <span class="comment">// bare locale -&gt; single entry
+<a href=#101 id=101 data-nosnippet>101</a>        </span><span class="kw">let </span>p = <span class="kw">crate</span>::Persona {
+<a href=#102 id=102 data-nosnippet>102</a>            locale: <span class="prelude-val">Some</span>(<span class="string">"en"</span>.into()),
+<a href=#103 id=103 data-nosnippet>103</a>            ..Default::default()
+<a href=#104 id=104 data-nosnippet>104</a>        };
+<a href=#105 id=105 data-nosnippet>105</a>        <span class="macro">assert_eq!</span>(<span class="kw">super</span>::resolve_languages(<span class="kw-2">&amp;</span>p, <span class="kw-2">&amp;</span>fp), <span class="macro">vec!</span>[<span class="string">"en"</span>]);
+<a href=#106 id=106 data-nosnippet>106</a>
+<a href=#107 id=107 data-nosnippet>107</a>        <span class="comment">// nothing set -&gt; default
+<a href=#108 id=108 data-nosnippet>108</a>        </span><span class="kw">let </span>p = <span class="kw">crate</span>::Persona::default();
+<a href=#109 id=109 data-nosnippet>109</a>        <span class="macro">assert_eq!</span>(<span class="kw">super</span>::resolve_languages(<span class="kw-2">&amp;</span>p, <span class="kw-2">&amp;</span>fp), <span class="macro">vec!</span>[<span class="string">"en-US"</span>, <span class="string">"en"</span>]);
+<a href=#110 id=110 data-nosnippet>110</a>    }
+<a href=#111 id=111 data-nosnippet>111</a>
+<a href=#112 id=112 data-nosnippet>112</a>    <span class="attr">#[test]
+<a href=#113 id=113 data-nosnippet>113</a>    </span><span class="kw">fn </span>formats_q_weights() {
+<a href=#114 id=114 data-nosnippet>114</a>        <span class="macro">assert_eq!</span>(accept_language(<span class="kw-2">&amp;</span>v(<span class="kw-2">&amp;</span>[<span class="string">"en-US"</span>, <span class="string">"en"</span>])), <span class="string">"en-US,en;q=0.9"</span>);
+<a href=#115 id=115 data-nosnippet>115</a>        <span class="macro">assert_eq!</span>(
+<a href=#116 id=116 data-nosnippet>116</a>            accept_language(<span class="kw-2">&amp;</span>v(<span class="kw-2">&amp;</span>[<span class="string">"de-DE"</span>, <span class="string">"de"</span>, <span class="string">"en"</span>])),
+<a href=#117 id=117 data-nosnippet>117</a>            <span class="string">"de-DE,de;q=0.9,en;q=0.8"
+<a href=#118 id=118 data-nosnippet>118</a>        </span>);
+<a href=#119 id=119 data-nosnippet>119</a>    }
+<a href=#120 id=120 data-nosnippet>120</a>
+<a href=#121 id=121 data-nosnippet>121</a>    <span class="attr">#[test]
+<a href=#122 id=122 data-nosnippet>122</a>    </span><span class="kw">fn </span>single_and_empty() {
+<a href=#123 id=123 data-nosnippet>123</a>        <span class="macro">assert_eq!</span>(accept_language(<span class="kw-2">&amp;</span>v(<span class="kw-2">&amp;</span>[<span class="string">"fr-FR"</span>])), <span class="string">"fr-FR"</span>);
+<a href=#124 id=124 data-nosnippet>124</a>        <span class="macro">assert_eq!</span>(accept_language(<span class="kw-2">&amp;</span>[]), <span class="string">""</span>);
+<a href=#125 id=125 data-nosnippet>125</a>    }
+<a href=#126 id=126 data-nosnippet>126</a>
+<a href=#127 id=127 data-nosnippet>127</a>    <span class="attr">#[test]
+<a href=#128 id=128 data-nosnippet>128</a>    </span><span class="kw">fn </span>dedups_and_floors_q() {
+<a href=#129 id=129 data-nosnippet>129</a>        <span class="macro">assert_eq!</span>(accept_language(<span class="kw-2">&amp;</span>v(<span class="kw-2">&amp;</span>[<span class="string">"en"</span>, <span class="string">"en"</span>, <span class="string">"fr"</span>])), <span class="string">"en,fr;q=0.9"</span>);
+<a href=#130 id=130 data-nosnippet>130</a>        <span class="kw">let </span>many: Vec&lt;String&gt; = (<span class="number">0</span>..<span class="number">12</span>).map(|i| <span class="macro">format!</span>(<span class="string">"l{i}"</span>)).collect();
+<a href=#131 id=131 data-nosnippet>131</a>        <span class="kw">let </span>out = accept_language(<span class="kw-2">&amp;</span>many);
+<a href=#132 id=132 data-nosnippet>132</a>        <span class="macro">assert!</span>(out.ends_with(<span class="string">"l11;q=0.1"</span>), <span class="string">"q must floor at 0.1: {out}"</span>);
+<a href=#133 id=133 data-nosnippet>133</a>    }
+<a href=#134 id=134 data-nosnippet>134</a>}
 </code></pre></div></section></main></body></html>
