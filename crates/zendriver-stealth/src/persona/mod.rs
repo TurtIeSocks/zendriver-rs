@@ -6,7 +6,9 @@ pub mod surface;
 pub(crate) mod webgpu_adapter;
 
 pub use seed::Seed;
-pub use specs::{FontSpec, HardwareSpec, SurfaceCfg, UaSpec, WebglSpec, WebrtcSpec};
+pub use specs::{
+    FontSpec, HardwareSpec, ScreenSpec, SurfaceCfg, UaMetadata, UaSpec, WebglSpec, WebrtcSpec,
+};
 
 use std::sync::OnceLock;
 
@@ -49,6 +51,9 @@ pub struct Persona {
     /// [`locale`](Self::locale) — keeps `navigator.geolocation` in step with
     /// the exit IP's real location instead of leaking the host's.
     pub geolocation: Option<GeoPos>,
+    /// Screen / device-metrics override (`Emulation.setDeviceMetricsOverride`).
+    /// `None` → the observer's fixed 1920x1080 default (today's behavior).
+    pub screen: Option<ScreenSpec>,
     pub webgl: Option<WebglSpec>,
     pub webgpu: Option<SurfaceCfg>,
     pub canvas: Option<SurfaceCfg>,
@@ -120,13 +125,21 @@ impl Persona {
     pub fn overlay(self, over: Persona) -> Persona {
         Persona {
             platform: over.platform.or(self.platform),
-            ua: over.ua.or(self.ua),
+            // UA-CH composes field-wise (via `UaSpec::overlay`) rather than
+            // one side wholesale-replacing the other, so layering two
+            // personas can patch e.g. just `platform_version` without
+            // clobbering a base persona's `brands`.
+            ua: match (self.ua, over.ua) {
+                (Some(base), Some(add)) => Some(base.overlay(add)),
+                (base, add) => add.or(base),
+            },
             hardware_concurrency: over.hardware_concurrency.or(self.hardware_concurrency),
             device_memory_gb: over.device_memory_gb.or(self.device_memory_gb),
             timezone: over.timezone.or(self.timezone),
             locale: over.locale.or(self.locale),
             languages: over.languages.or(self.languages),
             geolocation: over.geolocation.or(self.geolocation),
+            screen: over.screen.or(self.screen),
             webgl: over.webgl.or(self.webgl),
             webgpu: over.webgpu.or(self.webgpu),
             canvas: over.canvas.or(self.canvas),
@@ -530,6 +543,109 @@ mod persona_tests {
         assert_eq!(geo.latitude, 10.0);
         assert_eq!(geo.longitude, 20.0);
         assert_eq!(geo.accuracy, None);
+    }
+
+    #[test]
+    fn persona_round_trips_ua_metadata_and_screen_json() {
+        let p = Persona {
+            ua: Some(UaSpec {
+                ua_string: Some("Mozilla/5.0 (Windows NT 10.0; Win64; x64)".into()),
+                ua_metadata: Some(UaMetadata {
+                    platform_version: Some("15.0.0".into()),
+                    architecture: Some("arm".into()),
+                    bitness: Some("64".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            screen: Some(ScreenSpec {
+                width: 1536,
+                height: 864,
+                device_pixel_ratio: 1.25,
+            }),
+            ..Persona::default()
+        };
+        let s = serde_json::to_string(&p).unwrap();
+        let back: Persona = serde_json::from_str(&s).unwrap();
+        assert_eq!(
+            back.ua
+                .as_ref()
+                .and_then(|u| u.ua_metadata.as_ref())
+                .and_then(|m| m.architecture.clone())
+                .as_deref(),
+            Some("arm")
+        );
+        assert_eq!(
+            back.screen,
+            Some(ScreenSpec {
+                width: 1536,
+                height: 864,
+                device_pixel_ratio: 1.25
+            })
+        );
+    }
+
+    #[test]
+    fn overlay_screen_some_wins_none_inherits() {
+        let base = Persona {
+            screen: Some(ScreenSpec {
+                width: 1920,
+                height: 1080,
+                device_pixel_ratio: 1.0,
+            }),
+            ..Persona::default()
+        };
+        let over = Persona {
+            screen: Some(ScreenSpec {
+                width: 1536,
+                height: 864,
+                device_pixel_ratio: 1.25,
+            }),
+            ..Persona::default()
+        };
+        let merged = base.clone().overlay(over);
+        assert_eq!(
+            merged.screen,
+            Some(ScreenSpec {
+                width: 1536,
+                height: 864,
+                device_pixel_ratio: 1.25
+            })
+        ); // some wins
+        let merged2 = base.overlay(Persona::default());
+        assert_eq!(
+            merged2.screen,
+            Some(ScreenSpec {
+                width: 1920,
+                height: 1080,
+                device_pixel_ratio: 1.0
+            })
+        ); // none inherits
+    }
+
+    #[test]
+    fn overlay_ua_composes_field_wise_not_whole_swap() {
+        // A base persona's `platform` override must survive an overlay that
+        // only sets `ua_string` — whole-swap semantics would have silently
+        // dropped it.
+        let base = Persona {
+            ua: Some(UaSpec {
+                platform: Some("Windows".into()),
+                ..Default::default()
+            }),
+            ..Persona::default()
+        };
+        let over = Persona {
+            ua: Some(UaSpec {
+                ua_string: Some("custom-ua".into()),
+                ..Default::default()
+            }),
+            ..Persona::default()
+        };
+        let merged = base.overlay(over);
+        let ua = merged.ua.expect("ua merged");
+        assert_eq!(ua.platform.as_deref(), Some("Windows")); // inherited
+        assert_eq!(ua.ua_string.as_deref(), Some("custom-ua")); // over wins
     }
 
     #[test]

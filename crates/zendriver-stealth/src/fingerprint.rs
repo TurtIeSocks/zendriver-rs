@@ -1,10 +1,10 @@
 //! Fingerprint: composed UA + Sec-CH-UA metadata + system facts.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::Platform;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Brand {
     pub brand: String,
     pub version: String,
@@ -12,7 +12,7 @@ pub struct Brand {
 
 /// Sent to CDP as `Emulation.setUserAgentOverride.userAgentMetadata`.
 /// Mirrors the [W3C UA-CH spec](https://wicg.github.io/ua-client-hints/).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct UserAgentMetadata {
     pub brands: Vec<Brand>,
     #[serde(rename = "fullVersionList")]
@@ -103,6 +103,11 @@ pub struct Fingerprint {
     pub timezone: Option<String>,
     pub locale: Option<String>,
     pub languages: Option<Vec<String>>,
+    /// Screen / device-metrics override resolved from
+    /// [`StealthProfile::screen`](crate::StealthProfile::screen). `None` by
+    /// default (`auto_detect` never probes a screen size) — the observer's
+    /// fixed 1920x1080 default is untouched until this is explicitly set.
+    pub screen: Option<crate::persona::specs::ScreenSpec>,
 }
 
 impl Fingerprint {
@@ -132,6 +137,7 @@ impl Fingerprint {
             timezone: None,
             locale: None,
             languages: None,
+            screen: None,
         })
     }
 
@@ -603,6 +609,7 @@ mod fingerprint_tests {
             timezone: None,
             locale: None,
             languages: None,
+            screen: None,
         };
         fp.recompose();
         assert!(fp.ua_string.contains("Windows NT 10.0"));

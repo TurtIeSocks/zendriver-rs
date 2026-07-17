@@ -4,7 +4,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::StealthError;
-use crate::fingerprint::Fingerprint;
+use crate::fingerprint::{Fingerprint, UserAgentMetadata};
+use crate::persona::specs::ScreenSpec;
 
 /// Stealth modes shipped by the library.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +71,8 @@ pub(crate) struct PerFieldOverride {
     pub locale: Option<String>,
     pub languages: Option<Vec<String>>,
     pub ua_string: Option<String>,
+    pub ua_metadata: Option<UserAgentMetadata>,
+    pub screen: Option<ScreenSpec>,
 }
 
 /// Stealth configuration passed to `BrowserBuilder::stealth(...)`.
@@ -245,6 +248,36 @@ impl StealthProfile {
         self.per_field.ua_string = Some(ua.into());
         self
     }
+    /// Override the reported UA-CH (`userAgentMetadata`) wholesale.
+    ///
+    /// Skips the composed-from-fingerprint step entirely — the resolved
+    /// [`Fingerprint::ua_metadata`] equals exactly what's passed here.
+    /// Prefer this over hand-composing individual UA-CH fields when you
+    /// need an exact, pre-built [`UserAgentMetadata`] (e.g. captured from a
+    /// real browser). For persona-driven, field-wise UA-CH overrides that
+    /// fall back to the derived value per sub-field, use a
+    /// [`Persona`](crate::Persona)'s `ua.ua_metadata`
+    /// ([`UaMetadata`](crate::UaMetadata)) instead, threaded via
+    /// [`StealthObserver::with_persona`](crate::StealthObserver::with_persona).
+    #[must_use]
+    pub fn user_agent_metadata(mut self, m: UserAgentMetadata) -> Self {
+        self.per_field.ua_metadata = Some(m);
+        self
+    }
+    /// Override the reported screen / device-metrics
+    /// (`Emulation.setDeviceMetricsOverride`) wholesale.
+    ///
+    /// Replaces the observer's fixed 1920x1080 default. Like
+    /// [`user_agent_metadata`](Self::user_agent_metadata), this is a
+    /// profile-level pin; a [`Persona`](crate::Persona)'s `screen` field
+    /// (threaded via
+    /// [`StealthObserver::with_persona`](crate::StealthObserver::with_persona))
+    /// takes precedence when both are set.
+    #[must_use]
+    pub fn screen(mut self, s: ScreenSpec) -> Self {
+        self.per_field.screen = Some(s);
+        self
+    }
     /// Toggle `Page.setBypassCSP`. Default `true` for [`spoofed`](Self::spoofed),
     /// `false` for [`native`](Self::native) / [`off`](Self::off).
     #[must_use]
@@ -333,6 +366,19 @@ impl StealthProfile {
         fp.recompose();
         if let Some(ref ua) = self.per_field.ua_string {
             fp.ua_string = ua.clone();
+        }
+        // Wholesale UA-CH pin: mirrors the `ua_string` override immediately
+        // above — when set, it REPLACES the recompose()-derived UAM outright
+        // (no field-wise fallback; that's what `Persona`'s `ua_metadata` is
+        // for, resolved in the observer against this fingerprint instead).
+        if let Some(ref uam) = self.per_field.ua_metadata {
+            fp.ua_metadata = uam.clone();
+        }
+        // Screen has no "derived" baseline (unlike UA-CH) — `Fingerprint`
+        // never had a screen concept before this, so leaving it `None` here
+        // is exactly today's behavior (the observer's fixed 1920x1080).
+        if let Some(s) = self.per_field.screen {
+            fp.screen = Some(s);
         }
         if let Some(ref tz) = self.per_field.timezone {
             fp.timezone = Some(tz.clone());
@@ -508,6 +554,7 @@ mod profile_tests {
             timezone: None,
             locale: None,
             languages: None,
+            screen: None,
         };
         let p = StealthProfile::native()
             .fingerprint(fp.clone())
@@ -533,11 +580,83 @@ mod profile_tests {
             timezone: None,
             locale: None,
             languages: None,
+            screen: None,
         };
         let profile = profile.fingerprint(fp);
         let resolved = profile
             .resolve_fingerprint(std::path::Path::new("/nonexistent-chrome"))
             .expect("resolve ok");
         assert_eq!(resolved.languages.unwrap(), vec!["fr-FR", "fr"]);
+    }
+
+    fn bare_fp() -> Fingerprint {
+        Fingerprint {
+            platform: Platform::Win32,
+            chrome_major: 120,
+            chrome_full: "120.0.6099.234".into(),
+            cpu_count: 8,
+            memory_gb: 8,
+            ua_string: String::new(),
+            ua_metadata: UserAgentMetadata::realistic(Platform::Win32, 120, "120.0.6099.234"),
+            timezone: None,
+            locale: None,
+            languages: None,
+            screen: None,
+        }
+    }
+
+    #[test]
+    fn custom_ua_metadata_replaces_recompose_derived_when_supplied() {
+        let custom = UserAgentMetadata::realistic(Platform::MacIntel, 150, "150.0.7500.0");
+        let profile = StealthProfile::native()
+            .fingerprint(bare_fp())
+            .user_agent_metadata(custom.clone());
+        let resolved = profile
+            .resolve_fingerprint(std::path::Path::new("/nonexistent"))
+            .unwrap();
+        // Equals the SUPPLIED value exactly, not the recompose()-derived one
+        // (which would be `realistic(Win32, 120, ...)` from `bare_fp()`).
+        assert_eq!(resolved.ua_metadata, custom);
+    }
+
+    #[test]
+    fn absent_ua_metadata_override_keeps_recompose_derived_behavior() {
+        let profile = StealthProfile::native().fingerprint(bare_fp());
+        let resolved = profile
+            .resolve_fingerprint(std::path::Path::new("/nonexistent"))
+            .unwrap();
+        // No override → today's behavior: recompose()-derived from platform
+        // + chrome_major, i.e. matches `UserAgentMetadata::realistic` for the
+        // fingerprint's own (unoverridden) platform/version.
+        assert_eq!(
+            resolved.ua_metadata,
+            UserAgentMetadata::realistic(Platform::Win32, 120, "120.0.6099.234")
+        );
+    }
+
+    #[test]
+    fn custom_screen_resolves_onto_fingerprint_when_supplied() {
+        let screen = ScreenSpec {
+            width: 1536,
+            height: 864,
+            device_pixel_ratio: 1.25,
+        };
+        let profile = StealthProfile::native()
+            .fingerprint(bare_fp())
+            .screen(screen);
+        let resolved = profile
+            .resolve_fingerprint(std::path::Path::new("/nonexistent"))
+            .unwrap();
+        assert_eq!(resolved.screen, Some(screen));
+    }
+
+    #[test]
+    fn absent_screen_override_leaves_fingerprint_screen_none() {
+        let profile = StealthProfile::native().fingerprint(bare_fp());
+        let resolved = profile
+            .resolve_fingerprint(std::path::Path::new("/nonexistent"))
+            .unwrap();
+        // No override → today's behavior: no screen field influence at all.
+        assert_eq!(resolved.screen, None);
     }
 }

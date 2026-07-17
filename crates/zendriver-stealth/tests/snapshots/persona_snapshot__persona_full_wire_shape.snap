@@ -11,6 +11,7 @@ expression: p
   "locale": null,
   "languages": null,
   "geolocation": null,
+  "screen": null,
   "webgl": null,
   "webgpu": null,
   "canvas": null,
