@@ -1,17 +1,18 @@
-//! `IpApiResolver`: derive the exit-IP country via a proxied HTTP probe.
+//! `IpApiResolver`: derive the exit-IP country (and exact timezone, when
+//! available) via a proxied HTTP probe.
 
 use std::time::Duration;
 
 use async_trait::async_trait;
-use zendriver_stealth::geo::{Country, GeoResolver};
+use zendriver_stealth::geo::{Country, GeoResolver, ResolvedGeo};
 
-/// Resolves the apparent country by querying an IP-geolocation service
-/// (default `http://ip-api.com/json` — **plaintext**; the proxy operator can
-/// tamper with the response in transit, so override [`Self::endpoint`] to an
-/// HTTPS service if response integrity matters for your threat model)
-/// through the browser's proxy. Opt-in via `BrowserBuilder::geo_auto`;
-/// endpoint overridable; swap the whole thing out with a custom
-/// [`GeoResolver`].
+/// Resolves the apparent country — and, when present, the exact IANA
+/// timezone — by querying an IP-geolocation service (default
+/// `http://ip-api.com/json` — **plaintext**; the proxy operator can tamper
+/// with the response in transit, so override [`Self::endpoint`] to an HTTPS
+/// service if response integrity matters for your threat model) through the
+/// browser's proxy. Opt-in via `BrowserBuilder::geo_auto`; endpoint
+/// overridable; swap the whole thing out with a custom [`GeoResolver`].
 pub struct IpApiResolver {
     endpoint: String,
     proxy: Option<String>,
@@ -44,7 +45,10 @@ impl IpApiResolver {
     /// is plaintext HTTP — a malicious or compromised proxy operator can
     /// observe or tamper with the response since it's routed through
     /// `with_proxy`; override to an HTTPS endpoint if you need integrity).
-    /// Must return a JSON body with a top-level `countryCode` string field.
+    /// Must return a JSON body with a top-level `countryCode` string field;
+    /// an optional top-level `timezone` string field (ip-api's exact IANA
+    /// zone for the exit IP) is used when present, falling back to the
+    /// country-representative zone otherwise.
     #[must_use]
     pub fn endpoint(mut self, url: impl Into<String>) -> Self {
         self.endpoint = url.into();
@@ -81,7 +85,7 @@ impl IpApiResolver {
 
 #[async_trait]
 impl GeoResolver for IpApiResolver {
-    async fn country(&self) -> Option<Country> {
+    async fn resolve(&self) -> Option<ResolvedGeo> {
         let mut builder = reqwest::Client::builder().timeout(self.timeout);
         if let Some(p) = &self.proxy {
             match reqwest::Proxy::all(p) {
@@ -111,13 +115,19 @@ impl GeoResolver for IpApiResolver {
         };
         let body: serde_json::Value = resp.json().await.ok()?;
         let cc = body.get("countryCode").and_then(|v| v.as_str())?;
-        match Country::try_from(cc) {
-            Ok(c) => Some(c),
+        let country = match Country::try_from(cc) {
+            Ok(c) => c,
             Err(_) => {
                 tracing::warn!(country = %cc, "geo probe: unrecognized country code");
-                None
+                return None;
             }
-        }
+        };
+        let timezone = body
+            .get("timezone")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        Some(ResolvedGeo { country, timezone })
     }
 }
 
@@ -135,7 +145,53 @@ mod tests {
             .mount(&server)
             .await;
         let r = IpApiResolver::new().endpoint(server.uri());
-        assert_eq!(r.country().await, Some(Country::try_from("DE").unwrap()));
+        assert_eq!(
+            r.resolve().await,
+            Some(ResolvedGeo {
+                country: Country::try_from("DE").unwrap(),
+                timezone: None,
+            })
+        );
+    }
+
+    /// A body carrying ip-api's `timezone` field must thread it through as
+    /// the EXACT probe timezone, not just the country.
+    #[tokio::test]
+    async fn resolves_exact_timezone_from_ipapi_json() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_string(r#"{"countryCode":"US","timezone":"America/Los_Angeles"}"#),
+            )
+            .mount(&server)
+            .await;
+        let r = IpApiResolver::new().endpoint(server.uri());
+        assert_eq!(
+            r.resolve().await,
+            Some(ResolvedGeo {
+                country: Country::try_from("US").unwrap(),
+                timezone: Some("America/Los_Angeles".to_string()),
+            })
+        );
+    }
+
+    /// A body with `countryCode` but no `timezone` field must yield
+    /// `timezone: None` (falls back to the country-representative zone
+    /// downstream), not an error.
+    #[tokio::test]
+    async fn missing_timezone_field_yields_none_timezone() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_string(r#"{"countryCode":"US"}"#),
+            )
+            .mount(&server)
+            .await;
+        let r = IpApiResolver::new().endpoint(server.uri());
+        let resolved = r.resolve().await.unwrap();
+        assert_eq!(resolved.country, Country::try_from("US").unwrap());
+        assert_eq!(resolved.timezone, None);
     }
 
     #[tokio::test]
@@ -146,7 +202,7 @@ mod tests {
             .mount(&server)
             .await;
         assert_eq!(
-            IpApiResolver::new().endpoint(server.uri()).country().await,
+            IpApiResolver::new().endpoint(server.uri()).resolve().await,
             None
         );
     }
@@ -162,7 +218,7 @@ mod tests {
     /// with a `Proxy-Authorization` header when `basic_auth` was set, so the
     /// mock server IS the thing that receives (and can assert on) that
     /// header. If `with_proxy`'s `auth` were dropped (the C1 bug), the mock
-    /// (which requires the header) would never match and `country()` would
+    /// (which requires the header) would never match and `resolve()` would
     /// return `None`.
     #[tokio::test]
     async fn threads_proxy_credentials_into_reqwest_proxy() {
@@ -178,7 +234,10 @@ mod tests {
         let r = IpApiResolver::new()
             .endpoint("http://geo-probe.invalid/json")
             .with_proxy(Some(proxy.uri()), Some(("bob".into(), "s3cret".into())));
-        assert_eq!(r.country().await, Some(Country::try_from("DE").unwrap()));
+        assert_eq!(
+            r.resolve().await.map(|g| g.country),
+            Some(Country::try_from("DE").unwrap())
+        );
     }
 
     /// Without credentials, the mock (which requires `Proxy-Authorization`)
@@ -199,7 +258,7 @@ mod tests {
             .endpoint("http://geo-probe.invalid/json")
             .with_proxy(Some(proxy.uri()), None);
         // No `Proxy-Authorization` header sent -> mock doesn't match -> 404
-        // from wiremock -> `.json()` fails -> `country()` yields `None`.
-        assert_eq!(r.country().await, None);
+        // from wiremock -> `.json()` fails -> `resolve()` yields `None`.
+        assert_eq!(r.resolve().await, None);
     }
 }
