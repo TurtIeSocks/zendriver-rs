@@ -607,7 +607,7 @@ pub zendriver::cookies::Cookie::domain: alloc::string::String
 pub zendriver::cookies::Cookie::expires: core::option::Option<f64>
 pub zendriver::cookies::Cookie::http_only: bool
 pub zendriver::cookies::Cookie::name: alloc::string::String
-pub zendriver::cookies::Cookie::partition_key: core::option::Option<alloc::string::String>
+pub zendriver::cookies::Cookie::partition_key: core::option::Option<zendriver::cookies::CookiePartitionKey>
 pub zendriver::cookies::Cookie::path: alloc::string::String
 pub zendriver::cookies::Cookie::priority: core::option::Option<zendriver::cookies::CookiePriority>
 pub zendriver::cookies::Cookie::same_party: core::option::Option<bool>
@@ -725,6 +725,67 @@ impl<T> typenum::type_operators::Same for zendriver::cookies::CookieJar
 pub type zendriver::cookies::CookieJar::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for zendriver::cookies::CookieJar where V: ppv_lite86::types::MultiLane<T>
 pub fn zendriver::cookies::CookieJar::vzip(self) -> V
+pub struct zendriver::cookies::CookiePartitionKey
+pub zendriver::cookies::CookiePartitionKey::has_cross_site_ancestor: bool
+pub zendriver::cookies::CookiePartitionKey::top_level_site: alloc::string::String
+impl zendriver::cookies::CookiePartitionKey
+pub fn zendriver::cookies::CookiePartitionKey::new(impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for zendriver::cookies::CookiePartitionKey
+pub fn zendriver::cookies::CookiePartitionKey::clone(&self) -> zendriver::cookies::CookiePartitionKey
+impl core::cmp::PartialEq for zendriver::cookies::CookiePartitionKey
+pub fn zendriver::cookies::CookiePartitionKey::eq(&self, &zendriver::cookies::CookiePartitionKey) -> bool
+impl core::convert::From<&str> for zendriver::cookies::CookiePartitionKey
+pub fn zendriver::cookies::CookiePartitionKey::from(&str) -> Self
+impl core::convert::From<alloc::string::String> for zendriver::cookies::CookiePartitionKey
+pub fn zendriver::cookies::CookiePartitionKey::from(alloc::string::String) -> Self
+impl core::default::Default for zendriver::cookies::CookiePartitionKey
+pub fn zendriver::cookies::CookiePartitionKey::default() -> zendriver::cookies::CookiePartitionKey
+impl core::fmt::Debug for zendriver::cookies::CookiePartitionKey
+pub fn zendriver::cookies::CookiePartitionKey::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for zendriver::cookies::CookiePartitionKey
+impl serde_core::ser::Serialize for zendriver::cookies::CookiePartitionKey
+pub fn zendriver::cookies::CookiePartitionKey::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for zendriver::cookies::CookiePartitionKey
+pub fn zendriver::cookies::CookiePartitionKey::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for zendriver::cookies::CookiePartitionKey
+impl core::marker::Send for zendriver::cookies::CookiePartitionKey
+impl core::marker::Sync for zendriver::cookies::CookiePartitionKey
+impl core::marker::Unpin for zendriver::cookies::CookiePartitionKey
+impl core::marker::UnsafeUnpin for zendriver::cookies::CookiePartitionKey
+impl core::panic::unwind_safe::RefUnwindSafe for zendriver::cookies::CookiePartitionKey
+impl core::panic::unwind_safe::UnwindSafe for zendriver::cookies::CookiePartitionKey
+impl<T, U> core::convert::Into<U> for zendriver::cookies::CookiePartitionKey where U: core::convert::From<T>
+pub fn zendriver::cookies::CookiePartitionKey::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for zendriver::cookies::CookiePartitionKey where U: core::convert::Into<T>
+pub type zendriver::cookies::CookiePartitionKey::Error = core::convert::Infallible
+pub fn zendriver::cookies::CookiePartitionKey::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for zendriver::cookies::CookiePartitionKey where U: core::convert::TryFrom<T>
+pub type zendriver::cookies::CookiePartitionKey::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn zendriver::cookies::CookiePartitionKey::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for zendriver::cookies::CookiePartitionKey where T: core::clone::Clone
+pub type zendriver::cookies::CookiePartitionKey::Owned = T
+pub fn zendriver::cookies::CookiePartitionKey::clone_into(&self, &mut T)
+pub fn zendriver::cookies::CookiePartitionKey::to_owned(&self) -> T
+impl<T> core::any::Any for zendriver::cookies::CookiePartitionKey where T: 'static + ?core::marker::Sized
+pub fn zendriver::cookies::CookiePartitionKey::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for zendriver::cookies::CookiePartitionKey where T: ?core::marker::Sized
+pub fn zendriver::cookies::CookiePartitionKey::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for zendriver::cookies::CookiePartitionKey where T: ?core::marker::Sized
+pub fn zendriver::cookies::CookiePartitionKey::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for zendriver::cookies::CookiePartitionKey where T: core::clone::Clone
+pub unsafe fn zendriver::cookies::CookiePartitionKey::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for zendriver::cookies::CookiePartitionKey
+pub fn zendriver::cookies::CookiePartitionKey::from(T) -> T
+impl<T> serde_core::de::DeserializeOwned for zendriver::cookies::CookiePartitionKey where T: for<'de> serde_core::de::Deserialize<'de>
+impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::cookies::CookiePartitionKey where T: ?core::marker::Sized
+pub fn zendriver::cookies::CookiePartitionKey::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::cookies::CookiePartitionKey::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for zendriver::cookies::CookiePartitionKey
+impl<T> tracing::instrument::WithSubscriber for zendriver::cookies::CookiePartitionKey
+impl<T> typenum::type_operators::Same for zendriver::cookies::CookiePartitionKey
+pub type zendriver::cookies::CookiePartitionKey::Output = T
+impl<V, T> ppv_lite86::types::VZip<V> for zendriver::cookies::CookiePartitionKey where V: ppv_lite86::types::MultiLane<T>
+pub fn zendriver::cookies::CookiePartitionKey::vzip(self) -> V
 pub mod zendriver::element
 pub mod zendriver::element::actions
 pub struct zendriver::element::actions::ClickOptions
@@ -5832,7 +5893,7 @@ pub zendriver::Cookie::domain: alloc::string::String
 pub zendriver::Cookie::expires: core::option::Option<f64>
 pub zendriver::Cookie::http_only: bool
 pub zendriver::Cookie::name: alloc::string::String
-pub zendriver::Cookie::partition_key: core::option::Option<alloc::string::String>
+pub zendriver::Cookie::partition_key: core::option::Option<zendriver::cookies::CookiePartitionKey>
 pub zendriver::Cookie::path: alloc::string::String
 pub zendriver::Cookie::priority: core::option::Option<zendriver::cookies::CookiePriority>
 pub zendriver::Cookie::same_party: core::option::Option<bool>
@@ -5950,6 +6011,67 @@ impl<T> typenum::type_operators::Same for zendriver::cookies::CookieJar
 pub type zendriver::cookies::CookieJar::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for zendriver::cookies::CookieJar where V: ppv_lite86::types::MultiLane<T>
 pub fn zendriver::cookies::CookieJar::vzip(self) -> V
+pub struct zendriver::CookiePartitionKey
+pub zendriver::CookiePartitionKey::has_cross_site_ancestor: bool
+pub zendriver::CookiePartitionKey::top_level_site: alloc::string::String
+impl zendriver::cookies::CookiePartitionKey
+pub fn zendriver::cookies::CookiePartitionKey::new(impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for zendriver::cookies::CookiePartitionKey
+pub fn zendriver::cookies::CookiePartitionKey::clone(&self) -> zendriver::cookies::CookiePartitionKey
+impl core::cmp::PartialEq for zendriver::cookies::CookiePartitionKey
+pub fn zendriver::cookies::CookiePartitionKey::eq(&self, &zendriver::cookies::CookiePartitionKey) -> bool
+impl core::convert::From<&str> for zendriver::cookies::CookiePartitionKey
+pub fn zendriver::cookies::CookiePartitionKey::from(&str) -> Self
+impl core::convert::From<alloc::string::String> for zendriver::cookies::CookiePartitionKey
+pub fn zendriver::cookies::CookiePartitionKey::from(alloc::string::String) -> Self
+impl core::default::Default for zendriver::cookies::CookiePartitionKey
+pub fn zendriver::cookies::CookiePartitionKey::default() -> zendriver::cookies::CookiePartitionKey
+impl core::fmt::Debug for zendriver::cookies::CookiePartitionKey
+pub fn zendriver::cookies::CookiePartitionKey::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for zendriver::cookies::CookiePartitionKey
+impl serde_core::ser::Serialize for zendriver::cookies::CookiePartitionKey
+pub fn zendriver::cookies::CookiePartitionKey::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for zendriver::cookies::CookiePartitionKey
+pub fn zendriver::cookies::CookiePartitionKey::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for zendriver::cookies::CookiePartitionKey
+impl core::marker::Send for zendriver::cookies::CookiePartitionKey
+impl core::marker::Sync for zendriver::cookies::CookiePartitionKey
+impl core::marker::Unpin for zendriver::cookies::CookiePartitionKey
+impl core::marker::UnsafeUnpin for zendriver::cookies::CookiePartitionKey
+impl core::panic::unwind_safe::RefUnwindSafe for zendriver::cookies::CookiePartitionKey
+impl core::panic::unwind_safe::UnwindSafe for zendriver::cookies::CookiePartitionKey
+impl<T, U> core::convert::Into<U> for zendriver::cookies::CookiePartitionKey where U: core::convert::From<T>
+pub fn zendriver::cookies::CookiePartitionKey::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for zendriver::cookies::CookiePartitionKey where U: core::convert::Into<T>
+pub type zendriver::cookies::CookiePartitionKey::Error = core::convert::Infallible
+pub fn zendriver::cookies::CookiePartitionKey::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for zendriver::cookies::CookiePartitionKey where U: core::convert::TryFrom<T>
+pub type zendriver::cookies::CookiePartitionKey::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn zendriver::cookies::CookiePartitionKey::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for zendriver::cookies::CookiePartitionKey where T: core::clone::Clone
+pub type zendriver::cookies::CookiePartitionKey::Owned = T
+pub fn zendriver::cookies::CookiePartitionKey::clone_into(&self, &mut T)
+pub fn zendriver::cookies::CookiePartitionKey::to_owned(&self) -> T
+impl<T> core::any::Any for zendriver::cookies::CookiePartitionKey where T: 'static + ?core::marker::Sized
+pub fn zendriver::cookies::CookiePartitionKey::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for zendriver::cookies::CookiePartitionKey where T: ?core::marker::Sized
+pub fn zendriver::cookies::CookiePartitionKey::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for zendriver::cookies::CookiePartitionKey where T: ?core::marker::Sized
+pub fn zendriver::cookies::CookiePartitionKey::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for zendriver::cookies::CookiePartitionKey where T: core::clone::Clone
+pub unsafe fn zendriver::cookies::CookiePartitionKey::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for zendriver::cookies::CookiePartitionKey
+pub fn zendriver::cookies::CookiePartitionKey::from(T) -> T
+impl<T> serde_core::de::DeserializeOwned for zendriver::cookies::CookiePartitionKey where T: for<'de> serde_core::de::Deserialize<'de>
+impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::cookies::CookiePartitionKey where T: ?core::marker::Sized
+pub fn zendriver::cookies::CookiePartitionKey::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::cookies::CookiePartitionKey::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for zendriver::cookies::CookiePartitionKey
+impl<T> tracing::instrument::WithSubscriber for zendriver::cookies::CookiePartitionKey
+impl<T> typenum::type_operators::Same for zendriver::cookies::CookiePartitionKey
+pub type zendriver::cookies::CookiePartitionKey::Output = T
+impl<V, T> ppv_lite86::types::VZip<V> for zendriver::cookies::CookiePartitionKey where V: ppv_lite86::types::MultiLane<T>
+pub fn zendriver::cookies::CookiePartitionKey::vzip(self) -> V
 pub struct zendriver::DialogExpectation
 impl zendriver::expect::dialog::DialogExpectation
 pub async fn zendriver::expect::dialog::DialogExpectation::matched(self) -> zendriver::error::Result<zendriver::expect::dialog::MatchedDialog>
