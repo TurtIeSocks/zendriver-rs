@@ -1097,12 +1097,16 @@ impl BrowserBuilder {
         self
     }
 
-    /// Auto-derive locale/languages from the exit IP's country via a proxied
+    /// Auto-derive locale/languages/timezone from the exit IP via a proxied
     /// probe to `ip-api.com`. Opt-in; makes ONE outbound request at launch
     /// only when set. Overridden by an explicit `geo_locale`/`persona`/
     /// `persona_overlay` locale (which also skips the probe). Mirrors the
     /// proxy set via [`Self::proxy`], including its credentials — the probe
-    /// authenticates the same way the browser itself will.
+    /// authenticates the same way the browser itself will. Unlike
+    /// `geo_locale` (which only has a country to go on), the resolved
+    /// timezone is the EXACT IANA zone ip-api reports for the exit IP, not
+    /// the country-representative zone — multi-timezone countries (US, RU,
+    /// CA, AU, BR, ...) get the visitor's real local zone.
     #[cfg(feature = "geo")]
     #[must_use]
     pub fn geo_auto(mut self) -> Self {
@@ -1129,7 +1133,11 @@ impl BrowserBuilder {
     /// Resolve the geo-derived locale (if a resolver is set) and merge it
     /// into `persona_overlay`, honoring the same precedence
     /// [`Self::geo_locale`] uses: an explicit overlay locale wins and skips
-    /// the probe entirely. Extracted out of `launch`/`connect` so it's
+    /// the probe entirely. When the resolver returns an exact timezone (e.g.
+    /// `IpApiResolver` parsing ip-api's `timezone` field), it overrides
+    /// `persona`'s country-representative zone — precedence is explicit
+    /// persona/overlay timezone > exact-probe timezone > country-
+    /// representative timezone. Extracted out of `launch`/`connect` so it's
     /// unit-testable without a live Chrome.
     #[cfg(feature = "geo")]
     async fn apply_geo_overlay(&mut self) {
@@ -1149,8 +1157,16 @@ impl BrowserBuilder {
         if explicit_locale {
             return;
         }
-        if let Some(country) = resolver.country().await {
-            let derived = zendriver_stealth::geo::persona(country);
+        if let Some(geo) = resolver.resolve().await {
+            let mut derived = zendriver_stealth::geo::persona(geo.country);
+            // The exact probe timezone (when the source knows it) beats
+            // `persona`'s country-representative zone — precise beats
+            // approximate for the SAME field, still below anything the
+            // caller pinned explicitly (handled by the overlay direction
+            // just below).
+            if let Some(tz) = geo.timezone {
+                derived.timezone = Some(tz);
+            }
             self.persona_overlay = Some(match self.persona_overlay.take() {
                 // Same direction as `geo_locale` above: `derived.overlay(existing)`
                 // — `existing` is the ARG so its explicit fields (e.g. a
@@ -4166,9 +4182,36 @@ mod tests {
     #[cfg(feature = "geo")]
     #[async_trait::async_trait]
     impl zendriver_stealth::geo::GeoResolver for StubCountryResolver {
-        async fn country(&self) -> Option<zendriver_stealth::geo::Country> {
+        async fn resolve(&self) -> Option<zendriver_stealth::geo::ResolvedGeo> {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            zendriver_stealth::geo::Country::try_from(self.cc).ok()
+            zendriver_stealth::geo::Country::try_from(self.cc)
+                .ok()
+                .map(|country| zendriver_stealth::geo::ResolvedGeo {
+                    country,
+                    timezone: None,
+                })
+        }
+    }
+
+    /// A [`zendriver_stealth::geo::GeoResolver`] stub that resolves to a
+    /// fixed country AND an exact probe timezone, so tests can assert the
+    /// exact zone wins over the country-representative one.
+    #[cfg(feature = "geo")]
+    struct StubGeoResolver {
+        cc: &'static str,
+        timezone: Option<&'static str>,
+    }
+
+    #[cfg(feature = "geo")]
+    #[async_trait::async_trait]
+    impl zendriver_stealth::geo::GeoResolver for StubGeoResolver {
+        async fn resolve(&self) -> Option<zendriver_stealth::geo::ResolvedGeo> {
+            zendriver_stealth::geo::Country::try_from(self.cc)
+                .ok()
+                .map(|country| zendriver_stealth::geo::ResolvedGeo {
+                    country,
+                    timezone: self.timezone.map(str::to_string),
+                })
         }
     }
 
@@ -4244,7 +4287,7 @@ mod tests {
         struct NoneResolver;
         #[async_trait::async_trait]
         impl zendriver_stealth::geo::GeoResolver for NoneResolver {
-            async fn country(&self) -> Option<zendriver_stealth::geo::Country> {
+            async fn resolve(&self) -> Option<zendriver_stealth::geo::ResolvedGeo> {
                 None
             }
         }
@@ -4312,6 +4355,66 @@ mod tests {
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
+    /// Core of this change: a resolver that knows the EXACT probe timezone
+    /// (e.g. `IpApiResolver` parsing ip-api's `timezone` field) must have
+    /// that exact zone land in the resolved persona — NOT the
+    /// country-representative zone `geo::persona` would derive alone
+    /// (`US` -> `America/New_York`).
+    #[cfg(feature = "geo")]
+    #[tokio::test]
+    async fn geo_overlay_uses_exact_probe_timezone_over_representative() {
+        let mut builder = Browser::builder().geo_resolver(StubGeoResolver {
+            cc: "US",
+            timezone: Some("America/Los_Angeles"),
+        });
+        builder.apply_geo_overlay().await;
+        let p = builder.resolved_persona();
+        assert_eq!(p.timezone.as_deref(), Some("America/Los_Angeles"));
+        assert_eq!(p.locale.as_deref(), Some("en-US"));
+    }
+
+    /// A resolver reporting `timezone: None` (source doesn't know the exact
+    /// zone) must fall back to the country-representative zone — same
+    /// behavior as before this change.
+    #[cfg(feature = "geo")]
+    #[tokio::test]
+    async fn geo_overlay_falls_back_to_representative_timezone_when_probe_has_none() {
+        let mut builder = Browser::builder().geo_resolver(StubGeoResolver {
+            cc: "US",
+            timezone: None,
+        });
+        builder.apply_geo_overlay().await;
+        let p = builder.resolved_persona();
+        assert_eq!(p.timezone.as_deref(), Some("America/New_York"));
+    }
+
+    /// An explicit `.persona_overlay(..)` timezone (no locale, so the probe
+    /// still fires per the existing skip-guard) must still win over the
+    /// resolver's EXACT probe timezone, not just the country-representative
+    /// one — the overlay merge direction (`derived.overlay(existing)`) must
+    /// keep protecting a caller-pinned field even now that `derived` itself
+    /// can carry an exact tz.
+    #[cfg(feature = "geo")]
+    #[tokio::test]
+    async fn explicit_timezone_wins_over_exact_probe_timezone() {
+        let overlay = Persona::builder().timezone("Asia/Tokyo").build();
+        let mut builder =
+            Browser::builder()
+                .persona_overlay(overlay)
+                .geo_resolver(StubGeoResolver {
+                    cc: "US",
+                    timezone: Some("America/Los_Angeles"),
+                });
+        builder.apply_geo_overlay().await;
+        let p = builder.resolved_persona();
+        assert_eq!(
+            p.timezone.as_deref(),
+            Some("Asia/Tokyo"),
+            "explicit timezone must win over the exact probe timezone"
+        );
+        assert_eq!(p.locale.as_deref(), Some("en-US"), "locale still fills in");
+    }
+
     #[cfg(feature = "geo")]
     #[tokio::test]
     async fn geo_auto_mirrors_proxy_and_credentials_into_resolver() {
@@ -4340,7 +4443,7 @@ mod tests {
             .clone()
             .expect("geo_auto sets a resolver");
         assert_eq!(
-            resolver.country().await,
+            resolver.resolve().await.map(|g| g.country),
             Some(zendriver_stealth::geo::Country::try_from("DE").unwrap())
         );
     }

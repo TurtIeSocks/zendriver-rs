@@ -58,11 +58,14 @@ pub struct OpenInput {
     /// simply not auto-wired). See `BrowserBuilder::proxy`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<String>,
-    /// Auto-derive `locale`/`languages` from the exit IP's country via a
+    /// Auto-derive `locale`/`languages`/`timezone` from the exit IP via a
     /// proxied probe to an IP-geolocation service (default `ip-api.com`).
     /// Opt-in; makes at most ONE outbound HTTP request, at launch, and only
     /// when this is `true`. Mirrors `proxy` above when both are set, so the
-    /// probe reports the same exit IP Chrome will actually use. Overridden by
+    /// probe reports the same exit IP Chrome will actually use. The resolved
+    /// timezone is the EXACT IANA zone the probe reports for the exit IP
+    /// (not a country-representative one), so multi-timezone countries (US,
+    /// RU, CA, AU, BR, ...) get the visitor's real local zone. Overridden by
     /// an explicit `persona`/locale, which also skips the probe. Always
     /// present in the schema so the wire shape is feature-stable; only takes
     /// effect when the server is built with the `geo` feature (otherwise

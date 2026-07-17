@@ -79,16 +79,31 @@ pub fn persona(country: Country) -> Persona {
     }
 }
 
-/// Resolve a [`Country`] from ambient context (e.g. the exit IP behind a
-/// proxy). The auto-resolving implementation (`IpApiResolver` + structured
-/// proxy URL + outbound probe) lands in a follow-up PR; this seam exists now so
-/// callers and the `BrowserBuilder` API are forward-compatible. Both the
-/// caller-supplied path (`geo_locale("US")`) and a future resolver terminate in
-/// the same [`persona`] mapping.
+/// Geo info resolved from ambient context (e.g. an exit-IP probe): the
+/// [`Country`] plus, when the source knows it, the visitor's exact IANA
+/// timezone — more precise than [`persona`]'s country-representative zone
+/// for multi-timezone countries (US, RU, CA, AU, BR, ...).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedGeo {
+    pub country: Country,
+    /// Exact IANA timezone if the source knows it (e.g. ip-api's
+    /// `timezone` field); `None` falls back to the country-representative
+    /// zone from [`persona`].
+    pub timezone: Option<String>,
+}
+
+/// Resolve geo info from ambient context (e.g. the exit IP behind a proxy).
+/// The bundled implementation (`IpApiResolver` in the `zendriver` crate)
+/// probes `ip-api.com` through the browser's proxy; implement this trait
+/// yourself (offline DB, another service, a test double) to swap it out via
+/// `BrowserBuilder::geo_resolver`. Both the caller-supplied path
+/// (`geo_locale("US")`) and a resolver's country terminate in the same
+/// [`persona`] mapping; a resolver's exact `timezone` (when present)
+/// overrides `persona`'s country-representative zone.
 #[async_trait::async_trait]
 pub trait GeoResolver: Send + Sync {
-    /// Resolve the apparent country, or `None` if it cannot be determined.
-    async fn country(&self) -> Option<Country>;
+    /// Resolve the apparent geo info, or `None` if it cannot be determined.
+    async fn resolve(&self) -> Option<ResolvedGeo>;
 }
 
 /// An ISO 3166-1 alpha-2 country code (uppercase, validated).
