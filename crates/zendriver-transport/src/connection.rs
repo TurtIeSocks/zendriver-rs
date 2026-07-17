@@ -652,9 +652,44 @@ where
         + Unpin
         + 'static,
 {
+    spawn_actor_with_observers_timeout_and_capacity(
+        ws,
+        observers,
+        observer_timeout,
+        EVENT_BUS_CAPACITY,
+    )
+}
+
+/// Spawn the actor with a custom `observer_timeout` **and** a
+/// caller-controlled accounted-bus capacity. `pub(crate)` — reached through
+/// [`spawn_actor_with_observers_and_timeout`] (which fixes the capacity at
+/// [`EVENT_BUS_CAPACITY`]) for production/general test code, and through
+/// `testing::MockConnection::pair_with_accounted_capacity` for downstream
+/// crates that need to force a deterministic
+/// [`AccountedRawEvent::Lagged`] by overflowing a small accounted bus
+/// without pushing thousands of frames through the real 1024-deep one.
+pub(crate) fn spawn_actor_with_observers_timeout_and_capacity<S>(
+    ws: S,
+    observers: Vec<Arc<dyn TargetObserver>>,
+    observer_timeout: Duration,
+    accounted_capacity: usize,
+) -> Connection
+where
+    S: futures::Sink<
+            tokio_tungstenite::tungstenite::Message,
+            Error = tokio_tungstenite::tungstenite::Error,
+        > + futures::Stream<
+            Item = Result<
+                tokio_tungstenite::tungstenite::Message,
+                tokio_tungstenite::tungstenite::Error,
+            >,
+        > + Send
+        + Unpin
+        + 'static,
+{
     let (cmd_tx, cmd_rx) = mpsc::channel::<OutboundCmd>(64);
     let (event_tx, _event_rx) = broadcast::channel::<RawEvent>(EVENT_BUS_CAPACITY);
-    let (accounted_tx, _accounted_rx) = broadcast::channel::<AccountedRawEvent>(EVENT_BUS_CAPACITY);
+    let (accounted_tx, _accounted_rx) = broadcast::channel::<AccountedRawEvent>(accounted_capacity);
     let shutdown = CancellationToken::new();
     let inner = Arc::new(ConnectionInner {
         cmd_tx: Mutex::new(cmd_tx),
@@ -1213,7 +1248,10 @@ mod tests {
     /// Like [`spawn_actor`] but with a caller-controlled accounted-bus
     /// capacity, so lag tests can force a broadcast overflow deterministically
     /// without pushing thousands of frames through the real
-    /// [`EVENT_BUS_CAPACITY`] (1024).
+    /// [`EVENT_BUS_CAPACITY`] (1024). Thin wrapper over
+    /// [`spawn_actor_with_observers_timeout_and_capacity`], the same
+    /// entry point `testing::MockConnection::pair_with_accounted_capacity`
+    /// uses for downstream crates.
     fn spawn_actor_with_accounted_capacity<S>(ws: S, accounted_capacity: usize) -> Connection
     where
         S: futures::Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
@@ -1222,35 +1260,12 @@ mod tests {
             + Unpin
             + 'static,
     {
-        let (cmd_tx, cmd_rx) = mpsc::channel::<OutboundCmd>(64);
-        let (event_tx, _event_rx) = broadcast::channel::<RawEvent>(EVENT_BUS_CAPACITY);
-        let (accounted_tx, _accounted_rx) =
-            broadcast::channel::<AccountedRawEvent>(accounted_capacity);
-        let shutdown = CancellationToken::new();
-        let inner = Arc::new(ConnectionInner {
-            cmd_tx: Mutex::new(cmd_tx),
-            event_tx: event_tx.clone(),
-            accounted_tx: accounted_tx.clone(),
-            generation: AtomicU64::new(1),
-            shutdown: Mutex::new(shutdown.clone()),
-            observer_timeout: DEFAULT_OBSERVER_TIMEOUT,
-            call_timeout_ms: AtomicU64::new(DEFAULT_CALL_TIMEOUT.as_millis() as u64),
-            observers: Vec::new(),
-        });
-        let weak_inner = Arc::downgrade(&inner);
-        tokio::spawn(run_actor(
+        spawn_actor_with_observers_timeout_and_capacity(
             ws,
-            cmd_rx,
-            event_tx,
-            AccountedBus {
-                tx: accounted_tx,
-                generation: 1,
-            },
-            shutdown,
             Vec::new(),
-            weak_inner,
-        ));
-        Connection { inner }
+            DEFAULT_OBSERVER_TIMEOUT,
+            accounted_capacity,
+        )
     }
 
     #[tokio::test]

@@ -85,6 +85,45 @@ impl MockConnection {
         (mock, conn)
     }
 
+    /// Variant of [`Self::pair`] with a caller-controlled
+    /// [`crate::AccountedRawEvent`] bus capacity, letting a downstream test
+    /// force a deterministic [`crate::AccountedRawEvent::Lagged`] by
+    /// emitting more events than `accounted_capacity` before the
+    /// `subscribe_raw_accounted()` subscriber ever polls — without pushing
+    /// thousands of frames through the real (1024-deep) production bus.
+    ///
+    /// ```ignore
+    /// use zendriver_transport::{AccountedRawEvent, testing::MockConnection};
+    ///
+    /// # tokio_test::block_on(async {
+    /// let (mock, conn) = MockConnection::pair_with_accounted_capacity(2);
+    /// let mut events = conn.subscribe_raw_accounted();
+    /// // ...emit more than 2 events on `mock` without polling `events`...
+    /// # });
+    /// ```
+    #[must_use]
+    pub fn pair_with_accounted_capacity(accounted_capacity: usize) -> (Self, Connection) {
+        let (tx_to_driver, rx_driver) =
+            mpsc::channel::<Result<Message, tokio_tungstenite::tungstenite::Error>>(64);
+        let (tx_from_driver, rx_test) = mpsc::channel::<Message>(64);
+        let driver = crate::connection::test_only::DriverStream {
+            tx: tx_from_driver,
+            rx: rx_driver,
+        };
+        let conn = crate::connection::spawn_actor_with_observers_timeout_and_capacity(
+            driver,
+            Vec::new(),
+            crate::connection::DEFAULT_OBSERVER_TIMEOUT,
+            accounted_capacity,
+        );
+        let mock = MockConnection {
+            server_in: tx_to_driver,
+            server_out: rx_test,
+            last_sent: None,
+        };
+        (mock, conn)
+    }
+
     /// Block until the driver sends a command whose `method` field matches.
     /// Returns the command id. Wrap in [`tokio::time::timeout`] at test sites
     /// — there is no built-in timeout.

@@ -1,5 +1,6 @@
 pub mod zendriver
 pub use zendriver::AbortReason
+pub use zendriver::AccountedRawEvent
 pub use zendriver::CallError
 pub use zendriver::CaptchaChallenge
 pub use zendriver::CaptchaKind
@@ -1012,6 +1013,7 @@ pub zendriver::error::ZendriverError::Disconnected
 pub zendriver::error::ZendriverError::ElementNotFound
 pub zendriver::error::ZendriverError::ElementNotFound::selector: alloc::string::String
 pub zendriver::error::ZendriverError::ElementStale
+pub zendriver::error::ZendriverError::EventStreamIncomplete
 pub zendriver::error::ZendriverError::Fetcher(alloc::boxed::Box<zendriver_fetcher::error::FetcherError>)
 pub zendriver::error::ZendriverError::FrameNotFound(alloc::string::String)
 pub zendriver::error::ZendriverError::HistoryNavigation(alloc::string::String)
@@ -3062,6 +3064,62 @@ pub type zendriver::monitor::NetworkMonitor::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for zendriver::monitor::NetworkMonitor where V: ppv_lite86::types::MultiLane<T>
 pub fn zendriver::monitor::NetworkMonitor::vzip(self) -> V
 pub mod zendriver::network_idle
+pub enum zendriver::network_idle::IdleLossPolicy
+pub zendriver::network_idle::IdleLossPolicy::Lenient
+pub zendriver::network_idle::IdleLossPolicy::Strict
+impl core::clone::Clone for zendriver::network_idle::IdleLossPolicy
+pub fn zendriver::network_idle::IdleLossPolicy::clone(&self) -> zendriver::network_idle::IdleLossPolicy
+impl core::cmp::Eq for zendriver::network_idle::IdleLossPolicy
+impl core::cmp::PartialEq for zendriver::network_idle::IdleLossPolicy
+pub fn zendriver::network_idle::IdleLossPolicy::eq(&self, &zendriver::network_idle::IdleLossPolicy) -> bool
+impl core::default::Default for zendriver::network_idle::IdleLossPolicy
+pub fn zendriver::network_idle::IdleLossPolicy::default() -> zendriver::network_idle::IdleLossPolicy
+impl core::fmt::Debug for zendriver::network_idle::IdleLossPolicy
+pub fn zendriver::network_idle::IdleLossPolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for zendriver::network_idle::IdleLossPolicy
+impl core::marker::StructuralPartialEq for zendriver::network_idle::IdleLossPolicy
+impl core::marker::Freeze for zendriver::network_idle::IdleLossPolicy
+impl core::marker::Send for zendriver::network_idle::IdleLossPolicy
+impl core::marker::Sync for zendriver::network_idle::IdleLossPolicy
+impl core::marker::Unpin for zendriver::network_idle::IdleLossPolicy
+impl core::marker::UnsafeUnpin for zendriver::network_idle::IdleLossPolicy
+impl core::panic::unwind_safe::RefUnwindSafe for zendriver::network_idle::IdleLossPolicy
+impl core::panic::unwind_safe::UnwindSafe for zendriver::network_idle::IdleLossPolicy
+impl<Q, K> equivalent::Equivalent<K> for zendriver::network_idle::IdleLossPolicy where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn zendriver::network_idle::IdleLossPolicy::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for zendriver::network_idle::IdleLossPolicy where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn zendriver::network_idle::IdleLossPolicy::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for zendriver::network_idle::IdleLossPolicy where U: core::convert::From<T>
+pub fn zendriver::network_idle::IdleLossPolicy::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for zendriver::network_idle::IdleLossPolicy where U: core::convert::Into<T>
+pub type zendriver::network_idle::IdleLossPolicy::Error = core::convert::Infallible
+pub fn zendriver::network_idle::IdleLossPolicy::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for zendriver::network_idle::IdleLossPolicy where U: core::convert::TryFrom<T>
+pub type zendriver::network_idle::IdleLossPolicy::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn zendriver::network_idle::IdleLossPolicy::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for zendriver::network_idle::IdleLossPolicy where T: core::clone::Clone
+pub type zendriver::network_idle::IdleLossPolicy::Owned = T
+pub fn zendriver::network_idle::IdleLossPolicy::clone_into(&self, &mut T)
+pub fn zendriver::network_idle::IdleLossPolicy::to_owned(&self) -> T
+impl<T> core::any::Any for zendriver::network_idle::IdleLossPolicy where T: 'static + ?core::marker::Sized
+pub fn zendriver::network_idle::IdleLossPolicy::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for zendriver::network_idle::IdleLossPolicy where T: ?core::marker::Sized
+pub fn zendriver::network_idle::IdleLossPolicy::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for zendriver::network_idle::IdleLossPolicy where T: ?core::marker::Sized
+pub fn zendriver::network_idle::IdleLossPolicy::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for zendriver::network_idle::IdleLossPolicy where T: core::clone::Clone
+pub unsafe fn zendriver::network_idle::IdleLossPolicy::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for zendriver::network_idle::IdleLossPolicy
+pub fn zendriver::network_idle::IdleLossPolicy::from(T) -> T
+impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::network_idle::IdleLossPolicy where T: ?core::marker::Sized
+pub fn zendriver::network_idle::IdleLossPolicy::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::network_idle::IdleLossPolicy::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for zendriver::network_idle::IdleLossPolicy
+impl<T> tracing::instrument::WithSubscriber for zendriver::network_idle::IdleLossPolicy
+impl<T> typenum::type_operators::Same for zendriver::network_idle::IdleLossPolicy
+pub type zendriver::network_idle::IdleLossPolicy::Output = T
+impl<V, T> ppv_lite86::types::VZip<V> for zendriver::network_idle::IdleLossPolicy where V: ppv_lite86::types::MultiLane<T>
+pub fn zendriver::network_idle::IdleLossPolicy::vzip(self) -> V
 pub mod zendriver::pdf
 pub struct zendriver::pdf::PdfBuilder<'tab>
 impl<'tab> zendriver::pdf::PdfBuilder<'tab>
@@ -3864,6 +3922,7 @@ pub type zendriver::tab::FrameResourceMatch::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for zendriver::tab::FrameResourceMatch where V: ppv_lite86::types::MultiLane<T>
 pub fn zendriver::tab::FrameResourceMatch::vzip(self) -> V
 pub struct zendriver::tab::IdleOptions
+pub zendriver::tab::IdleOptions::loss_policy: zendriver::network_idle::IdleLossPolicy
 pub zendriver::tab::IdleOptions::max_inflight_age: core::option::Option<core::time::Duration>
 pub zendriver::tab::IdleOptions::quiet_window: core::time::Duration
 pub zendriver::tab::IdleOptions::timeout: core::time::Duration
@@ -4885,6 +4944,62 @@ impl<T> typenum::type_operators::Same for zendriver::monitor::FrameDirection
 pub type zendriver::monitor::FrameDirection::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for zendriver::monitor::FrameDirection where V: ppv_lite86::types::MultiLane<T>
 pub fn zendriver::monitor::FrameDirection::vzip(self) -> V
+pub enum zendriver::IdleLossPolicy
+pub zendriver::IdleLossPolicy::Lenient
+pub zendriver::IdleLossPolicy::Strict
+impl core::clone::Clone for zendriver::network_idle::IdleLossPolicy
+pub fn zendriver::network_idle::IdleLossPolicy::clone(&self) -> zendriver::network_idle::IdleLossPolicy
+impl core::cmp::Eq for zendriver::network_idle::IdleLossPolicy
+impl core::cmp::PartialEq for zendriver::network_idle::IdleLossPolicy
+pub fn zendriver::network_idle::IdleLossPolicy::eq(&self, &zendriver::network_idle::IdleLossPolicy) -> bool
+impl core::default::Default for zendriver::network_idle::IdleLossPolicy
+pub fn zendriver::network_idle::IdleLossPolicy::default() -> zendriver::network_idle::IdleLossPolicy
+impl core::fmt::Debug for zendriver::network_idle::IdleLossPolicy
+pub fn zendriver::network_idle::IdleLossPolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for zendriver::network_idle::IdleLossPolicy
+impl core::marker::StructuralPartialEq for zendriver::network_idle::IdleLossPolicy
+impl core::marker::Freeze for zendriver::network_idle::IdleLossPolicy
+impl core::marker::Send for zendriver::network_idle::IdleLossPolicy
+impl core::marker::Sync for zendriver::network_idle::IdleLossPolicy
+impl core::marker::Unpin for zendriver::network_idle::IdleLossPolicy
+impl core::marker::UnsafeUnpin for zendriver::network_idle::IdleLossPolicy
+impl core::panic::unwind_safe::RefUnwindSafe for zendriver::network_idle::IdleLossPolicy
+impl core::panic::unwind_safe::UnwindSafe for zendriver::network_idle::IdleLossPolicy
+impl<Q, K> equivalent::Equivalent<K> for zendriver::network_idle::IdleLossPolicy where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn zendriver::network_idle::IdleLossPolicy::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for zendriver::network_idle::IdleLossPolicy where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn zendriver::network_idle::IdleLossPolicy::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for zendriver::network_idle::IdleLossPolicy where U: core::convert::From<T>
+pub fn zendriver::network_idle::IdleLossPolicy::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for zendriver::network_idle::IdleLossPolicy where U: core::convert::Into<T>
+pub type zendriver::network_idle::IdleLossPolicy::Error = core::convert::Infallible
+pub fn zendriver::network_idle::IdleLossPolicy::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for zendriver::network_idle::IdleLossPolicy where U: core::convert::TryFrom<T>
+pub type zendriver::network_idle::IdleLossPolicy::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn zendriver::network_idle::IdleLossPolicy::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for zendriver::network_idle::IdleLossPolicy where T: core::clone::Clone
+pub type zendriver::network_idle::IdleLossPolicy::Owned = T
+pub fn zendriver::network_idle::IdleLossPolicy::clone_into(&self, &mut T)
+pub fn zendriver::network_idle::IdleLossPolicy::to_owned(&self) -> T
+impl<T> core::any::Any for zendriver::network_idle::IdleLossPolicy where T: 'static + ?core::marker::Sized
+pub fn zendriver::network_idle::IdleLossPolicy::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for zendriver::network_idle::IdleLossPolicy where T: ?core::marker::Sized
+pub fn zendriver::network_idle::IdleLossPolicy::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for zendriver::network_idle::IdleLossPolicy where T: ?core::marker::Sized
+pub fn zendriver::network_idle::IdleLossPolicy::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for zendriver::network_idle::IdleLossPolicy where T: core::clone::Clone
+pub unsafe fn zendriver::network_idle::IdleLossPolicy::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for zendriver::network_idle::IdleLossPolicy
+pub fn zendriver::network_idle::IdleLossPolicy::from(T) -> T
+impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::network_idle::IdleLossPolicy where T: ?core::marker::Sized
+pub fn zendriver::network_idle::IdleLossPolicy::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::network_idle::IdleLossPolicy::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for zendriver::network_idle::IdleLossPolicy
+impl<T> tracing::instrument::WithSubscriber for zendriver::network_idle::IdleLossPolicy
+impl<T> typenum::type_operators::Same for zendriver::network_idle::IdleLossPolicy
+pub type zendriver::network_idle::IdleLossPolicy::Output = T
+impl<V, T> ppv_lite86::types::VZip<V> for zendriver::network_idle::IdleLossPolicy where V: ppv_lite86::types::MultiLane<T>
+pub fn zendriver::network_idle::IdleLossPolicy::vzip(self) -> V
 pub enum zendriver::Key
 pub zendriver::Key::Char(char)
 pub zendriver::Key::Special(zendriver::input::keyboard::SpecialKey)
@@ -5482,6 +5597,7 @@ pub zendriver::ZendriverError::Disconnected
 pub zendriver::ZendriverError::ElementNotFound
 pub zendriver::ZendriverError::ElementNotFound::selector: alloc::string::String
 pub zendriver::ZendriverError::ElementStale
+pub zendriver::ZendriverError::EventStreamIncomplete
 pub zendriver::ZendriverError::Fetcher(alloc::boxed::Box<zendriver_fetcher::error::FetcherError>)
 pub zendriver::ZendriverError::FrameNotFound(alloc::string::String)
 pub zendriver::ZendriverError::HistoryNavigation(alloc::string::String)
@@ -6499,6 +6615,7 @@ pub type zendriver::tab::FrameResourceMatch::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for zendriver::tab::FrameResourceMatch where V: ppv_lite86::types::MultiLane<T>
 pub fn zendriver::tab::FrameResourceMatch::vzip(self) -> V
 pub struct zendriver::IdleOptions
+pub zendriver::IdleOptions::loss_policy: zendriver::network_idle::IdleLossPolicy
 pub zendriver::IdleOptions::max_inflight_age: core::option::Option<core::time::Duration>
 pub zendriver::IdleOptions::quiet_window: core::time::Duration
 pub zendriver::IdleOptions::timeout: core::time::Duration

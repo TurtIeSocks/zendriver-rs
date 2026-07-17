@@ -110,6 +110,7 @@ pub use element::actions::ClickOptions;
 pub use error::{BrowserError, Result, ZendriverError};
 pub use frame::Frame;
 pub use input::{Key, KeyModifiers, KeySequence, MouseButton, SpecialKey};
+pub use network_idle::IdleLossPolicy;
 pub use pdf::PdfBuilder;
 pub use query::{AriaRole, BoundingBox, FindBuilder, PageBox};
 pub use request::{RequestBuilder, Response};

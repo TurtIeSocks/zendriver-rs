@@ -15,6 +15,10 @@ properties:
     format: uint64
     default: ~
     minimum: 0
+  strict:
+    description: "Abort the wait with an error if the underlying event stream loses\ndelivery continuity (a lagging subscriber, a reconnect, or a dropped\nconnection) while waiting. Default `false`: a delivery gap is\ntolerated and the wait still resolves on a best-effort basis."
+    type: boolean
+    default: false
   timeout_ms:
     description: "Outer timeout in milliseconds (default: 5000)."
     type: integer

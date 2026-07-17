@@ -251,6 +251,41 @@ tab.wait_for_idle_opts(IdleOptions {
 `max_inflight_age` defaults to `None` (the historical
 wait-for-everything behavior).
 
+## Does `wait_for_idle` count a response's headers as "done"?
+
+No — only `Network.loadingFinished` / `Network.loadingFailed` clear a
+request from the in-flight set. `Network.responseReceived` (the
+response's *headers* arriving) is deliberately not treated as
+completion, since the body can still be streaming for an arbitrarily
+long time afterward (a large download, chunked transfer encoding, a
+slow origin).
+
+`wait_for_idle` is best-effort by default: if the underlying CDP event
+stream loses delivery continuity mid-wait (a lagging subscriber, a
+[`Browser::reconnect`], or the WebSocket dying), it silently tolerates
+the gap and still resolves on what it *did* observe —
+`IdleOptions::loss_policy: IdleLossPolicy::Lenient`, matching every
+prior release's behavior. Opt into `IdleLossPolicy::Strict` to fail
+loudly with [`ZendriverError::EventStreamIncomplete`] instead of
+risking a possibly-wrong idle:
+
+```rust,no_run
+# async fn ex() -> zendriver::Result<()> {
+# let browser = zendriver::Browser::builder().launch().await?;
+# let tab = browser.main_tab();
+use zendriver::{IdleLossPolicy, IdleOptions};
+
+tab.wait_for_idle_opts(IdleOptions {
+    loss_policy: IdleLossPolicy::Strict,
+    ..Default::default()
+})
+.await?;
+# Ok(()) }
+```
+
+[`Browser::reconnect`]: https://docs.rs/zendriver/latest/zendriver/struct.Browser.html#method.reconnect
+[`ZendriverError::EventStreamIncomplete`]: https://docs.rs/zendriver/latest/zendriver/enum.ZendriverError.html#variant.EventStreamIncomplete
+
 ## Where do I find the full list of errors?
 
 [Error Reference](./error-reference.md) — every public variant of

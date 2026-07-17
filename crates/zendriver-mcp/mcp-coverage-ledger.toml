@@ -465,3 +465,34 @@ excluded = "Stream-returning subscription; not a request/response tool"
 [[entry]]
 api = "zendriver::AccountedRawEvent"
 excluded = "Stream-returning subscription; not a request/response tool"
+
+# ── Task 4: responseReceived correctness fix + opt-in IdleLossPolicy::Strict ─
+# (EventStreamIncomplete's enum variant landed with Task 3's transport work,
+# but Task 4 is the first — and, as of this entry, only — call site that
+# constructs it, via wait_for_idle_opts under IdleLossPolicy::Strict.)
+[[entry]]
+api = "zendriver::error::ZendriverError::EventStreamIncomplete"
+covered = "browser_wait_for_idle.strict"
+
+[[entry]]
+api = "zendriver::ZendriverError::EventStreamIncomplete"
+covered = "browser_wait_for_idle.strict"
+
+[[entry]]
+api = "zendriver::network_idle::IdleLossPolicy"
+covered = "browser_wait_for_idle.strict"
+
+[[entry]]
+api = "zendriver::IdleLossPolicy"
+covered = "browser_wait_for_idle.strict"
+
+[[entry]]
+# Trailing `:` is intentional — cargo-public-api renders a struct field as
+# `pub path::to::Field: Type`, and `extract_path` in tests/public_api.rs
+# stops at the first whitespace, which lands right after the colon.
+api = "zendriver::tab::IdleOptions::loss_policy:"
+covered = "browser_wait_for_idle.strict"
+
+[[entry]]
+api = "zendriver::IdleOptions::loss_policy:"
+covered = "browser_wait_for_idle.strict"
