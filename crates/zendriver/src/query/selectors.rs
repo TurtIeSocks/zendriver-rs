@@ -725,7 +725,11 @@ async fn resolve_text_many(
 // ---------------------------------------------------------------------
 //
 // JS path:
-//   `Array.from(ctx.querySelectorAll('*')).filter(el => new RegExp(pat, flags).test(el.innerText||el.textContent))`
+//   `Array.from(ctx.querySelectorAll('*')).filter(el => new RegExp(pat, flags).test(el.innerText||el.textContent))`,
+//   then narrowed to the innermost matching element (see
+//   `regex_narrowing_js`) — an ancestor whose only text-bearing
+//   descendant is the match otherwise has an identical `innerText` and
+//   also passes the filter, ranking first in document order.
 //
 // The regex is *re-parsed* on the JS side via `new RegExp`, so the
 // pattern must use JS-flavored regex syntax (which is essentially the
@@ -736,20 +740,56 @@ async fn resolve_text_many(
 // We construct the RegExp *once outside* the filter callback so the
 // pattern is only compiled per query rather than per element.
 
+/// JS fragment implementing the same "narrowest match" filter the
+/// substring builders use (see `build_text_substring_js_tab`), but with
+/// the regex predicate (`r.test(t)`, reusing the already-constructed
+/// `RegExp` `r`) in place of `.includes(lc)`. `matches_var` is the
+/// in-scope identifier holding the raw (un-narrowed) candidate array;
+/// the fragment declares `narrowed` as the result with any element that
+/// has a descendant also matching `r` subtracted out. Shared between
+/// `build_text_regex_js_tab` and `build_text_regex_fn_body` (kept
+/// separate from the substring builders' fragment so their existing,
+/// tested JS output stays untouched).
+fn regex_narrowing_js(matches_var: &str) -> String {
+    format!(
+        "var narrowed={m}.filter(function(el){{\
+            return !Array.from(el.querySelectorAll('*')).some(function(c){{\
+                var t=c.innerText||c.textContent||'';\
+                return r.test(t);\
+            }});\
+        }})",
+        m = matches_var,
+    )
+}
+
 fn build_text_regex_js_tab(pattern: &str, flags: &str, best_match: bool) -> String {
     // `best_match` has no literal needle for a regex; we use the pattern
     // length as the closest-length proxy (the only well-defined analog
-    // for the regex case). Matches are re-sorted ascending by
-    // `abs(len(text) - len(pattern))` when set.
+    // for the regex case). The NARROWED array is re-sorted ascending by
+    // `abs(len(text) - len(pattern))` when set, mirroring the substring
+    // builder's order-of-operations (narrow first, then sort the
+    // leaves).
     let sort = if best_match {
-        format!(";{}", best_match_sort_js("m", pattern.chars().count()))
+        format!(
+            ";{}",
+            best_match_sort_js("narrowed", pattern.chars().count())
+        )
     } else {
         String::new()
     };
     format!(
-        "(function(){{var r=new RegExp({p}, {f});var m=Array.from(document.querySelectorAll('*')).filter(function(el){{var t=el.innerText||el.textContent||'';return r.test(t);}}){sort};return m;}})()",
+        "(function(){{\
+            var r=new RegExp({p}, {f});\
+            var m=Array.from(document.querySelectorAll('*')).filter(function(el){{\
+                var t=el.innerText||el.textContent||'';\
+                return r.test(t);\
+            }});\
+            {narrowing}{sort};\
+            return narrowed;\
+        }})()",
         p = json!(pattern),
         f = json!(flags),
+        narrowing = regex_narrowing_js("m"),
         sort = sort,
     )
 }
@@ -757,14 +797,26 @@ fn build_text_regex_js_tab(pattern: &str, flags: &str, best_match: bool) -> Stri
 fn build_text_regex_fn_body(pattern: &str, best_match: bool) -> String {
     // Element scope: `this` is the scope element. Pattern + flags
     // passed as arguments. See `build_text_regex_js_tab` for the
-    // best_match proxy rationale.
+    // best_match proxy rationale and the narrowing semantics.
     let sort = if best_match {
-        format!(";{}", best_match_sort_js("m", pattern.chars().count()))
+        format!(
+            ";{}",
+            best_match_sort_js("narrowed", pattern.chars().count())
+        )
     } else {
         String::new()
     };
     format!(
-        "function(p,f){{var r=new RegExp(p,f);var m=Array.from(this.querySelectorAll('*')).filter(function(el){{var t=el.innerText||el.textContent||'';return r.test(t);}}){sort};return m;}}",
+        "function(p,f){{\
+            var r=new RegExp(p,f);\
+            var m=Array.from(this.querySelectorAll('*')).filter(function(el){{\
+                var t=el.innerText||el.textContent||'';\
+                return r.test(t);\
+            }});\
+            {narrowing}{sort};\
+            return narrowed;\
+        }}",
+        narrowing = regex_narrowing_js("m"),
         sort = sort,
     )
 }
@@ -1190,6 +1242,60 @@ mod tests {
         assert!(
             sent.contains("im"),
             "regex path must embed the flags string; got: {sent}"
+        );
+
+        mock.reply(
+            id_q,
+            json!({ "result": { "type": "object", "subtype": "null" } }),
+        )
+        .await;
+
+        let r = fut.await.unwrap().unwrap();
+        assert!(r.is_none(), "null subtype must yield Ok(None)");
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn text_regex_eval_narrows_to_innermost_matching_element() {
+        // Regression test: `.text_regex()` used to have no "narrowest
+        // match" step (unlike `.text()`/`.text_exact()`), so an ancestor
+        // (`<html>`/`<body>`) whose only text-bearing descendant is the
+        // real match ends up with an identical `innerText` and also
+        // passes the regex filter — ranking first in document order and
+        // winning `.one()`'s `[0]` instead of the intended leaf. Assert
+        // the dispatched expression now subtracts any element that has a
+        // matching descendant (mirroring `build_text_substring_js_tab`'s
+        // narrowing), reusing the same `RegExp` object as the predicate.
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                let scope = QueryScope::Tab(&t);
+                SelectorKind::TextRegex {
+                    pattern: "unique-frame-text".into(),
+                    flags: "".into(),
+                }
+                .resolve_one(&scope)
+                .await
+            }
+        });
+
+        let id_q = mock.expect_cmd("Runtime.evaluate").await;
+        let sent = mock.last_sent()["params"]["expression"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            sent.contains(".querySelectorAll('*')).some("),
+            "regex path must narrow via descendant-subtraction (some()); got: {sent}"
+        );
+        assert!(
+            sent.matches("r.test(").count() >= 2,
+            "narrowing predicate must reuse the same RegExp object `r` (once for the initial \
+             filter, once for the descendant check); got: {sent}"
         );
 
         mock.reply(
