@@ -89,6 +89,42 @@ pub enum CookieSourceScheme {
     Secure,
 }
 
+/// CHIPS partition key — the top-level site a partitioned cookie is scoped
+/// to, plus whether it was set from a cross-site context. Mirrors CDP's
+/// `Network.CookiePartitionKey` (M119+).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CookiePartitionKey {
+    /// The top-level site (e.g. `"https://example.com"`).
+    pub top_level_site: String,
+    /// `true` if the cookie was set from a cross-site context.
+    #[serde(default)]
+    pub has_cross_site_ancestor: bool,
+}
+
+impl CookiePartitionKey {
+    /// Partition key for `top_level_site` with `has_cross_site_ancestor = false`
+    /// (the common case).
+    pub fn new(top_level_site: impl Into<String>) -> Self {
+        Self {
+            top_level_site: top_level_site.into(),
+            has_cross_site_ancestor: false,
+        }
+    }
+}
+
+impl From<&str> for CookiePartitionKey {
+    fn from(s: &str) -> Self {
+        Self::new(s)
+    }
+}
+
+impl From<String> for CookiePartitionKey {
+    fn from(s: String) -> Self {
+        Self::new(s)
+    }
+}
+
 /// A single HTTP cookie.
 ///
 /// Field shape matches the public Rust/JSON contract (snake_case). An
@@ -149,14 +185,10 @@ pub struct Cookie {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_port: Option<i32>,
     /// CHIPS partition key — the top-level site the partitioned cookie is
-    /// scoped to (e.g. `"https://example.com"`).
-    ///
-    /// Modeled as the top-level-site string for the common case. Newer CDP
-    /// channels expose `partitionKey` as a structured object
-    /// (`{ topLevelSite, hasCrossSiteAncestor }`); that variant is
-    /// deferred — set the string form for now.
+    /// scoped to, plus whether it was set from a cross-site context.
+    /// Mirrors CDP's `Network.CookiePartitionKey` (M119+).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub partition_key: Option<String>,
+    pub partition_key: Option<CookiePartitionKey>,
 }
 
 /// Internal mirror of [`Cookie`] with CDP's camelCase rename. Used only at
@@ -188,7 +220,7 @@ struct CdpCookie {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source_port: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    partition_key: Option<String>,
+    partition_key: Option<CookiePartitionKey>,
 }
 
 impl From<Cookie> for CdpCookie {
@@ -626,7 +658,7 @@ mod tests {
                     same_party: Some(true),
                     source_scheme: Some(CookieSourceScheme::Secure),
                     source_port: Some(443),
-                    partition_key: Some("https://top".into()),
+                    partition_key: Some(CookiePartitionKey::new("https://top")),
                     ..Default::default()
                 })
                 .await
@@ -642,7 +674,8 @@ mod tests {
         assert_eq!(c["sameParty"], true);
         assert_eq!(c["sourceScheme"], "Secure");
         assert_eq!(c["sourcePort"], 443);
-        assert_eq!(c["partitionKey"], "https://top");
+        assert_eq!(c["partitionKey"]["topLevelSite"], "https://top");
+        assert_eq!(c["partitionKey"]["hasCrossSiteAncestor"], false);
         // Snake-case names must NOT leak onto the wire.
         assert!(c.get("same_party").is_none());
         assert!(c.get("source_scheme").is_none());
@@ -667,7 +700,7 @@ mod tests {
             same_party: Some(false),
             source_scheme: Some(CookieSourceScheme::NonSecure),
             source_port: Some(80),
-            partition_key: Some("https://top.example".into()),
+            partition_key: Some(CookiePartitionKey::new("https://top.example")),
             ..Default::default()
         };
 
@@ -682,7 +715,10 @@ mod tests {
         assert_eq!(back.same_party, Some(false));
         assert_eq!(back.source_scheme, Some(CookieSourceScheme::NonSecure));
         assert_eq!(back.source_port, Some(80));
-        assert_eq!(back.partition_key.as_deref(), Some("https://top.example"));
+        assert_eq!(
+            back.partition_key,
+            Some(CookiePartitionKey::new("https://top.example"))
+        );
     }
 
     /// Deserializing a CDP cookie that omits the new fields must leave them
@@ -707,6 +743,32 @@ mod tests {
         assert_eq!(cookie.source_scheme, None);
         assert_eq!(cookie.source_port, None);
         assert_eq!(cookie.partition_key, None);
+    }
+
+    /// A CDP cookie carrying the M119+ structured `partitionKey` object must
+    /// deserialize into `Some(CookiePartitionKey)` with both fields intact.
+    #[test]
+    fn cookie_read_structured_partition_key_object() {
+        let cdp: CdpCookie = serde_json::from_value(json!({
+            "name": "sid",
+            "value": "xyz",
+            "domain": ".example.com",
+            "path": "/",
+            "partitionKey": {
+                "topLevelSite": "https://top.example",
+                "hasCrossSiteAncestor": true,
+            },
+        }))
+        .expect("a CDP cookie with a structured partitionKey must parse");
+        let cookie: Cookie = cdp.into();
+
+        assert_eq!(
+            cookie.partition_key,
+            Some(CookiePartitionKey {
+                top_level_site: "https://top.example".into(),
+                has_cross_site_ancestor: true,
+            })
+        );
     }
 
     /// A future Chrome version may add new CDP cookie fields rs doesn't model
