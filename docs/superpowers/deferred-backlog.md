@@ -47,6 +47,7 @@ Legend: ⏸ parked (blocked on an external decision, not a bug) · 🐞 shipped-
 ### Elements / input
 - **Button-triggered file pickers** via `Page.fileChooserOpened`; today `upload_files` uses `DOM.setFileInputFiles` on direct `<input type=file>` only. — `crates/zendriver/src/element/actions.rs:585,600`
 - **Case-insensitive matchers** (`[a="v" i]`, lowercased text compare). No CI flag/variant; no CI matcher in the public API. — `crates/zendriver/src/query/predicate.rs:53-66,85-86`
+- **🐞 `text_regex` selector lacks the "narrowest match" filter** → can return an ancestor (`<html>`/`<body>`) whose normalized `innerText` also matches, instead of the actual leaf element. `.text()`/`.text_exact()` already narrow to the innermost matching node; `resolve_text_regex_many` does not. Affects Tab + Frame scope equally. Found 2026-07-16 during the frame-`contextId` fix. — `resolve_text_regex_many` in `crates/zendriver/src/query/selectors.rs:830`
 - **Custom mouse pressure / pen / touch input.** Mouse dispatch carries no pressure/pointerType; no `Input.dispatchTouchEvent` anywhere. — `crates/zendriver/src/input/mouse.rs:152-175`
 
 ### Launch / context / fetcher
