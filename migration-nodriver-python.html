@@ -354,18 +354,15 @@ zendriver = { version = "0.1", features = ["interception", "expect", "cloudflare
 pre-register-then-await pattern saves you from event-handler race
 conditions) and add the rest as you hit them.</p>
 <h2 id="known-gaps-in-v010"><a class="header" href="#known-gaps-in-v010">Known gaps in v0.1.0</a></h2>
+<p>Canvas / WebGL / audio / font fingerprint spoofing and a browserforge
+equivalent have shipped since this section was first written — see the
+<a href="./fingerprint.html">Fingerprint spoofing</a> chapter, including
+<a href="./fingerprint.html#pool--generative-sources-zendriver-fingerprints">pool + generative sources</a>
+for the <code>zendriver-fingerprints</code> crate (real-device persona dataset /
+Bayesian-network sampler) that plays the same role as nodriver's pairing
+with the <code>browserforge</code> library.</p>
 <p>Things nodriver supports that zendriver-rs <strong>doesn't yet</strong>:</p>
 <ul>
-<li><strong>Canvas / WebGL / audio / font fingerprint spoofing.</strong> nodriver's
-bootstrap injects JS randomizers for each of these per launch. The
-Rust port currently ships protocol-level stealth (UA scrub,
-<code>webdriver</code> flag, hardware overrides) plus the <code>spoofed()</code> profile
-that patches the Navigator prototype — but not canvas-noise
-injection. On the post-v0.1 roadmap.</li>
-<li><strong>browserforge fingerprint generation.</strong> nodriver pairs with the
-<code>browserforge</code> library for pre-canned realistic fingerprints. Not
-ported; build a <code>StealthProfile</code> from explicit <code>UserAgentMetadata</code>
-fields by hand.</li>
 <li><strong>OCR helpers.</strong> nodriver bundles <code>easyocr</code> / <code>tesseract</code> wrappers
 for text-in-image extraction. Not ported; pair <code>tab.screenshot()</code>
 with the <code>tesseract-rs</code> or <code>leptess</code> crate.</li>

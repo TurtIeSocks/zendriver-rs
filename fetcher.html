@@ -260,10 +260,10 @@ async fn main() -&gt; zendriver::Result&lt;()&gt; {
 <li><code>VersionSpec::Latest</code> — the newest entry in the manifest (default).</li>
 <li><code>VersionSpec::Stable</code> — alias for <code>Latest</code> today; will diverge if /
 when CFT exposes a stable-channel JSON.</li>
-<li><code>VersionSpec::Channel(Channel::Stable)</code> — only <code>Stable</code> is fully
-wired in 0.1; <code>Beta</code> / <code>Dev</code> / <code>Canary</code> return
-<a href="https://docs.rs/zendriver/latest/zendriver/enum.FetcherError.html#variant.UnsupportedPlatform"><code>FetcherError::UnsupportedPlatform</code></a> (the CFT endpoint is
-separate).</li>
+<li><code>VersionSpec::Channel(Channel::Stable | Channel::Beta | Channel::Dev | Channel::Canary)</code> —
+<code>Stable</code> resolves through the same flat manifest as <code>Latest</code>; <code>Beta</code> /
+<code>Dev</code> / <code>Canary</code> resolve through Chrome for Testing's separate
+per-channel <code>last-known-good-versions-with-downloads.json</code> endpoint.</li>
 <li><code>VersionSpec::Explicit("126.0.6478.182".into())</code> — exact version
 string from the manifest.</li>
 </ul>

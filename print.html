@@ -3115,10 +3115,10 @@ async fn main() -&gt; zendriver::Result&lt;()&gt; {
 <li><code>VersionSpec::Latest</code> — the newest entry in the manifest (default).</li>
 <li><code>VersionSpec::Stable</code> — alias for <code>Latest</code> today; will diverge if /
 when CFT exposes a stable-channel JSON.</li>
-<li><code>VersionSpec::Channel(Channel::Stable)</code> — only <code>Stable</code> is fully
-wired in 0.1; <code>Beta</code> / <code>Dev</code> / <code>Canary</code> return
-<a href="https://docs.rs/zendriver/latest/zendriver/enum.FetcherError.html#variant.UnsupportedPlatform"><code>FetcherError::UnsupportedPlatform</code></a> (the CFT endpoint is
-separate).</li>
+<li><code>VersionSpec::Channel(Channel::Stable | Channel::Beta | Channel::Dev | Channel::Canary)</code> —
+<code>Stable</code> resolves through the same flat manifest as <code>Latest</code>; <code>Beta</code> /
+<code>Dev</code> / <code>Canary</code> resolve through Chrome for Testing's separate
+per-channel <code>last-known-good-versions-with-downloads.json</code> endpoint.</li>
 <li><code>VersionSpec::Explicit("126.0.6478.182".into())</code> — exact version
 string from the manifest.</li>
 </ul>
@@ -3668,18 +3668,16 @@ zendriver = { version = "0.1", features = ["interception", "expect", "cloudflare
 end up wanting <code>expect_response</code> for network assertions) and add
 <code>interception</code> / <code>cloudflare</code> if you hit those needs.</p>
 <h2 id="known-gaps-in-v010"><a class="header" href="#known-gaps-in-v010">Known gaps in v0.1.0</a></h2>
+<p>Canvas / WebGL / font / audio fingerprint spoofing and a browserforge
+equivalent have shipped since this section was first written — see the
+<a href="./fingerprint.html">Fingerprint spoofing</a> chapter, including
+<a href="./fingerprint.html#pool--generative-sources-zendriver-fingerprints">pool + generative sources</a>
+for the <code>zendriver-fingerprints</code> crate (real-device persona dataset /
+Bayesian-network sampler) that plays the same role as Python's optional
+<code>browserforge</code> dependency.</p>
 <p>Capabilities the Python <code>zendriver</code> ships that are <strong>not yet</strong> in the
 Rust port:</p>
 <ul>
-<li><strong>Canvas / WebGL / font / audio fingerprint spoofing.</strong> Python's
-stealth layer randomizes these per-launch via JS bootstrap injection;
-the Rust port only ships the protocol-level patches (UA scrub,
-<code>webdriver</code> removal, hardware overrides) plus the optional
-<code>spoofed()</code> profile that patches the Navigator prototype. Active
-canvas-noise injection is on the post-v0.1 roadmap.</li>
-<li><strong>browserforge integration.</strong> Python's optional dep for
-pre-canned realistic fingerprints isn't ported. Build a
-<code>StealthProfile</code> from explicit <code>UserAgentMetadata</code> fields instead.</li>
 <li><strong>OCR helpers.</strong> Python's bundled OCR wrappers (<code>tesseract</code> /
 <code>easyocr</code>) for text-in-image extraction aren't ported. Pair Rust's
 <code>tab.screenshot()</code> with the <code>tesseract-rs</code> or <code>leptess</code> crate.</li>
@@ -3884,18 +3882,15 @@ zendriver = { version = "0.1", features = ["interception", "expect", "cloudflare
 pre-register-then-await pattern saves you from event-handler race
 conditions) and add the rest as you hit them.</p>
 <h2 id="known-gaps-in-v010-1"><a class="header" href="#known-gaps-in-v010-1">Known gaps in v0.1.0</a></h2>
+<p>Canvas / WebGL / audio / font fingerprint spoofing and a browserforge
+equivalent have shipped since this section was first written — see the
+<a href="./fingerprint.html">Fingerprint spoofing</a> chapter, including
+<a href="./fingerprint.html#pool--generative-sources-zendriver-fingerprints">pool + generative sources</a>
+for the <code>zendriver-fingerprints</code> crate (real-device persona dataset /
+Bayesian-network sampler) that plays the same role as nodriver's pairing
+with the <code>browserforge</code> library.</p>
 <p>Things nodriver supports that zendriver-rs <strong>doesn't yet</strong>:</p>
 <ul>
-<li><strong>Canvas / WebGL / audio / font fingerprint spoofing.</strong> nodriver's
-bootstrap injects JS randomizers for each of these per launch. The
-Rust port currently ships protocol-level stealth (UA scrub,
-<code>webdriver</code> flag, hardware overrides) plus the <code>spoofed()</code> profile
-that patches the Navigator prototype — but not canvas-noise
-injection. On the post-v0.1 roadmap.</li>
-<li><strong>browserforge fingerprint generation.</strong> nodriver pairs with the
-<code>browserforge</code> library for pre-canned realistic fingerprints. Not
-ported; build a <code>StealthProfile</code> from explicit <code>UserAgentMetadata</code>
-fields by hand.</li>
 <li><strong>OCR helpers.</strong> nodriver bundles <code>easyocr</code> / <code>tesseract</code> wrappers
 for text-in-image extraction. Not ported; pair <code>tab.screenshot()</code>
 with the <code>tesseract-rs</code> or <code>leptess</code> crate.</li>
@@ -4421,7 +4416,7 @@ directly in the public surface.</p>
 <tr><td><code>Io(io::Error)</code></td><td>Local FS write failed (cache, extract).</td><td>Check cache-dir permissions / free space.</td></tr>
 <tr><td><code>Manifest(serde_json::Error)</code></td><td>Manifest JSON didn't parse.</td><td>Should not happen with the canonical URL; means the CFT side changed format — file an issue.</td></tr>
 <tr><td><code>VersionNotFound(version)</code></td><td><code>VersionSpec::Explicit("...")</code> string not present in manifest.</td><td>Drop a version (CFT only keeps the last N); use <code>VersionSpec::Latest</code> or a known version from the manifest.</td></tr>
-<tr><td><code>UnsupportedPlatform</code></td><td><code>Platform::auto_detect</code> returned <code>None</code>, or a non-<code>Stable</code> channel was requested.</td><td>Currently no fix for unsupported platforms (Linux arm64, BSDs); install Chrome out-of-band.</td></tr>
+<tr><td><code>UnsupportedPlatform</code></td><td><code>Platform::auto_detect</code> returned <code>None</code>, or the resolved manifest/channel has no download for the requested platform.</td><td>Currently no fix for unsupported platforms (Linux arm64, BSDs); install Chrome out-of-band.</td></tr>
 <tr><td><code>IntegrityFailed { expected, actual }</code></td><td>SHA256 of the downloaded zip doesn't match the manifest.</td><td>Delete the partial download under the cache dir; retry.</td></tr>
 <tr><td><code>Extraction(String)</code></td><td>Zip extraction failed.</td><td>Free disk space; check for filesystem corruption.</td></tr>
 </tbody></table>

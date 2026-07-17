@@ -321,18 +321,16 @@ zendriver = { version = "0.1", features = ["interception", "expect", "cloudflare
 end up wanting <code>expect_response</code> for network assertions) and add
 <code>interception</code> / <code>cloudflare</code> if you hit those needs.</p>
 <h2 id="known-gaps-in-v010"><a class="header" href="#known-gaps-in-v010">Known gaps in v0.1.0</a></h2>
+<p>Canvas / WebGL / font / audio fingerprint spoofing and a browserforge
+equivalent have shipped since this section was first written — see the
+<a href="./fingerprint.html">Fingerprint spoofing</a> chapter, including
+<a href="./fingerprint.html#pool--generative-sources-zendriver-fingerprints">pool + generative sources</a>
+for the <code>zendriver-fingerprints</code> crate (real-device persona dataset /
+Bayesian-network sampler) that plays the same role as Python's optional
+<code>browserforge</code> dependency.</p>
 <p>Capabilities the Python <code>zendriver</code> ships that are <strong>not yet</strong> in the
 Rust port:</p>
 <ul>
-<li><strong>Canvas / WebGL / font / audio fingerprint spoofing.</strong> Python's
-stealth layer randomizes these per-launch via JS bootstrap injection;
-the Rust port only ships the protocol-level patches (UA scrub,
-<code>webdriver</code> removal, hardware overrides) plus the optional
-<code>spoofed()</code> profile that patches the Navigator prototype. Active
-canvas-noise injection is on the post-v0.1 roadmap.</li>
-<li><strong>browserforge integration.</strong> Python's optional dep for
-pre-canned realistic fingerprints isn't ported. Build a
-<code>StealthProfile</code> from explicit <code>UserAgentMetadata</code> fields instead.</li>
 <li><strong>OCR helpers.</strong> Python's bundled OCR wrappers (<code>tesseract</code> /
 <code>easyocr</code>) for text-in-image extraction aren't ported. Pair Rust's
 <code>tab.screenshot()</code> with the <code>tesseract-rs</code> or <code>leptess</code> crate.</li>

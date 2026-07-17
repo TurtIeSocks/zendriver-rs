@@ -280,7 +280,7 @@ directly in the public surface.</p>
 <tr><td><code>Io(io::Error)</code></td><td>Local FS write failed (cache, extract).</td><td>Check cache-dir permissions / free space.</td></tr>
 <tr><td><code>Manifest(serde_json::Error)</code></td><td>Manifest JSON didn't parse.</td><td>Should not happen with the canonical URL; means the CFT side changed format — file an issue.</td></tr>
 <tr><td><code>VersionNotFound(version)</code></td><td><code>VersionSpec::Explicit("...")</code> string not present in manifest.</td><td>Drop a version (CFT only keeps the last N); use <code>VersionSpec::Latest</code> or a known version from the manifest.</td></tr>
-<tr><td><code>UnsupportedPlatform</code></td><td><code>Platform::auto_detect</code> returned <code>None</code>, or a non-<code>Stable</code> channel was requested.</td><td>Currently no fix for unsupported platforms (Linux arm64, BSDs); install Chrome out-of-band.</td></tr>
+<tr><td><code>UnsupportedPlatform</code></td><td><code>Platform::auto_detect</code> returned <code>None</code>, or the resolved manifest/channel has no download for the requested platform.</td><td>Currently no fix for unsupported platforms (Linux arm64, BSDs); install Chrome out-of-band.</td></tr>
 <tr><td><code>IntegrityFailed { expected, actual }</code></td><td>SHA256 of the downloaded zip doesn't match the manifest.</td><td>Delete the partial download under the cache dir; retry.</td></tr>
 <tr><td><code>Extraction(String)</code></td><td>Zip extraction failed.</td><td>Free disk space; check for filesystem corruption.</td></tr>
 </tbody></table>
