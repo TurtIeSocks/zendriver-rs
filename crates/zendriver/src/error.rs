@@ -51,6 +51,18 @@ pub enum ZendriverError {
     #[error("connection to chrome lost unexpectedly")]
     Disconnected,
 
+    /// An awaited event stream ended — or lost delivery continuity — before
+    /// the condition being watched for could be observed. Distinct from a
+    /// timeout: the awaited condition may in fact have occurred, but a
+    /// transport teardown, reconnect, or dropped broadcast subscriber means we
+    /// can no longer prove whether it did, so reporting a plain timeout (or a
+    /// complete result) would be a lie. Callers that need a definitive answer
+    /// should re-establish the wait — after a
+    /// [`Browser::reconnect`](crate::Browser::reconnect) if the connection
+    /// itself dropped.
+    #[error("event stream ended before the awaited condition was observed")]
+    EventStreamIncomplete,
+
     /// Chrome returned a CDP RPC error (a method call returned `error.code` /
     /// `error.message`).
     #[error("CDP RPC error [{code}] {message}")]
