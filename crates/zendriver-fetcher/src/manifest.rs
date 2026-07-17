@@ -1,7 +1,11 @@
 //! Chrome for Testing manifest fetcher.
 //!
 //! Fetches and parses the `known-good-versions-with-downloads.json` manifest
-//! published by Google's Chrome for Testing project.
+//! published by Google's Chrome for Testing project, plus the per-channel
+//! `last-known-good-versions-with-downloads.json` manifest used to resolve
+//! the `Beta`/`Dev`/`Canary` channels.
+
+use std::collections::HashMap;
 
 use serde::Deserialize;
 
@@ -50,6 +54,40 @@ pub(crate) async fn fetch_manifest_from(
     let resp = reqwest::get(url).await?;
     let text = resp.text().await?;
     let parsed: KnownGoodVersionsResponse = serde_json::from_str(&text)?;
+    Ok(parsed)
+}
+
+/// Chrome for Testing's per-channel manifest —
+/// `last-known-good-versions-with-downloads.json`. Keyed by channel name
+/// (`"Stable"`, `"Beta"`, `"Dev"`, `"Canary"`) rather than a flat version
+/// list, since each channel tracks its own latest known-good build.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ChannelsResponse {
+    pub channels: HashMap<String, ChannelEntry>,
+}
+
+/// One channel's entry in [`ChannelsResponse`] — same shape as
+/// [`VersionEntry`] (the manifest omits only the redundant `channel` name
+/// field, already carried as this entry's map key).
+#[allow(
+    dead_code,
+    reason = "revision not consumed by the resolver yet, same as VersionEntry"
+)]
+#[derive(Debug, Deserialize)]
+pub(crate) struct ChannelEntry {
+    pub version: String,
+    pub revision: String,
+    pub downloads: Downloads,
+}
+
+/// Same rationale as [`fetch_manifest_from`] — allows overriding the URL
+/// for wiremock-based testing.
+pub(crate) async fn fetch_channels_manifest_from(
+    url: &str,
+) -> Result<ChannelsResponse, FetcherError> {
+    let resp = reqwest::get(url).await?;
+    let text = resp.text().await?;
+    let parsed: ChannelsResponse = serde_json::from_str(&text)?;
     Ok(parsed)
 }
 

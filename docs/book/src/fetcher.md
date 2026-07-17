@@ -60,10 +60,10 @@ Customization points:
   - `VersionSpec::Latest` — the newest entry in the manifest (default).
   - `VersionSpec::Stable` — alias for `Latest` today; will diverge if /
     when CFT exposes a stable-channel JSON.
-  - `VersionSpec::Channel(Channel::Stable)` — only `Stable` is fully
-    wired in 0.1; `Beta` / `Dev` / `Canary` return
-    [`FetcherError::UnsupportedPlatform`] (the CFT endpoint is
-    separate).
+  - `VersionSpec::Channel(Channel::Stable | Channel::Beta | Channel::Dev | Channel::Canary)` —
+    `Stable` resolves through the same flat manifest as `Latest`; `Beta` /
+    `Dev` / `Canary` resolve through Chrome for Testing's separate
+    per-channel `last-known-good-versions-with-downloads.json` endpoint.
   - `VersionSpec::Explicit("126.0.6478.182".into())` — exact version
     string from the manifest.
 - **`.platform(Platform)`** — override [`Platform::auto_detect`]. Useful
@@ -73,7 +73,6 @@ Customization points:
 - **`.on_progress(cb)`** — receive a [`FetcherProgress`] snapshot on
   every phase transition + per-chunk during download.
 
-[`FetcherError::UnsupportedPlatform`]: https://docs.rs/zendriver/latest/zendriver/enum.FetcherError.html#variant.UnsupportedPlatform
 [`Platform::auto_detect`]: https://docs.rs/zendriver/latest/zendriver/enum.Platform.html#method.auto_detect
 [`FetcherProgress`]: https://docs.rs/zendriver/latest/zendriver/struct.FetcherProgress.html
 
