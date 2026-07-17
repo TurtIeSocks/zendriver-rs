@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.7.5] - 2026-07-17
+
+### Fixed
+
+- Wire Beta/Dev/Canary channels
+
+
 ## [0.7.4] - 2026-07-17
 
 
