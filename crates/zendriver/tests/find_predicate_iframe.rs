@@ -195,6 +195,47 @@ async fn select_all_returns_all_matches() {
     browser.close().await.unwrap();
 }
 
+/// Regression test: `.text_regex()` must resolve to the innermost
+/// matching element, not an ancestor. Chrome normalizes `innerText` such
+/// that `<html>`/`<body>` — whose only text-bearing descendant is the
+/// `<span>` — end up with an `innerText` identical to the leaf's, so an
+/// un-narrowed regex filter matches all three and `.one()`'s `[0]`
+/// (document order) picks the ancestor instead of the `<span>`. Assert
+/// on the resolved element's tag name (a distinguishing property, not
+/// just presence) to confirm it's the leaf.
+#[tokio::test]
+#[serial]
+#[ignore] // headful; run on the integration job or locally with Chrome
+async fn text_regex_resolves_to_innermost_leaf_not_ancestor() {
+    let mock = fixture_with_html(
+        r#"<!doctype html><html><body><div><span>match-me</span></div></body></html>"#,
+    )
+    .await;
+    let browser = Browser::builder().headless(true).launch().await.unwrap();
+    let tab = browser.main_tab();
+    tab.goto(&mock.uri()).await.unwrap();
+    tab.wait_for_load().await.unwrap();
+
+    let el = tab
+        .find()
+        .text_regex(regex::Regex::new("match-me").unwrap())
+        .one()
+        .await
+        .expect("text_regex(\"match-me\") must find a match");
+
+    let tag = el
+        .evaluate::<String>("el.tagName.toLowerCase()")
+        .await
+        .unwrap();
+    assert_eq!(
+        tag, "span",
+        "text_regex() must resolve to the innermost matching <span>, not an ancestor \
+         (<div>/<body>/<html>) whose innerText happens to equal the leaf's"
+    );
+
+    browser.close().await.unwrap();
+}
+
 /// Mixing `.css()` and a predicate method on the same query must return
 /// `Err(ZendriverError::ConflictingSelectors)`.
 #[tokio::test]

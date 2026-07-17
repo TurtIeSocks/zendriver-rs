@@ -27,15 +27,11 @@ use zendriver::{AriaRole, Browser};
 /// document (instead of the frame's) finds the WRONG element instead of
 /// finding nothing.
 ///
-/// Deliberate whitespace/indentation around the button: the `text_regex`
-/// resolver (`resolve_text_regex_many`/`_one`) has no "narrowest match"
-/// step (unlike the plain-substring `.text()` path), so an unanchored
-/// pattern matching the button's text also matches `<body>`/`<html>`'s
-/// *aggregate* `textContent` and — being first in document order — wins
-/// `.one()`'s `[0]`. That's a separate, pre-existing gap (not this fix's
-/// scope); anchoring the regex to the button's exact (unpadded) text and
-/// keeping surrounding whitespace on the ancestors sidesteps it here so
-/// this test isolates just the frame-`contextId` behavior under test.
+/// `text_regex`'s resolver now also applies the "narrowest match" step
+/// (see `regex_narrowing_js` in `crates/zendriver/src/query/selectors.rs`),
+/// so an unanchored pattern matching the button's text no longer also
+/// matches `<body>`/`<html>`'s *aggregate* `textContent` — the button
+/// itself wins `.one()`'s `[0]` even without anchoring.
 ///
 /// `main-btn`'s text deliberately starts with the same `unique-` prefix as
 /// the frame's button (but a different suffix) so a buggy frame-scoped
@@ -152,20 +148,23 @@ async fn frame_text_regex_finds_frame_element_not_main_doc() {
 
     let frame = child_frame(&tab).await;
 
-    // NOTE: the regex resolver (`resolve_text_regex_many`/`_one`) has no
-    // "narrowest match" step (unlike the plain-substring `.text()` path),
-    // so `[0]` in document order can land on an ancestor (`<body>`/`<html>`)
-    // whose *rendered* `innerText` equals the leaf's — a separate,
-    // pre-existing gap unrelated to frame `contextId` scoping. So this
-    // test asserts on rendered *content* (which document the match came
-    // from) rather than requiring the match to be the `<button>` node
-    // itself.
+    // Now that the regex resolver applies the same "narrowest match" step
+    // as `.text()` (see `regex_narrowing_js` in
+    // `crates/zendriver/src/query/selectors.rs`), `.one()` resolves to
+    // the `<button>` itself rather than an ancestor whose *rendered*
+    // `innerText` happens to equal the leaf's — so this asserts on the
+    // resolved node's `id` directly, in addition to frame scoping.
     let el = frame
         .find()
         .text_regex(regex::Regex::new("unique-frame-text").unwrap())
         .one()
         .await
         .expect("frame.find().text_regex() must find a match in the frame's own document");
+    assert_eq!(
+        el.attr("id").await.unwrap().as_deref(),
+        Some("frame-btn"),
+        "text_regex() must resolve to the frame's own <button>, not an ancestor or the main doc's element"
+    );
     let text = el.inner_text().await.unwrap();
     assert!(
         text.contains("unique-frame-text"),
