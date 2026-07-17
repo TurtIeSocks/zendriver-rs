@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["CookiePriority","CookieSourceScheme","SameSite"],"mod":["persistence"],"struct":["Cookie","CookieJar"]};
+window.SIDEBAR_ITEMS = {"enum":["CookiePriority","CookieSourceScheme","SameSite"],"mod":["persistence"],"struct":["Cookie","CookieJar","CookiePartitionKey"]};
