@@ -49,5 +49,7 @@ pub use connection::{
 };
 pub use error::{CallError, TransportError};
 pub use frame::{AccountedRawEvent, CdpCommand, CdpInbound, CdpRpcError, RawEvent};
-pub use observer::{ObserverError, PausedSession, TargetInfo, TargetObserver};
+pub use observer::{
+    ObserverError, ObserverFailurePolicy, PausedSession, TargetInfo, TargetObserver,
+};
 pub use session::SessionHandle;

@@ -17,7 +17,7 @@ use tracing::{debug, error, trace, warn};
 
 use crate::connection::{Connection, ConnectionInner};
 use crate::frame::{AccountedRawEvent, CdpCommand, CdpInbound, CdpRpcError, RawEvent};
-use crate::observer::{PausedSession, TargetInfo, TargetObserver};
+use crate::observer::{ObserverFailurePolicy, PausedSession, TargetInfo, TargetObserver};
 
 /// Outbound command sent from a `Connection` handle to the actor.
 #[derive(Debug)]
@@ -337,10 +337,15 @@ pub(crate) async fn run_actor<S>(
 
 /// Run all `observers` serially against the just-attached session. Returns
 /// after either: (a) every observer succeeds — in which case we release the
-/// debugger via `Runtime.runIfWaitingForDebugger`, (b) one observer errors or
+/// debugger via `Runtime.runIfWaitingForDebugger`; (b) one observer errors or
 /// panics — we detach via `Target.detachFromTarget` and return without
-/// releasing, or (c) an observer exceeds `observer_timeout` — we log and fall
-/// through to release the debugger so Chrome doesn't hang indefinitely.
+/// releasing; or (c) an observer exceeds `observer_timeout` — behavior then
+/// depends on [`TargetObserver::failure_policy`]:
+/// [`ObserverFailurePolicy::Required`] (the default) detaches the same as
+/// (b), fail closed, so a hung observer can never leave the page running
+/// without its setup; [`ObserverFailurePolicy::BestEffort`] logs and falls
+/// through to release the debugger anyway, matching the pre-existing
+/// fail-open behavior for observers that opt into it.
 ///
 /// ## Cancellation
 ///
@@ -372,31 +377,34 @@ async fn handle_target_attached(
             Ok(Ok(Ok(()))) => continue,
             Ok(Ok(Err(e))) => {
                 error!(observer = name, %session_id, error = %e, "observer failed; detaching");
-                let _ = conn
-                    .call_raw(
-                        "Target.detachFromTarget",
-                        json!({ "sessionId": &session_id }),
-                        None,
-                    )
-                    .await;
+                detach_target(&conn, &session_id).await;
                 return;
             }
             Ok(Err(panic)) => {
                 let msg = panic_payload(&panic);
                 error!(observer = name, %session_id, panic = %msg, "observer panicked; detaching");
-                let _ = conn
-                    .call_raw(
-                        "Target.detachFromTarget",
-                        json!({ "sessionId": &session_id }),
-                        None,
-                    )
-                    .await;
+                detach_target(&conn, &session_id).await;
                 return;
             }
-            Err(_) => {
-                warn!(observer = name, %session_id, "observer timed out; releasing");
-                break;
-            }
+            Err(_) => match obs.failure_policy() {
+                ObserverFailurePolicy::Required => {
+                    warn!(
+                        observer = name,
+                        %session_id,
+                        "observer timed out; detaching (fail-closed)"
+                    );
+                    detach_target(&conn, &session_id).await;
+                    return;
+                }
+                ObserverFailurePolicy::BestEffort => {
+                    warn!(
+                        observer = name,
+                        %session_id,
+                        "observer timed out; releasing (best-effort)"
+                    );
+                    break;
+                }
+            },
         }
     }
     let _ = conn
@@ -404,6 +412,20 @@ async fn handle_target_attached(
             "Runtime.runIfWaitingForDebugger",
             json!({}),
             Some(session_id),
+        )
+        .await;
+}
+
+/// Shared detach path for every observer failure mode (`Err`, panic, or a
+/// `Required`-policy timeout): force-detach the session via
+/// `Target.detachFromTarget` so the target is never handed back to Chrome
+/// with `Runtime.runIfWaitingForDebugger`.
+async fn detach_target(conn: &Connection, session_id: &str) {
+    let _ = conn
+        .call_raw(
+            "Target.detachFromTarget",
+            json!({ "sessionId": session_id }),
+            None,
         )
         .await;
 }
@@ -429,7 +451,7 @@ mod tests {
     use crate::connection::{
         spawn_actor_with_observers, spawn_actor_with_observers_and_timeout, test_only::DriverStream,
     };
-    use crate::observer::{ObserverError, PausedSession, TargetObserver};
+    use crate::observer::{ObserverError, ObserverFailurePolicy, PausedSession, TargetObserver};
     use serde_json::json;
     use std::sync::Mutex;
     use tokio_tungstenite::tungstenite::Message;
@@ -840,6 +862,7 @@ mod tests {
         name: &'static str,
         calls: Arc<Mutex<Vec<(&'static str, String)>>>,
         behavior: ObserverBehavior,
+        policy: ObserverFailurePolicy,
     }
 
     #[async_trait::async_trait]
@@ -865,6 +888,10 @@ mod tests {
                     Ok(())
                 }
             }
+        }
+
+        fn failure_policy(&self) -> ObserverFailurePolicy {
+            self.policy
         }
     }
 
@@ -910,6 +937,7 @@ mod tests {
             name: "rec",
             calls: calls.clone(),
             behavior: ObserverBehavior::Ok,
+            policy: ObserverFailurePolicy::Required,
         });
         let conn = spawn_actor_with_observers(ws, vec![obs]);
 
@@ -934,6 +962,7 @@ mod tests {
             name: "bad",
             calls: calls.clone(),
             behavior: ObserverBehavior::Err,
+            policy: ObserverFailurePolicy::Required,
         });
         let conn = spawn_actor_with_observers(ws, vec![obs]);
 
@@ -956,6 +985,7 @@ mod tests {
             name: "kaboom",
             calls: calls.clone(),
             behavior: ObserverBehavior::Panic,
+            policy: ObserverFailurePolicy::Required,
         });
         let conn = spawn_actor_with_observers(ws, vec![obs]);
 
@@ -991,19 +1021,65 @@ mod tests {
         conn.shutdown();
     }
 
+    /// Default (`Required`) policy: a timeout must fail closed, exactly like
+    /// an `Err` or a panic — detach, and never hand the target out via
+    /// `Runtime.runIfWaitingForDebugger`. This replaces the old fail-open
+    /// `observer_timeout_releases_debugger_anyway` test — that behavior is
+    /// now `BestEffort`-only, covered by
+    /// `best_effort_observer_timeout_releases_debugger_anyway` below.
     #[tokio::test]
-    async fn observer_timeout_releases_debugger_anyway() {
+    async fn required_observer_timeout_detaches_target() {
         let (ws, test_tx, mut test_rx) = duplex_pair();
         let calls = Arc::new(Mutex::new(Vec::new()));
         let obs: Arc<dyn TargetObserver> = Arc::new(RecordingObserver {
-            name: "slow",
+            name: "slow-required",
             calls: calls.clone(),
             behavior: ObserverBehavior::Sleep(Duration::from_secs(10)),
+            policy: ObserverFailurePolicy::Required,
         });
         let conn =
             spawn_actor_with_observers_and_timeout(ws, vec![obs], Duration::from_millis(100));
 
-        emit_attached(&test_tx, "S-slow").await;
+        emit_attached(&test_tx, "S-slow-required").await;
+
+        // Within ~200ms the timeout must fire and, for a Required observer,
+        // detach the target instead of releasing it.
+        let frame = tokio::time::timeout(Duration::from_millis(500), next_frame(&mut test_rx))
+            .await
+            .expect("timeout waiting for Target.detachFromTarget");
+        assert_eq!(frame["method"], "Target.detachFromTarget");
+        assert_eq!(frame["params"]["sessionId"], "S-slow-required");
+        assert!(frame.get("sessionId").is_none());
+
+        // The target must never be handed out: no runIfWaitingForDebugger
+        // frame should follow the detach.
+        let no_release =
+            tokio::time::timeout(Duration::from_millis(300), next_frame(&mut test_rx)).await;
+        assert!(
+            no_release.is_err(),
+            "Required observer timeout must not release the debugger after detaching"
+        );
+
+        conn.shutdown();
+    }
+
+    /// `BestEffort` policy: keeps today's original fail-open timeout
+    /// behavior — log and release the debugger anyway so Chrome doesn't
+    /// stay paused indefinitely on a non-critical observer.
+    #[tokio::test]
+    async fn best_effort_observer_timeout_releases_debugger_anyway() {
+        let (ws, test_tx, mut test_rx) = duplex_pair();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let obs: Arc<dyn TargetObserver> = Arc::new(RecordingObserver {
+            name: "slow-best-effort",
+            calls: calls.clone(),
+            behavior: ObserverBehavior::Sleep(Duration::from_secs(10)),
+            policy: ObserverFailurePolicy::BestEffort,
+        });
+        let conn =
+            spawn_actor_with_observers_and_timeout(ws, vec![obs], Duration::from_millis(100));
+
+        emit_attached(&test_tx, "S-slow-best-effort").await;
 
         // Within ~200ms the timeout must fire and the debugger must be released
         // anyway so Chrome doesn't stay paused indefinitely.
@@ -1011,7 +1087,7 @@ mod tests {
             .await
             .expect("timeout waiting for runIfWaitingForDebugger");
         assert_eq!(frame["method"], "Runtime.runIfWaitingForDebugger");
-        assert_eq!(frame["sessionId"], "S-slow");
+        assert_eq!(frame["sessionId"], "S-slow-best-effort");
 
         conn.shutdown();
     }
@@ -1025,6 +1101,7 @@ mod tests {
                 name,
                 calls: calls.clone(),
                 behavior: ObserverBehavior::Ok,
+                policy: ObserverFailurePolicy::Required,
             })
         };
         let conn =

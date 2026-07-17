@@ -8,10 +8,14 @@ use crate::error::CallError;
 /// debugger releases the target.
 ///
 /// The actor walks every registered observer serially (registration order)
-/// on each new target. A failing observer returns `Err` and the actor detaches
-/// the session via `Target.detachFromTarget`; observers that exceed the
-/// observer-timeout are skipped and the actor releases the debugger so Chrome
-/// doesn't hang indefinitely.
+/// on each new target. An observer can fail three ways: it returns `Err`, it
+/// panics, or it exceeds the observer timeout. `Err` and panics always fail
+/// closed — the actor detaches the session via `Target.detachFromTarget`.
+/// What happens on *timeout* depends on [`TargetObserver::failure_policy`]:
+/// [`ObserverFailurePolicy::Required`] (the default) also fails closed and
+/// detaches; [`ObserverFailurePolicy::BestEffort`] fails open and releases
+/// the debugger anyway so a non-critical, slow observer can't hang the
+/// target.
 ///
 /// `zendriver-stealth::StealthObserver` implements this trait to install
 /// patches on every new page target before the page's first script runs.
@@ -30,6 +34,70 @@ pub trait TargetObserver: Send + Sync {
 
     /// Stable identifier used in actor diagnostics (`error!` / `warn!` records).
     fn name(&self) -> &'static str;
+
+    /// How the actor should treat this observer when its `on_target_attached`
+    /// future exceeds the observer timeout.
+    ///
+    /// Defaults to [`ObserverFailurePolicy::Required`] — fail closed. This is
+    /// a **behavior change** for any pre-existing impl that doesn't override
+    /// this method: a hung observer used to be silently skipped (the actor
+    /// released the debugger and the page ran without that observer's setup);
+    /// now it detaches the target instead, the same way an `Err` or panic
+    /// already did. Override to return [`ObserverFailurePolicy::BestEffort`]
+    /// to opt a specific, non-critical observer back into the old fail-open
+    /// timeout behavior (log + release). Errors and panics are unaffected by
+    /// this policy — they always detach regardless of which variant is
+    /// returned here.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use zendriver_transport::{
+    ///     ObserverError, ObserverFailurePolicy, PausedSession, TargetObserver,
+    /// };
+    ///
+    /// /// A telemetry hook: nice to have, but must never block a page from
+    /// /// loading if it hangs.
+    /// struct OptionalTelemetry;
+    ///
+    /// #[async_trait::async_trait]
+    /// impl TargetObserver for OptionalTelemetry {
+    ///     async fn on_target_attached(
+    ///         &self,
+    ///         _session: PausedSession<'_>,
+    ///     ) -> Result<(), ObserverError> {
+    ///         Ok(())
+    ///     }
+    ///
+    ///     fn name(&self) -> &'static str {
+    ///         "optional-telemetry"
+    ///     }
+    ///
+    ///     fn failure_policy(&self) -> ObserverFailurePolicy {
+    ///         ObserverFailurePolicy::BestEffort
+    ///     }
+    /// }
+    /// ```
+    fn failure_policy(&self) -> ObserverFailurePolicy {
+        ObserverFailurePolicy::Required
+    }
+}
+
+/// How the actor reacts when a [`TargetObserver`] exceeds the observer
+/// timeout — see [`TargetObserver::failure_policy`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ObserverFailurePolicy {
+    /// Fail closed (the default): a timeout is treated the same as an `Err`
+    /// or a panic — the actor sends `Target.detachFromTarget` and the target
+    /// is never handed out (the debugger is not released).
+    Required,
+    /// Fail open on timeout only: the actor logs a warning and releases the
+    /// debugger (`Runtime.runIfWaitingForDebugger`) anyway, so the page runs
+    /// without this observer's setup rather than being detached. Errors and
+    /// panics from this observer still detach — only the timeout branch is
+    /// relaxed.
+    BestEffort,
 }
 
 /// Scope passed to [`TargetObserver::on_target_attached`] — a session that's
