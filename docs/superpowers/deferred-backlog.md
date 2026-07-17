@@ -42,7 +42,7 @@ Legend: ⏸ parked (blocked on an external decision, not a bug) · 🐞 shipped-
 - **Streaming response bodies** (monitor + HTTP `request()`); whole-body only, needs a Fetch-interception path. — `crates/zendriver/src/monitor/mod.rs:188`, `request.rs:346-380`
 - **Frame OOPIF placeholder** — *resolved, see §-closed* (backlog previously mis-cited a test fixture).
 - **Frame-scoped `.text()`/`.xpath()`/`.text_regex()` selectors ignoring CDP `contextId`** — *resolved, see §-closed*.
-- **Cross-frame result ordering is non-deterministic** — `Tab::frames()` is an unordered `HashMap`; a stable order (e.g. sorting by `Frame::id`) is a small follow-up if `include_frames()` callers ever need document-order-across-frames guarantees.
+- **Cross-frame result ordering is non-deterministic** — *resolved, see §-closed*.
 
 ### Elements / input
 - **Button-triggered file pickers** via `Page.fileChooserOpened`; today `upload_files` uses `DOM.setFileInputFiles` on direct `<input type=file>` only. — `crates/zendriver/src/element/actions.rs:585,600`
@@ -95,6 +95,7 @@ Legend: ⏸ parked (blocked on an external decision, not a bug) · 🐞 shipped-
 
 ## §-closed — ✅ Closed since the 2026-06-03 snapshot
 
+- **Cross-frame result ordering is non-deterministic** → **fixed** (2026-07-16, `fix(tab): sort frames() by frame id for deterministic cross-frame results`). `Tab::frames()` (`crates/zendriver/src/tab.rs`) now sorts its `HashMap`-backed snapshot by `Frame::id()` before returning, so `include_frames()`'s cross-frame fan-out (`one_across_frames`/`many_across_frames` in `crates/zendriver/src/query/mod.rs`, both of which iterate `tab.frames()` in registry order) gets a stable, run-to-run-consistent frame order instead of unspecified `HashMap::values()` iteration. Covered by a MockConnection unit test (`frames_are_sorted_by_id_regardless_of_attach_order`) that attaches three frames out of lexical order and asserts `frames()` returns them sorted.
 - **Frame-session `Runtime.evaluate`** → **shipped** (commit `5440066b`). `QueryScope::session()` returns the frame's session; `execution_context_id()` pins eval to the frame's isolated-world context; test `in_frame_override_routes_dispatch_to_frame_session` asserts it. (Backlog's old `query/mod.rs:1873` citation is now just a comment inside that test.)
 - **Nightly real-Chrome anti-detection CI** → **exists**. `nightly-stealth-tests` (cron `0 6 * * *`, real Chrome) runs `--test stealth_phase2`, which hits `bot.sannysoft.com` and `arh.antoinevastel.com/bots/areyouheadless`. — `.github/workflows/ci.yml:200-224`
 - **OOPIF bootstrap "placeholder Frame"** → **was already done**; the backlog mis-cited test-fixture setup. Real impl: `crates/zendriver/src/frame/oopif.rs:49` `register_oopif_frame`, wired at `browser.rs:1497` for `kind=="iframe"` (commit `b13fdbd3`).
