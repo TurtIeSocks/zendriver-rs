@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, trace, warn};
 
 use crate::connection::{Connection, ConnectionInner};
-use crate::frame::{CdpCommand, CdpInbound, CdpRpcError, RawEvent};
+use crate::frame::{AccountedRawEvent, CdpCommand, CdpInbound, CdpRpcError, RawEvent};
 use crate::observer::{PausedSession, TargetInfo, TargetObserver};
 
 /// Outbound command sent from a `Connection` handle to the actor.
@@ -30,6 +30,22 @@ pub(crate) struct OutboundCmd {
 
 /// Default broadcast bus capacity. Lagged subscribers drop frames.
 pub(crate) const EVENT_BUS_CAPACITY: usize = 1024;
+
+/// Accounted-bus plumbing for one actor run: the second, opt-in broadcast
+/// sender plus this run's generation number. Bundled into a struct (rather
+/// than two more [`run_actor`] parameters) to keep the function signature
+/// under clippy's `too_many_arguments` threshold and to make the bus/
+/// generation pairing explicit at each call site — mirrors the
+/// [`crate::connection`]-side rationale for bundling wide handshake inputs
+/// into a struct.
+pub(crate) struct AccountedBus {
+    /// Second broadcast bus behind
+    /// [`Connection::subscribe_raw_accounted`](crate::connection::Connection::subscribe_raw_accounted).
+    pub(crate) tx: broadcast::Sender<AccountedRawEvent>,
+    /// This actor run's generation number, stamped onto every
+    /// [`AccountedRawEvent`] it produces.
+    pub(crate) generation: u64,
+}
 
 /// `Target.attachedToTarget` event payload (we only deserialize what we need).
 #[derive(serde::Deserialize)]
@@ -57,10 +73,19 @@ struct TargetDetached {
 /// loop stays responsive; `weak_inner` lets the handler reconstruct a
 /// `Connection` (without forming a strong cycle) to talk back through this
 /// same actor.
+///
+/// `accounted` bundles the second, opt-in broadcast bus behind
+/// [`Connection::subscribe_raw_accounted`](crate::connection::Connection::subscribe_raw_accounted)
+/// with this actor run's generation number, stamped onto every
+/// [`AccountedRawEvent`] it produces. Mirroring onto `accounted.tx` — the
+/// per-event clone of [`RawEvent`] and the send itself — is gated behind
+/// `accounted.tx.receiver_count() > 0` so a connection with no accounted
+/// subscribers pays nothing beyond the existing `event_tx` broadcast.
 pub(crate) async fn run_actor<S>(
     mut ws: S,
     mut cmd_rx: mpsc::Receiver<OutboundCmd>,
     event_tx: broadcast::Sender<RawEvent>,
+    accounted: AccountedBus,
     shutdown: CancellationToken,
     observers: Vec<Arc<dyn TargetObserver>>,
     weak_inner: Weak<ConnectionInner>,
@@ -71,6 +96,11 @@ pub(crate) async fn run_actor<S>(
 {
     let mut pending: HashMap<u64, oneshot::Sender<Result<Value, CdpRpcError>>> = HashMap::new();
     let mut next_id: u64 = 1;
+    // Per-generation monotonic counter for `AccountedRawEvent::Event::sequence`.
+    // Reset to 1 on every actor run (a fresh call to `run_actor`, i.e. every
+    // reconnect); only advances when `accounted_tx` actually has a
+    // subscriber, since it counts positions *on the accounted bus*.
+    let mut next_accounted_sequence: u64 = 1;
 
     // Sentinel stamped onto drained pendings when the loop exits. Defaults to
     // the clean-shutdown code; the unexpected-ws-death branches below flip it
@@ -241,6 +271,21 @@ pub(crate) async fn run_actor<S>(
                                     }
                                 }
                                 let ev = RawEvent { method, params, session_id };
+                                // Gate the per-event clone + accounted-bus send
+                                // behind an actual subscriber: cloning `ev`
+                                // (method String + params Value — potentially
+                                // large Network.* JSON) is wasted work when
+                                // nobody is listening on the accounted bus.
+                                if accounted.tx.receiver_count() > 0 {
+                                    let sequence = next_accounted_sequence;
+                                    next_accounted_sequence =
+                                        next_accounted_sequence.wrapping_add(1);
+                                    let _ = accounted.tx.send(AccountedRawEvent::Event {
+                                        generation: accounted.generation,
+                                        sequence,
+                                        event: ev.clone(),
+                                    });
+                                }
                                 // Ignore SendError: zero subscribers is fine.
                                 let _ = event_tx.send(ev);
                             }
@@ -271,6 +316,15 @@ pub(crate) async fn run_actor<S>(
     } else {
         "connection shut down"
     };
+    // A genuine ws death (not a caller-requested `shutdown()` and not a
+    // `reconnect()` — both cancel via `shutdown.cancelled()`, which never
+    // sets `DISCONNECTED_CODE`) gets exactly one `Disconnected` on the
+    // accounted bus, gated the same as the per-event mirroring above.
+    if drain_code == crate::connection::DISCONNECTED_CODE && accounted.tx.receiver_count() > 0 {
+        let _ = accounted.tx.send(AccountedRawEvent::Disconnected {
+            generation: accounted.generation,
+        });
+    }
     for (_id, reply) in pending.drain() {
         let _ = reply.send(Err(CdpRpcError {
             code: drain_code,
@@ -410,6 +464,10 @@ mod tests {
             ws,
             cmd_rx,
             event_tx,
+            AccountedBus {
+                tx: broadcast::channel::<AccountedRawEvent>(EVENT_BUS_CAPACITY).0,
+                generation: 1,
+            },
             shutdown.clone(),
             Vec::new(),
             Weak::new(),
@@ -451,6 +509,10 @@ mod tests {
             ws,
             cmd_rx,
             event_tx,
+            AccountedBus {
+                tx: broadcast::channel::<AccountedRawEvent>(EVENT_BUS_CAPACITY).0,
+                generation: 1,
+            },
             shutdown.clone(),
             Vec::new(),
             Weak::new(),
@@ -501,6 +563,10 @@ mod tests {
             ws,
             cmd_rx,
             event_tx,
+            AccountedBus {
+                tx: broadcast::channel::<AccountedRawEvent>(EVENT_BUS_CAPACITY).0,
+                generation: 1,
+            },
             shutdown.clone(),
             Vec::new(),
             Weak::new(),
@@ -554,6 +620,10 @@ mod tests {
             ws,
             cmd_rx,
             event_tx,
+            AccountedBus {
+                tx: broadcast::channel::<AccountedRawEvent>(EVENT_BUS_CAPACITY).0,
+                generation: 1,
+            },
             shutdown.clone(),
             Vec::new(),
             Weak::new(),
@@ -588,6 +658,10 @@ mod tests {
             ws,
             cmd_rx,
             event_tx,
+            AccountedBus {
+                tx: broadcast::channel::<AccountedRawEvent>(EVENT_BUS_CAPACITY).0,
+                generation: 1,
+            },
             shutdown.clone(),
             Vec::new(),
             Weak::new(),
@@ -627,6 +701,10 @@ mod tests {
             ws,
             cmd_rx,
             event_tx,
+            AccountedBus {
+                tx: broadcast::channel::<AccountedRawEvent>(EVENT_BUS_CAPACITY).0,
+                generation: 1,
+            },
             shutdown.clone(),
             Vec::new(),
             Weak::new(),
@@ -665,6 +743,10 @@ mod tests {
             ws,
             cmd_rx,
             event_tx,
+            AccountedBus {
+                tx: broadcast::channel::<AccountedRawEvent>(EVENT_BUS_CAPACITY).0,
+                generation: 1,
+            },
             shutdown.clone(),
             Vec::new(),
             Weak::new(),
@@ -710,6 +792,10 @@ mod tests {
             ws,
             cmd_rx,
             event_tx,
+            AccountedBus {
+                tx: broadcast::channel::<AccountedRawEvent>(EVENT_BUS_CAPACITY).0,
+                generation: 1,
+            },
             shutdown.clone(),
             Vec::new(),
             Weak::new(),

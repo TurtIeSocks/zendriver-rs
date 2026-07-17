@@ -129,7 +129,9 @@ pub use window::{WindowBounds, WindowState};
 pub use zendriver_stealth::{Persona, PersonaBuilder, Seed, Strategy, Surface};
 
 // Re-export selected transport types for advanced users.
-pub use zendriver_transport::{CallError, Connection, SessionHandle, TransportError};
+pub use zendriver_transport::{
+    AccountedRawEvent, CallError, Connection, SessionHandle, TransportError,
+};
 
 /// Network interception API re-exports.
 ///

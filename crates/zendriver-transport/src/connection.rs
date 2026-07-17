@@ -9,11 +9,12 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_util::sync::CancellationToken;
 
-use crate::actor::{EVENT_BUS_CAPACITY, OutboundCmd, run_actor};
+use crate::actor::{AccountedBus, EVENT_BUS_CAPACITY, OutboundCmd, run_actor};
 use crate::error::{CallError, TransportError};
-use crate::frame::RawEvent;
+use crate::frame::{AccountedRawEvent, RawEvent};
 use crate::observer::TargetObserver;
 
 /// Default ceiling on a single observer's `on_target_attached` future, applied
@@ -109,6 +110,16 @@ pub(crate) struct ConnectionInner {
     /// keeps feeding them; the new actor is spawned with a clone of this very
     /// sender.
     pub(crate) event_tx: broadcast::Sender<RawEvent>,
+    /// Second, opt-in broadcast bus behind [`Connection::subscribe_raw_accounted`].
+    /// Like `event_tx`, **never** swapped on reconnect — the same `Sender`
+    /// keeps feeding existing accounted subscribers across a reconnect, with
+    /// [`AccountedRawEvent::Reconnected`] marking the transition.
+    pub(crate) accounted_tx: broadcast::Sender<AccountedRawEvent>,
+    /// Current connection generation, read by [`Connection::connection_generation`].
+    /// Starts at 1; bumped by [`Connection::reconnect`] before the new actor
+    /// is spawned. `Relaxed` suffices: advisory value with no ordering
+    /// relationship to anything else, same rationale as `call_timeout_ms`.
+    pub(crate) generation: AtomicU64,
     /// Cancellation token of the *current* actor. Swapped on reconnect: the
     /// old actor is cancelled (its already-dead `pending` drains) and the new
     /// actor gets a fresh token. Each spawned actor owns its own clone, so
@@ -139,6 +150,8 @@ impl std::fmt::Debug for ConnectionInner {
         f.debug_struct("ConnectionInner")
             .field("cmd_tx", &self.cmd_tx)
             .field("event_tx", &self.event_tx)
+            .field("accounted_tx", &self.accounted_tx)
+            .field("generation", &self.generation)
             .field("shutdown", &self.shutdown)
             .field("observer_timeout", &self.observer_timeout)
             .field("call_timeout_ms", &self.call_timeout_ms)
@@ -300,6 +313,96 @@ impl Connection {
         )
     }
 
+    /// Subscribe to all events on this connection, annotated with
+    /// generation, sequence, and explicit loss/reconnect/disconnect signals.
+    ///
+    /// Unlike [`Connection::subscribe_raw`], which silently drops frames a
+    /// lagging subscriber missed, this stream reports every gap explicitly
+    /// via [`AccountedRawEvent::Lagged`], every [`Connection::reconnect`] via
+    /// [`AccountedRawEvent::Reconnected`], and the underlying WebSocket dying
+    /// via [`AccountedRawEvent::Disconnected`] — so a capture/replay/monitor
+    /// consumer is never silently misled about what it saw.
+    ///
+    /// Opt-in and additive: `subscribe_raw` is completely unaffected by
+    /// whether this method is ever called. The actor gates the per-event
+    /// clone and the send onto this bus behind this stream having at least
+    /// one live subscriber, so a connection with no accounted subscribers
+    /// pays nothing beyond what `subscribe_raw` already costs.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use futures::StreamExt;
+    /// use zendriver_transport::{AccountedRawEvent, Connection};
+    ///
+    /// # async fn example(conn: Connection) {
+    /// let mut events = conn.subscribe_raw_accounted();
+    /// while let Some(ev) = events.next().await {
+    ///     match ev {
+    ///         AccountedRawEvent::Event { generation, sequence, event } => {
+    ///             println!("gen {generation} seq {sequence}: {}", event.method);
+    ///         }
+    ///         AccountedRawEvent::Lagged { generation, missed } => {
+    ///             eprintln!("gen {generation}: missed {missed} events");
+    ///         }
+    ///         AccountedRawEvent::Reconnected { previous, generation } => {
+    ///             eprintln!("reconnected: gen {previous} -> {generation}");
+    ///         }
+    ///         AccountedRawEvent::Disconnected { generation } => {
+    ///             eprintln!("gen {generation} disconnected");
+    ///             break;
+    ///         }
+    ///     }
+    /// }
+    /// # }
+    /// ```
+    pub fn subscribe_raw_accounted(
+        &self,
+    ) -> impl Stream<Item = AccountedRawEvent> + Send + Unpin + use<> {
+        let inner = Arc::clone(&self.inner);
+        Box::pin(
+            BroadcastStream::new(self.inner.accounted_tx.subscribe()).filter_map(move |res| {
+                let inner = Arc::clone(&inner);
+                async move {
+                    match res {
+                        Ok(ev) => Some(ev),
+                        Err(BroadcastStreamRecvError::Lagged(missed)) => {
+                            Some(AccountedRawEvent::Lagged {
+                                // Read fresh rather than a value captured at
+                                // subscribe time, so a `Lagged` detected after
+                                // a `reconnect()` reports the generation
+                                // active *now*, not the one active when this
+                                // subscriber first subscribed.
+                                generation: inner.generation.load(Ordering::Relaxed),
+                                missed,
+                            })
+                        }
+                    }
+                }
+            }),
+        )
+    }
+
+    /// The current connection generation.
+    ///
+    /// Starts at `1` for a freshly-spawned actor and increments by one on
+    /// every [`Connection::reconnect`]. Paired with the `generation` field on
+    /// every [`AccountedRawEvent`] so a
+    /// [`Connection::subscribe_raw_accounted`] consumer can tell which live
+    /// actor an event, lag, or disconnect came from.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # fn example(conn: zendriver_transport::Connection) {
+    /// let generation = conn.connection_generation();
+    /// assert!(generation >= 1);
+    /// # }
+    /// ```
+    pub fn connection_generation(&self) -> u64 {
+        self.inner.generation.load(Ordering::Relaxed)
+    }
+
     /// Trigger graceful shutdown of the underlying actor.
     pub fn shutdown(&self) {
         self.inner
@@ -357,7 +460,11 @@ impl Connection {
             + 'static,
     {
         // Cancel the previous actor — its `pending` (all stale by now) drains
-        // and its loop exits.
+        // and its loop exits. This goes through the `shutdown.cancelled()`
+        // branch of the actor loop (same as `Connection::shutdown`), so it
+        // never sets `DISCONNECTED_CODE` and therefore never emits
+        // `AccountedRawEvent::Disconnected` — a reconnect is announced solely
+        // via `Reconnected` below, not a spurious disconnect.
         {
             let guard = self
                 .inner
@@ -367,8 +474,25 @@ impl Connection {
             guard.cancel();
         }
 
+        // Bump the generation and announce the transition on the accounted
+        // bus BEFORE spawning the new actor, so a subscriber never observes
+        // an event tagged with the new generation before `Reconnected`.
+        // `fetch_add` returns the *previous* value, exactly what
+        // `AccountedRawEvent::Reconnected::previous` needs.
+        let previous_generation = self.inner.generation.fetch_add(1, Ordering::Relaxed);
+        let new_generation = previous_generation + 1;
+        if self.inner.accounted_tx.receiver_count() > 0 {
+            let _ = self
+                .inner
+                .accounted_tx
+                .send(AccountedRawEvent::Reconnected {
+                    previous: previous_generation,
+                    generation: new_generation,
+                });
+        }
+
         // Fresh command channel + shutdown token for the new actor; reuse the
-        // SAME event bus so existing subscribers keep receiving.
+        // SAME event buses so existing subscribers keep receiving.
         let (cmd_tx, cmd_rx) = mpsc::channel::<OutboundCmd>(64);
         let new_shutdown = CancellationToken::new();
         let weak_inner = Arc::downgrade(&self.inner);
@@ -376,6 +500,10 @@ impl Connection {
             ws,
             cmd_rx,
             self.inner.event_tx.clone(),
+            AccountedBus {
+                tx: self.inner.accounted_tx.clone(),
+                generation: new_generation,
+            },
             new_shutdown.clone(),
             self.inner.observers.clone(),
             weak_inner,
@@ -526,10 +654,13 @@ where
 {
     let (cmd_tx, cmd_rx) = mpsc::channel::<OutboundCmd>(64);
     let (event_tx, _event_rx) = broadcast::channel::<RawEvent>(EVENT_BUS_CAPACITY);
+    let (accounted_tx, _accounted_rx) = broadcast::channel::<AccountedRawEvent>(EVENT_BUS_CAPACITY);
     let shutdown = CancellationToken::new();
     let inner = Arc::new(ConnectionInner {
         cmd_tx: Mutex::new(cmd_tx),
         event_tx: event_tx.clone(),
+        accounted_tx: accounted_tx.clone(),
+        generation: AtomicU64::new(1),
         shutdown: Mutex::new(shutdown.clone()),
         observer_timeout,
         call_timeout_ms: AtomicU64::new(DEFAULT_CALL_TIMEOUT.as_millis() as u64),
@@ -542,7 +673,16 @@ where
     // (the actor's lifetime would otherwise transitively own itself).
     let weak_inner = Arc::downgrade(&inner);
     tokio::spawn(run_actor(
-        ws, cmd_rx, event_tx, shutdown, observers, weak_inner,
+        ws,
+        cmd_rx,
+        event_tx,
+        AccountedBus {
+            tx: accounted_tx,
+            generation: 1,
+        },
+        shutdown,
+        observers,
+        weak_inner,
     ));
     Connection { inner }
 }
@@ -1066,5 +1206,257 @@ mod tests {
         let cfg = ws_config();
         assert_eq!(cfg.max_message_size, Some(WS_MAX_BYTES));
         assert_eq!(cfg.max_frame_size, Some(WS_MAX_BYTES));
+    }
+
+    // ---------- `subscribe_raw_accounted` / `AccountedRawEvent` (Task 1) ----------
+
+    /// Like [`spawn_actor`] but with a caller-controlled accounted-bus
+    /// capacity, so lag tests can force a broadcast overflow deterministically
+    /// without pushing thousands of frames through the real
+    /// [`EVENT_BUS_CAPACITY`] (1024).
+    fn spawn_actor_with_accounted_capacity<S>(ws: S, accounted_capacity: usize) -> Connection
+    where
+        S: futures::Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
+            + futures::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
+            + Send
+            + Unpin
+            + 'static,
+    {
+        let (cmd_tx, cmd_rx) = mpsc::channel::<OutboundCmd>(64);
+        let (event_tx, _event_rx) = broadcast::channel::<RawEvent>(EVENT_BUS_CAPACITY);
+        let (accounted_tx, _accounted_rx) =
+            broadcast::channel::<AccountedRawEvent>(accounted_capacity);
+        let shutdown = CancellationToken::new();
+        let inner = Arc::new(ConnectionInner {
+            cmd_tx: Mutex::new(cmd_tx),
+            event_tx: event_tx.clone(),
+            accounted_tx: accounted_tx.clone(),
+            generation: AtomicU64::new(1),
+            shutdown: Mutex::new(shutdown.clone()),
+            observer_timeout: DEFAULT_OBSERVER_TIMEOUT,
+            call_timeout_ms: AtomicU64::new(DEFAULT_CALL_TIMEOUT.as_millis() as u64),
+            observers: Vec::new(),
+        });
+        let weak_inner = Arc::downgrade(&inner);
+        tokio::spawn(run_actor(
+            ws,
+            cmd_rx,
+            event_tx,
+            AccountedBus {
+                tx: accounted_tx,
+                generation: 1,
+            },
+            shutdown,
+            Vec::new(),
+            weak_inner,
+        ));
+        Connection { inner }
+    }
+
+    #[tokio::test]
+    async fn subscribe_raw_accounted_assigns_monotonic_sequence_starting_at_one() {
+        let (ws, test_tx, _test_rx) = duplex_pair();
+        let conn = spawn_actor(ws);
+        let mut sub = conn.subscribe_raw_accounted();
+
+        for i in 0..3u64 {
+            test_tx
+                .send(Ok(Message::text(
+                    json!({ "method": "Test.evt", "params": { "i": i } }).to_string(),
+                )))
+                .await
+                .unwrap();
+        }
+
+        for expected_seq in 1..=3u64 {
+            let ev = tokio::time::timeout(std::time::Duration::from_secs(1), sub.next())
+                .await
+                .expect("accounted event arrived")
+                .expect("stream not closed");
+            match ev {
+                AccountedRawEvent::Event {
+                    generation,
+                    sequence,
+                    event,
+                } => {
+                    assert_eq!(generation, 1);
+                    assert_eq!(sequence, expected_seq);
+                    assert_eq!(event.method, "Test.evt");
+                }
+                other => panic!("expected Event, got {other:?}"),
+            }
+        }
+
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn subscribe_raw_accounted_reports_lagged_with_correct_missed_count_and_resumes_monotonically()
+     {
+        // Capacity 2: pushing 5 events with the subscriber never polling
+        // forces exactly 3 missed (5 sent - 2 retained).
+        let (ws, test_tx, _test_rx) = duplex_pair();
+        let conn = spawn_actor_with_accounted_capacity(ws, 2);
+        let mut sub = conn.subscribe_raw_accounted();
+
+        for i in 0..5u64 {
+            test_tx
+                .send(Ok(Message::text(
+                    json!({ "method": "Test.evt", "params": { "i": i } }).to_string(),
+                )))
+                .await
+                .unwrap();
+        }
+        // Give the actor time to drain all 5 frames onto the accounted bus
+        // before this subscriber ever polls it.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let first = tokio::time::timeout(std::time::Duration::from_secs(1), sub.next())
+            .await
+            .expect("lagged notification arrived")
+            .expect("stream not closed");
+        match first {
+            AccountedRawEvent::Lagged { generation, missed } => {
+                assert_eq!(generation, 1);
+                assert_eq!(missed, 3, "5 sent - capacity 2 retained = 3 missed");
+            }
+            other => panic!("expected Lagged, got {other:?}"),
+        }
+
+        // Sequence must resume monotonically from where the loss left off
+        // (4, 5) rather than resetting — the actor's counter keeps
+        // incrementing for every event mirrored, independent of any one
+        // subscriber's lag.
+        for expected_seq in [4u64, 5u64] {
+            let ev = tokio::time::timeout(std::time::Duration::from_secs(1), sub.next())
+                .await
+                .expect("event arrived")
+                .expect("stream not closed");
+            match ev {
+                AccountedRawEvent::Event {
+                    generation,
+                    sequence,
+                    ..
+                } => {
+                    assert_eq!(generation, 1);
+                    assert_eq!(sequence, expected_seq);
+                }
+                other => panic!("expected Event, got {other:?}"),
+            }
+        }
+
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn reconnect_emits_reconnected_with_bumped_generation_and_resets_sequence() {
+        let (ws_a, _tx_a, _rx_a) = duplex_pair();
+        let conn = spawn_actor(ws_a);
+        assert_eq!(conn.connection_generation(), 1);
+
+        // Subscribe BEFORE the reconnect, same as `reconnect_preserves_event_subscribers`.
+        let mut sub = conn.subscribe_raw_accounted();
+
+        let (ws_b, tx_b, _rx_b) = duplex_pair();
+        conn.reconnect(ws_b);
+
+        let first = tokio::time::timeout(std::time::Duration::from_secs(1), sub.next())
+            .await
+            .expect("reconnected notification arrived")
+            .expect("stream not closed");
+        match first {
+            AccountedRawEvent::Reconnected {
+                previous,
+                generation,
+            } => {
+                assert_eq!(previous, 1);
+                assert_eq!(generation, 2);
+            }
+            other => panic!("expected Reconnected, got {other:?}"),
+        }
+        assert_eq!(conn.connection_generation(), 2);
+
+        // An event on the NEW socket must carry the bumped generation and a
+        // sequence freshly reset to 1 — a new actor run, fresh counter.
+        tx_b.send(Ok(Message::text(
+            json!({ "method": "Page.loadEventFired", "params": {} }).to_string(),
+        )))
+        .await
+        .unwrap();
+
+        let second = tokio::time::timeout(std::time::Duration::from_secs(1), sub.next())
+            .await
+            .expect("event arrived")
+            .expect("stream not closed");
+        match second {
+            AccountedRawEvent::Event {
+                generation,
+                sequence,
+                event,
+            } => {
+                assert_eq!(generation, 2);
+                assert_eq!(sequence, 1);
+                assert_eq!(event.method, "Page.loadEventFired");
+            }
+            other => panic!("expected Event, got {other:?}"),
+        }
+
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn ws_death_emits_exactly_one_disconnected() {
+        let (ws, test_tx, _test_rx) = duplex_pair();
+        let conn = spawn_actor(ws);
+        let mut sub = conn.subscribe_raw_accounted();
+
+        // Drop the server side so the stream returns `None` (socket vanished) —
+        // the same trigger `ws_stream_end_drains_pending_with_disconnected_code`
+        // uses in actor.rs.
+        drop(test_tx);
+
+        let first = tokio::time::timeout(std::time::Duration::from_secs(1), sub.next())
+            .await
+            .expect("disconnected notification arrived")
+            .expect("stream not closed");
+        match first {
+            AccountedRawEvent::Disconnected { generation } => assert_eq!(generation, 1),
+            other => panic!("expected Disconnected, got {other:?}"),
+        }
+
+        // Exactly one: nothing else should follow within a short window.
+        let extra = tokio::time::timeout(std::time::Duration::from_millis(200), sub.next()).await;
+        assert!(
+            extra.is_err(),
+            "expected no further accounted events after the single Disconnected, got {extra:?}"
+        );
+
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn raw_subscriber_unaffected_when_no_accounted_subscriber_exists() {
+        // No `subscribe_raw_accounted()` call anywhere in this test — the
+        // accounted bus has zero subscribers for its whole lifetime, which
+        // must gate off the per-event clone + accounted-bus send without
+        // disturbing `subscribe_raw` in any way.
+        let (ws, test_tx, _test_rx) = duplex_pair();
+        let conn = spawn_actor(ws);
+        let mut raw_sub = conn.subscribe_raw();
+
+        test_tx
+            .send(Ok(Message::text(
+                json!({ "method": "Page.loadEventFired", "params": {} }).to_string(),
+            )))
+            .await
+            .unwrap();
+
+        let ev = tokio::time::timeout(std::time::Duration::from_secs(1), raw_sub.next())
+            .await
+            .expect("raw subscriber received the event")
+            .expect("stream not closed");
+        assert_eq!(ev.method, "Page.loadEventFired");
+
+        conn.shutdown();
     }
 }

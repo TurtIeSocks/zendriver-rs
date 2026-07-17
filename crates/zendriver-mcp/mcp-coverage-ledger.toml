@@ -452,3 +452,16 @@ excluded = "accepts `impl GeoResolver + 'static` — a custom Rust trait impleme
 [[entry]]
 api = "zendriver::IpApiResolver"
 covered = "browser_open.geo_auto / browser_open.geo_endpoint"
+
+# ── Task 1: loss-accounted raw event stream (opt-in) ────────────────────────
+[[entry]]
+api = "zendriver::Connection::subscribe_raw_accounted"
+excluded = "Stream-returning subscription; not a request/response tool"
+
+[[entry]]
+api = "zendriver::Connection::connection_generation"
+excluded = "Stream-returning subscription; not a request/response tool"
+
+[[entry]]
+api = "zendriver::AccountedRawEvent"
+excluded = "Stream-returning subscription; not a request/response tool"
