@@ -30,6 +30,7 @@ serde.workspace                  = true
 serde_json.workspace             = true
 thiserror.workspace              = true
 tracing.workspace                = true
+psl.workspace                    = true
 
 [dev-dependencies]
 tokio-test.workspace = true
