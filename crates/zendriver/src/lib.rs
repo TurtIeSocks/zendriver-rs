@@ -91,6 +91,7 @@ pub(crate) mod preferences;
 mod proxy;
 pub mod query;
 pub mod request;
+pub mod response_body;
 pub mod screenshot;
 pub mod storage;
 pub mod tab;
@@ -114,6 +115,7 @@ pub use network_idle::IdleLossPolicy;
 pub use pdf::PdfBuilder;
 pub use query::{AriaRole, BoundingBox, FindBuilder, PageBox};
 pub use request::{RequestBuilder, Response};
+pub use response_body::BoundedBody;
 pub use screenshot::{Format, ScreenshotBuilder};
 pub use storage::Storage;
 pub use tab::{

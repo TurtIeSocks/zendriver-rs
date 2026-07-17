@@ -496,3 +496,44 @@ covered = "browser_wait_for_idle.strict"
 [[entry]]
 api = "zendriver::IdleOptions::loss_policy:"
 covered = "browser_wait_for_idle.strict"
+
+# ── Task 5: BoundedBody bounded body capture ────────────────────────────────
+# Standalone primitive; deliberately NOT wired into the network monitor by
+# this task (see crates/zendriver/src/response_body.rs doc comment). Task 8
+# wires it into browser_monitor_start / browser_monitor_read and should flip
+# these entries to `covered` at that point.
+[[entry]]
+api = "zendriver::response_body::BoundedBody"
+excluded = "standalone bounded-capture primitive added in isolation; not yet wired to any MCP tool. Task 8 wires it into the network monitor (browser_monitor_start/browser_monitor_read) and should convert this to `covered`"
+
+[[entry]]
+api = "zendriver::response_body::BoundedBody::bytes:"
+excluded = "see zendriver::response_body::BoundedBody"
+
+[[entry]]
+api = "zendriver::response_body::BoundedBody::truncated:"
+excluded = "see zendriver::response_body::BoundedBody"
+
+[[entry]]
+api = "zendriver::response_body::BoundedBody::encoded_len:"
+excluded = "see zendriver::response_body::BoundedBody"
+
+[[entry]]
+api = "zendriver::response_body::BoundedBody::capture"
+excluded = "see zendriver::response_body::BoundedBody"
+
+[[entry]]
+api = "zendriver::BoundedBody"
+excluded = "see zendriver::response_body::BoundedBody"
+
+[[entry]]
+api = "zendriver::BoundedBody::bytes:"
+excluded = "see zendriver::response_body::BoundedBody"
+
+[[entry]]
+api = "zendriver::BoundedBody::truncated:"
+excluded = "see zendriver::response_body::BoundedBody"
+
+[[entry]]
+api = "zendriver::BoundedBody::encoded_len:"
+excluded = "see zendriver::response_body::BoundedBody"
