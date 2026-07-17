@@ -167,6 +167,24 @@ pub enum ZendriverError {
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 
+    /// A persisted persona-seed file (`.zd_persona_seed` inside a
+    /// `user_data_dir`) exists but its contents are not a valid seed.
+    ///
+    /// Surfaced by
+    /// [`BrowserBuilder::resolved_persona`](crate::browser::BrowserBuilder::resolved_persona)
+    /// when the seed file is corrupt or truncated. Treated as a hard error
+    /// rather than silently minting a fresh random seed: for a credentialed
+    /// persistent profile, the fingerprint identity silently rotating out
+    /// from under the caller is a worse failure mode than refusing to
+    /// launch.
+    #[error("malformed persona seed at {path}: {reason}")]
+    PersonaSeed {
+        /// Path to the offending seed file.
+        path: PathBuf,
+        /// Human-readable parse failure.
+        reason: String,
+    },
+
     /// Stealth fingerprint resolution failed.
     #[error("stealth: {0}")]
     Stealth(Box<zendriver_stealth::StealthError>),
@@ -389,6 +407,17 @@ mod tests {
             searched: vec![PathBuf::from("/usr/bin/google-chrome")],
         });
         assert!(e.to_string().contains("/usr/bin/google-chrome"));
+    }
+
+    #[test]
+    fn display_for_persona_seed_includes_path_and_reason() {
+        let e = ZendriverError::PersonaSeed {
+            path: PathBuf::from("/tmp/profile/.zd_persona_seed"),
+            reason: "expected a base-10 u64, found \"garbage\"".into(),
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("/tmp/profile/.zd_persona_seed"));
+        assert!(msg.contains("garbage"));
     }
 
     #[test]

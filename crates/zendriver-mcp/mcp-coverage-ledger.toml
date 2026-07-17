@@ -537,3 +537,15 @@ excluded = "see zendriver::response_body::BoundedBody"
 [[entry]]
 api = "zendriver::BoundedBody::encoded_len:"
 excluded = "see zendriver::response_body::BoundedBody"
+
+# ── T6 Browser robustness: ready-barrier tab handoff + atomic seed ─────────
+# `resolved_persona` (already ledgered above under #24) becomes fallible;
+# its path is unchanged so the existing entry still matches. `PersonaSeed`
+# is the new error variant it can now return.
+[[entry]]
+api = "zendriver::error::ZendriverError::PersonaSeed"
+excluded = "error variant, not an operation; a corrupt/truncated persisted persona seed, surfaced as a failure of whichever tool resolves the persona (e.g. browser_open) rather than its own MCP tool"
+
+[[entry]]
+api = "zendriver::ZendriverError::PersonaSeed"
+excluded = "crate-root re-export of the above variant; same failure surface"
