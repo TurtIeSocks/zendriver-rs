@@ -25,6 +25,12 @@ properties:
     description: "Run Chrome with `--headless=new` (default: `true`)."
     type: boolean
     default: true
+  input_profile:
+    description: "Select the input-timing profile for synthesized keyboard/mouse\nevents, independent of `stealth_profile`. Defaults to `native`\n(zero-overhead, deterministic timing) regardless of the stealth\nsetting — pass `coherent` to opt into human-paced typing and jittery\nmouse motion without needing to also spoof the stealth surface."
+    anyOf:
+      - $ref: "#/$defs/InputProfileChoice"
+      - type: "null"
+    default: ~
   persona:
     description: "A fingerprint Persona JSON (as produced by `browser_fingerprint_generate`\nor hand-built). Parsed via `Persona::try_from_json`. Opaque on the wire."
   preferences:
@@ -51,6 +57,15 @@ properties:
       - type: "null"
 additionalProperties: false
 $defs:
+  InputProfileChoice:
+    description: "Input-timing profile choice carried over the MCP wire.\n\nWire mirror of `zendriver::stealth::InputProfile`'s two presets.\nDecoupled from [`StealthProfileChoice`] — selecting `Native` here is\nindependent of the chosen stealth profile (an explicit choice always\nwins over anything stealth would otherwise imply); `Native` is the\ndefault whether stealth is on, off, or spoofed."
+    oneOf:
+      - description: "Zero-overhead, deterministic timing (`InputProfile::native`). Default."
+        type: string
+        const: native
+      - description: "Non-mechanical, humanized timing (`InputProfile::coherent`) — human-\npaced typing and jittery mouse motion."
+        type: string
+        const: coherent
   StealthProfileChoice:
     description: "Stealth profile choice carried over the MCP wire.\n\nConcrete `StealthProfile` resolution happens inside the lifecycle\nhandler (it depends on platform detection that only matters at launch\ntime); the wire-level enum stays stable and platform-agnostic."
     oneOf:

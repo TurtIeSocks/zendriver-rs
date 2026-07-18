@@ -113,6 +113,24 @@ pub struct StealthOverrides {
     pub geo_country: Option<String>,
 }
 
+/// Input-timing profile choice carried over the MCP wire.
+///
+/// Wire mirror of `zendriver::stealth::InputProfile`'s two presets.
+/// Decoupled from [`StealthProfileChoice`] — selecting `Native` here is
+/// independent of the chosen stealth profile (an explicit choice always
+/// wins over anything stealth would otherwise imply); `Native` is the
+/// default whether stealth is on, off, or spoofed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum InputProfileChoice {
+    /// Zero-overhead, deterministic timing (`InputProfile::native`). Default.
+    #[default]
+    Native,
+    /// Non-mechanical, humanized timing (`InputProfile::coherent`) — human-
+    /// paced typing and jittery mouse motion.
+    Coherent,
+}
+
 /// State held for the duration of a single MCP session.
 ///
 /// `browser` is `None` until `browser_open` is called. `current_tab_id`

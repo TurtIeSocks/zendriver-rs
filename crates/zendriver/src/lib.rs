@@ -247,8 +247,8 @@ pub use geo_resolver::IpApiResolver;
 /// Stealth profile + fingerprint configuration re-exported from `zendriver-stealth`.
 pub mod stealth {
     pub use zendriver_stealth::{
-        Fingerprint, Persona, PersonaBuilder, Platform, Seed, StealthProfile, Strategy, Surface,
-        UserAgentMetadata,
+        Fingerprint, InputProfile, Persona, PersonaBuilder, Platform, Seed, StealthProfile,
+        Strategy, Surface, UserAgentMetadata,
     };
 }
 

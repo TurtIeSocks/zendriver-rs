@@ -589,3 +589,22 @@ excluded = "error variant, not an operation; a corrupt/truncated persisted perso
 [[entry]]
 api = "zendriver::ZendriverError::PersonaSeed"
 excluded = "crate-root re-export of the above variant; same failure surface"
+
+# ── Task 9: opt-in InputProfile selection, decoupled from stealth ──────────
+# `InputProfile`'s own inherent methods (`native`/`spoofed`/`coherent`) and
+# the new `impl PartialEq for InputProfile` live in the `zendriver-stealth`
+# crate's own public API, not `zendriver`'s (same as `Persona::builder` etc.
+# never being ledgered here) — `cargo public-api -p zendriver` only surfaces
+# items reachable through `zendriver`'s own paths, so only the three below
+# are new `zendriver`-crate items.
+[[entry]]
+api = "zendriver::stealth::InputProfile"
+covered = "browser_open.input_profile (InputProfileChoice enum maps native/coherent -> InputProfile::native()/coherent())"
+
+[[entry]]
+api = "zendriver::browser::BrowserBuilder::input_profile"
+covered = "browser_open.input_profile"
+
+[[entry]]
+api = "zendriver::browser::BrowserBuilder::resolved_input_profile"
+excluded = "read accessor for the composed input-timing profile; internal to launch flow, not needed as an MCP tool (same rationale as resolved_persona above)"

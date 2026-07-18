@@ -41,7 +41,8 @@ btn.click_fast().await?;
 | `type_text(s)`       | per-char + delays  | focus gate      | Default. Sub-keystroke timing. |
 | `type_text_fast(s)`  | per-char, no delay | focus gate      | Tests; trusted automation.     |
 
-The realism comes from the active [`StealthProfile`]'s `InputProfile`:
+By default, the realism comes from the active [`StealthProfile`]'s
+`InputProfile`:
 
 - `StealthProfile::native()` and `::spoofed()` install a realistic
   profile by default — Bezier control points with deterministic-but-
@@ -56,6 +57,40 @@ inside tests), seed the profile with a fixed RNG — see the
 
 [`StealthProfile`]: https://docs.rs/zendriver/latest/zendriver/stealth/struct.StealthProfile.html
 [`InputProfile`]: https://docs.rs/zendriver_stealth/latest/zendriver_stealth/struct.InputProfile.html
+
+### Opt-in: decoupling input timing from stealth
+
+[`BrowserBuilder::input_profile()`] lets you pick the [`InputProfile`]
+explicitly, **independent** of `StealthProfile`. This is opt-in only —
+it does not change any default. With no `.input_profile(..)` call, timing
+still resolves to `InputProfile::native()` (today's zero-overhead
+default), whether stealth is on, off, or spoofed.
+
+Use it when you want humanized timing without also turning on stealth's
+surface patches (canvas/WebGL/navigator overrides), or when you want
+stealth on but deterministic zero-delay input for a test:
+
+```rust,no_run
+use zendriver::stealth::{InputProfile, StealthProfile};
+
+# async fn ex() -> zendriver::Result<()> {
+// Stealth off (stock Chrome launch), but keep human-paced typing and
+// jittery mouse motion — previously impossible, since input timing was
+// derived from the stealth profile.
+let browser = zendriver::Browser::builder()
+    .stealth(StealthProfile::off())
+    .input_profile(InputProfile::coherent())
+    .launch()
+    .await?;
+# browser.close().await?;
+# Ok(()) }
+```
+
+`BrowserBuilder::resolved_input_profile()` returns the effective profile
+before launch, for tests/inspection — same pattern as
+`resolved_persona()`.
+
+[`BrowserBuilder::input_profile()`]: https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.input_profile
 
 ## `ClickOptions` for fine control
 

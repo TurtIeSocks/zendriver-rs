@@ -16,7 +16,9 @@ use zendriver::Browser;
 use zendriver::stealth::{Platform, StealthProfile};
 
 use crate::errors::{McpServerError, map_error};
-use crate::state::{SessionState, StealthOverrides, StealthPlatformChoice, StealthProfileChoice};
+use crate::state::{
+    InputProfileChoice, SessionState, StealthOverrides, StealthPlatformChoice, StealthProfileChoice,
+};
 use crate::tools::common::EmptyInput;
 
 // ---------- browser_open --------------------------------------------------
@@ -33,6 +35,13 @@ pub struct OpenInput {
     /// is used.
     #[serde(default)]
     pub stealth_profile: Option<StealthProfileChoice>,
+    /// Select the input-timing profile for synthesized keyboard/mouse
+    /// events, independent of `stealth_profile`. Defaults to `native`
+    /// (zero-overhead, deterministic timing) regardless of the stealth
+    /// setting — pass `coherent` to opt into human-paced typing and jittery
+    /// mouse motion without needing to also spoof the stealth surface.
+    #[serde(default)]
+    pub input_profile: Option<InputProfileChoice>,
     /// Chrome profile preferences merged into `Default/Preferences` at launch
     /// (dotted keys → nested objects). See `BrowserBuilder::preference`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -112,6 +121,9 @@ pub struct OpenOutput {
     pub headless: bool,
     /// Effective stealth profile for the launched browser.
     pub profile: StealthProfileChoice,
+    /// Effective input-timing profile for the launched browser (`native`
+    /// unless `input_profile: "coherent"` was requested).
+    pub input_profile: InputProfileChoice,
 }
 
 /// Launch Chrome with stealth defaults.
@@ -129,7 +141,11 @@ pub async fn open(
     }
     let profile = input.stealth_profile.unwrap_or(s.stealth_profile_choice);
     let stealth = apply_overrides(stealth_profile_for(profile), &s.stealth_overrides);
-    let mut builder = Browser::builder().headless(input.headless).stealth(stealth);
+    let input_profile_choice = input.input_profile.unwrap_or_default();
+    let mut builder = Browser::builder()
+        .headless(input.headless)
+        .stealth(stealth)
+        .input_profile(input_profile_for(input_profile_choice));
     if let Some(prefs) = &input.preferences {
         for (k, v) in prefs {
             builder = builder.preference(k.clone(), v.clone());
@@ -201,6 +217,7 @@ pub async fn open(
         chrome_version: String::new(),
         headless: input.headless,
         profile,
+        input_profile: input_profile_choice,
     })
 }
 
@@ -218,6 +235,19 @@ fn stealth_profile_for(choice: StealthProfileChoice) -> StealthProfile {
             StealthProfile::spoofed().platform(Platform::LinuxX86_64)
         }
         StealthProfileChoice::SpoofWindows => StealthProfile::spoofed().platform(Platform::Win32),
+    }
+}
+
+/// Map the wire-level [`InputProfileChoice`] to a concrete
+/// [`zendriver::stealth::InputProfile`].
+///
+/// Resolved independently of `stealth_profile_for` above — the whole point
+/// of `BrowserBuilder::input_profile` is that input timing no longer rides
+/// along with the stealth choice.
+fn input_profile_for(choice: InputProfileChoice) -> zendriver::stealth::InputProfile {
+    match choice {
+        InputProfileChoice::Native => zendriver::stealth::InputProfile::native(),
+        InputProfileChoice::Coherent => zendriver::stealth::InputProfile::coherent(),
     }
 }
 

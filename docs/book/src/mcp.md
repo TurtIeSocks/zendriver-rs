@@ -139,6 +139,13 @@ present in the schema but only takes effect when the `geo` feature is enabled.
   `http://ip-api.com/json`); only meaningful with `geo_auto: true`. Note this
   bypasses proxy mirroring — only the bundled default endpoint routes through
   `proxy`.
+- `input_profile: "native" | "coherent"` — select input-timing realism
+  (keyboard/mouse), **independent** of `stealth_profile`. Defaults to
+  `"native"` (zero-overhead, deterministic timing) whether stealth is on,
+  off, or spoofed. Pass `"coherent"` for human-paced typing and jittery
+  mouse motion without needing to also change the stealth profile. Wraps
+  `zendriver::stealth::InputProfile` via `BrowserBuilder::input_profile`;
+  echoed back on `browser_open`'s output as `input_profile`.
 
 ## `browser_monitor_*` options
 

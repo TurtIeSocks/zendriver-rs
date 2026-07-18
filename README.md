@@ -125,7 +125,7 @@ No manual MCP config — the plugin bundles the server plus scraping skills, the
 
 **What agents get out of the box:**
 
-- **Stealth navigation** — `browser_open`, `browser_goto`, `browser_back/forward/reload`, `browser_wait_for_idle`, plus a runtime-swappable `browser_set_stealth_profile` (auto / native / spoof_macos / spoof_linux / spoof_windows)
+- **Stealth navigation** — `browser_open`, `browser_goto`, `browser_back/forward/reload`, `browser_wait_for_idle`, plus a runtime-swappable `browser_set_stealth_profile` (auto / native / spoof_macos / spoof_linux / spoof_windows) and an `input_profile` (native / coherent) opt-in for humanized keyboard/mouse timing, decoupled from the stealth profile
 - **Selector-based find + actions** — one `Selector` arg works across `browser_find`, `browser_click`, `browser_type`, `browser_press`, `browser_set_value`, `browser_upload`, etc., with CSS / XPath / visible-text / ARIA-role lookups and per-frame scoping
 - **Three ways to "see" the page** — `browser_html` (trimmed DOM), `browser_screenshot` (PNG / JPEG / WebP as inline image content), `browser_element_state` (visibility / geometry / attrs)
 - **Stateful primitives** agents need for real work — `browser_cookies_persist` for save/load auth, full `browser_storage_*`, multi-tab management, frame traversal; `browser_monitor_*` passive network monitor (HTTP / WS / SSE); `browser_request` for HTTP from the page's own session

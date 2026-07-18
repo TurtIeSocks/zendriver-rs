@@ -30,7 +30,9 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
-use zendriver_stealth::{Persona, Seed, StealthObserver, StealthProfile, Strategy, Surface};
+use zendriver_stealth::{
+    InputProfile, Persona, Seed, StealthObserver, StealthProfile, Strategy, Surface,
+};
 use zendriver_transport::{
     Connection, ObserverError, PausedSession, SessionHandle, TargetObserver,
 };
@@ -503,6 +505,11 @@ pub struct BrowserBuilder {
     pub(crate) force_open_shadow_roots: bool,
     pub(crate) extra_args: Vec<String>,
     pub(crate) stealth: Option<StealthProfile>,
+    /// Explicit input-timing profile, decoupled from [`Self::stealth`]. `None`
+    /// (the default) resolves to [`InputProfile::native`] regardless of the
+    /// stealth setting. See [`BrowserBuilder::input_profile`] and
+    /// [`BrowserBuilder::resolved_input_profile`].
+    pub(crate) input_profile: Option<InputProfile>,
     /// Base fingerprint [`Persona`] driving the spoofed-mode surface patches.
     /// `None` → [`Persona::system`] (host-probed) is used. See
     /// [`BrowserBuilder::persona`] and [`BrowserBuilder::resolved_persona`].
@@ -570,6 +577,7 @@ impl std::fmt::Debug for BrowserBuilder {
             .field("force_open_shadow_roots", &self.force_open_shadow_roots)
             .field("extra_args", &self.extra_args)
             .field("stealth", &self.stealth)
+            .field("input_profile", &self.input_profile)
             .field("persona", &self.persona)
             .field("persona_overlay", &self.persona_overlay)
             .field("surface_overrides", &self.surface_overrides)
@@ -1108,6 +1116,29 @@ impl BrowserBuilder {
         self
     }
 
+    /// Explicitly select the [`InputProfile`] used for synthesized
+    /// keyboard/mouse timing, **independent** of [`BrowserBuilder::stealth`].
+    ///
+    /// Opt-in only — the default (no call) resolves to
+    /// [`InputProfile::native`] (zero-overhead, deterministic timing)
+    /// regardless of the stealth setting; see
+    /// [`BrowserBuilder::resolved_input_profile`]. Pass
+    /// [`InputProfile::coherent`] for human-paced typing and jittery mouse
+    /// motion without needing to also turn stealth surface patches on (or
+    /// off): input timing and stealth are resolved independently.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use zendriver::stealth::InputProfile;
+    /// let builder = zendriver::Browser::builder().input_profile(InputProfile::coherent());
+    /// ```
+    #[must_use]
+    pub fn input_profile(mut self, profile: InputProfile) -> Self {
+        self.input_profile = Some(profile);
+        self
+    }
+
     /// Set the base fingerprint [`Persona`] driving the spoofed-mode surface
     /// patches (canvas/WebGL/audio/fonts/clientRects/WebRTC/hardware).
     ///
@@ -1328,6 +1359,25 @@ impl BrowserBuilder {
         Ok(persona)
     }
 
+    /// Resolve the effective [`InputProfile`] this builder will use for
+    /// synthesized keyboard/mouse timing on every tab.
+    ///
+    /// **Decoupled from [`BrowserBuilder::stealth`].** An explicit
+    /// [`BrowserBuilder::input_profile`] always wins, whether stealth is on,
+    /// off, or spoofed. When unset, this resolves to [`InputProfile::native`]
+    /// — the same zero-overhead, deterministic timing a bare `Browser::builder()`
+    /// has always produced — regardless of the stealth setting. Input timing
+    /// is never silently derived from (or lost by toggling) the stealth
+    /// profile; it must be opted into explicitly.
+    ///
+    /// Callable before launch — it does not require a live browser.
+    #[must_use]
+    pub fn resolved_input_profile(&self) -> InputProfile {
+        self.input_profile
+            .clone()
+            .unwrap_or_else(InputProfile::native)
+    }
+
     /// Register an additional [`TargetObserver`].
     ///
     /// Observers fire on each new attached page target. The stealth observer
@@ -1532,11 +1582,13 @@ pub(crate) struct BrowserInner {
     /// session and must leave the process alone — `close()` only shuts down
     /// the transport, and no `Child` is held so `kill_on_drop` never fires).
     pub(crate) owns_process: bool,
-    /// Cached `InputProfile` from the active `StealthProfile` (or
-    /// `InputProfile::native` when stealth is off). `Browser::new_tab` and
+    /// Cached [`InputProfile`], resolved via
+    /// [`BrowserBuilder::resolved_input_profile`] — independent of the
+    /// active `StealthProfile`; `InputProfile::native` unless the caller
+    /// opted in via `BrowserBuilder::input_profile`. `Browser::new_tab` and
     /// the [`TabRegistrar`] observer read this to build a fresh per-Tab
     /// [`InputController`] for each new tab without re-resolving the
-    /// stealth profile.
+    /// profile.
     ///
     /// Currently consumed only by the [`TabRegistrar`] (via the clone
     /// stashed inside the registrar at construction time); a direct
@@ -2828,17 +2880,13 @@ impl BrowserBuilder {
         // `BrowserInner` below so the extracted dirs outlive Chrome.
         let extension_dirs = resolve_extension_dirs(&mut self.extensions).await?;
 
-        // 2. Resolve the per-tab InputProfile from the active StealthProfile
-        // (or zero-overhead `native` when stealth is off). Cached on
-        // `BrowserInner` so `Browser::new_tab` + the `TabRegistrar` observer
-        // can build fresh per-Tab controllers without re-resolving the
-        // profile each time.
-        let input_profile = self
-            .stealth
-            .as_ref()
-            .map_or_else(zendriver_stealth::InputProfile::native, |sp| {
-                sp.input_profile()
-            });
+        // 2. Resolve the per-tab InputProfile. Decoupled from the active
+        // `StealthProfile` (see `resolved_input_profile`): defaults to
+        // zero-overhead `native` unless the caller opted in explicitly via
+        // `.input_profile(..)`. Cached on `BrowserInner` so `Browser::new_tab`
+        // + the `TabRegistrar` observer can build fresh per-Tab controllers
+        // without re-resolving the profile each time.
+        let input_profile = self.resolved_input_profile();
 
         // 3. Build the `TabRegistrar` observer. Holds a `OnceLock` for the
         // `Weak<BrowserInner>` that gets wired in step 10 — observers must
@@ -3156,17 +3204,13 @@ impl BrowserBuilder {
         #[cfg(feature = "geo")]
         self.apply_geo_overlay().await;
 
-        // Resolve the per-tab InputProfile + build the observer chain exactly
+        // Resolve the per-tab InputProfile (decoupled from `StealthProfile`,
+        // see `resolved_input_profile`) + build the observer chain exactly
         // like `launch` does (stealth observer → user observers →
         // force-open-shadow-roots → tab registrar LAST, the ready barrier).
         // The spawn-only branches (`executable`, flags, TempDir) are
         // intentionally skipped — `connect` never launches a process.
-        let input_profile = self
-            .stealth
-            .as_ref()
-            .map_or_else(zendriver_stealth::InputProfile::native, |sp| {
-                sp.input_profile()
-            });
+        let input_profile = self.resolved_input_profile();
         let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
         let stealth_obs: Option<Arc<dyn TargetObserver>> = if let Some(ref profile) = self.stealth {
             // No executable to resolve a fingerprint from on the connect path;
@@ -4241,6 +4285,40 @@ mod tests {
             p.webrtc.as_ref().and_then(|w| w.strategy),
             Some(Strategy::Native),
             "surface override must set the WebRTC strategy"
+        );
+    }
+
+    #[test]
+    fn explicit_input_profile_wins_even_with_stealth_off() {
+        // Opt-in `input_profile(..)` must apply regardless of the stealth
+        // setting — the whole point of decoupling input timing from stealth
+        // selection.
+        let b = Browser::builder()
+            .stealth(StealthProfile::off())
+            .input_profile(InputProfile::coherent());
+        assert_eq!(b.resolved_input_profile(), InputProfile::coherent());
+    }
+
+    #[test]
+    fn no_input_profile_call_defaults_to_native_with_stealth_off() {
+        let b = Browser::builder().stealth(StealthProfile::off());
+        assert_eq!(
+            b.resolved_input_profile(),
+            InputProfile::native(),
+            "no explicit input_profile() call must resolve to today's native default"
+        );
+    }
+
+    #[test]
+    fn no_input_profile_call_defaults_to_native_with_stealth_on() {
+        // `Browser::builder()` seeds `stealth: Some(StealthProfile::native())`
+        // (stealth ON, the default path) — resolved input timing must still
+        // be exactly today's native default with no explicit call.
+        let b = Browser::builder();
+        assert_eq!(
+            b.resolved_input_profile(),
+            InputProfile::native(),
+            "no explicit input_profile() call must resolve to today's default for the default stealth path"
         );
     }
 
