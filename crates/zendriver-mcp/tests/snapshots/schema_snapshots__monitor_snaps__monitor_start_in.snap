@@ -12,10 +12,10 @@ properties:
     type: boolean
     default: false
   capture_body_max_bytes:
-    description: "Maximum bytes of a response body to capture per `http` event when\n`capture_bodies` is set (bounding is against the raw decoded length,\nnever a base64 length). A body larger than this is truncated to that\nmany bytes with `body_truncated: true`; `body_full_bytes` always\nreports the full pre-truncation length. `0` means unbounded — capture\nthe entire body regardless of size. Ignored when `capture_bodies` is\n`false`. Defaults to 1 MiB."
+    description: "Maximum bytes of a response body to capture per `http` event when\n`capture_bodies` is set (bounding is against the raw decoded length,\nnever a base64 length). A body larger than this is truncated to that\nmany bytes with `body_truncated: true`; `body_full_bytes` always\nreports the full pre-truncation length. Ignored when `capture_bodies`\nis `false`.\n\nDefaults to `0` (unbounded) — `capture_bodies` keeps its historical\nfull-body behavior when the field is omitted. Set a positive cap\n(`1048576` = 1 MiB is a sensible choice when an agent forwards bodies\ninto its own context) to bound large bodies and keep\n`browser_monitor_read` output manageable."
     type: integer
     format: uint
-    default: 1048576
+    default: 0
     minimum: 0
   url_pattern:
     description: "Restrict buffered events to those whose URL contains this substring.\nOmit to buffer every observed event."

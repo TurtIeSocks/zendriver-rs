@@ -54,16 +54,6 @@ use crate::tools::common::current_tab;
 
 // ---------- browser_monitor_start -----------------------------------------
 
-/// Default cap for `StartInput::capture_body_max_bytes`: 1 MiB. Generous
-/// enough for the overwhelming majority of API responses an agent inspects,
-/// small enough that one enormous body can't blow out an agent's context
-/// window when the event is later read back through `browser_monitor_read`.
-const DEFAULT_CAPTURE_BODY_MAX_BYTES: usize = 1024 * 1024;
-
-fn default_capture_body_max_bytes() -> usize {
-    DEFAULT_CAPTURE_BODY_MAX_BYTES
-}
-
 /// Input for `browser_monitor_start`.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -81,10 +71,15 @@ pub struct StartInput {
     /// `capture_bodies` is set (bounding is against the raw decoded length,
     /// never a base64 length). A body larger than this is truncated to that
     /// many bytes with `body_truncated: true`; `body_full_bytes` always
-    /// reports the full pre-truncation length. `0` means unbounded — capture
-    /// the entire body regardless of size. Ignored when `capture_bodies` is
-    /// `false`. Defaults to 1 MiB.
-    #[serde(default = "default_capture_body_max_bytes")]
+    /// reports the full pre-truncation length. Ignored when `capture_bodies`
+    /// is `false`.
+    ///
+    /// Defaults to `0` (unbounded) — `capture_bodies` keeps its historical
+    /// full-body behavior when the field is omitted. Set a positive cap
+    /// (`1048576` = 1 MiB is a sensible choice when an agent forwards bodies
+    /// into its own context) to bound large bodies and keep
+    /// `browser_monitor_read` output manageable.
+    #[serde(default)]
     pub capture_body_max_bytes: usize,
 }
 
