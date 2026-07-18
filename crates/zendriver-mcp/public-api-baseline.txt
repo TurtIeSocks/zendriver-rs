@@ -275,6 +275,7 @@ pub fn zendriver::browser::BrowserBuilder::geo_auto(self) -> Self
 pub fn zendriver::browser::BrowserBuilder::geo_locale(self, impl core::convert::TryInto<zendriver_stealth::geo::Country>) -> Self
 pub fn zendriver::browser::BrowserBuilder::geo_resolver(self, impl zendriver_stealth::geo::GeoResolver + 'static) -> Self
 pub fn zendriver::browser::BrowserBuilder::headless(self, bool) -> Self
+pub fn zendriver::browser::BrowserBuilder::input_profile(self, zendriver_stealth::input_profile::InputProfile) -> Self
 pub fn zendriver::browser::BrowserBuilder::lang(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::browser::BrowserBuilder::new() -> Self
 pub fn zendriver::browser::BrowserBuilder::observer(self, alloc::sync::Arc<dyn zendriver_transport::observer::TargetObserver>) -> Self
@@ -283,7 +284,8 @@ pub fn zendriver::browser::BrowserBuilder::persona_overlay(self, zendriver_steal
 pub fn zendriver::browser::BrowserBuilder::preference(self, impl core::convert::Into<alloc::string::String>, serde_json::value::Value) -> Self
 pub fn zendriver::browser::BrowserBuilder::proxy(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::browser::BrowserBuilder::proxy_auth(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
-pub fn zendriver::browser::BrowserBuilder::resolved_persona(&self) -> zendriver_stealth::persona::Persona
+pub fn zendriver::browser::BrowserBuilder::resolved_input_profile(&self) -> zendriver_stealth::input_profile::InputProfile
+pub fn zendriver::browser::BrowserBuilder::resolved_persona(&self) -> core::result::Result<zendriver_stealth::persona::Persona, zendriver::error::ZendriverError>
 pub fn zendriver::browser::BrowserBuilder::sandbox(self, bool) -> Self
 pub fn zendriver::browser::BrowserBuilder::stealth(self, zendriver_stealth::profile::StealthProfile) -> Self
 pub fn zendriver::browser::BrowserBuilder::surface(self, zendriver_stealth::persona::surface::Surface, zendriver_stealth::persona::surface::Strategy) -> Self
@@ -1025,6 +1027,9 @@ pub zendriver::error::ZendriverError::Navigation(alloc::string::String)
 pub zendriver::error::ZendriverError::NetworkMonitor(alloc::string::String)
 pub zendriver::error::ZendriverError::NotActionable(core::time::Duration, alloc::string::String)
 pub zendriver::error::ZendriverError::NotRefreshable
+pub zendriver::error::ZendriverError::PersonaSeed
+pub zendriver::error::ZendriverError::PersonaSeed::path: std::path::PathBuf
+pub zendriver::error::ZendriverError::PersonaSeed::reason: alloc::string::String
 pub zendriver::error::ZendriverError::Request(alloc::string::String)
 pub zendriver::error::ZendriverError::Serde(serde_json::error::Error)
 pub zendriver::error::ZendriverError::Stealth(alloc::boxed::Box<zendriver_stealth::error::StealthError>)
@@ -2781,7 +2786,71 @@ impl<T> typenum::type_operators::Same for zendriver::monitor::FrameDirection
 pub type zendriver::monitor::FrameDirection::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for zendriver::monitor::FrameDirection where V: ppv_lite86::types::MultiLane<T>
 pub fn zendriver::monitor::FrameDirection::vzip(self) -> V
+pub enum zendriver::monitor::NetworkDeliveryBoundary
+pub zendriver::monitor::NetworkDeliveryBoundary::CorrelationEvicted
+pub zendriver::monitor::NetworkDeliveryBoundary::CorrelationEvicted::url: alloc::string::String
+pub zendriver::monitor::NetworkDeliveryBoundary::DecodeFailed
+pub zendriver::monitor::NetworkDeliveryBoundary::Disconnected
+pub zendriver::monitor::NetworkDeliveryBoundary::Disconnected::generation: u64
+pub zendriver::monitor::NetworkDeliveryBoundary::Lagged
+pub zendriver::monitor::NetworkDeliveryBoundary::Lagged::generation: u64
+pub zendriver::monitor::NetworkDeliveryBoundary::Lagged::missed: u64
+pub zendriver::monitor::NetworkDeliveryBoundary::Reconnected
+pub zendriver::monitor::NetworkDeliveryBoundary::Reconnected::generation: u64
+pub zendriver::monitor::NetworkDeliveryBoundary::Reconnected::previous: u64
+pub zendriver::monitor::NetworkDeliveryBoundary::Unknown
+impl core::clone::Clone for zendriver::monitor::NetworkDeliveryBoundary
+pub fn zendriver::monitor::NetworkDeliveryBoundary::clone(&self) -> zendriver::monitor::NetworkDeliveryBoundary
+impl core::cmp::Eq for zendriver::monitor::NetworkDeliveryBoundary
+impl core::cmp::PartialEq for zendriver::monitor::NetworkDeliveryBoundary
+pub fn zendriver::monitor::NetworkDeliveryBoundary::eq(&self, &zendriver::monitor::NetworkDeliveryBoundary) -> bool
+impl core::fmt::Debug for zendriver::monitor::NetworkDeliveryBoundary
+pub fn zendriver::monitor::NetworkDeliveryBoundary::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for zendriver::monitor::NetworkDeliveryBoundary
+impl core::marker::Freeze for zendriver::monitor::NetworkDeliveryBoundary
+impl core::marker::Send for zendriver::monitor::NetworkDeliveryBoundary
+impl core::marker::Sync for zendriver::monitor::NetworkDeliveryBoundary
+impl core::marker::Unpin for zendriver::monitor::NetworkDeliveryBoundary
+impl core::marker::UnsafeUnpin for zendriver::monitor::NetworkDeliveryBoundary
+impl core::panic::unwind_safe::RefUnwindSafe for zendriver::monitor::NetworkDeliveryBoundary
+impl core::panic::unwind_safe::UnwindSafe for zendriver::monitor::NetworkDeliveryBoundary
+impl<Q, K> equivalent::Equivalent<K> for zendriver::monitor::NetworkDeliveryBoundary where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn zendriver::monitor::NetworkDeliveryBoundary::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for zendriver::monitor::NetworkDeliveryBoundary where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn zendriver::monitor::NetworkDeliveryBoundary::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for zendriver::monitor::NetworkDeliveryBoundary where U: core::convert::From<T>
+pub fn zendriver::monitor::NetworkDeliveryBoundary::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for zendriver::monitor::NetworkDeliveryBoundary where U: core::convert::Into<T>
+pub type zendriver::monitor::NetworkDeliveryBoundary::Error = core::convert::Infallible
+pub fn zendriver::monitor::NetworkDeliveryBoundary::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for zendriver::monitor::NetworkDeliveryBoundary where U: core::convert::TryFrom<T>
+pub type zendriver::monitor::NetworkDeliveryBoundary::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn zendriver::monitor::NetworkDeliveryBoundary::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for zendriver::monitor::NetworkDeliveryBoundary where T: core::clone::Clone
+pub type zendriver::monitor::NetworkDeliveryBoundary::Owned = T
+pub fn zendriver::monitor::NetworkDeliveryBoundary::clone_into(&self, &mut T)
+pub fn zendriver::monitor::NetworkDeliveryBoundary::to_owned(&self) -> T
+impl<T> core::any::Any for zendriver::monitor::NetworkDeliveryBoundary where T: 'static + ?core::marker::Sized
+pub fn zendriver::monitor::NetworkDeliveryBoundary::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for zendriver::monitor::NetworkDeliveryBoundary where T: ?core::marker::Sized
+pub fn zendriver::monitor::NetworkDeliveryBoundary::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for zendriver::monitor::NetworkDeliveryBoundary where T: ?core::marker::Sized
+pub fn zendriver::monitor::NetworkDeliveryBoundary::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for zendriver::monitor::NetworkDeliveryBoundary where T: core::clone::Clone
+pub unsafe fn zendriver::monitor::NetworkDeliveryBoundary::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for zendriver::monitor::NetworkDeliveryBoundary
+pub fn zendriver::monitor::NetworkDeliveryBoundary::from(T) -> T
+impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::monitor::NetworkDeliveryBoundary where T: ?core::marker::Sized
+pub fn zendriver::monitor::NetworkDeliveryBoundary::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::NetworkDeliveryBoundary::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for zendriver::monitor::NetworkDeliveryBoundary
+impl<T> tracing::instrument::WithSubscriber for zendriver::monitor::NetworkDeliveryBoundary
+impl<T> typenum::type_operators::Same for zendriver::monitor::NetworkDeliveryBoundary
+pub type zendriver::monitor::NetworkDeliveryBoundary::Output = T
+impl<V, T> ppv_lite86::types::VZip<V> for zendriver::monitor::NetworkDeliveryBoundary where V: ppv_lite86::types::MultiLane<T>
+pub fn zendriver::monitor::NetworkDeliveryBoundary::vzip(self) -> V
 pub enum zendriver::monitor::NetworkEvent
+pub zendriver::monitor::NetworkEvent::DeliveryBoundary(zendriver::monitor::NetworkDeliveryBoundary)
 pub zendriver::monitor::NetworkEvent::EventSourceMessage
 pub zendriver::monitor::NetworkEvent::EventSourceMessage::data: alloc::string::String
 pub zendriver::monitor::NetworkEvent::EventSourceMessage::event_id: alloc::string::String
@@ -3640,6 +3709,63 @@ impl<T> typenum::type_operators::Same for zendriver::request::Response
 pub type zendriver::request::Response::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for zendriver::request::Response where V: ppv_lite86::types::MultiLane<T>
 pub fn zendriver::request::Response::vzip(self) -> V
+pub mod zendriver::response_body
+pub struct zendriver::response_body::BoundedBody
+pub zendriver::response_body::BoundedBody::bytes: alloc::vec::Vec<u8>
+pub zendriver::response_body::BoundedBody::encoded_len: u64
+pub zendriver::response_body::BoundedBody::truncated: bool
+impl zendriver::response_body::BoundedBody
+pub fn zendriver::response_body::BoundedBody::capture(&[u8], usize) -> Self
+impl core::clone::Clone for zendriver::response_body::BoundedBody
+pub fn zendriver::response_body::BoundedBody::clone(&self) -> zendriver::response_body::BoundedBody
+impl core::cmp::Eq for zendriver::response_body::BoundedBody
+impl core::cmp::PartialEq for zendriver::response_body::BoundedBody
+pub fn zendriver::response_body::BoundedBody::eq(&self, &zendriver::response_body::BoundedBody) -> bool
+impl core::fmt::Debug for zendriver::response_body::BoundedBody
+pub fn zendriver::response_body::BoundedBody::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for zendriver::response_body::BoundedBody
+impl core::marker::Freeze for zendriver::response_body::BoundedBody
+impl core::marker::Send for zendriver::response_body::BoundedBody
+impl core::marker::Sync for zendriver::response_body::BoundedBody
+impl core::marker::Unpin for zendriver::response_body::BoundedBody
+impl core::marker::UnsafeUnpin for zendriver::response_body::BoundedBody
+impl core::panic::unwind_safe::RefUnwindSafe for zendriver::response_body::BoundedBody
+impl core::panic::unwind_safe::UnwindSafe for zendriver::response_body::BoundedBody
+impl<Q, K> equivalent::Equivalent<K> for zendriver::response_body::BoundedBody where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn zendriver::response_body::BoundedBody::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for zendriver::response_body::BoundedBody where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn zendriver::response_body::BoundedBody::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for zendriver::response_body::BoundedBody where U: core::convert::From<T>
+pub fn zendriver::response_body::BoundedBody::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for zendriver::response_body::BoundedBody where U: core::convert::Into<T>
+pub type zendriver::response_body::BoundedBody::Error = core::convert::Infallible
+pub fn zendriver::response_body::BoundedBody::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for zendriver::response_body::BoundedBody where U: core::convert::TryFrom<T>
+pub type zendriver::response_body::BoundedBody::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn zendriver::response_body::BoundedBody::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for zendriver::response_body::BoundedBody where T: core::clone::Clone
+pub type zendriver::response_body::BoundedBody::Owned = T
+pub fn zendriver::response_body::BoundedBody::clone_into(&self, &mut T)
+pub fn zendriver::response_body::BoundedBody::to_owned(&self) -> T
+impl<T> core::any::Any for zendriver::response_body::BoundedBody where T: 'static + ?core::marker::Sized
+pub fn zendriver::response_body::BoundedBody::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for zendriver::response_body::BoundedBody where T: ?core::marker::Sized
+pub fn zendriver::response_body::BoundedBody::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for zendriver::response_body::BoundedBody where T: ?core::marker::Sized
+pub fn zendriver::response_body::BoundedBody::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for zendriver::response_body::BoundedBody where T: core::clone::Clone
+pub unsafe fn zendriver::response_body::BoundedBody::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for zendriver::response_body::BoundedBody
+pub fn zendriver::response_body::BoundedBody::from(T) -> T
+impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::response_body::BoundedBody where T: ?core::marker::Sized
+pub fn zendriver::response_body::BoundedBody::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::response_body::BoundedBody::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for zendriver::response_body::BoundedBody
+impl<T> tracing::instrument::WithSubscriber for zendriver::response_body::BoundedBody
+impl<T> typenum::type_operators::Same for zendriver::response_body::BoundedBody
+pub type zendriver::response_body::BoundedBody::Output = T
+impl<V, T> ppv_lite86::types::VZip<V> for zendriver::response_body::BoundedBody where V: ppv_lite86::types::MultiLane<T>
+pub fn zendriver::response_body::BoundedBody::vzip(self) -> V
 pub mod zendriver::screenshot
 pub enum zendriver::screenshot::Format
 pub zendriver::screenshot::Format::Jpeg
@@ -3746,6 +3872,7 @@ impl<V, T> ppv_lite86::types::VZip<V> for zendriver::screenshot::ScreenshotBuild
 pub fn zendriver::screenshot::ScreenshotBuilder<'tab>::vzip(self) -> V
 pub mod zendriver::stealth
 pub use zendriver::stealth::Fingerprint
+pub use zendriver::stealth::InputProfile
 pub use zendriver::stealth::Persona
 pub use zendriver::stealth::PersonaBuilder
 pub use zendriver::stealth::Platform
@@ -5113,7 +5240,71 @@ impl<T> typenum::type_operators::Same for zendriver::input::mouse::MouseButton
 pub type zendriver::input::mouse::MouseButton::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for zendriver::input::mouse::MouseButton where V: ppv_lite86::types::MultiLane<T>
 pub fn zendriver::input::mouse::MouseButton::vzip(self) -> V
+pub enum zendriver::NetworkDeliveryBoundary
+pub zendriver::NetworkDeliveryBoundary::CorrelationEvicted
+pub zendriver::NetworkDeliveryBoundary::CorrelationEvicted::url: alloc::string::String
+pub zendriver::NetworkDeliveryBoundary::DecodeFailed
+pub zendriver::NetworkDeliveryBoundary::Disconnected
+pub zendriver::NetworkDeliveryBoundary::Disconnected::generation: u64
+pub zendriver::NetworkDeliveryBoundary::Lagged
+pub zendriver::NetworkDeliveryBoundary::Lagged::generation: u64
+pub zendriver::NetworkDeliveryBoundary::Lagged::missed: u64
+pub zendriver::NetworkDeliveryBoundary::Reconnected
+pub zendriver::NetworkDeliveryBoundary::Reconnected::generation: u64
+pub zendriver::NetworkDeliveryBoundary::Reconnected::previous: u64
+pub zendriver::NetworkDeliveryBoundary::Unknown
+impl core::clone::Clone for zendriver::monitor::NetworkDeliveryBoundary
+pub fn zendriver::monitor::NetworkDeliveryBoundary::clone(&self) -> zendriver::monitor::NetworkDeliveryBoundary
+impl core::cmp::Eq for zendriver::monitor::NetworkDeliveryBoundary
+impl core::cmp::PartialEq for zendriver::monitor::NetworkDeliveryBoundary
+pub fn zendriver::monitor::NetworkDeliveryBoundary::eq(&self, &zendriver::monitor::NetworkDeliveryBoundary) -> bool
+impl core::fmt::Debug for zendriver::monitor::NetworkDeliveryBoundary
+pub fn zendriver::monitor::NetworkDeliveryBoundary::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for zendriver::monitor::NetworkDeliveryBoundary
+impl core::marker::Freeze for zendriver::monitor::NetworkDeliveryBoundary
+impl core::marker::Send for zendriver::monitor::NetworkDeliveryBoundary
+impl core::marker::Sync for zendriver::monitor::NetworkDeliveryBoundary
+impl core::marker::Unpin for zendriver::monitor::NetworkDeliveryBoundary
+impl core::marker::UnsafeUnpin for zendriver::monitor::NetworkDeliveryBoundary
+impl core::panic::unwind_safe::RefUnwindSafe for zendriver::monitor::NetworkDeliveryBoundary
+impl core::panic::unwind_safe::UnwindSafe for zendriver::monitor::NetworkDeliveryBoundary
+impl<Q, K> equivalent::Equivalent<K> for zendriver::monitor::NetworkDeliveryBoundary where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn zendriver::monitor::NetworkDeliveryBoundary::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for zendriver::monitor::NetworkDeliveryBoundary where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn zendriver::monitor::NetworkDeliveryBoundary::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for zendriver::monitor::NetworkDeliveryBoundary where U: core::convert::From<T>
+pub fn zendriver::monitor::NetworkDeliveryBoundary::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for zendriver::monitor::NetworkDeliveryBoundary where U: core::convert::Into<T>
+pub type zendriver::monitor::NetworkDeliveryBoundary::Error = core::convert::Infallible
+pub fn zendriver::monitor::NetworkDeliveryBoundary::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for zendriver::monitor::NetworkDeliveryBoundary where U: core::convert::TryFrom<T>
+pub type zendriver::monitor::NetworkDeliveryBoundary::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn zendriver::monitor::NetworkDeliveryBoundary::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for zendriver::monitor::NetworkDeliveryBoundary where T: core::clone::Clone
+pub type zendriver::monitor::NetworkDeliveryBoundary::Owned = T
+pub fn zendriver::monitor::NetworkDeliveryBoundary::clone_into(&self, &mut T)
+pub fn zendriver::monitor::NetworkDeliveryBoundary::to_owned(&self) -> T
+impl<T> core::any::Any for zendriver::monitor::NetworkDeliveryBoundary where T: 'static + ?core::marker::Sized
+pub fn zendriver::monitor::NetworkDeliveryBoundary::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for zendriver::monitor::NetworkDeliveryBoundary where T: ?core::marker::Sized
+pub fn zendriver::monitor::NetworkDeliveryBoundary::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for zendriver::monitor::NetworkDeliveryBoundary where T: ?core::marker::Sized
+pub fn zendriver::monitor::NetworkDeliveryBoundary::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for zendriver::monitor::NetworkDeliveryBoundary where T: core::clone::Clone
+pub unsafe fn zendriver::monitor::NetworkDeliveryBoundary::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for zendriver::monitor::NetworkDeliveryBoundary
+pub fn zendriver::monitor::NetworkDeliveryBoundary::from(T) -> T
+impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::monitor::NetworkDeliveryBoundary where T: ?core::marker::Sized
+pub fn zendriver::monitor::NetworkDeliveryBoundary::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::monitor::NetworkDeliveryBoundary::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for zendriver::monitor::NetworkDeliveryBoundary
+impl<T> tracing::instrument::WithSubscriber for zendriver::monitor::NetworkDeliveryBoundary
+impl<T> typenum::type_operators::Same for zendriver::monitor::NetworkDeliveryBoundary
+pub type zendriver::monitor::NetworkDeliveryBoundary::Output = T
+impl<V, T> ppv_lite86::types::VZip<V> for zendriver::monitor::NetworkDeliveryBoundary where V: ppv_lite86::types::MultiLane<T>
+pub fn zendriver::monitor::NetworkDeliveryBoundary::vzip(self) -> V
 pub enum zendriver::NetworkEvent
+pub zendriver::NetworkEvent::DeliveryBoundary(zendriver::monitor::NetworkDeliveryBoundary)
 pub zendriver::NetworkEvent::EventSourceMessage
 pub zendriver::NetworkEvent::EventSourceMessage::data: alloc::string::String
 pub zendriver::NetworkEvent::EventSourceMessage::event_id: alloc::string::String
@@ -5609,6 +5800,9 @@ pub zendriver::ZendriverError::Navigation(alloc::string::String)
 pub zendriver::ZendriverError::NetworkMonitor(alloc::string::String)
 pub zendriver::ZendriverError::NotActionable(core::time::Duration, alloc::string::String)
 pub zendriver::ZendriverError::NotRefreshable
+pub zendriver::ZendriverError::PersonaSeed
+pub zendriver::ZendriverError::PersonaSeed::path: std::path::PathBuf
+pub zendriver::ZendriverError::PersonaSeed::reason: alloc::string::String
 pub zendriver::ZendriverError::Request(alloc::string::String)
 pub zendriver::ZendriverError::Serde(serde_json::error::Error)
 pub zendriver::ZendriverError::Stealth(alloc::boxed::Box<zendriver_stealth::error::StealthError>)
@@ -5678,6 +5872,62 @@ impl<T> typenum::type_operators::Same for zendriver::error::ZendriverError
 pub type zendriver::error::ZendriverError::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for zendriver::error::ZendriverError where V: ppv_lite86::types::MultiLane<T>
 pub fn zendriver::error::ZendriverError::vzip(self) -> V
+pub struct zendriver::BoundedBody
+pub zendriver::BoundedBody::bytes: alloc::vec::Vec<u8>
+pub zendriver::BoundedBody::encoded_len: u64
+pub zendriver::BoundedBody::truncated: bool
+impl zendriver::response_body::BoundedBody
+pub fn zendriver::response_body::BoundedBody::capture(&[u8], usize) -> Self
+impl core::clone::Clone for zendriver::response_body::BoundedBody
+pub fn zendriver::response_body::BoundedBody::clone(&self) -> zendriver::response_body::BoundedBody
+impl core::cmp::Eq for zendriver::response_body::BoundedBody
+impl core::cmp::PartialEq for zendriver::response_body::BoundedBody
+pub fn zendriver::response_body::BoundedBody::eq(&self, &zendriver::response_body::BoundedBody) -> bool
+impl core::fmt::Debug for zendriver::response_body::BoundedBody
+pub fn zendriver::response_body::BoundedBody::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for zendriver::response_body::BoundedBody
+impl core::marker::Freeze for zendriver::response_body::BoundedBody
+impl core::marker::Send for zendriver::response_body::BoundedBody
+impl core::marker::Sync for zendriver::response_body::BoundedBody
+impl core::marker::Unpin for zendriver::response_body::BoundedBody
+impl core::marker::UnsafeUnpin for zendriver::response_body::BoundedBody
+impl core::panic::unwind_safe::RefUnwindSafe for zendriver::response_body::BoundedBody
+impl core::panic::unwind_safe::UnwindSafe for zendriver::response_body::BoundedBody
+impl<Q, K> equivalent::Equivalent<K> for zendriver::response_body::BoundedBody where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn zendriver::response_body::BoundedBody::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for zendriver::response_body::BoundedBody where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn zendriver::response_body::BoundedBody::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for zendriver::response_body::BoundedBody where U: core::convert::From<T>
+pub fn zendriver::response_body::BoundedBody::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for zendriver::response_body::BoundedBody where U: core::convert::Into<T>
+pub type zendriver::response_body::BoundedBody::Error = core::convert::Infallible
+pub fn zendriver::response_body::BoundedBody::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for zendriver::response_body::BoundedBody where U: core::convert::TryFrom<T>
+pub type zendriver::response_body::BoundedBody::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn zendriver::response_body::BoundedBody::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for zendriver::response_body::BoundedBody where T: core::clone::Clone
+pub type zendriver::response_body::BoundedBody::Owned = T
+pub fn zendriver::response_body::BoundedBody::clone_into(&self, &mut T)
+pub fn zendriver::response_body::BoundedBody::to_owned(&self) -> T
+impl<T> core::any::Any for zendriver::response_body::BoundedBody where T: 'static + ?core::marker::Sized
+pub fn zendriver::response_body::BoundedBody::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for zendriver::response_body::BoundedBody where T: ?core::marker::Sized
+pub fn zendriver::response_body::BoundedBody::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for zendriver::response_body::BoundedBody where T: ?core::marker::Sized
+pub fn zendriver::response_body::BoundedBody::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for zendriver::response_body::BoundedBody where T: core::clone::Clone
+pub unsafe fn zendriver::response_body::BoundedBody::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for zendriver::response_body::BoundedBody
+pub fn zendriver::response_body::BoundedBody::from(T) -> T
+impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::response_body::BoundedBody where T: ?core::marker::Sized
+pub fn zendriver::response_body::BoundedBody::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::response_body::BoundedBody::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for zendriver::response_body::BoundedBody
+impl<T> tracing::instrument::WithSubscriber for zendriver::response_body::BoundedBody
+impl<T> typenum::type_operators::Same for zendriver::response_body::BoundedBody
+pub type zendriver::response_body::BoundedBody::Output = T
+impl<V, T> ppv_lite86::types::VZip<V> for zendriver::response_body::BoundedBody where V: ppv_lite86::types::MultiLane<T>
+pub fn zendriver::response_body::BoundedBody::vzip(self) -> V
 pub struct zendriver::BoundingBox
 pub zendriver::BoundingBox::height: f64
 pub zendriver::BoundingBox::width: f64
@@ -5809,6 +6059,7 @@ pub fn zendriver::browser::BrowserBuilder::geo_auto(self) -> Self
 pub fn zendriver::browser::BrowserBuilder::geo_locale(self, impl core::convert::TryInto<zendriver_stealth::geo::Country>) -> Self
 pub fn zendriver::browser::BrowserBuilder::geo_resolver(self, impl zendriver_stealth::geo::GeoResolver + 'static) -> Self
 pub fn zendriver::browser::BrowserBuilder::headless(self, bool) -> Self
+pub fn zendriver::browser::BrowserBuilder::input_profile(self, zendriver_stealth::input_profile::InputProfile) -> Self
 pub fn zendriver::browser::BrowserBuilder::lang(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::browser::BrowserBuilder::new() -> Self
 pub fn zendriver::browser::BrowserBuilder::observer(self, alloc::sync::Arc<dyn zendriver_transport::observer::TargetObserver>) -> Self
@@ -5817,7 +6068,8 @@ pub fn zendriver::browser::BrowserBuilder::persona_overlay(self, zendriver_steal
 pub fn zendriver::browser::BrowserBuilder::preference(self, impl core::convert::Into<alloc::string::String>, serde_json::value::Value) -> Self
 pub fn zendriver::browser::BrowserBuilder::proxy(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::browser::BrowserBuilder::proxy_auth(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
-pub fn zendriver::browser::BrowserBuilder::resolved_persona(&self) -> zendriver_stealth::persona::Persona
+pub fn zendriver::browser::BrowserBuilder::resolved_input_profile(&self) -> zendriver_stealth::input_profile::InputProfile
+pub fn zendriver::browser::BrowserBuilder::resolved_persona(&self) -> core::result::Result<zendriver_stealth::persona::Persona, zendriver::error::ZendriverError>
 pub fn zendriver::browser::BrowserBuilder::sandbox(self, bool) -> Self
 pub fn zendriver::browser::BrowserBuilder::stealth(self, zendriver_stealth::profile::StealthProfile) -> Self
 pub fn zendriver::browser::BrowserBuilder::surface(self, zendriver_stealth::persona::surface::Surface, zendriver_stealth::persona::surface::Strategy) -> Self
@@ -8055,64 +8307,3 @@ pub fn zendriver::tab::Tab::find(&self) -> zendriver::query::FindBuilder<'_>
 pub fn zendriver::tab::Tab::find_all(&self) -> zendriver::query::FindAllBuilder<'_>
 pub async fn zendriver::start() -> zendriver::error::Result<zendriver::browser::Browser>
 pub type zendriver::Result<T, E> = core::result::Result<T, E>
-pub mod zendriver::response_body
-pub struct zendriver::response_body::BoundedBody
-pub zendriver::response_body::BoundedBody::bytes: alloc::vec::Vec<u8>
-pub zendriver::response_body::BoundedBody::encoded_len: u64
-pub zendriver::response_body::BoundedBody::truncated: bool
-impl zendriver::response_body::BoundedBody
-pub fn zendriver::response_body::BoundedBody::capture(&[u8], usize) -> Self
-impl core::clone::Clone for zendriver::response_body::BoundedBody
-pub fn zendriver::response_body::BoundedBody::clone(&self) -> zendriver::response_body::BoundedBody
-impl core::cmp::Eq for zendriver::response_body::BoundedBody
-impl core::cmp::PartialEq for zendriver::response_body::BoundedBody
-pub fn zendriver::response_body::BoundedBody::eq(&self, &zendriver::response_body::BoundedBody) -> bool
-impl core::fmt::Debug for zendriver::response_body::BoundedBody
-pub fn zendriver::response_body::BoundedBody::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for zendriver::response_body::BoundedBody
-impl core::marker::Freeze for zendriver::response_body::BoundedBody
-impl core::marker::Send for zendriver::response_body::BoundedBody
-impl core::marker::Sync for zendriver::response_body::BoundedBody
-impl core::marker::Unpin for zendriver::response_body::BoundedBody
-impl core::marker::UnsafeUnpin for zendriver::response_body::BoundedBody
-impl core::panic::unwind_safe::RefUnwindSafe for zendriver::response_body::BoundedBody
-impl core::panic::unwind_safe::UnwindSafe for zendriver::response_body::BoundedBody
-impl<Q, K> equivalent::Equivalent<K> for zendriver::response_body::BoundedBody where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
-pub fn zendriver::response_body::BoundedBody::equivalent(&self, &K) -> bool
-impl<Q, K> hashbrown::Equivalent<K> for zendriver::response_body::BoundedBody where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
-pub fn zendriver::response_body::BoundedBody::equivalent(&self, &K) -> bool
-impl<T, U> core::convert::Into<U> for zendriver::response_body::BoundedBody where U: core::convert::From<T>
-pub fn zendriver::response_body::BoundedBody::into(self) -> U
-impl<T, U> core::convert::TryFrom<U> for zendriver::response_body::BoundedBody where U: core::convert::Into<T>
-pub type zendriver::response_body::BoundedBody::Error = core::convert::Infallible
-pub fn zendriver::response_body::BoundedBody::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
-impl<T, U> core::convert::TryInto<U> for zendriver::response_body::BoundedBody where U: core::convert::TryFrom<T>
-pub type zendriver::response_body::BoundedBody::Error = <U as core::convert::TryFrom<T>>::Error
-pub fn zendriver::response_body::BoundedBody::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
-impl<T> alloc::borrow::ToOwned for zendriver::response_body::BoundedBody where T: core::clone::Clone
-pub type zendriver::response_body::BoundedBody::Owned = T
-pub fn zendriver::response_body::BoundedBody::clone_into(&self, &mut T)
-pub fn zendriver::response_body::BoundedBody::to_owned(&self) -> T
-impl<T> core::any::Any for zendriver::response_body::BoundedBody where T: 'static + ?core::marker::Sized
-pub fn zendriver::response_body::BoundedBody::type_id(&self) -> core::any::TypeId
-impl<T> core::borrow::Borrow<T> for zendriver::response_body::BoundedBody where T: ?core::marker::Sized
-pub fn zendriver::response_body::BoundedBody::borrow(&self) -> &T
-impl<T> core::borrow::BorrowMut<T> for zendriver::response_body::BoundedBody where T: ?core::marker::Sized
-pub fn zendriver::response_body::BoundedBody::borrow_mut(&mut self) -> &mut T
-impl<T> core::clone::CloneToUninit for zendriver::response_body::BoundedBody where T: core::clone::Clone
-pub unsafe fn zendriver::response_body::BoundedBody::clone_to_uninit(&self, *mut u8)
-impl<T> core::convert::From<T> for zendriver::response_body::BoundedBody
-pub fn zendriver::response_body::BoundedBody::from(T) -> T
-impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::response_body::BoundedBody where T: ?core::marker::Sized
-pub fn zendriver::response_body::BoundedBody::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn zendriver::response_body::BoundedBody::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-impl<T> tracing::instrument::Instrument for zendriver::response_body::BoundedBody
-impl<T> tracing::instrument::WithSubscriber for zendriver::response_body::BoundedBody
-impl<T> typenum::type_operators::Same for zendriver::response_body::BoundedBody
-pub type zendriver::response_body::BoundedBody::Output = T
-impl<V, T> ppv_lite86::types::VZip<V> for zendriver::response_body::BoundedBody where V: ppv_lite86::types::MultiLane<T>
-pub fn zendriver::response_body::BoundedBody::vzip(self) -> V
-pub struct zendriver::BoundedBody
-pub zendriver::BoundedBody::bytes: alloc::vec::Vec<u8>
-pub zendriver::BoundedBody::encoded_len: u64
-pub zendriver::BoundedBody::truncated: bool
