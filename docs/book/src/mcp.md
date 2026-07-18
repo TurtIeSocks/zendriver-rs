@@ -172,7 +172,7 @@ instead of silently dropped. Its `boundary` field is one of `"lagged"` |
 `url` populated depending on which. A `"disconnected"` boundary means the
 underlying monitor's correlator task has ended — no further events will ever
 be buffered for that handle; call `browser_monitor_start` again for a fresh
-one. See [Network monitor & HTTP](./network.md#delivery-loss-boundaries) for
+one. See [Network monitor](./network-monitor.md#delivery-loss-boundaries) for
 the full semantics.
 
 ## Stealth
