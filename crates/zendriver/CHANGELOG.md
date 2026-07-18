@@ -5,6 +5,30 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-18
+
+### Added
+
+- Add loss-accounted raw event stream (opt-in)
+- Add EventStreamIncomplete to distinguish lost-observation from timeout
+- Add BoundedBody bounded capture with explicit truncation
+- Surface delivery-loss boundaries and bounded bodies instead of silent gaps
+- Opt-in coherent input profile decoupled from stealth selection
+
+### Changed
+
+- Rename BoundedBody.encoded_len/body_encoded_bytes to full_len/body_full_bytes **(BREAKING)**
+
+### Fixed
+
+- Treat responseReceived as headers-only; add opt-in strict loss policy
+- Ready-barrier tab handoff, atomic seed, fail-closed on corrupt identity **(BREAKING)**
+- BestEffort timeout continues the observer chain (no orphaned target)
+- Report EventStreamIncomplete on transport teardown instead of Timeout
+- Default input profile follows stealth selection (no silent regression)
+- Evict oldest tracked request (FIFO) instead of an arbitrary one
+
+
 ## [0.2.30] - 2026-07-17
 
 ### Added

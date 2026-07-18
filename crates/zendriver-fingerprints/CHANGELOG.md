@@ -3,6 +3,9 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.2.15] - 2026-07-18
+
+
 ## [0.2.14] - 2026-07-17
 
 

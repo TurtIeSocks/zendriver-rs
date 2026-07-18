@@ -5,6 +5,24 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-18
+
+### Added
+
+- Add loss-accounted raw event stream (opt-in)
+- Observer timeout fails closed by default (BestEffort opt-out) **(BREAKING)**
+- Opt-in coherent input profile decoupled from stealth selection
+
+### Changed
+
+- Log Required-observer timeout at error!, matching its fail-closed peers
+
+### Fixed
+
+- Treat responseReceived as headers-only; add opt-in strict loss policy
+- BestEffort timeout continues the observer chain (no orphaned target)
+
+
 ## [0.1.11] - 2026-07-17
 
 

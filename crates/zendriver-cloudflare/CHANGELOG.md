@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-07-18
+
+### Added
+
+- Opt-in coherent input profile decoupled from stealth selection
+
+
 ## [0.2.7] - 2026-07-17
 
 

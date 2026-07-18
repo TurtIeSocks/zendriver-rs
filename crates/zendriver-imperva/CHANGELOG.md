@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.2.11] - 2026-07-18
+
+### Added
+
+- Opt-in coherent input profile decoupled from stealth selection
+
+
 ## [0.2.10] - 2026-07-17
 
 

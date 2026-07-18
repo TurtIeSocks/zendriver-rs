@@ -3,6 +3,20 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.8.0] - 2026-07-18
+
+### Added
+
+- Opt-in coherent input profile decoupled from stealth selection
+- Add opt-in native-isolation/real-WebGL profile (default unchanged)
+
+### Fixed
+
+- Default input profile follows stealth selection (no silent regression)
+- Keep WebGPU coherent with real WebGL under native_isolation
+- Derive locale override from pinned languages for cross-surface coherence
+
+
 ## [0.7.0] - 2026-07-17
 
 ### Added
