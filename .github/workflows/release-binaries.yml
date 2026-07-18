@@ -71,9 +71,20 @@ jobs:
           echo "ASSET=$OUT" >> "$GITHUB_ENV"
           echo "RAWBIN=$BIN" >> "$GITHUB_ENV"
 
-      - name: Checksum
+      # `shasum` (a Perl script) ships on the Linux/macOS runners but NOT in
+      # Git-for-Windows bash (exit 127: "shasum: command not found"), which
+      # silently dropped the Windows binary from every release. Git-bash does
+      # bundle coreutils' `sha256sum`, whose `<hash>  <file>` output matches
+      # `shasum -a 256`, so the aggregated SHA256SUMS stays consistent.
+      - name: Checksum (unix)
+        if: matrix.os != 'windows-latest'
         shell: bash
         run: shasum -a 256 "$ASSET" > "$ASSET.sha256"
+
+      - name: Checksum (windows)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: sha256sum "$ASSET" > "$ASSET.sha256"
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v1
