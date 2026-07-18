@@ -210,14 +210,15 @@ It's off by default on every profile, so existing `native()` /
 `spoofed()` callers see no behavior change unless they opt in
 explicitly.
 
-**Known caveat — WebGPU is untouched.** The WebGPU coherence patch
-(`navigator.gpu`) is driven independently by the
+**WebGL and WebGPU stay coherent.** When `native_isolation` drops the
+WebGL patch, the WebGPU **value** adapter spoof (`navigator.gpu`,
+driven by the
 [`Persona`](https://docs.rs/zendriver-stealth/latest/zendriver_stealth/struct.Persona.html)
-`webgpu` surface, which defaults to still deriving a spoofed adapter
-from the hardcoded Intel/ANGLE renderer. Enabling `native_isolation`
-does **not** disable that — pair it with a `Persona` that sets the
-`Webgpu` surface strategy to `Native` (via `apply_surface_override`) if
-you need full WebGL/WebGPU coherence with the real host GPU.
+`webgpu` surface) is skipped along with it, so `navigator.gpu` reports
+the real host adapter instead of one derived from a renderer the WebGL
+patch no longer applies — no cross-API mismatch. An explicit `Webgpu`
+`Block` (hiding `navigator.gpu`) is renderer-neutral, so it is still
+honored if you set it.
 
 ## End-to-end example
 

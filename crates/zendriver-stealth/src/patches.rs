@@ -74,22 +74,28 @@ pub fn bootstrap_script(persona: &Persona, identity: &Fingerprint) -> String {
 /// value-substitution patch (`patches/webgl.js`) entirely — the host's real
 /// `WebGLRenderingContext.getParameter`/`getSupportedExtensions` values pass
 /// through unpatched instead of the coherent ANGLE/Direct3D11 Intel identity
-/// the patch spoofs by default. Every other patch (identity IIFE, noise
-/// surfaces, WebGPU, fonts, hardware, webrtc, screen/mouse coherence) is
-/// unaffected — in particular the WebGPU coherence patch still runs with its
-/// own (persona-driven) strategy, so it is NOT automatically kept coherent
-/// with the now-unpatched real WebGL renderer; see
+/// the patch spoofs by default.
+///
+/// To keep WebGL and WebGPU reporting the *same* (real) GPU, the WebGPU
+/// **value** adapter spoof is omitted here too — otherwise a spoofed
+/// `navigator.gpu` adapter (derived from the WebGL renderer this variant does
+/// not apply) would disagree with the real WebGL renderer, a cross-API
+/// coherence tell. An explicit WebGPU `Block` (hiding `navigator.gpu`) is
+/// renderer-neutral and is still honored. Every other patch (identity IIFE,
+/// noise surfaces, fonts, hardware, webrtc, screen/mouse coherence) is
+/// unaffected. See
 /// [`StealthProfile::native_isolation`](crate::StealthProfile::native_isolation)
-/// for that caveat and the caller-facing trade-off this backs.
+/// for the caller-facing trade-off this backs.
 #[must_use]
 pub fn bootstrap_script_native_webgl(persona: &Persona, identity: &Fingerprint) -> String {
     bootstrap_script_impl(persona, identity, false)
 }
 
 /// Shared implementation for [`bootstrap_script`] /
-/// [`bootstrap_script_native_webgl`]. `spoof_webgl` gates only the
-/// `push_webgl` call — every other patch is identical between the two
-/// public entry points.
+/// [`bootstrap_script_native_webgl`]. `spoof_webgl` gates the `push_webgl`
+/// call and the WebGPU *value* spoof (which is skipped when WebGL is left
+/// real, so the two APIs stay coherent — see [`push_webgpu`]); every other
+/// patch is identical between the two public entry points.
 fn bootstrap_script_impl(persona: &Persona, identity: &Fingerprint, spoof_webgl: bool) -> String {
     // Prelude first: installs the toString override + closure-local helpers
     // that every patch below routes through.
@@ -138,7 +144,12 @@ fn bootstrap_script_impl(persona: &Persona, identity: &Fingerprint, spoof_webgl:
     if spoof_webgl {
         push_webgl(&mut body, persona.webgl.as_ref());
     }
-    push_webgpu(&mut body, persona.webgpu.as_ref(), persona.webgl.as_ref());
+    push_webgpu(
+        &mut body,
+        persona.webgpu.as_ref(),
+        persona.webgl.as_ref(),
+        spoof_webgl,
+    );
     push_fonts(&mut body, persona.fonts.as_ref(), seed);
     push_hardware(&mut body, persona.hardware.as_ref());
     push_webrtc(&mut body, persona.webrtc.as_ref());
@@ -242,10 +253,31 @@ fn push_webgl(out: &mut String, spec: Option<&WebglSpec>) {
 /// Append the WebGPU coherence patch. The adapter info is derived from the
 /// persona's WebGL renderer (or the hardcoded Intel default the webgl block
 /// falls back to), so navigator.gpu agrees with WebGL. Omitted under `Native`.
-fn push_webgpu(out: &mut String, cfg: Option<&SurfaceCfg>, webgl: Option<&WebglSpec>) {
+///
+/// `spoof_webgl` reflects whether the WebGL value patch ran. When it is
+/// `false` (the native-WebGL opt-in — [`bootstrap_script_native_webgl`]) the
+/// real WebGL renderer passes through unpatched, so a spoofed WebGPU *value*
+/// adapter — derived from the WebGL renderer we did NOT apply, or the
+/// hardcoded default below — would disagree with the real GPU. That cross-API
+/// mismatch is the exact coherence tell the opt-in exists to avoid, so the
+/// value spoof is skipped too and the real `navigator.gpu` adapter passes
+/// through. An explicit `Block` (hide `navigator.gpu`) is renderer-neutral
+/// and stays honored regardless.
+fn push_webgpu(
+    out: &mut String,
+    cfg: Option<&SurfaceCfg>,
+    webgl: Option<&WebglSpec>,
+    spoof_webgl: bool,
+) {
     use crate::persona::webgpu_adapter::adapter_for_renderer;
     let strat = Surface::Webgpu.resolve_strategy(cfg.and_then(|c| c.strategy));
     if strat == Strategy::Native {
+        return;
+    }
+    // Native-WebGL renderer coherence: skip the value adapter spoof when the
+    // real WebGL renderer is left unpatched (see the doc comment above). A
+    // `Block` is renderer-neutral, so it is still emitted.
+    if !spoof_webgl && strat != Strategy::Block {
         return;
     }
     const DEFAULT_RENDERER: &str =
@@ -652,13 +684,38 @@ mod tests {
         );
         assert!(s.contains("userAgentData"), "user_agent_data patch missing");
         assert!(s.contains("naturalWidth"), "broken_image patch missing");
-        // WebGPU coherence patch is untouched by this opt-in (documented
-        // caveat) — default persona strategy (`Value`) still runs.
+    }
+
+    #[test]
+    fn native_webgl_bootstrap_omits_webgpu_value_spoof_for_renderer_coherence() {
+        // native_isolation leaves the real WebGL renderer unpatched. A spoofed
+        // WebGPU *value* adapter — derived from the WebGL renderer we did NOT
+        // apply, or the hardcoded Intel default — would disagree with the real
+        // GPU. That cross-API mismatch is exactly the coherence tell this
+        // opt-in exists to avoid, so the default (`Value`) WebGPU spoof must
+        // ALSO be omitted, leaving the real `navigator.gpu` adapter through.
+        let s = bootstrap_script_native_webgl(&Persona::default(), &mock_identity());
         assert!(
-            s.contains("navigator, 'gpu'")
-                || s.contains("GPUAdapter")
-                || s.contains("requestAdapter"),
-            "webgpu patch should still run (not gated by native-webgl opt-in)"
+            !s.contains("GPUAdapter.prototype"),
+            "native-webgl must omit the WebGPU value spoof for WebGL/WebGPU renderer coherence"
+        );
+    }
+
+    #[test]
+    fn native_webgl_bootstrap_still_honors_explicit_webgpu_block() {
+        // A `Block` (hide `navigator.gpu`) is renderer-neutral — it removes the
+        // API rather than reporting a mismatched adapter — so an explicit Block
+        // stays honored under native-webgl.
+        let p = Persona {
+            webgpu: Some(SurfaceCfg {
+                strategy: Some(Strategy::Block),
+            }),
+            ..Persona::default()
+        };
+        let s = bootstrap_script_native_webgl(&p, &mock_identity());
+        assert!(
+            s.contains("navigator, 'gpu'"),
+            "explicit webgpu Block should still shadow navigator.gpu under native-webgl"
         );
     }
 

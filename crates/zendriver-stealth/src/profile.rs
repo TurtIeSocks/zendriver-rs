@@ -318,14 +318,13 @@ impl StealthProfile {
     /// are unaffected unless you call this explicitly, so existing callers
     /// see no behavior change.
     ///
-    /// Note: this does not touch the separate WebGPU coherence patch (driven
-    /// by the [`Persona`](crate::Persona) `webgpu` surface, `Value` strategy
-    /// by default) — it still derives a spoofed `navigator.gpu` adapter from
-    /// the hardcoded default renderer even when the WebGL patch above is
-    /// skipped. A caller who wants full WebGL/WebGPU coherence with the real
-    /// host should also set that surface to
-    /// [`Strategy::Native`](crate::Strategy) via
-    /// [`Persona::apply_surface_override`](crate::Persona::apply_surface_override).
+    /// WebGL/WebGPU stay coherent: when this drops the WebGL patch, the
+    /// separate WebGPU **value** adapter spoof (driven by the
+    /// [`Persona`](crate::Persona) `webgpu` surface, `Value` by default) is
+    /// skipped too, so `navigator.gpu` reports the real host adapter rather
+    /// than one derived from a renderer the WebGL patch no longer applies. An
+    /// explicit WebGPU [`Strategy::Block`](crate::Strategy) (hiding
+    /// `navigator.gpu`) is renderer-neutral and is still honored.
     ///
     /// ```
     /// use zendriver_stealth::StealthProfile;
