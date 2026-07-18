@@ -16,8 +16,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, trace, warn};
 
 use crate::connection::{Connection, ConnectionInner};
-use crate::frame::{CdpCommand, CdpInbound, CdpRpcError, RawEvent};
-use crate::observer::{PausedSession, TargetInfo, TargetObserver};
+use crate::frame::{AccountedRawEvent, CdpCommand, CdpInbound, CdpRpcError, RawEvent};
+use crate::observer::{ObserverFailurePolicy, PausedSession, TargetInfo, TargetObserver};
 
 /// Outbound command sent from a `Connection` handle to the actor.
 #[derive(Debug)]
@@ -30,6 +30,22 @@ pub(crate) struct OutboundCmd {
 
 /// Default broadcast bus capacity. Lagged subscribers drop frames.
 pub(crate) const EVENT_BUS_CAPACITY: usize = 1024;
+
+/// Accounted-bus plumbing for one actor run: the second, opt-in broadcast
+/// sender plus this run's generation number. Bundled into a struct (rather
+/// than two more [`run_actor`] parameters) to keep the function signature
+/// under clippy's `too_many_arguments` threshold and to make the bus/
+/// generation pairing explicit at each call site — mirrors the
+/// [`crate::connection`]-side rationale for bundling wide handshake inputs
+/// into a struct.
+pub(crate) struct AccountedBus {
+    /// Second broadcast bus behind
+    /// [`Connection::subscribe_raw_accounted`](crate::connection::Connection::subscribe_raw_accounted).
+    pub(crate) tx: broadcast::Sender<AccountedRawEvent>,
+    /// This actor run's generation number, stamped onto every
+    /// [`AccountedRawEvent`] it produces.
+    pub(crate) generation: u64,
+}
 
 /// `Target.attachedToTarget` event payload (we only deserialize what we need).
 #[derive(serde::Deserialize)]
@@ -57,10 +73,19 @@ struct TargetDetached {
 /// loop stays responsive; `weak_inner` lets the handler reconstruct a
 /// `Connection` (without forming a strong cycle) to talk back through this
 /// same actor.
+///
+/// `accounted` bundles the second, opt-in broadcast bus behind
+/// [`Connection::subscribe_raw_accounted`](crate::connection::Connection::subscribe_raw_accounted)
+/// with this actor run's generation number, stamped onto every
+/// [`AccountedRawEvent`] it produces. Mirroring onto `accounted.tx` — the
+/// per-event clone of [`RawEvent`] and the send itself — is gated behind
+/// `accounted.tx.receiver_count() > 0` so a connection with no accounted
+/// subscribers pays nothing beyond the existing `event_tx` broadcast.
 pub(crate) async fn run_actor<S>(
     mut ws: S,
     mut cmd_rx: mpsc::Receiver<OutboundCmd>,
     event_tx: broadcast::Sender<RawEvent>,
+    accounted: AccountedBus,
     shutdown: CancellationToken,
     observers: Vec<Arc<dyn TargetObserver>>,
     weak_inner: Weak<ConnectionInner>,
@@ -71,6 +96,11 @@ pub(crate) async fn run_actor<S>(
 {
     let mut pending: HashMap<u64, oneshot::Sender<Result<Value, CdpRpcError>>> = HashMap::new();
     let mut next_id: u64 = 1;
+    // Per-generation monotonic counter for `AccountedRawEvent::Event::sequence`.
+    // Reset to 1 on every actor run (a fresh call to `run_actor`, i.e. every
+    // reconnect); only advances when `accounted_tx` actually has a
+    // subscriber, since it counts positions *on the accounted bus*.
+    let mut next_accounted_sequence: u64 = 1;
 
     // Sentinel stamped onto drained pendings when the loop exits. Defaults to
     // the clean-shutdown code; the unexpected-ws-death branches below flip it
@@ -241,6 +271,21 @@ pub(crate) async fn run_actor<S>(
                                     }
                                 }
                                 let ev = RawEvent { method, params, session_id };
+                                // Gate the per-event clone + accounted-bus send
+                                // behind an actual subscriber: cloning `ev`
+                                // (method String + params Value — potentially
+                                // large Network.* JSON) is wasted work when
+                                // nobody is listening on the accounted bus.
+                                if accounted.tx.receiver_count() > 0 {
+                                    let sequence = next_accounted_sequence;
+                                    next_accounted_sequence =
+                                        next_accounted_sequence.wrapping_add(1);
+                                    let _ = accounted.tx.send(AccountedRawEvent::Event {
+                                        generation: accounted.generation,
+                                        sequence,
+                                        event: ev.clone(),
+                                    });
+                                }
                                 // Ignore SendError: zero subscribers is fine.
                                 let _ = event_tx.send(ev);
                             }
@@ -271,6 +316,15 @@ pub(crate) async fn run_actor<S>(
     } else {
         "connection shut down"
     };
+    // A genuine ws death (not a caller-requested `shutdown()` and not a
+    // `reconnect()` — both cancel via `shutdown.cancelled()`, which never
+    // sets `DISCONNECTED_CODE`) gets exactly one `Disconnected` on the
+    // accounted bus, gated the same as the per-event mirroring above.
+    if drain_code == crate::connection::DISCONNECTED_CODE && accounted.tx.receiver_count() > 0 {
+        let _ = accounted.tx.send(AccountedRawEvent::Disconnected {
+            generation: accounted.generation,
+        });
+    }
     for (_id, reply) in pending.drain() {
         let _ = reply.send(Err(CdpRpcError {
             code: drain_code,
@@ -283,10 +337,22 @@ pub(crate) async fn run_actor<S>(
 
 /// Run all `observers` serially against the just-attached session. Returns
 /// after either: (a) every observer succeeds — in which case we release the
-/// debugger via `Runtime.runIfWaitingForDebugger`, (b) one observer errors or
+/// debugger via `Runtime.runIfWaitingForDebugger`; (b) one observer errors or
 /// panics — we detach via `Target.detachFromTarget` and return without
-/// releasing, or (c) an observer exceeds `observer_timeout` — we log and fall
-/// through to release the debugger so Chrome doesn't hang indefinitely.
+/// releasing; or (c) an observer exceeds `observer_timeout` — behavior then
+/// depends on [`TargetObserver::failure_policy`]:
+/// [`ObserverFailurePolicy::Required`] (the default) detaches the same as
+/// (b), fail closed, so a hung observer can never leave the page running
+/// without its setup; [`ObserverFailurePolicy::BestEffort`] logs a warning
+/// and **skips only the timed-out observer**, then continues on to the
+/// remaining observers in the chain (if any) exactly as if this one had
+/// returned `Ok`. Once every remaining observer has run (or there were none
+/// left), the debugger is released the same as the success path. This
+/// matters because zendriver registers its tab-registrar observer last as a
+/// ready barrier (see `assemble_observer_chain` in `zendriver::browser`): a
+/// `BestEffort` timeout earlier in the chain must not skip the observers
+/// that come after it, or the registrar would never run and the target
+/// would leak — live and released, but absent from `BrowserInner::tabs`.
 ///
 /// ## Cancellation
 ///
@@ -318,31 +384,37 @@ async fn handle_target_attached(
             Ok(Ok(Ok(()))) => continue,
             Ok(Ok(Err(e))) => {
                 error!(observer = name, %session_id, error = %e, "observer failed; detaching");
-                let _ = conn
-                    .call_raw(
-                        "Target.detachFromTarget",
-                        json!({ "sessionId": &session_id }),
-                        None,
-                    )
-                    .await;
+                detach_target(&conn, &session_id).await;
                 return;
             }
             Ok(Err(panic)) => {
                 let msg = panic_payload(&panic);
                 error!(observer = name, %session_id, panic = %msg, "observer panicked; detaching");
-                let _ = conn
-                    .call_raw(
-                        "Target.detachFromTarget",
-                        json!({ "sessionId": &session_id }),
-                        None,
-                    )
-                    .await;
+                detach_target(&conn, &session_id).await;
                 return;
             }
-            Err(_) => {
-                warn!(observer = name, %session_id, "observer timed out; releasing");
-                break;
-            }
+            Err(_) => match obs.failure_policy() {
+                ObserverFailurePolicy::Required => {
+                    // Same severity as the Err/panic branches above: a Required
+                    // observer timing out is a fail-closed detach, not a
+                    // best-effort skip — log it at error!, not warn!.
+                    error!(
+                        observer = name,
+                        %session_id,
+                        "observer timed out; detaching (fail-closed)"
+                    );
+                    detach_target(&conn, &session_id).await;
+                    return;
+                }
+                ObserverFailurePolicy::BestEffort => {
+                    warn!(
+                        observer = name,
+                        %session_id,
+                        "observer timed out; skipping (best-effort) and continuing the chain"
+                    );
+                    continue;
+                }
+            },
         }
     }
     let _ = conn
@@ -350,6 +422,20 @@ async fn handle_target_attached(
             "Runtime.runIfWaitingForDebugger",
             json!({}),
             Some(session_id),
+        )
+        .await;
+}
+
+/// Shared detach path for every observer failure mode (`Err`, panic, or a
+/// `Required`-policy timeout): force-detach the session via
+/// `Target.detachFromTarget` so the target is never handed back to Chrome
+/// with `Runtime.runIfWaitingForDebugger`.
+async fn detach_target(conn: &Connection, session_id: &str) {
+    let _ = conn
+        .call_raw(
+            "Target.detachFromTarget",
+            json!({ "sessionId": session_id }),
+            None,
         )
         .await;
 }
@@ -375,7 +461,7 @@ mod tests {
     use crate::connection::{
         spawn_actor_with_observers, spawn_actor_with_observers_and_timeout, test_only::DriverStream,
     };
-    use crate::observer::{ObserverError, PausedSession, TargetObserver};
+    use crate::observer::{ObserverError, ObserverFailurePolicy, PausedSession, TargetObserver};
     use serde_json::json;
     use std::sync::Mutex;
     use tokio_tungstenite::tungstenite::Message;
@@ -410,6 +496,10 @@ mod tests {
             ws,
             cmd_rx,
             event_tx,
+            AccountedBus {
+                tx: broadcast::channel::<AccountedRawEvent>(EVENT_BUS_CAPACITY).0,
+                generation: 1,
+            },
             shutdown.clone(),
             Vec::new(),
             Weak::new(),
@@ -451,6 +541,10 @@ mod tests {
             ws,
             cmd_rx,
             event_tx,
+            AccountedBus {
+                tx: broadcast::channel::<AccountedRawEvent>(EVENT_BUS_CAPACITY).0,
+                generation: 1,
+            },
             shutdown.clone(),
             Vec::new(),
             Weak::new(),
@@ -501,6 +595,10 @@ mod tests {
             ws,
             cmd_rx,
             event_tx,
+            AccountedBus {
+                tx: broadcast::channel::<AccountedRawEvent>(EVENT_BUS_CAPACITY).0,
+                generation: 1,
+            },
             shutdown.clone(),
             Vec::new(),
             Weak::new(),
@@ -554,6 +652,10 @@ mod tests {
             ws,
             cmd_rx,
             event_tx,
+            AccountedBus {
+                tx: broadcast::channel::<AccountedRawEvent>(EVENT_BUS_CAPACITY).0,
+                generation: 1,
+            },
             shutdown.clone(),
             Vec::new(),
             Weak::new(),
@@ -588,6 +690,10 @@ mod tests {
             ws,
             cmd_rx,
             event_tx,
+            AccountedBus {
+                tx: broadcast::channel::<AccountedRawEvent>(EVENT_BUS_CAPACITY).0,
+                generation: 1,
+            },
             shutdown.clone(),
             Vec::new(),
             Weak::new(),
@@ -627,6 +733,10 @@ mod tests {
             ws,
             cmd_rx,
             event_tx,
+            AccountedBus {
+                tx: broadcast::channel::<AccountedRawEvent>(EVENT_BUS_CAPACITY).0,
+                generation: 1,
+            },
             shutdown.clone(),
             Vec::new(),
             Weak::new(),
@@ -665,6 +775,10 @@ mod tests {
             ws,
             cmd_rx,
             event_tx,
+            AccountedBus {
+                tx: broadcast::channel::<AccountedRawEvent>(EVENT_BUS_CAPACITY).0,
+                generation: 1,
+            },
             shutdown.clone(),
             Vec::new(),
             Weak::new(),
@@ -710,6 +824,10 @@ mod tests {
             ws,
             cmd_rx,
             event_tx,
+            AccountedBus {
+                tx: broadcast::channel::<AccountedRawEvent>(EVENT_BUS_CAPACITY).0,
+                generation: 1,
+            },
             shutdown.clone(),
             Vec::new(),
             Weak::new(),
@@ -754,6 +872,7 @@ mod tests {
         name: &'static str,
         calls: Arc<Mutex<Vec<(&'static str, String)>>>,
         behavior: ObserverBehavior,
+        policy: ObserverFailurePolicy,
     }
 
     #[async_trait::async_trait]
@@ -779,6 +898,10 @@ mod tests {
                     Ok(())
                 }
             }
+        }
+
+        fn failure_policy(&self) -> ObserverFailurePolicy {
+            self.policy
         }
     }
 
@@ -824,6 +947,7 @@ mod tests {
             name: "rec",
             calls: calls.clone(),
             behavior: ObserverBehavior::Ok,
+            policy: ObserverFailurePolicy::Required,
         });
         let conn = spawn_actor_with_observers(ws, vec![obs]);
 
@@ -848,6 +972,7 @@ mod tests {
             name: "bad",
             calls: calls.clone(),
             behavior: ObserverBehavior::Err,
+            policy: ObserverFailurePolicy::Required,
         });
         let conn = spawn_actor_with_observers(ws, vec![obs]);
 
@@ -870,6 +995,7 @@ mod tests {
             name: "kaboom",
             calls: calls.clone(),
             behavior: ObserverBehavior::Panic,
+            policy: ObserverFailurePolicy::Required,
         });
         let conn = spawn_actor_with_observers(ws, vec![obs]);
 
@@ -905,19 +1031,65 @@ mod tests {
         conn.shutdown();
     }
 
+    /// Default (`Required`) policy: a timeout must fail closed, exactly like
+    /// an `Err` or a panic — detach, and never hand the target out via
+    /// `Runtime.runIfWaitingForDebugger`. This replaces the old fail-open
+    /// `observer_timeout_releases_debugger_anyway` test — that behavior is
+    /// now `BestEffort`-only, covered by
+    /// `best_effort_observer_timeout_releases_debugger_anyway` below.
     #[tokio::test]
-    async fn observer_timeout_releases_debugger_anyway() {
+    async fn required_observer_timeout_detaches_target() {
         let (ws, test_tx, mut test_rx) = duplex_pair();
         let calls = Arc::new(Mutex::new(Vec::new()));
         let obs: Arc<dyn TargetObserver> = Arc::new(RecordingObserver {
-            name: "slow",
+            name: "slow-required",
             calls: calls.clone(),
             behavior: ObserverBehavior::Sleep(Duration::from_secs(10)),
+            policy: ObserverFailurePolicy::Required,
         });
         let conn =
             spawn_actor_with_observers_and_timeout(ws, vec![obs], Duration::from_millis(100));
 
-        emit_attached(&test_tx, "S-slow").await;
+        emit_attached(&test_tx, "S-slow-required").await;
+
+        // Within ~200ms the timeout must fire and, for a Required observer,
+        // detach the target instead of releasing it.
+        let frame = tokio::time::timeout(Duration::from_millis(500), next_frame(&mut test_rx))
+            .await
+            .expect("timeout waiting for Target.detachFromTarget");
+        assert_eq!(frame["method"], "Target.detachFromTarget");
+        assert_eq!(frame["params"]["sessionId"], "S-slow-required");
+        assert!(frame.get("sessionId").is_none());
+
+        // The target must never be handed out: no runIfWaitingForDebugger
+        // frame should follow the detach.
+        let no_release =
+            tokio::time::timeout(Duration::from_millis(300), next_frame(&mut test_rx)).await;
+        assert!(
+            no_release.is_err(),
+            "Required observer timeout must not release the debugger after detaching"
+        );
+
+        conn.shutdown();
+    }
+
+    /// `BestEffort` policy: keeps today's original fail-open timeout
+    /// behavior — log and release the debugger anyway so Chrome doesn't
+    /// stay paused indefinitely on a non-critical observer.
+    #[tokio::test]
+    async fn best_effort_observer_timeout_releases_debugger_anyway() {
+        let (ws, test_tx, mut test_rx) = duplex_pair();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let obs: Arc<dyn TargetObserver> = Arc::new(RecordingObserver {
+            name: "slow-best-effort",
+            calls: calls.clone(),
+            behavior: ObserverBehavior::Sleep(Duration::from_secs(10)),
+            policy: ObserverFailurePolicy::BestEffort,
+        });
+        let conn =
+            spawn_actor_with_observers_and_timeout(ws, vec![obs], Duration::from_millis(100));
+
+        emit_attached(&test_tx, "S-slow-best-effort").await;
 
         // Within ~200ms the timeout must fire and the debugger must be released
         // anyway so Chrome doesn't stay paused indefinitely.
@@ -925,7 +1097,59 @@ mod tests {
             .await
             .expect("timeout waiting for runIfWaitingForDebugger");
         assert_eq!(frame["method"], "Runtime.runIfWaitingForDebugger");
-        assert_eq!(frame["sessionId"], "S-slow");
+        assert_eq!(frame["sessionId"], "S-slow-best-effort");
+
+        conn.shutdown();
+    }
+
+    /// A `BestEffort` observer that times out must not abandon the rest of
+    /// the chain: the observer(s) registered after it must still run. This
+    /// is what keeps a registrar-last chain (zendriver's `TabRegistrar`)
+    /// from being skipped when an earlier, non-critical observer hangs —
+    /// see the `handle_target_attached` doc comment above.
+    #[tokio::test]
+    async fn best_effort_observer_timeout_does_not_abandon_later_observers() {
+        let (ws, test_tx, mut test_rx) = duplex_pair();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let slow: Arc<dyn TargetObserver> = Arc::new(RecordingObserver {
+            name: "slow-best-effort",
+            calls: calls.clone(),
+            behavior: ObserverBehavior::Sleep(Duration::from_secs(10)),
+            policy: ObserverFailurePolicy::BestEffort,
+        });
+        let after: Arc<dyn TargetObserver> = Arc::new(RecordingObserver {
+            name: "after",
+            calls: calls.clone(),
+            behavior: ObserverBehavior::Ok,
+            policy: ObserverFailurePolicy::Required,
+        });
+        let conn = spawn_actor_with_observers_and_timeout(
+            ws,
+            vec![slow, after],
+            Duration::from_millis(100),
+        );
+
+        emit_attached(&test_tx, "S-chain-continues").await;
+
+        // The chain must still reach the end and release the debugger, which
+        // only happens once every observer (including the one after the
+        // timed-out `BestEffort` observer) has run.
+        let frame = tokio::time::timeout(Duration::from_millis(500), next_frame(&mut test_rx))
+            .await
+            .expect("timeout waiting for runIfWaitingForDebugger");
+        assert_eq!(frame["method"], "Runtime.runIfWaitingForDebugger");
+        assert_eq!(frame["sessionId"], "S-chain-continues");
+
+        // Prove the second observer actually ran (not just that a release
+        // frame appeared for some other reason).
+        let recorded = calls.lock().unwrap().clone();
+        assert_eq!(
+            recorded,
+            vec![
+                ("slow-best-effort", "S-chain-continues".to_string()),
+                ("after", "S-chain-continues".to_string()),
+            ]
+        );
 
         conn.shutdown();
     }
@@ -939,6 +1163,7 @@ mod tests {
                 name,
                 calls: calls.clone(),
                 behavior: ObserverBehavior::Ok,
+                policy: ObserverFailurePolicy::Required,
             })
         };
         let conn =

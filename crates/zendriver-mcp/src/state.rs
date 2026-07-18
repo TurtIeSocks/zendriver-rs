@@ -103,6 +103,15 @@ pub struct StealthOverrides {
     /// Toggle Content-Security-Policy bypass.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bypass_csp: Option<bool>,
+    /// Opt in to Chrome's real site isolation (`IsolateOrigins`/
+    /// `site-per-process` stay enabled) and, for `spoof_*` profiles, skip
+    /// the WebGL vendor/renderer patch — the host's real WebGL renderer
+    /// passes through unpatched. **Trade-off, not a strict stealth
+    /// improvement**: dropping the WebGL patch removes an anti-WAF
+    /// coherence defense (see `StealthProfile::native_isolation` rustdoc).
+    /// Off (`false`/unset) by default — existing behavior unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_isolation: Option<bool>,
     /// Derive a coherent `locale` + `languages` from a country code
     /// (ISO 3166-1 alpha-2, e.g. `"US"`). Overridden by an explicit `locale`.
     ///
@@ -111,6 +120,28 @@ pub struct StealthOverrides {
     /// (otherwise the field is accepted and ignored).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geo_country: Option<String>,
+}
+
+/// Input-timing profile choice carried over the MCP wire.
+///
+/// Wire mirror of `zendriver::stealth::InputProfile`'s two presets.
+/// Decoupled from [`StealthProfileChoice`] — an explicit choice here always
+/// wins over anything stealth would otherwise imply. When `browser_open`'s
+/// `input_profile` field is left unset, the *effective* profile instead
+/// follows the resolved stealth profile (spoofed stealth implies
+/// `Coherent`, `auto`/`native` stealth implies `Native`) — see
+/// `crate::tools::lifecycle::input_profile_choice_for`. This type's own
+/// `#[default]` (`Native`) is not consulted on that unset path; nothing in
+/// this crate currently calls `InputProfileChoice::default()`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum InputProfileChoice {
+    /// Zero-overhead, deterministic timing (`InputProfile::native`). Default.
+    #[default]
+    Native,
+    /// Non-mechanical, humanized timing (`InputProfile::coherent`) — human-
+    /// paced typing and jittery mouse motion.
+    Coherent,
 }
 
 /// State held for the duration of a single MCP session.
@@ -170,8 +201,9 @@ pub struct InterceptRuleHandle {
 ///
 /// One variant per observed network event. HTTP bodies are captured at
 /// observe-time by the drain task (before Chrome evicts them) when the monitor
-/// was started with `capture_bodies` — so `body` / `body_base64` are present
-/// only on `http` events from a body-capturing monitor.
+/// was started with `capture_bodies` — so `body` / `body_base64` (and the
+/// `body_truncated` / `body_full_bytes` / `body_capture_error` triple) are
+/// present only on `http` events from a body-capturing monitor.
 #[cfg(feature = "monitor")]
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -187,14 +219,34 @@ pub enum MonitorEvent {
         status: Option<u16>,
         /// Network-level error text, if the request failed.
         error: Option<String>,
-        /// UTF-8–lossy decode of the captured response body. Present only when
-        /// the monitor captured bodies and the fetch succeeded.
+        /// UTF-8–lossy decode of the captured response body, bounded by
+        /// `capture_body_max_bytes`. Present only when the monitor captured
+        /// bodies and the fetch succeeded — a truncated body still decodes
+        /// (lossily) whatever prefix was kept.
         #[serde(skip_serializing_if = "Option::is_none")]
         body: Option<String>,
-        /// Base64 of the captured raw response body bytes. Present only when
-        /// the monitor captured bodies and the fetch succeeded.
+        /// Base64 of the captured (possibly bounded) raw response body bytes.
+        /// Present only when the monitor captured bodies and the fetch
+        /// succeeded.
         #[serde(skip_serializing_if = "Option::is_none")]
         body_base64: Option<String>,
+        /// `true` if the body's full length exceeded `capture_body_max_bytes`
+        /// and `body` / `body_base64` hold only a prefix. `false` means the
+        /// entire body was captured. Present only alongside `body`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        body_truncated: Option<bool>,
+        /// The full (pre-truncation) response body length in bytes,
+        /// regardless of how much was kept in `body` / `body_base64`. Present
+        /// only alongside `body`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        body_full_bytes: Option<u64>,
+        /// Set instead of `body` / `body_base64` when body capture was
+        /// requested (`capture_bodies: true`) but the `getResponseBody` fetch
+        /// itself failed (e.g. Chrome already evicted the body) — distinct
+        /// from a genuinely empty body, which decodes to `body: ""` rather
+        /// than setting this field.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        body_capture_error: Option<String>,
     },
     /// A new WebSocket connection was opened.
     WebSocketOpen {
@@ -229,6 +281,33 @@ pub enum MonitorEvent {
         event_id: String,
         /// The SSE `data:` payload.
         data: String,
+    },
+    /// A delivery-loss boundary on the monitor's underlying event stream (or
+    /// its own correlation bookkeeping) — a wire mirror of
+    /// `zendriver::NetworkDeliveryBoundary`. Previously these losses were
+    /// silent; they're now explicit events on the same stream. A
+    /// `disconnected` boundary means the underlying lib-side monitor's
+    /// correlator task has ended — no further events will be buffered for
+    /// this handle; start a new monitor to resume.
+    DeliveryBoundary {
+        /// `"lagged"` | `"reconnected"` | `"disconnected"` |
+        /// `"correlation_evicted"` | `"decode_failed"` | `"unknown"`.
+        boundary: String,
+        /// Present for `lagged` / `reconnected` / `disconnected`: the
+        /// transport connection generation active when the boundary occurred.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        generation: Option<u64>,
+        /// Present for `lagged`: number of events this subscription missed.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        missed: Option<u64>,
+        /// Present for `reconnected`: generation of the connection actor that
+        /// was replaced.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        previous: Option<u64>,
+        /// Present for `correlation_evicted`: URL of the evicted in-flight
+        /// exchange.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
     },
 }
 

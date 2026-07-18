@@ -167,6 +167,19 @@ On timeout the future resolves to
 The subscriber task is canceled before the error returns, so there's no
 leaked listener.
 
+If the connection to Chrome drops, reconnects, or a broadcast subscriber
+falls behind while an expectation is waiting, the future instead resolves to
+[`ZendriverError::EventStreamIncomplete`](https://docs.rs/zendriver/latest/zendriver/enum.ZendriverError.html#variant.EventStreamIncomplete)
+— distinct from `Timeout` because the awaited event may in fact have fired,
+but the delivery gap means it can no longer be confirmed either way. Treat it
+as "re-establish and re-wait", not as "it didn't happen".
+
+> **Note:** the delivery lag that triggers this is connection-wide, not
+> scoped to the awaited event — a `Lagged` boundary on the shared CDP
+> broadcast can abort an `expect_*` wait even when the lag was on
+> unrelated traffic, so callers on event-heavy pages may see
+> `EventStreamIncomplete` more often.
+
 ## When to use which
 
 - **`expect_response`** — confirm an API call returned (covers status +

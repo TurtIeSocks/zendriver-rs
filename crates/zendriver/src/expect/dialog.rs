@@ -162,7 +162,7 @@ impl MatchedDialog {
 /// Playwright-style fluent API.
 #[derive(Debug)]
 pub struct DialogExpectation {
-    rx: oneshot::Receiver<MatchedDialog>,
+    rx: oneshot::Receiver<Result<MatchedDialog>>,
     timeout: Duration,
     sleep: Option<Pin<Box<Sleep>>>,
 }
@@ -216,11 +216,19 @@ impl Future for DialogExpectation {
         // Poll the oneshot first — if the subscriber already sent, return
         // without ever arming the sleep timer.
         match Pin::new(&mut self.rx).poll(cx) {
-            Poll::Ready(Ok(dialog)) => return Poll::Ready(Ok(dialog)),
+            Poll::Ready(Ok(Ok(dialog))) => return Poll::Ready(Ok(dialog)),
+            // Subscriber observed a delivery-loss boundary (disconnect,
+            // reconnect, lag, or a same-method decode failure) before a
+            // dialog opened — see `crate::expect::watch`. We can no longer
+            // prove a dialog didn't open just before the boundary, so
+            // reporting a plain timeout would be a lie.
+            Poll::Ready(Ok(Err(e))) => return Poll::Ready(Err(e)),
             Poll::Ready(Err(_)) => {
-                // Sender dropped without sending — subscriber task exited
-                // (transport closed). Surface as timeout: same observable
-                // shape (no event arrived), avoids inventing a new error.
+                // Sender dropped without sending anything — the accounted
+                // stream itself ended (e.g. a clean `Connection::shutdown`,
+                // which never emits a `Disconnected` boundary) with no
+                // boundary and no match observed. Surface as timeout: same
+                // observable shape as a genuine no-show.
                 return Poll::Ready(Err(ZendriverError::Timeout(self.timeout)));
             }
             Poll::Pending => {}
@@ -259,11 +267,11 @@ struct JavascriptDialogOpenedEvent {
 pub(crate) fn register(session: &SessionHandle) -> DialogExpectation {
     let (tx, rx) = oneshot::channel();
     let mut stream =
-        session.subscribe::<JavascriptDialogOpenedEvent>("Page.javascriptDialogOpened");
+        crate::expect::watch::<JavascriptDialogOpenedEvent>(session, "Page.javascriptDialogOpened");
     let session_for_dialog = session.clone();
     tokio::spawn(async move {
-        if let Some(ev) = stream.next().await {
-            let matched = MatchedDialog {
+        if let Some(res) = stream.next().await {
+            let outcome = res.map(|ev| MatchedDialog {
                 dialog_type: DialogType::from_cdp(&ev.dialog_type),
                 message: ev.message,
                 // CDP sends an empty string for non-prompt dialogs; normalize
@@ -279,10 +287,10 @@ pub(crate) fn register(session: &SessionHandle) -> DialogExpectation {
                 default_prompt: ev.default_prompt.filter(|s| !s.is_empty()),
                 url: ev.url,
                 session: session_for_dialog,
-            };
+            });
             // Send is fallible only if the receiver was dropped; in that
             // case the caller no longer cares and we just exit.
-            let _ = tx.send(matched);
+            let _ = tx.send(outcome);
         }
     });
     DialogExpectation {
@@ -330,6 +338,53 @@ mod tests {
         assert_eq!(matched.message, "What is your name?");
         assert_eq!(matched.default_prompt.as_deref(), Some("Anonymous"));
         assert_eq!(matched.url, "https://example.com/form");
+
+        conn.shutdown();
+    }
+
+    /// Register an expectation, then simulate a transport teardown
+    /// (`AccountedRawEvent::Disconnected`, via `MockConnection::disconnect`)
+    /// before any dialog opens. The wait must resolve with
+    /// `EventStreamIncomplete`, not `Timeout` — we lost the ability to
+    /// observe the event, we didn't observe its genuine absence.
+    #[tokio::test]
+    async fn expect_dialog_returns_event_stream_incomplete_on_disconnect() {
+        let (mock, conn) = MockConnection::pair();
+        let session = SessionHandle::new(conn.clone(), "S1");
+
+        let expectation = register(&session);
+
+        mock.disconnect();
+
+        let res = tokio::time::timeout(Duration::from_secs(2), expectation)
+            .await
+            .expect("expectation did not resolve within 2s after disconnect");
+        assert!(
+            matches!(res, Err(ZendriverError::EventStreamIncomplete)),
+            "expected EventStreamIncomplete after transport teardown, got {res:?}",
+        );
+
+        conn.shutdown();
+    }
+
+    /// Register an expectation with a short timeout, emit no dialog and no
+    /// teardown, and assert a genuine no-show still returns
+    /// `ZendriverError::Timeout` — the teardown fix must not change this
+    /// path.
+    #[tokio::test]
+    async fn expect_dialog_times_out() {
+        let (_mock, conn) = MockConnection::pair();
+        let session = SessionHandle::new(conn.clone(), "S1");
+
+        let expectation = register(&session).timeout(Duration::from_millis(50));
+
+        let res = expectation.await;
+        match res {
+            Err(ZendriverError::Timeout(d)) => {
+                assert_eq!(d, Duration::from_millis(50));
+            }
+            other => panic!("expected Timeout(50ms), got {other:?}"),
+        }
 
         conn.shutdown();
     }

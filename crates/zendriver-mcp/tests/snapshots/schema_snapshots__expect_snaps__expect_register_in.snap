@@ -8,7 +8,7 @@ description: "Input for `browser_expect_register`."
 type: object
 properties:
   dialog_action:
-    description: "Dialog only: drive the matched dialog (`accept` / `dismiss`) instead\nof leaving Chrome's default handling. Decided here, at register time,\nbecause the matched dialog handle is consumed by the spawned task."
+    description: "Dialog only: drive the matched dialog (`accept` / `dismiss`) instead\nof leaving it open for observation only. Decided here, at register\ntime, because the matched dialog handle is consumed by the spawned\ntask."
     anyOf:
       - $ref: "#/$defs/DialogAction"
       - type: "null"
@@ -45,7 +45,7 @@ required:
   - kind
 $defs:
   DialogAction:
-    description: "How to drive a matched JavaScript dialog (`kind: dialog` only).\n\nApplied by the spawned task the instant the dialog opens — so the page's\nblocking `alert()` / `confirm()` / `prompt()` call returns promptly and\nthe matched event carries the chosen action. Omitting `dialog_action`\nfalls back to Chrome's default handling (the dialog is accepted when the\nmatched handle is dropped at task end)."
+    description: "How to drive a matched JavaScript dialog (`kind: dialog` only).\n\nApplied by the spawned task the instant the dialog opens — so the page's\nblocking `alert()` / `confirm()` / `prompt()` call returns promptly and\nthe matched event carries the chosen action. Omitting `dialog_action`\nleaves the dialog untouched: the matched handle is dropped without\ndispatching `Page.handleJavaScriptDialog` (`MatchedDialog` has no `Drop`\nimpl, so nothing is sent to Chrome), so the dialog stays open and the\npage's blocking JS call does not return until something else resolves\nit. Use this to merely observe that a dialog opened without acting on\nit."
     oneOf:
       - description: "Accept the dialog. For a `prompt`, submit `dialog_prompt_text` (or the\ndialog's default value when that is unset)."
         type: string

@@ -13,7 +13,7 @@ use rmcp::ErrorData;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use zendriver::{IdleOptions, ReadyState, ReloadOptions};
+use zendriver::{IdleLossPolicy, IdleOptions, ReadyState, ReloadOptions};
 
 use crate::errors::{McpServerError, map_error};
 use crate::snapshot::html_trim;
@@ -286,6 +286,12 @@ pub struct IdleInput {
     /// wait for every request to complete (the default).
     #[serde(default)]
     pub max_inflight_age_ms: Option<u64>,
+    /// Abort the wait with an error if the underlying event stream loses
+    /// delivery continuity (a lagging subscriber, a reconnect, or a dropped
+    /// connection) while waiting. Default `false`: a delivery gap is
+    /// tolerated and the wait still resolves on a best-effort basis.
+    #[serde(default)]
+    pub strict: bool,
 }
 
 const fn default_idle_timeout() -> u64 {
@@ -297,6 +303,7 @@ impl Default for IdleInput {
         Self {
             timeout_ms: default_idle_timeout(),
             max_inflight_age_ms: None,
+            strict: false,
         }
     }
 }
@@ -312,7 +319,9 @@ pub struct IdleOutput {
 ///
 /// Quiet window is fixed at 500ms; `timeout_ms` is the outer bound.
 /// `max_inflight_age_ms`, when set, lets idle resolve even while a stuck /
-/// background request is still open.
+/// background request is still open. `strict`, when `true`, fails the call
+/// instead of silently tolerating a delivery gap on the underlying event
+/// stream.
 pub async fn wait_for_idle(
     state: Arc<Mutex<SessionState>>,
     input: IdleInput,
@@ -323,6 +332,11 @@ pub async fn wait_for_idle(
         timeout: Duration::from_millis(input.timeout_ms),
         quiet_window: Duration::from_millis(500),
         max_inflight_age: input.max_inflight_age_ms.map(Duration::from_millis),
+        loss_policy: if input.strict {
+            IdleLossPolicy::Strict
+        } else {
+            IdleLossPolicy::Lenient
+        },
     })
     .await
     .map_err(|e| map_error(McpServerError::from(e)))?;

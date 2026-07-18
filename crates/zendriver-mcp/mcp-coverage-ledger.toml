@@ -452,3 +452,181 @@ excluded = "accepts `impl GeoResolver + 'static` — a custom Rust trait impleme
 [[entry]]
 api = "zendriver::IpApiResolver"
 covered = "browser_open.geo_auto / browser_open.geo_endpoint"
+
+# ── Task 1: loss-accounted raw event stream (opt-in) ────────────────────────
+[[entry]]
+api = "zendriver::Connection::subscribe_raw_accounted"
+excluded = "Stream-returning subscription; not a request/response tool"
+
+[[entry]]
+api = "zendriver::Connection::connection_generation"
+excluded = "Stream-returning subscription; not a request/response tool"
+
+[[entry]]
+api = "zendriver::AccountedRawEvent"
+excluded = "Stream-returning subscription; not a request/response tool"
+
+# ── Task 4: responseReceived correctness fix + opt-in IdleLossPolicy::Strict ─
+# (EventStreamIncomplete's enum variant landed with Task 3's transport work,
+# but Task 4 is the first — and, as of this entry, only — call site that
+# constructs it, via wait_for_idle_opts under IdleLossPolicy::Strict.)
+[[entry]]
+api = "zendriver::error::ZendriverError::EventStreamIncomplete"
+covered = "browser_wait_for_idle.strict"
+
+[[entry]]
+api = "zendriver::ZendriverError::EventStreamIncomplete"
+covered = "browser_wait_for_idle.strict"
+
+[[entry]]
+api = "zendriver::network_idle::IdleLossPolicy"
+covered = "browser_wait_for_idle.strict"
+
+[[entry]]
+api = "zendriver::IdleLossPolicy"
+covered = "browser_wait_for_idle.strict"
+
+[[entry]]
+# Trailing `:` is intentional — cargo-public-api renders a struct field as
+# `pub path::to::Field: Type`, and `extract_path` in tests/public_api.rs
+# stops at the first whitespace, which lands right after the colon.
+api = "zendriver::tab::IdleOptions::loss_policy:"
+covered = "browser_wait_for_idle.strict"
+
+[[entry]]
+api = "zendriver::IdleOptions::loss_policy:"
+covered = "browser_wait_for_idle.strict"
+
+# ── Task 5: BoundedBody bounded body capture ────────────────────────────────
+# Wired into browser_monitor_start (`capture_body_max_bytes`) /
+# browser_monitor_read (`body_truncated` / `body_full_bytes`) by Task 8 —
+# see crates/zendriver-mcp/src/tools/monitor.rs `wire_body_fields`.
+[[entry]]
+api = "zendriver::response_body::BoundedBody"
+covered = "browser_monitor_start.capture_body_max_bytes / browser_monitor_read (body_truncated, body_full_bytes)"
+
+[[entry]]
+api = "zendriver::response_body::BoundedBody::bytes:"
+covered = "browser_monitor_read (body / body_base64, truncated to the captured prefix)"
+
+[[entry]]
+api = "zendriver::response_body::BoundedBody::truncated:"
+covered = "browser_monitor_read.body_truncated"
+
+[[entry]]
+api = "zendriver::response_body::BoundedBody::full_len:"
+covered = "browser_monitor_read.body_full_bytes"
+
+[[entry]]
+api = "zendriver::response_body::BoundedBody::capture"
+covered = "browser_monitor_start.capture_body_max_bytes (browser_monitor_start.capture_bodies gates whether it is called)"
+
+[[entry]]
+api = "zendriver::BoundedBody"
+covered = "browser_monitor_start.capture_body_max_bytes / browser_monitor_read (body_truncated, body_full_bytes)"
+
+[[entry]]
+api = "zendriver::BoundedBody::bytes:"
+covered = "browser_monitor_read (body / body_base64, truncated to the captured prefix)"
+
+[[entry]]
+api = "zendriver::BoundedBody::truncated:"
+covered = "browser_monitor_read.body_truncated"
+
+[[entry]]
+api = "zendriver::BoundedBody::full_len:"
+covered = "browser_monitor_read.body_full_bytes"
+
+# ── Task 8: NetworkDeliveryBoundary loss-accounting on the network monitor ──
+# `NetworkEvent::DeliveryBoundary` replaces four previously-silent paths
+# (cross-gap stitching, correlation-cap eviction, decode failure, transport
+# disconnect) with an explicit event. Wired into browser_monitor_read as the
+# `delivery_boundary` MonitorEvent variant.
+[[entry]]
+api = "zendriver::monitor::NetworkDeliveryBoundary"
+covered = "browser_monitor_read (delivery_boundary events)"
+
+[[entry]]
+api = "zendriver::monitor::NetworkDeliveryBoundary::Lagged"
+covered = "browser_monitor_read (delivery_boundary: boundary=\"lagged\", missed, generation)"
+
+[[entry]]
+api = "zendriver::monitor::NetworkDeliveryBoundary::Reconnected"
+covered = "browser_monitor_read (delivery_boundary: boundary=\"reconnected\", previous, generation)"
+
+[[entry]]
+api = "zendriver::monitor::NetworkDeliveryBoundary::Disconnected"
+covered = "browser_monitor_read (delivery_boundary: boundary=\"disconnected\", generation)"
+
+[[entry]]
+api = "zendriver::monitor::NetworkDeliveryBoundary::CorrelationEvicted"
+covered = "browser_monitor_read (delivery_boundary: boundary=\"correlation_evicted\", url)"
+
+[[entry]]
+api = "zendriver::monitor::NetworkDeliveryBoundary::DecodeFailed"
+covered = "browser_monitor_read (delivery_boundary: boundary=\"decode_failed\")"
+
+[[entry]]
+api = "zendriver::monitor::NetworkDeliveryBoundary::Unknown"
+covered = "browser_monitor_read (delivery_boundary: boundary=\"unknown\")"
+
+[[entry]]
+api = "zendriver::NetworkDeliveryBoundary"
+covered = "browser_monitor_read (delivery_boundary events)"
+
+[[entry]]
+api = "zendriver::monitor::NetworkEvent::DeliveryBoundary"
+covered = "browser_monitor_read (delivery_boundary events)"
+
+# ── T6 Browser robustness: ready-barrier tab handoff + atomic seed ─────────
+# `resolved_persona` (already ledgered above under #24) becomes fallible;
+# its path is unchanged so the existing entry still matches. `PersonaSeed`
+# is the new error variant it can now return.
+[[entry]]
+api = "zendriver::error::ZendriverError::PersonaSeed"
+excluded = "error variant, not an operation; a corrupt/truncated persisted persona seed, surfaced as a failure of whichever tool resolves the persona (e.g. browser_open) rather than its own MCP tool"
+
+[[entry]]
+api = "zendriver::ZendriverError::PersonaSeed"
+excluded = "crate-root re-export of the above variant; same failure surface"
+
+# ── Task 9: opt-in InputProfile selection, decoupled from stealth ──────────
+# `InputProfile`'s own inherent methods (`native`/`spoofed`/`coherent`) and
+# the new `impl PartialEq for InputProfile` live in the `zendriver-stealth`
+# crate's own public API, not `zendriver`'s (same as `Persona::builder` etc.
+# never being ledgered here) — `cargo public-api -p zendriver` only surfaces
+# items reachable through `zendriver`'s own paths, so only the three below
+# are new `zendriver`-crate items.
+[[entry]]
+api = "zendriver::stealth::InputProfile"
+covered = "browser_open.input_profile (InputProfileChoice enum maps native/coherent -> InputProfile::native()/coherent())"
+
+[[entry]]
+api = "zendriver::browser::BrowserBuilder::input_profile"
+covered = "browser_open.input_profile"
+
+[[entry]]
+api = "zendriver::browser::BrowserBuilder::resolved_input_profile"
+excluded = "read accessor for the composed input-timing profile; internal to launch flow, not needed as an MCP tool (same rationale as resolved_persona above)"
+
+# ── Task 10: opt-in native-isolation / real-WebGL profile ──────────────────
+# `StealthProfile::native_isolation`/`native_isolation_enabled` and
+# `patches::bootstrap_script_native_webgl` live entirely in the
+# `zendriver-stealth` crate's own public API, not `zendriver`'s — same
+# rationale as `InputProfile`'s inherent methods above: `cargo public-api -p
+# zendriver` only surfaces items reachable through `zendriver`'s own paths,
+# and `BrowserBuilder::stealth(profile: StealthProfile)` (already ledgered
+# implicitly via its unchanged signature) passes the whole builder through,
+# so no `zendriver`-crate-rooted item changed — `browser.rs` was not touched
+# by this task. Confirmed no new items surfaced by re-running
+# `cargo +nightly test -p zendriver-mcp --features public-api-check --test
+# public_api` after this change.
+#
+# MCP coverage: wired via the existing `StealthOverrides` fine-grained
+# override mechanism (same extension point as `bypass_csp`). Set via
+# `browser_stealth_set.overrides.native_isolation`, which persists into
+# session state and is applied by `apply_overrides` on every subsequent
+# `browser_open` for that session (same flow as `bypass_csp`/`locale`/etc.).
+[[entry]]
+api = "zendriver_mcp::state::StealthOverrides::native_isolation"
+covered = "browser_stealth_set.overrides.native_isolation -> StealthProfile::native_isolation (applied to browser_open via session state)"

@@ -445,6 +445,7 @@ async fn wait_for_idle_opts_resolves_despite_stuck_request() {
         timeout: Duration::from_secs(10),
         quiet_window: QUIET_WINDOW,
         max_inflight_age: Some(MAX_AGE),
+        ..Default::default()
     })
     .await
     .unwrap();

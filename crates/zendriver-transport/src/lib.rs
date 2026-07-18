@@ -17,6 +17,11 @@
 //! - [`SessionHandle`] — a connection scoped to a particular CDP `sessionId`.
 //! - [`CdpCommand`] / [`CdpInbound`] / [`CdpRpcError`] / [`RawEvent`] — wire
 //!   types.
+//! - [`AccountedRawEvent`] — opt-in loss-accounted alternative to
+//!   `RawEvent`, delivered by
+//!   [`Connection::subscribe_raw_accounted`](connection::Connection::subscribe_raw_accounted);
+//!   reports lag, reconnects, and disconnects explicitly instead of silently
+//!   dropping frames.
 //! - [`TargetObserver`] — observer trait fired on `Target.attachedToTarget`
 //!   before the debugger is released; used by `zendriver-stealth` to install
 //!   patches on new pages.
@@ -43,6 +48,8 @@ pub use connection::{
     spawn_actor_with_observers,
 };
 pub use error::{CallError, TransportError};
-pub use frame::{CdpCommand, CdpInbound, CdpRpcError, RawEvent};
-pub use observer::{ObserverError, PausedSession, TargetInfo, TargetObserver};
+pub use frame::{AccountedRawEvent, CdpCommand, CdpInbound, CdpRpcError, RawEvent};
+pub use observer::{
+    ObserverError, ObserverFailurePolicy, PausedSession, TargetInfo, TargetObserver,
+};
 pub use session::SessionHandle;

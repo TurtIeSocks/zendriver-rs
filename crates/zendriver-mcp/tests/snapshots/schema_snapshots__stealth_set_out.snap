@@ -61,6 +61,11 @@ $defs:
           - "null"
         format: uint32
         minimum: 0
+      native_isolation:
+        description: "Opt in to Chrome's real site isolation (`IsolateOrigins`/\n`site-per-process` stay enabled) and, for `spoof_*` profiles, skip\nthe WebGL vendor/renderer patch — the host's real WebGL renderer\npasses through unpatched. **Trade-off, not a strict stealth\nimprovement**: dropping the WebGL patch removes an anti-WAF\ncoherence defense (see `StealthProfile::native_isolation` rustdoc).\nOff (`false`/unset) by default — existing behavior unchanged."
+        type:
+          - boolean
+          - "null"
       platform:
         description: "Spoofed `navigator.platform` / UA platform token."
         anyOf:

@@ -30,7 +30,9 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
-use zendriver_stealth::{Persona, Seed, StealthObserver, StealthProfile, Strategy, Surface};
+use zendriver_stealth::{
+    InputProfile, Persona, Seed, StealthObserver, StealthProfile, Strategy, Surface,
+};
 use zendriver_transport::{
     Connection, ObserverError, PausedSession, SessionHandle, TargetObserver,
 };
@@ -361,22 +363,98 @@ pub(crate) async fn poll_devtools_active_port(user_data_dir: &Path) -> String {
 /// `user_data_dir`.
 ///
 /// Stored as a single base-10 `u64` in `<dir>/.zd_persona_seed`. On reuse the
-/// file is read and parsed; on first use (or any read/parse failure) a fresh
-/// [`Seed::random`] is generated and written, giving a stable per-profile
-/// fingerprint across runs. All filesystem errors are swallowed (best-effort):
-/// a dir that can't be written simply yields a fresh random seed each launch
-/// rather than failing the build.
-fn persisted_seed(dir: &Path) -> Seed {
+/// file is read and parsed; on first use a fresh [`Seed::random`] is
+/// generated and persisted **atomically** (written to a uniquely-named temp
+/// file in `dir`, `sync_all`'d, then linked into place only if `.zd_persona_seed`
+/// does not already exist), giving a stable per-profile fingerprint across
+/// runs. A reader therefore never observes a partially-written file: it is
+/// either fully absent or fully valid.
+///
+/// # Concurrent first use
+///
+/// If two callers race to create the seed for the same `user_data_dir`
+/// (e.g. two processes launching against a shared, freshly-provisioned
+/// profile dir at once), the loser's atomic persist fails with
+/// `AlreadyExists` — it re-reads the winner's now-authoritative file instead
+/// of falling back to its own freshly generated seed. Both callers converge
+/// on the SAME identity; neither silently mints its own.
+///
+/// # Errors
+///
+/// A `.zd_persona_seed` file that exists but fails to parse as a base-10
+/// `u64` (corrupt, truncated, hand-edited to garbage) is a **hard error**
+/// ([`ZendriverError::PersonaSeed`]) rather than a silent fresh-identity
+/// rotation: for a credentialed persistent profile, the fingerprint quietly
+/// changing out from under the caller is a worse failure mode than refusing
+/// to launch. Any other filesystem failure (unwritable dir, disk full, …)
+/// surfaces as [`ZendriverError::Io`].
+fn persisted_seed(dir: &Path) -> Result<Seed, ZendriverError> {
     let path = dir.join(".zd_persona_seed");
-    if let Ok(contents) = std::fs::read_to_string(&path) {
-        if let Ok(value) = contents.trim().parse::<u64>() {
-            return Seed::from_u64(value);
+    match std::fs::read_to_string(&path) {
+        Ok(contents) => parse_seed_contents(&contents, &path),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir_all(dir)?;
+            write_seed_atomic(dir, &path)
         }
+        Err(e) => Err(e.into()),
     }
+}
+
+/// Parse a `.zd_persona_seed` file's contents (a base-10 `u64`, optionally
+/// with surrounding whitespace) into a [`Seed`]. Any other content is a
+/// malformed seed — see [`persisted_seed`].
+fn parse_seed_contents(contents: &str, path: &Path) -> Result<Seed, ZendriverError> {
+    contents
+        .trim()
+        .parse::<u64>()
+        .map(Seed::from_u64)
+        .map_err(|_| ZendriverError::PersonaSeed {
+            path: path.to_path_buf(),
+            reason: format!("expected a base-10 u64, found {contents:?}"),
+        })
+}
+
+/// Generate a fresh random [`Seed`] and persist it to `path` atomically —
+/// the first-use half of [`persisted_seed`].
+///
+/// Writes the seed to a uniquely-named [`tempfile::NamedTempFile`] inside
+/// `dir` (so the eventual persist is same-filesystem, hence atomic),
+/// `sync_all`'s it to disk, then [`NamedTempFile::persist_noclobber`] moves
+/// it to `path` only if nothing is there yet, followed by a best-effort
+/// `fsync` of `dir` itself so the new directory entry survives an unclean
+/// crash. If `path` was created by a concurrent racer in the meantime,
+/// `persist_noclobber` fails with `AlreadyExists` and this re-reads `path` —
+/// which by construction already holds the racer's fully-written seed —
+/// instead of persisting the redundant one just generated.
+fn write_seed_atomic(dir: &Path, path: &Path) -> Result<Seed, ZendriverError> {
+    use std::io::Write as _;
+
     let seed = Seed::random();
-    let _ = std::fs::create_dir_all(dir);
-    let _ = std::fs::write(&path, seed.value().to_string());
-    seed
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(seed.value().to_string().as_bytes())?;
+    tmp.as_file().sync_all()?;
+    match tmp.persist_noclobber(path) {
+        Ok(_file) => {
+            // POSIX doesn't guarantee the rename `persist_noclobber` just
+            // performed is durable until the *directory entry* itself is
+            // fsynced, not just the file's contents (already `sync_all`'d
+            // above) — so fsync `dir` too. Best-effort: if the directory
+            // can't be opened or synced, ignore it. The seed's contents are
+            // already durable; a missing directory entry after an unclean
+            // crash just means `persisted_seed` regenerates a fresh seed on
+            // next launch, which is a harmless (if mildly wasteful) outcome,
+            // not data loss.
+            if let Ok(dir_file) = std::fs::File::open(dir) {
+                let _ = dir_file.sync_all();
+            }
+            Ok(seed)
+        }
+        Err(persist_err) if persist_err.error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let contents = std::fs::read_to_string(path)?;
+            parse_seed_contents(&contents, path)
+        }
+        Err(persist_err) => Err(persist_err.error.into()),
+    }
 }
 
 /// Fluent builder for a [`Browser`] launch.
@@ -427,6 +505,13 @@ pub struct BrowserBuilder {
     pub(crate) force_open_shadow_roots: bool,
     pub(crate) extra_args: Vec<String>,
     pub(crate) stealth: Option<StealthProfile>,
+    /// Explicit input-timing profile, decoupled from [`Self::stealth`]. `None`
+    /// (the default) falls back to the timing implied by [`Self::stealth`]
+    /// ([`InputProfile::spoofed`] under `StealthProfile::spoofed`,
+    /// [`InputProfile::native`] under `::native`/`::off`). See
+    /// [`BrowserBuilder::input_profile`] and
+    /// [`BrowserBuilder::resolved_input_profile`].
+    pub(crate) input_profile: Option<InputProfile>,
     /// Base fingerprint [`Persona`] driving the spoofed-mode surface patches.
     /// `None` → [`Persona::system`] (host-probed) is used. See
     /// [`BrowserBuilder::persona`] and [`BrowserBuilder::resolved_persona`].
@@ -494,6 +579,7 @@ impl std::fmt::Debug for BrowserBuilder {
             .field("force_open_shadow_roots", &self.force_open_shadow_roots)
             .field("extra_args", &self.extra_args)
             .field("stealth", &self.stealth)
+            .field("input_profile", &self.input_profile)
             .field("persona", &self.persona)
             .field("persona_overlay", &self.persona_overlay)
             .field("surface_overrides", &self.surface_overrides)
@@ -1032,6 +1118,29 @@ impl BrowserBuilder {
         self
     }
 
+    /// Explicitly select the [`InputProfile`] used for synthesized
+    /// keyboard/mouse timing, **independent** of [`BrowserBuilder::stealth`].
+    ///
+    /// Opt-in only — the default (no call) still follows the active stealth
+    /// selection, exactly as before this method existed (see
+    /// [`BrowserBuilder::resolved_input_profile`] for the precise mapping).
+    /// Pass [`InputProfile::coherent`] for human-paced typing and jittery
+    /// mouse motion pinned independently of the stealth setting — e.g. to
+    /// keep humanized timing while stealth is off, or to force deterministic
+    /// zero-delay timing while stealth is on.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use zendriver::stealth::InputProfile;
+    /// let builder = zendriver::Browser::builder().input_profile(InputProfile::coherent());
+    /// ```
+    #[must_use]
+    pub fn input_profile(mut self, profile: InputProfile) -> Self {
+        self.input_profile = Some(profile);
+        self
+    }
+
     /// Set the base fingerprint [`Persona`] driving the spoofed-mode surface
     /// patches (canvas/WebGL/audio/fonts/clientRects/WebRTC/hardware).
     ///
@@ -1209,8 +1318,16 @@ impl BrowserBuilder {
     /// resolved persona has no explicit seed.
     ///
     /// Callable before launch — it does not require a live browser.
-    #[must_use]
-    pub fn resolved_persona(&self) -> Persona {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::PersonaSeed`] when a `user_data_dir`-persisted
+    /// seed file (`.zd_persona_seed`) exists but is corrupt/truncated (fails
+    /// to parse as a base-10 `u64`) — a hard error rather than silently
+    /// minting a fresh identity for what may be a credentialed profile.
+    /// Returns [`ZendriverError::Io`] on other filesystem failures while
+    /// reading or atomically persisting a fresh seed.
+    pub fn resolved_persona(&self) -> Result<Persona, ZendriverError> {
         // Did the caller pin a seed explicitly (via `.persona` or
         // `.persona_overlay`)? Capture this BEFORE the `system()` fallback,
         // which injects a fresh random seed of its own — an explicit seed must
@@ -1237,18 +1354,47 @@ impl BrowserBuilder {
         // seed stands (fresh identity per launch).
         if explicit_seed.is_none() {
             if let Some(dir) = &self.user_data_dir {
-                persona.seed = Some(persisted_seed(dir));
+                persona.seed = Some(persisted_seed(dir)?);
             }
         }
 
-        persona
+        Ok(persona)
+    }
+
+    /// Resolve the effective [`InputProfile`] this builder will use for
+    /// synthesized keyboard/mouse timing on every tab.
+    ///
+    /// An explicit [`BrowserBuilder::input_profile`] always wins. When unset,
+    /// this falls back to the timing implied by [`BrowserBuilder::stealth`]
+    /// — exactly the mapping [`StealthProfile::input_profile`] has always
+    /// produced ([`InputProfile::spoofed`] under `StealthProfile::spoofed`,
+    /// [`InputProfile::native`] under `::native`/`::off`), so a
+    /// stealth-spoofed browser stays humanized by default and a bare
+    /// `Browser::builder()` (stealth `native` by default) stays
+    /// zero-overhead. `.input_profile(..)` only matters when you want to
+    /// *decouple* timing from the stealth selection — e.g. humanized input
+    /// with stealth off, or deterministic zero-delay input with stealth on.
+    ///
+    /// [`StealthProfile::input_profile`]: zendriver_stealth::StealthProfile::input_profile
+    ///
+    /// Callable before launch — it does not require a live browser.
+    #[must_use]
+    pub fn resolved_input_profile(&self) -> InputProfile {
+        self.input_profile.clone().unwrap_or_else(|| {
+            self.stealth
+                .as_ref()
+                .map_or_else(InputProfile::native, StealthProfile::input_profile)
+        })
     }
 
     /// Register an additional [`TargetObserver`].
     ///
     /// Observers fire on each new attached page target. The stealth observer
     /// (if any) is added before user observers; user observers run in the
-    /// order they were registered.
+    /// order they were registered. The internal tab-registrar observer
+    /// always runs last, after every observer registered here — a ready
+    /// barrier that keeps a `Tab` from being handed back until every
+    /// observer above it (including this one) has finished running.
     ///
     /// # Examples
     ///
@@ -1445,11 +1591,15 @@ pub(crate) struct BrowserInner {
     /// session and must leave the process alone — `close()` only shuts down
     /// the transport, and no `Child` is held so `kill_on_drop` never fires).
     pub(crate) owns_process: bool,
-    /// Cached `InputProfile` from the active `StealthProfile` (or
-    /// `InputProfile::native` when stealth is off). `Browser::new_tab` and
+    /// Cached [`InputProfile`], resolved via
+    /// [`BrowserBuilder::resolved_input_profile`]. When the caller does not
+    /// call [`BrowserBuilder::input_profile`], this follows the timing implied
+    /// by the active `StealthProfile` (`Spoofed` → humanized `spoofed()`,
+    /// `Native`/`Off` → `native()`); an explicit `input_profile(..)` decouples
+    /// input timing from the stealth selection. `Browser::new_tab` and
     /// the [`TabRegistrar`] observer read this to build a fresh per-Tab
     /// [`InputController`] for each new tab without re-resolving the
-    /// stealth profile.
+    /// profile.
     ///
     /// Currently consumed only by the [`TabRegistrar`] (via the clone
     /// stashed inside the registrar at construction time); a direct
@@ -1650,8 +1800,27 @@ pub(crate) fn test_only_inner_from_conn(conn: Connection) -> Arc<BrowserInner> {
 /// after the surrounding [`Arc::new_cyclic`] resolves; before that point
 /// the registrar is constructed empty.
 ///
-/// Registered AFTER [`StealthObserver`] in the observer chain so stealth
-/// patches apply before any user code sees the new tab.
+/// Registered LAST in the observer chain — after [`StealthObserver`], every
+/// user-supplied [`BrowserBuilder::observer`], and the opt-in
+/// force-open-shadow-roots observer — so it acts as a **ready barrier**: a
+/// `Tab` is inserted into [`BrowserInner::tabs`] (and therefore becomes
+/// visible to [`Browser::tabs`] / is handed back from
+/// [`Browser::new_tab`]) only after every other observer has finished
+/// running against that target. Callers never see a page before its
+/// stealth/user/shadow-root setup has applied — the transport actor runs
+/// observers serially in registration order, so by the time this observer
+/// runs, the rest of the chain has already completed.
+///
+/// This barrier only holds when every earlier observer actually reaches
+/// completion. An earlier observer's `Err`/panic/`Required`-policy timeout
+/// detaches the target (`Target.detachFromTarget`) and stops the chain —
+/// this observer correctly never runs, and there is no live target to leak.
+/// But an earlier observer with [`zendriver_transport::ObserverFailurePolicy::BestEffort`]
+/// that *times out* does **not** stop the chain: the transport actor skips
+/// only that one observer and continues on to the rest, including this
+/// registrar — see `handle_target_attached` in `zendriver_transport::actor`.
+/// So "skip the registrar" happens only on detach, never on a bare
+/// `BestEffort` timeout.
 pub(crate) struct TabRegistrar {
     browser: OnceLock<Weak<BrowserInner>>,
     input_profile: zendriver_stealth::InputProfile,
@@ -1858,6 +2027,50 @@ impl TargetObserver for TabRegistrar {
                 .remove(session_id);
         }
     }
+}
+
+/// Assemble the canonical observer chain: an optional stealth observer,
+/// then every user-supplied observer (registration order preserved), then
+/// the opt-in force-open-shadow-roots observer, then [`TabRegistrar`] LAST.
+///
+/// Registering the registrar last makes it a **ready barrier**. Observers
+/// run serially in registration order (the transport actor awaits each
+/// `on_target_attached` before starting the next), so no `Tab` is inserted
+/// into the registry — and therefore no caller can observe it via
+/// [`Browser::tabs`] or get it back from [`Browser::new_tab`] — until every
+/// observer ahead of the registrar in the returned `Vec` has finished
+/// running against that target.
+///
+/// The barrier is preserved by how the transport actor treats observer
+/// failure: an `Err`, a panic, or a `Required`-policy timeout from any
+/// observer ahead of the registrar detaches the target and stops the chain
+/// outright, so the registrar correctly never runs (there's no live target
+/// left to register). A [`zendriver_transport::ObserverFailurePolicy::BestEffort`]
+/// observer that *times out*, however, does not stop the chain — the actor
+/// skips only that observer and continues on to the rest, registrar
+/// included. So the registrar is skipped exactly when the target is
+/// detached, never merely because an earlier best-effort observer was slow.
+///
+/// Shared by [`BrowserBuilder::launch`] and [`BrowserBuilder::connect`] so
+/// both paths order the chain identically. Factored out as a small, pure,
+/// synchronous function specifically so the ordering itself is
+/// unit-testable without spawning or attaching to a real browser — see
+/// `observer_chain_ends_with_tab_registrar` in this module's tests.
+fn assemble_observer_chain(
+    stealth_obs: Option<Arc<dyn TargetObserver>>,
+    extra_observers: &[Arc<dyn TargetObserver>],
+    force_open_shadow_roots: bool,
+    registrar: Arc<TabRegistrar>,
+) -> Vec<Arc<dyn TargetObserver>> {
+    let mut obs_vec =
+        Vec::with_capacity(usize::from(stealth_obs.is_some()) + extra_observers.len() + 2);
+    obs_vec.extend(stealth_obs);
+    obs_vec.extend(extra_observers.iter().cloned());
+    if force_open_shadow_roots {
+        obs_vec.push(Arc::new(crate::expert::ShadowRootObserver) as Arc<dyn TargetObserver>);
+    }
+    obs_vec.push(registrar as Arc<dyn TargetObserver>);
+    obs_vec
 }
 
 const WS_ENDPOINT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -2678,17 +2891,14 @@ impl BrowserBuilder {
         // `BrowserInner` below so the extracted dirs outlive Chrome.
         let extension_dirs = resolve_extension_dirs(&mut self.extensions).await?;
 
-        // 2. Resolve the per-tab InputProfile from the active StealthProfile
-        // (or zero-overhead `native` when stealth is off). Cached on
-        // `BrowserInner` so `Browser::new_tab` + the `TabRegistrar` observer
-        // can build fresh per-Tab controllers without re-resolving the
-        // profile each time.
-        let input_profile = self
-            .stealth
-            .as_ref()
-            .map_or_else(zendriver_stealth::InputProfile::native, |sp| {
-                sp.input_profile()
-            });
+        // 2. Resolve the per-tab InputProfile. When `.input_profile(..)` was
+        // not called this follows the active `StealthProfile`'s timing
+        // (`Spoofed` → humanized `spoofed()`, `Native`/`Off` → `native()`); an
+        // explicit `.input_profile(..)` decouples input timing from the stealth
+        // selection (see `resolved_input_profile`). Cached on `BrowserInner` so
+        // `Browser::new_tab` + the `TabRegistrar` observer can build fresh
+        // per-Tab controllers without re-resolving the profile each time.
+        let input_profile = self.resolved_input_profile();
 
         // 3. Build the `TabRegistrar` observer. Holds a `OnceLock` for the
         // `Weak<BrowserInner>` that gets wired in step 10 — observers must
@@ -2705,35 +2915,27 @@ impl BrowserBuilder {
         self.apply_geo_overlay().await;
 
         // 4. Resolve fingerprint + build observer chain + profile flags.
-        // Observer order: stealth (patches each new target) → tab registrar
-        // (records the resulting Tab handle) → user-supplied observers →
-        // force-open-shadow-roots (independent of the stealth bundle).
-        let (mut observers, extra_flags): (Vec<Arc<dyn TargetObserver>>, Vec<String>) =
+        // Chain order (see `assemble_observer_chain`): stealth → user-supplied
+        // observers → force-open-shadow-roots → tab registrar LAST, the
+        // ready barrier.
+        let (stealth_obs, extra_flags): (Option<Arc<dyn TargetObserver>>, Vec<String>) =
             if let Some(ref profile) = self.stealth {
                 let fp = profile.resolve_fingerprint(&exe)?;
-                let stealth_obs: Arc<dyn TargetObserver> = Arc::new(StealthObserver::with_persona(
+                let obs: Arc<dyn TargetObserver> = Arc::new(StealthObserver::with_persona(
                     profile.clone(),
                     fp,
-                    self.resolved_persona(),
+                    self.resolved_persona()?,
                 ));
-                let mut obs_vec = Vec::with_capacity(3 + self.extra_observers.len());
-                obs_vec.push(stealth_obs);
-                obs_vec.push(registrar.clone() as Arc<dyn TargetObserver>);
-                obs_vec.extend(self.extra_observers.iter().cloned());
-                (obs_vec, profile.build_flags())
+                (Some(obs), profile.build_flags())
             } else {
-                let mut obs_vec = Vec::with_capacity(2 + self.extra_observers.len());
-                obs_vec.push(registrar.clone() as Arc<dyn TargetObserver>);
-                obs_vec.extend(self.extra_observers.iter().cloned());
-                (obs_vec, Vec::new())
+                (None, Vec::new())
             };
-        // Append the force-open-shadow-roots observer last so its injected
-        // attachShadow override runs independently of (and after) the stealth
-        // bundle. Only added when the caller opted in — keeps the default
-        // observer chain untouched.
-        if self.force_open_shadow_roots {
-            observers.push(Arc::new(crate::expert::ShadowRootObserver) as Arc<dyn TargetObserver>);
-        }
+        let observers = assemble_observer_chain(
+            stealth_obs,
+            &self.extra_observers,
+            self.force_open_shadow_roots,
+            registrar.clone(),
+        );
 
         // 5. Allocate user_data_dir (or use a TempDir we keep alive until shutdown).
         let (user_data_path, owned_tmp) = match self.user_data_dir.clone() {
@@ -3014,41 +3216,32 @@ impl BrowserBuilder {
         #[cfg(feature = "geo")]
         self.apply_geo_overlay().await;
 
-        // Resolve the per-tab InputProfile + build the observer chain exactly
-        // like `launch` does (stealth observer → tab registrar → user
-        // observers). The spawn-only branches (`executable`, flags, TempDir)
-        // are intentionally skipped — `connect` never launches a process.
-        let input_profile = self
-            .stealth
-            .as_ref()
-            .map_or_else(zendriver_stealth::InputProfile::native, |sp| {
-                sp.input_profile()
-            });
+        // Resolve the per-tab InputProfile (decoupled from `StealthProfile`,
+        // see `resolved_input_profile`) + build the observer chain exactly
+        // like `launch` does (stealth observer → user observers →
+        // force-open-shadow-roots → tab registrar LAST, the ready barrier).
+        // The spawn-only branches (`executable`, flags, TempDir) are
+        // intentionally skipped — `connect` never launches a process.
+        let input_profile = self.resolved_input_profile();
         let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
-        let mut observers: Vec<Arc<dyn TargetObserver>> = if let Some(ref profile) = self.stealth {
+        let stealth_obs: Option<Arc<dyn TargetObserver>> = if let Some(ref profile) = self.stealth {
             // No executable to resolve a fingerprint from on the connect path;
             // fall back to the profile's default fingerprint.
             let fp = profile.resolve_fingerprint(Path::new(""))?;
-            let stealth_obs: Arc<dyn TargetObserver> = Arc::new(StealthObserver::with_persona(
+            Some(Arc::new(StealthObserver::with_persona(
                 profile.clone(),
                 fp,
-                self.resolved_persona(),
-            ));
-            let mut obs_vec = Vec::with_capacity(3 + self.extra_observers.len());
-            obs_vec.push(stealth_obs);
-            obs_vec.push(registrar.clone() as Arc<dyn TargetObserver>);
-            obs_vec.extend(self.extra_observers.iter().cloned());
-            obs_vec
+                self.resolved_persona()?,
+            )))
         } else {
-            let mut obs_vec = Vec::with_capacity(2 + self.extra_observers.len());
-            obs_vec.push(registrar.clone() as Arc<dyn TargetObserver>);
-            obs_vec.extend(self.extra_observers.iter().cloned());
-            obs_vec
+            None
         };
-        // Same opt-in force-open-shadow-roots observer as the launch path.
-        if self.force_open_shadow_roots {
-            observers.push(Arc::new(crate::expert::ShadowRootObserver) as Arc<dyn TargetObserver>);
-        }
+        let observers = assemble_observer_chain(
+            stealth_obs,
+            &self.extra_observers,
+            self.force_open_shadow_roots,
+            registrar.clone(),
+        );
 
         debug!(ws_url = %ws_url, "attaching to running chrome");
         let conn = zendriver_transport::connect_with_observers(&ws_url, observers).await?;
@@ -4097,13 +4290,76 @@ mod tests {
             .persona(Persona::builder().device_memory_gb(16).build())
             .persona_overlay(r#"{"timezone":"UTC"}"#.parse().unwrap())
             .surface(Surface::Webrtc, Strategy::Native);
-        let p = b.resolved_persona();
+        let p = b.resolved_persona().unwrap();
         assert_eq!(p.device_memory_gb, Some(16));
         assert_eq!(p.timezone.as_deref(), Some("UTC"));
         assert_eq!(
             p.webrtc.as_ref().and_then(|w| w.strategy),
             Some(Strategy::Native),
             "surface override must set the WebRTC strategy"
+        );
+    }
+
+    #[test]
+    fn explicit_input_profile_wins_even_with_stealth_off() {
+        // Opt-in `input_profile(..)` must apply regardless of the stealth
+        // setting — the whole point of decoupling input timing from stealth
+        // selection.
+        let b = Browser::builder()
+            .stealth(StealthProfile::off())
+            .input_profile(InputProfile::coherent());
+        assert_eq!(b.resolved_input_profile(), InputProfile::coherent());
+    }
+
+    #[test]
+    fn explicit_native_override_wins_even_with_stealth_spoofed() {
+        // Opt-in `input_profile(native())` is an explicit opt-out — it must
+        // win even when stealth is spoofed (which would otherwise imply
+        // humanized timing).
+        let b = Browser::builder()
+            .stealth(StealthProfile::spoofed())
+            .input_profile(InputProfile::native());
+        assert_eq!(b.resolved_input_profile(), InputProfile::native());
+    }
+
+    #[test]
+    fn no_input_profile_call_defaults_to_native_with_stealth_off() {
+        let b = Browser::builder().stealth(StealthProfile::off());
+        assert_eq!(
+            b.resolved_input_profile(),
+            InputProfile::native(),
+            "no explicit input_profile() call must resolve to today's native default"
+        );
+    }
+
+    #[test]
+    fn no_input_profile_call_defaults_to_native_with_stealth_native() {
+        // `Browser::builder()` seeds `stealth: Some(StealthProfile::native())`
+        // (stealth ON in native mode, the default path) — resolved input
+        // timing must still be exactly today's native default with no
+        // explicit call.
+        let b = Browser::builder();
+        assert_eq!(
+            b.resolved_input_profile(),
+            InputProfile::native(),
+            "no explicit input_profile() call must resolve to today's default for the default stealth path"
+        );
+    }
+
+    #[test]
+    fn no_input_profile_call_defaults_to_spoofed_with_stealth_spoofed() {
+        // THE regression case: before `input_profile()`/`resolved_input_profile()`
+        // existed, production resolved input timing as
+        // `stealth.map_or_else(InputProfile::native, |sp| sp.input_profile())`,
+        // so a spoofed-stealth browser got humanized (`spoofed()`) input
+        // timing by default. With no explicit `.input_profile(..)` call,
+        // that mapping must be preserved — falling back to `native()`
+        // unconditionally would silently defeat spoofed stealth's realism.
+        let b = Browser::builder().stealth(StealthProfile::spoofed());
+        assert_eq!(
+            b.resolved_input_profile(),
+            InputProfile::spoofed(),
+            "no explicit input_profile() call must still follow spoofed stealth's humanized timing"
         );
     }
 
@@ -4116,11 +4372,13 @@ mod tests {
         let s1 = Browser::builder()
             .user_data_dir(dir.path())
             .resolved_persona()
+            .unwrap()
             .seed
             .unwrap();
         let s2 = Browser::builder()
             .user_data_dir(dir.path())
             .resolved_persona()
+            .unwrap()
             .seed
             .unwrap();
         assert_eq!(s1, s2, "same profile dir → same seed across builders");
@@ -4134,6 +4392,7 @@ mod tests {
             .persona(Persona::builder().seed(Seed::from_u64(777)).build())
             .user_data_dir(dir.path())
             .resolved_persona()
+            .unwrap()
             .seed
             .unwrap();
         assert_eq!(pinned, Seed::from_u64(777));
@@ -4141,11 +4400,167 @@ mod tests {
         assert!(!dir.path().join(".zd_persona_seed").exists());
     }
 
+    #[test]
+    fn corrupt_seed_file_is_a_hard_error_not_a_silent_rotation() {
+        // A `.zd_persona_seed` that exists but doesn't parse as a base-10
+        // u64 (hand-edited garbage, or a truncated write that landed on a
+        // non-numeric prefix) must fail loudly. The pre-fix behavior
+        // silently minted a fresh random identity here — dangerous for a
+        // credentialed persistent profile, since the fingerprint would
+        // rotate without the caller ever knowing.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".zd_persona_seed"), "not-a-seed").unwrap();
+
+        let err = Browser::builder()
+            .user_data_dir(dir.path())
+            .resolved_persona()
+            .unwrap_err();
+        assert!(
+            matches!(err, ZendriverError::PersonaSeed { .. }),
+            "expected ZendriverError::PersonaSeed, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn truncated_seed_file_is_a_hard_error() {
+        // Same defect, different corruption shape: an empty file (as a
+        // crash mid-write, pre-atomic-fix, would have left behind).
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".zd_persona_seed"), "").unwrap();
+
+        let err = Browser::builder()
+            .user_data_dir(dir.path())
+            .resolved_persona()
+            .unwrap_err();
+        assert!(
+            matches!(err, ZendriverError::PersonaSeed { .. }),
+            "expected ZendriverError::PersonaSeed, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn concurrent_create_race_converges_on_winners_seed() {
+        // Simulates the `AlreadyExists` branch of `write_seed_atomic`
+        // directly: by the time this racer's atomic persist runs, another
+        // racer has ALREADY fully written+persisted its own seed to `path`
+        // (the only way `path` can exist at this point, since nothing else
+        // in `persisted_seed` creates it eagerly). The loser must detect the
+        // collision and adopt the winner's seed rather than keep the
+        // freshly-generated one it was about to persist — no duplicate
+        // write, no divergent identity.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".zd_persona_seed");
+        let winner = Seed::from_u64(424_242);
+        std::fs::write(&path, winner.value().to_string()).unwrap();
+
+        let resolved = write_seed_atomic(dir.path(), &path).unwrap();
+        assert_eq!(
+            resolved, winner,
+            "the loser of the create race must converge on the winner's seed, not mint its own"
+        );
+    }
+
+    #[test]
+    fn concurrent_first_use_across_threads_converges_on_one_seed() {
+        // Real (not simulated) concurrency on a brand-new `user_data_dir`:
+        // several threads race `persisted_seed` for the very first time.
+        // Whichever thread's atomic persist wins, every thread must observe
+        // the SAME resolved seed — none may silently keep a value the
+        // others don't agree on.
+        const RACERS: usize = 8;
+        let dir = tempfile::tempdir().unwrap();
+        let dir_path = dir.path().to_path_buf();
+        let barrier = Arc::new(std::sync::Barrier::new(RACERS));
+
+        let handles: Vec<_> = (0..RACERS)
+            .map(|_| {
+                let dir_path = dir_path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    persisted_seed(&dir_path).unwrap()
+                })
+            })
+            .collect();
+        let seeds: Vec<Seed> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+        let first = seeds[0];
+        assert!(
+            seeds.iter().all(|s| *s == first),
+            "every racing thread must converge on the same seed: {seeds:?}"
+        );
+    }
+
+    /// Minimal [`TargetObserver`] stub for chain-ordering tests — does
+    /// nothing on attach, just carries a distinguishing [`TargetObserver::name`].
+    struct NamedObserver(&'static str);
+
+    #[async_trait::async_trait]
+    impl TargetObserver for NamedObserver {
+        async fn on_target_attached(
+            &self,
+            _session: PausedSession<'_>,
+        ) -> Result<(), ObserverError> {
+            Ok(())
+        }
+
+        fn name(&self) -> &'static str {
+            self.0
+        }
+    }
+
+    #[test]
+    fn observer_chain_ends_with_tab_registrar() {
+        // The tab-registrar observer is the ready barrier described on its
+        // doc comment: it must run LAST, after stealth, every user-supplied
+        // observer (in registration order), and the opt-in shadow-root
+        // observer. This is the strongest assertion obtainable without a
+        // live Chrome — `assemble_observer_chain` is the exact ordering
+        // logic `launch`/`connect` hand to `connect_with_observers`, and
+        // observers run serially in registration order (see the transport
+        // actor), so this ordering is what makes a `Tab` unobservable via
+        // `Browser::tabs`/`Browser::new_tab` until every other observer has
+        // finished. A true end-to-end assertion (a `Tab` handle literally
+        // not existing until a slow user observer completes) needs a live
+        // Chrome target-attach round trip and is out of scope for a unit test.
+        let stealth: Arc<dyn TargetObserver> = Arc::new(NamedObserver("stealth-stub"));
+        let extra: Vec<Arc<dyn TargetObserver>> = vec![
+            Arc::new(NamedObserver("user-1")),
+            Arc::new(NamedObserver("user-2")),
+        ];
+        let registrar = Arc::new(TabRegistrar::new(zendriver_stealth::InputProfile::native()));
+
+        let chain = assemble_observer_chain(Some(stealth), &extra, true, registrar);
+
+        let names: Vec<&str> = chain.iter().map(|o| o.name()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "stealth-stub",
+                "user-1",
+                "user-2",
+                "force-open-shadow-roots",
+                "tab-registrar",
+            ],
+        );
+    }
+
+    #[test]
+    fn observer_chain_registrar_last_even_with_no_stealth_or_extras() {
+        // Degenerate case: no stealth profile, no user observers, shadow
+        // roots off. The registrar must still be present and last (in this
+        // case, the only entry).
+        let registrar = Arc::new(TabRegistrar::new(zendriver_stealth::InputProfile::native()));
+        let chain = assemble_observer_chain(None, &[], false, registrar);
+        let names: Vec<&str> = chain.iter().map(|o| o.name()).collect();
+        assert_eq!(names, vec!["tab-registrar"]);
+    }
+
     #[cfg(feature = "geo")]
     #[test]
     fn geo_locale_sets_overlay() {
         let builder = Browser::builder().geo_locale("US");
-        let p = builder.resolved_persona();
+        let p = builder.resolved_persona().unwrap();
         assert_eq!(p.locale.as_deref(), Some("en-US"));
     }
 
@@ -4160,7 +4575,7 @@ mod tests {
         // or the derived timezone clobbers the pinned one.
         let overlay = Persona::builder().timezone("Asia/Tokyo").build();
         let builder = Browser::builder().persona_overlay(overlay).geo_locale("US");
-        let p = builder.resolved_persona();
+        let p = builder.resolved_persona().unwrap();
         assert_eq!(
             p.timezone.as_deref(),
             Some("Asia/Tokyo"),
@@ -4226,7 +4641,7 @@ mod tests {
             calls: calls.clone(),
         });
         builder.apply_geo_overlay().await;
-        let p = builder.resolved_persona();
+        let p = builder.resolved_persona().unwrap();
         assert_eq!(p.locale.as_deref(), Some("de-DE"));
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
@@ -4244,7 +4659,7 @@ mod tests {
                 calls: calls.clone(),
             });
         builder.apply_geo_overlay().await;
-        let p = builder.resolved_persona();
+        let p = builder.resolved_persona().unwrap();
         assert_eq!(p.locale.as_deref(), Some("en-US"));
         assert_eq!(
             calls.load(std::sync::atomic::Ordering::SeqCst),
@@ -4269,7 +4684,7 @@ mod tests {
                 calls: calls.clone(),
             });
         builder.apply_geo_overlay().await;
-        let p = builder.resolved_persona();
+        let p = builder.resolved_persona().unwrap();
         assert_eq!(p.locale.as_deref(), Some("ja-JP"));
         assert_eq!(
             calls.load(std::sync::atomic::Ordering::SeqCst),
@@ -4296,7 +4711,7 @@ mod tests {
             .persona_overlay(overlay)
             .geo_resolver(NoneResolver);
         builder.apply_geo_overlay().await;
-        let p = builder.resolved_persona();
+        let p = builder.resolved_persona().unwrap();
         assert_eq!(p.timezone.as_deref(), Some("UTC"));
         assert_eq!(p.locale, None);
     }
@@ -4317,7 +4732,7 @@ mod tests {
                     calls: calls.clone(),
                 });
         builder.apply_geo_overlay().await;
-        let p = builder.resolved_persona();
+        let p = builder.resolved_persona().unwrap();
         assert_eq!(p.device_memory_gb, Some(16));
         assert_eq!(p.locale.as_deref(), Some("de-DE"));
         assert!(p.languages.is_some());
@@ -4344,7 +4759,7 @@ mod tests {
                     calls: calls.clone(),
                 });
         builder.apply_geo_overlay().await;
-        let p = builder.resolved_persona();
+        let p = builder.resolved_persona().unwrap();
         assert_eq!(
             p.timezone.as_deref(),
             Some("Asia/Tokyo"),
@@ -4368,7 +4783,7 @@ mod tests {
             timezone: Some("America/Los_Angeles"),
         });
         builder.apply_geo_overlay().await;
-        let p = builder.resolved_persona();
+        let p = builder.resolved_persona().unwrap();
         assert_eq!(p.timezone.as_deref(), Some("America/Los_Angeles"));
         assert_eq!(p.locale.as_deref(), Some("en-US"));
     }
@@ -4384,7 +4799,7 @@ mod tests {
             timezone: None,
         });
         builder.apply_geo_overlay().await;
-        let p = builder.resolved_persona();
+        let p = builder.resolved_persona().unwrap();
         assert_eq!(p.timezone.as_deref(), Some("America/New_York"));
     }
 
@@ -4406,7 +4821,7 @@ mod tests {
                     timezone: Some("America/Los_Angeles"),
                 });
         builder.apply_geo_overlay().await;
-        let p = builder.resolved_persona();
+        let p = builder.resolved_persona().unwrap();
         assert_eq!(
             p.timezone.as_deref(),
             Some("Asia/Tokyo"),

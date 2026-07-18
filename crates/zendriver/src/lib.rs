@@ -1,10 +1,15 @@
-//! Async, undetectable Chrome automation over the Chrome DevTools Protocol.
+//! Async Chrome automation over the Chrome DevTools Protocol, with a
+//! coherent stealth identity and explicit anti-detection controls on by
+//! default.
 //!
 //! `zendriver` is the high-level browser-automation entry point built on a
 //! CDP-over-WebSocket transport. The crate aims to feel like Playwright /
 //! Puppeteer for Rust while staying explicit about its CDP underpinnings —
 //! every public type maps cleanly to a CDP surface, every action has a
-//! single-call escape hatch, and stealth is on by default.
+//! single-call escape hatch, and stealth is on by default. No automation
+//! stack can guarantee invisibility to a determined, adaptive site; what
+//! this crate provides is a coherent fingerprint identity plus explicit
+//! controls, not a guarantee.
 //!
 //! See the [user guide / mdBook](https://turtiesocks.github.io/zendriver-rs/)
 //! for end-to-end walkthroughs covering [installation][book-install],
@@ -91,6 +96,7 @@ pub(crate) mod preferences;
 mod proxy;
 pub mod query;
 pub mod request;
+pub mod response_body;
 pub mod screenshot;
 pub mod storage;
 pub mod tab;
@@ -110,9 +116,11 @@ pub use element::actions::ClickOptions;
 pub use error::{BrowserError, Result, ZendriverError};
 pub use frame::Frame;
 pub use input::{Key, KeyModifiers, KeySequence, MouseButton, SpecialKey};
+pub use network_idle::IdleLossPolicy;
 pub use pdf::PdfBuilder;
 pub use query::{AriaRole, BoundingBox, FindBuilder, PageBox};
 pub use request::{RequestBuilder, Response};
+pub use response_body::BoundedBody;
 pub use screenshot::{Format, ScreenshotBuilder};
 pub use storage::Storage;
 pub use tab::{
@@ -129,7 +137,9 @@ pub use window::{WindowBounds, WindowState};
 pub use zendriver_stealth::{Persona, PersonaBuilder, Seed, Strategy, Surface};
 
 // Re-export selected transport types for advanced users.
-pub use zendriver_transport::{CallError, Connection, SessionHandle, TransportError};
+pub use zendriver_transport::{
+    AccountedRawEvent, CallError, Connection, SessionHandle, TransportError,
+};
 
 /// Network interception API re-exports.
 ///
@@ -188,8 +198,8 @@ pub use url_matcher::UrlMatcher;
 /// Gated by the `monitor` cargo feature. Drive via [`Tab::monitor`].
 #[cfg(feature = "monitor")]
 pub use monitor::{
-    FrameDirection, MonitorBuilder, MonitoredRequest, MonitoredResponse, NetworkEvent,
-    NetworkExchange, NetworkMonitor,
+    FrameDirection, MonitorBuilder, MonitoredRequest, MonitoredResponse, NetworkDeliveryBoundary,
+    NetworkEvent, NetworkExchange, NetworkMonitor,
 };
 
 /// `expect_request` API re-exports.
@@ -242,8 +252,8 @@ pub use geo_resolver::IpApiResolver;
 /// Stealth profile + fingerprint configuration re-exported from `zendriver-stealth`.
 pub mod stealth {
     pub use zendriver_stealth::{
-        Fingerprint, Persona, PersonaBuilder, Platform, Seed, StealthProfile, Strategy, Surface,
-        UserAgentMetadata,
+        Fingerprint, InputProfile, Persona, PersonaBuilder, Platform, Seed, StealthProfile,
+        Strategy, Surface, UserAgentMetadata,
     };
 }
 

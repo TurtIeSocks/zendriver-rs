@@ -6,6 +6,11 @@ Pick the profile that matches your target site's detection layer; tweak
 the fingerprint with builder methods when you need to pin a specific
 identity.
 
+None of these profiles is a guarantee of invisibility — no automation
+stack has one against a determined, adaptively-defended site. What they
+provide is a coherent, plausible browser identity plus explicit controls
+over the specific tells that mainstream fingerprint checks probe for.
+
 ## The three profiles
 
 | Profile     | Launch flags | UA scrub | Emulation overrides | JS bootstrap   | Bypass CSP | Use case                                     |
@@ -155,6 +160,65 @@ let browser = Browser::builder()
 `user_agent()` skips the auto-composition step entirely — prefer
 `platform()` + `chrome_version()` unless you need a bit-for-bit
 specific UA.
+
+## Opting into real site isolation + real WebGL (`native_isolation`)
+
+`native()` and `spoofed()` both disable Chrome's render-process site
+isolation (`--disable-features=IsolateOrigins,...,site-per-process`),
+and `spoofed()` additionally patches
+`WebGLRenderingContext.getParameter()` /`getSupportedExtensions()` to
+report a coherent ANGLE/Direct3D11 Intel identity regardless of the
+host's actual GPU. `.native_isolation(true)` opts a profile **out** of
+both:
+
+```rust,no_run
+use zendriver::{Browser, StealthProfile};
+
+# async fn ex() -> zendriver::Result<()> {
+let profile = StealthProfile::spoofed().native_isolation(true);
+
+let browser = Browser::builder()
+    .stealth(profile)
+    .launch()
+    .await?;
+# Ok(()) }
+```
+
+With this set:
+
+- The launch flags omit `IsolateOrigins`/`site-per-process` from
+  `--disable-features=...` — Chrome runs with its normal render-process
+  isolation boundary. (The unrelated
+  `DisableLoadExtensionCommandLineSwitch` feature name stays disabled
+  either way — it controls `--load-extension`, not isolation.)
+- For `spoofed()`, the bootstrap script omits the WebGL
+  vendor/renderer patch entirely — `getParameter(UNMASKED_VENDOR_WEBGL)`
+  etc. return the host's real values instead of the spoofed default.
+
+**This is a trade-off, not a strict stealth improvement.** The defaults
+it opts out of exist as anti-detection measures: the WebGL patch in
+particular is an anti-WAF *coherence* defense — some WAFs
+(Imperva/Incapsula) cross-check the WebGL identity against the rest of
+the fingerprint and flag a real, host-specific renderer string as a bot
+tell when it doesn't match. Reach for `native_isolation(true)` when you
+need the host's actual GPU behavior (WebGL-heavy rendering, screenshot
+fidelity, visual regression testing) or want Chrome's stock
+process-isolation security boundary, and evasion isn't the priority —
+not because it's "more stealthy." It isn't; it removes a defense.
+
+It's off by default on every profile, so existing `native()` /
+`spoofed()` callers see no behavior change unless they opt in
+explicitly.
+
+**WebGL and WebGPU stay coherent.** When `native_isolation` drops the
+WebGL patch, the WebGPU **value** adapter spoof (`navigator.gpu`,
+driven by the
+[`Persona`](https://docs.rs/zendriver-stealth/latest/zendriver_stealth/struct.Persona.html)
+`webgpu` surface) is skipped along with it, so `navigator.gpu` reports
+the real host adapter instead of one derived from a renderer the WebGL
+patch no longer applies — no cross-API mismatch. An explicit `Webgpu`
+`Block` (hiding `navigator.gpu`) is renderer-neutral, so it is still
+honored if you set it.
 
 ## End-to-end example
 

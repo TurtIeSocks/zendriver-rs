@@ -85,6 +85,45 @@ impl MockConnection {
         (mock, conn)
     }
 
+    /// Variant of [`Self::pair`] with a caller-controlled
+    /// [`crate::AccountedRawEvent`] bus capacity, letting a downstream test
+    /// force a deterministic [`crate::AccountedRawEvent::Lagged`] by
+    /// emitting more events than `accounted_capacity` before the
+    /// `subscribe_raw_accounted()` subscriber ever polls — without pushing
+    /// thousands of frames through the real (1024-deep) production bus.
+    ///
+    /// ```ignore
+    /// use zendriver_transport::{AccountedRawEvent, testing::MockConnection};
+    ///
+    /// # tokio_test::block_on(async {
+    /// let (mock, conn) = MockConnection::pair_with_accounted_capacity(2);
+    /// let mut events = conn.subscribe_raw_accounted();
+    /// // ...emit more than 2 events on `mock` without polling `events`...
+    /// # });
+    /// ```
+    #[must_use]
+    pub fn pair_with_accounted_capacity(accounted_capacity: usize) -> (Self, Connection) {
+        let (tx_to_driver, rx_driver) =
+            mpsc::channel::<Result<Message, tokio_tungstenite::tungstenite::Error>>(64);
+        let (tx_from_driver, rx_test) = mpsc::channel::<Message>(64);
+        let driver = crate::connection::test_only::DriverStream {
+            tx: tx_from_driver,
+            rx: rx_driver,
+        };
+        let conn = crate::connection::spawn_actor_with_observers_timeout_and_capacity(
+            driver,
+            Vec::new(),
+            crate::connection::DEFAULT_OBSERVER_TIMEOUT,
+            accounted_capacity,
+        );
+        let mock = MockConnection {
+            server_in: tx_to_driver,
+            server_out: rx_test,
+            last_sent: None,
+        };
+        (mock, conn)
+    }
+
     /// Block until the driver sends a command whose `method` field matches.
     /// Returns the command id. Wrap in [`tokio::time::timeout`] at test sites
     /// — there is no built-in timeout.
@@ -183,6 +222,32 @@ impl MockConnection {
         // `server_out` is dropped with `self`; the driver's sink writes will
         // start failing, but the stream-end (`None`) is what trips the
         // disconnect drain.
+    }
+
+    /// Simulate a transport *reconnect*: swap `conn` onto a fresh in-memory
+    /// socket via [`Connection::reconnect`]. That bumps the connection
+    /// generation and emits a single [`crate::AccountedRawEvent::Reconnected`]
+    /// on the accounted bus — distinct from [`Self::disconnect`], which emits
+    /// `Disconnected` (the connection is *replaced*, not lost). The accounted
+    /// bus itself survives, so a `subscribe_raw_accounted` subscriber observes
+    /// the `Reconnected` boundary and keeps receiving afterwards.
+    ///
+    /// Unlike [`Self::disconnect`], this keeps the mock usable: it rewires the
+    /// mock onto the new socket, so [`Self::emit_event`] / [`Self::expect_cmd`]
+    /// drive the reconnected actor. The generation observed by the subscriber
+    /// goes `1 -> 2` on the first call (`previous = 1`, `generation = 2`).
+    pub fn reconnect(&mut self, conn: &Connection) {
+        let (tx_to_driver, rx_driver) =
+            mpsc::channel::<Result<Message, tokio_tungstenite::tungstenite::Error>>(64);
+        let (tx_from_driver, rx_test) = mpsc::channel::<Message>(64);
+        let driver = crate::connection::test_only::DriverStream {
+            tx: tx_from_driver,
+            rx: rx_driver,
+        };
+        conn.reconnect(driver);
+        self.server_in = tx_to_driver;
+        self.server_out = rx_test;
+        self.last_sent = None;
     }
 
     /// Emit a CDP event scoped to a specific session.
