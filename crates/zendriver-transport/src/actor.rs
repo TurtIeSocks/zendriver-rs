@@ -395,7 +395,10 @@ async fn handle_target_attached(
             }
             Err(_) => match obs.failure_policy() {
                 ObserverFailurePolicy::Required => {
-                    warn!(
+                    // Same severity as the Err/panic branches above: a Required
+                    // observer timing out is a fail-closed detach, not a
+                    // best-effort skip — log it at error!, not warn!.
+                    error!(
                         observer = name,
                         %session_id,
                         "observer timed out; detaching (fail-closed)"
