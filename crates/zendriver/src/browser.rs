@@ -1119,13 +1119,13 @@ impl BrowserBuilder {
     /// Explicitly select the [`InputProfile`] used for synthesized
     /// keyboard/mouse timing, **independent** of [`BrowserBuilder::stealth`].
     ///
-    /// Opt-in only — the default (no call) resolves to
-    /// [`InputProfile::native`] (zero-overhead, deterministic timing)
-    /// regardless of the stealth setting; see
-    /// [`BrowserBuilder::resolved_input_profile`]. Pass
-    /// [`InputProfile::coherent`] for human-paced typing and jittery mouse
-    /// motion without needing to also turn stealth surface patches on (or
-    /// off): input timing and stealth are resolved independently.
+    /// Opt-in only — the default (no call) still follows the active stealth
+    /// selection, exactly as before this method existed (see
+    /// [`BrowserBuilder::resolved_input_profile`] for the precise mapping).
+    /// Pass [`InputProfile::coherent`] for human-paced typing and jittery
+    /// mouse motion pinned independently of the stealth setting — e.g. to
+    /// keep humanized timing while stealth is off, or to force deterministic
+    /// zero-delay timing while stealth is on.
     ///
     /// # Examples
     ///
@@ -1362,20 +1362,27 @@ impl BrowserBuilder {
     /// Resolve the effective [`InputProfile`] this builder will use for
     /// synthesized keyboard/mouse timing on every tab.
     ///
-    /// **Decoupled from [`BrowserBuilder::stealth`].** An explicit
-    /// [`BrowserBuilder::input_profile`] always wins, whether stealth is on,
-    /// off, or spoofed. When unset, this resolves to [`InputProfile::native`]
-    /// — the same zero-overhead, deterministic timing a bare `Browser::builder()`
-    /// has always produced — regardless of the stealth setting. Input timing
-    /// is never silently derived from (or lost by toggling) the stealth
-    /// profile; it must be opted into explicitly.
+    /// An explicit [`BrowserBuilder::input_profile`] always wins. When unset,
+    /// this falls back to the timing implied by [`BrowserBuilder::stealth`]
+    /// — exactly the mapping [`StealthProfile::input_profile`] has always
+    /// produced ([`InputProfile::spoofed`] under `StealthProfile::spoofed`,
+    /// [`InputProfile::native`] under `::native`/`::off`), so a
+    /// stealth-spoofed browser stays humanized by default and a bare
+    /// `Browser::builder()` (stealth `native` by default) stays
+    /// zero-overhead. `.input_profile(..)` only matters when you want to
+    /// *decouple* timing from the stealth selection — e.g. humanized input
+    /// with stealth off, or deterministic zero-delay input with stealth on.
+    ///
+    /// [`StealthProfile::input_profile`]: zendriver_stealth::StealthProfile::input_profile
     ///
     /// Callable before launch — it does not require a live browser.
     #[must_use]
     pub fn resolved_input_profile(&self) -> InputProfile {
-        self.input_profile
-            .clone()
-            .unwrap_or_else(InputProfile::native)
+        self.input_profile.clone().unwrap_or_else(|| {
+            self.stealth
+                .as_ref()
+                .map_or_else(InputProfile::native, StealthProfile::input_profile)
+        })
     }
 
     /// Register an additional [`TargetObserver`].
@@ -4300,6 +4307,17 @@ mod tests {
     }
 
     #[test]
+    fn explicit_native_override_wins_even_with_stealth_spoofed() {
+        // Opt-in `input_profile(native())` is an explicit opt-out — it must
+        // win even when stealth is spoofed (which would otherwise imply
+        // humanized timing).
+        let b = Browser::builder()
+            .stealth(StealthProfile::spoofed())
+            .input_profile(InputProfile::native());
+        assert_eq!(b.resolved_input_profile(), InputProfile::native());
+    }
+
+    #[test]
     fn no_input_profile_call_defaults_to_native_with_stealth_off() {
         let b = Browser::builder().stealth(StealthProfile::off());
         assert_eq!(
@@ -4310,15 +4328,33 @@ mod tests {
     }
 
     #[test]
-    fn no_input_profile_call_defaults_to_native_with_stealth_on() {
+    fn no_input_profile_call_defaults_to_native_with_stealth_native() {
         // `Browser::builder()` seeds `stealth: Some(StealthProfile::native())`
-        // (stealth ON, the default path) — resolved input timing must still
-        // be exactly today's native default with no explicit call.
+        // (stealth ON in native mode, the default path) — resolved input
+        // timing must still be exactly today's native default with no
+        // explicit call.
         let b = Browser::builder();
         assert_eq!(
             b.resolved_input_profile(),
             InputProfile::native(),
             "no explicit input_profile() call must resolve to today's default for the default stealth path"
+        );
+    }
+
+    #[test]
+    fn no_input_profile_call_defaults_to_spoofed_with_stealth_spoofed() {
+        // THE regression case: before `input_profile()`/`resolved_input_profile()`
+        // existed, production resolved input timing as
+        // `stealth.map_or_else(InputProfile::native, |sp| sp.input_profile())`,
+        // so a spoofed-stealth browser got humanized (`spoofed()`) input
+        // timing by default. With no explicit `.input_profile(..)` call,
+        // that mapping must be preserved — falling back to `native()`
+        // unconditionally would silently defeat spoofed stealth's realism.
+        let b = Browser::builder().stealth(StealthProfile::spoofed());
+        assert_eq!(
+            b.resolved_input_profile(),
+            InputProfile::spoofed(),
+            "no explicit input_profile() call must still follow spoofed stealth's humanized timing"
         );
     }
 

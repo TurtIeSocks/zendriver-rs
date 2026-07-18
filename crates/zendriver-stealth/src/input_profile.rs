@@ -65,13 +65,15 @@ impl InputProfile {
     /// Shares [`InputProfile::spoofed`]'s tunables (human-paced typing,
     /// jittery mouse motion) but is meant to be opted into explicitly — e.g.
     /// via `BrowserBuilder::input_profile(InputProfile::coherent())` — rather
-    /// than being derived from the active stealth profile. That decoupling
-    /// is the point: today, toggling `StealthProfile` (native/off vs.
-    /// spoofed) silently toggles input timing along with it, so turning
-    /// stealth off can unexpectedly drop back to zero-delay mechanical
-    /// input. `coherent()` lets a caller keep humanized timing regardless of
-    /// the stealth setting (or vice versa). It is never the default —
-    /// [`InputProfile::native`] remains the default with or without stealth.
+    /// than being derived from the active stealth profile. By default (no
+    /// explicit `.input_profile(..)` call), input timing already follows the
+    /// active `StealthProfile` — spoofed stealth gets humanized timing,
+    /// native/off stealth gets zero-overhead timing — exactly as it always
+    /// has. `coherent()` is for callers who want to *decouple* the two: keep
+    /// humanized timing while stealth is off (or otherwise pin non-mechanical
+    /// timing independently of whatever the stealth setting is doing). It is
+    /// never applied implicitly — only an explicit `.input_profile(..)` call
+    /// selects it.
     ///
     /// ```
     /// use zendriver_stealth::InputProfile;

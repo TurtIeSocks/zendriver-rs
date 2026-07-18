@@ -44,12 +44,13 @@ btn.click_fast().await?;
 By default, the realism comes from the active [`StealthProfile`]'s
 `InputProfile`:
 
-- `StealthProfile::native()` and `::spoofed()` install a realistic
-  profile by default — Bezier control points with deterministic-but-
-  jittered timing, per-character keyboard delays of 30-200 ms,
-  occasional 1-2% typo + correction events.
-- `StealthProfile::off()` installs a no-op profile — even realistic
-  methods just do the dispatch without realism.
+- `StealthProfile::spoofed()` installs a realistic profile by default —
+  Bezier control points with deterministic-but-jittered timing,
+  per-character keyboard delays of 30-200 ms, occasional 1-2% typo +
+  correction events.
+- `StealthProfile::native()` and `::off()` install a zero-overhead,
+  deterministic profile by default — even realistic methods just do
+  the dispatch without added realism.
 
 When realism matters but you also want determinism (e.g. snapshots
 inside tests), seed the profile with a fixed RNG — see the
@@ -63,12 +64,15 @@ inside tests), seed the profile with a fixed RNG — see the
 [`BrowserBuilder::input_profile()`] lets you pick the [`InputProfile`]
 explicitly, **independent** of `StealthProfile`. This is opt-in only —
 it does not change any default. With no `.input_profile(..)` call, timing
-still resolves to `InputProfile::native()` (today's zero-overhead
-default), whether stealth is on, off, or spoofed.
+still resolves to whatever the active `StealthProfile` implies (the same
+mapping described above — `InputProfile::spoofed()` under
+`StealthProfile::spoofed()`, `InputProfile::native()` under `::native()`
+or `::off()`), exactly as before this method existed.
 
-Use it when you want humanized timing without also turning on stealth's
-surface patches (canvas/WebGL/navigator overrides), or when you want
-stealth on but deterministic zero-delay input for a test:
+Use it when you want to *decouple* timing from the stealth setting —
+e.g. humanized timing without also turning on stealth's surface patches
+(canvas/WebGL/navigator overrides), or stealth on but deterministic
+zero-delay input for a test:
 
 ```rust,no_run
 use zendriver::stealth::{InputProfile, StealthProfile};
