@@ -506,8 +506,10 @@ pub struct BrowserBuilder {
     pub(crate) extra_args: Vec<String>,
     pub(crate) stealth: Option<StealthProfile>,
     /// Explicit input-timing profile, decoupled from [`Self::stealth`]. `None`
-    /// (the default) resolves to [`InputProfile::native`] regardless of the
-    /// stealth setting. See [`BrowserBuilder::input_profile`] and
+    /// (the default) falls back to the timing implied by [`Self::stealth`]
+    /// ([`InputProfile::spoofed`] under `StealthProfile::spoofed`,
+    /// [`InputProfile::native`] under `::native`/`::off`). See
+    /// [`BrowserBuilder::input_profile`] and
     /// [`BrowserBuilder::resolved_input_profile`].
     pub(crate) input_profile: Option<InputProfile>,
     /// Base fingerprint [`Persona`] driving the spoofed-mode surface patches.
