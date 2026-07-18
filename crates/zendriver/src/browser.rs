@@ -418,11 +418,12 @@ fn parse_seed_contents(contents: &str, path: &Path) -> Result<Seed, ZendriverErr
 /// Writes the seed to a uniquely-named [`tempfile::NamedTempFile`] inside
 /// `dir` (so the eventual persist is same-filesystem, hence atomic),
 /// `sync_all`'s it to disk, then [`NamedTempFile::persist_noclobber`] moves
-/// it to `path` only if nothing is there yet. If `path` was created by a
-/// concurrent racer in the meantime, `persist_noclobber` fails with
-/// `AlreadyExists` and this re-reads `path` — which by construction already
-/// holds the racer's fully-written seed — instead of persisting the
-/// redundant one just generated.
+/// it to `path` only if nothing is there yet, followed by a best-effort
+/// `fsync` of `dir` itself so the new directory entry survives an unclean
+/// crash. If `path` was created by a concurrent racer in the meantime,
+/// `persist_noclobber` fails with `AlreadyExists` and this re-reads `path` —
+/// which by construction already holds the racer's fully-written seed —
+/// instead of persisting the redundant one just generated.
 fn write_seed_atomic(dir: &Path, path: &Path) -> Result<Seed, ZendriverError> {
     use std::io::Write as _;
 
@@ -431,7 +432,21 @@ fn write_seed_atomic(dir: &Path, path: &Path) -> Result<Seed, ZendriverError> {
     tmp.write_all(seed.value().to_string().as_bytes())?;
     tmp.as_file().sync_all()?;
     match tmp.persist_noclobber(path) {
-        Ok(_file) => Ok(seed),
+        Ok(_file) => {
+            // POSIX doesn't guarantee the rename `persist_noclobber` just
+            // performed is durable until the *directory entry* itself is
+            // fsynced, not just the file's contents (already `sync_all`'d
+            // above) — so fsync `dir` too. Best-effort: if the directory
+            // can't be opened or synced, ignore it. The seed's contents are
+            // already durable; a missing directory entry after an unclean
+            // crash just means `persisted_seed` regenerates a fresh seed on
+            // next launch, which is a harmless (if mildly wasteful) outcome,
+            // not data loss.
+            if let Ok(dir_file) = std::fs::File::open(dir) {
+                let _ = dir_file.sync_all();
+            }
+            Ok(seed)
+        }
         Err(persist_err) if persist_err.error.kind() == std::io::ErrorKind::AlreadyExists => {
             let contents = std::fs::read_to_string(path)?;
             parse_seed_contents(&contents, path)
@@ -1731,9 +1746,18 @@ pub(crate) fn test_only_inner_from_conn(conn: Connection) -> Arc<BrowserInner> {
 /// running against that target. Callers never see a page before its
 /// stealth/user/shadow-root setup has applied — the transport actor runs
 /// observers serially in registration order, so by the time this observer
-/// runs, the rest of the chain has already completed (or the target was
-/// detached on an earlier observer's failure, in which case this observer
-/// never runs at all).
+/// runs, the rest of the chain has already completed.
+///
+/// This barrier only holds when every earlier observer actually reaches
+/// completion. An earlier observer's `Err`/panic/`Required`-policy timeout
+/// detaches the target (`Target.detachFromTarget`) and stops the chain —
+/// this observer correctly never runs, and there is no live target to leak.
+/// But an earlier observer with [`zendriver_transport::ObserverFailurePolicy::BestEffort`]
+/// that *times out* does **not** stop the chain: the transport actor skips
+/// only that one observer and continues on to the rest, including this
+/// registrar — see `handle_target_attached` in `zendriver_transport::actor`.
+/// So "skip the registrar" happens only on detach, never on a bare
+/// `BestEffort` timeout.
 pub(crate) struct TabRegistrar {
     browser: OnceLock<Weak<BrowserInner>>,
     input_profile: zendriver_stealth::InputProfile,
@@ -1953,6 +1977,16 @@ impl TargetObserver for TabRegistrar {
 /// [`Browser::tabs`] or get it back from [`Browser::new_tab`] — until every
 /// observer ahead of the registrar in the returned `Vec` has finished
 /// running against that target.
+///
+/// The barrier is preserved by how the transport actor treats observer
+/// failure: an `Err`, a panic, or a `Required`-policy timeout from any
+/// observer ahead of the registrar detaches the target and stops the chain
+/// outright, so the registrar correctly never runs (there's no live target
+/// left to register). A [`zendriver_transport::ObserverFailurePolicy::BestEffort`]
+/// observer that *times out*, however, does not stop the chain — the actor
+/// skips only that observer and continues on to the rest, registrar
+/// included. So the registrar is skipped exactly when the target is
+/// detached, never merely because an earlier best-effort observer was slow.
 ///
 /// Shared by [`BrowserBuilder::launch`] and [`BrowserBuilder::connect`] so
 /// both paths order the chain identically. Factored out as a small, pure,

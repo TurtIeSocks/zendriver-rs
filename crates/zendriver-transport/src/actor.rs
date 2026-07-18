@@ -343,9 +343,16 @@ pub(crate) async fn run_actor<S>(
 /// depends on [`TargetObserver::failure_policy`]:
 /// [`ObserverFailurePolicy::Required`] (the default) detaches the same as
 /// (b), fail closed, so a hung observer can never leave the page running
-/// without its setup; [`ObserverFailurePolicy::BestEffort`] logs and falls
-/// through to release the debugger anyway, matching the pre-existing
-/// fail-open behavior for observers that opt into it.
+/// without its setup; [`ObserverFailurePolicy::BestEffort`] logs a warning
+/// and **skips only the timed-out observer**, then continues on to the
+/// remaining observers in the chain (if any) exactly as if this one had
+/// returned `Ok`. Once every remaining observer has run (or there were none
+/// left), the debugger is released the same as the success path. This
+/// matters because zendriver registers its tab-registrar observer last as a
+/// ready barrier (see `assemble_observer_chain` in `zendriver::browser`): a
+/// `BestEffort` timeout earlier in the chain must not skip the observers
+/// that come after it, or the registrar would never run and the target
+/// would leak — live and released, but absent from `BrowserInner::tabs`.
 ///
 /// ## Cancellation
 ///
@@ -400,9 +407,9 @@ async fn handle_target_attached(
                     warn!(
                         observer = name,
                         %session_id,
-                        "observer timed out; releasing (best-effort)"
+                        "observer timed out; skipping (best-effort) and continuing the chain"
                     );
-                    break;
+                    continue;
                 }
             },
         }
@@ -1088,6 +1095,58 @@ mod tests {
             .expect("timeout waiting for runIfWaitingForDebugger");
         assert_eq!(frame["method"], "Runtime.runIfWaitingForDebugger");
         assert_eq!(frame["sessionId"], "S-slow-best-effort");
+
+        conn.shutdown();
+    }
+
+    /// A `BestEffort` observer that times out must not abandon the rest of
+    /// the chain: the observer(s) registered after it must still run. This
+    /// is what keeps a registrar-last chain (zendriver's `TabRegistrar`)
+    /// from being skipped when an earlier, non-critical observer hangs —
+    /// see the `handle_target_attached` doc comment above.
+    #[tokio::test]
+    async fn best_effort_observer_timeout_does_not_abandon_later_observers() {
+        let (ws, test_tx, mut test_rx) = duplex_pair();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let slow: Arc<dyn TargetObserver> = Arc::new(RecordingObserver {
+            name: "slow-best-effort",
+            calls: calls.clone(),
+            behavior: ObserverBehavior::Sleep(Duration::from_secs(10)),
+            policy: ObserverFailurePolicy::BestEffort,
+        });
+        let after: Arc<dyn TargetObserver> = Arc::new(RecordingObserver {
+            name: "after",
+            calls: calls.clone(),
+            behavior: ObserverBehavior::Ok,
+            policy: ObserverFailurePolicy::Required,
+        });
+        let conn = spawn_actor_with_observers_and_timeout(
+            ws,
+            vec![slow, after],
+            Duration::from_millis(100),
+        );
+
+        emit_attached(&test_tx, "S-chain-continues").await;
+
+        // The chain must still reach the end and release the debugger, which
+        // only happens once every observer (including the one after the
+        // timed-out `BestEffort` observer) has run.
+        let frame = tokio::time::timeout(Duration::from_millis(500), next_frame(&mut test_rx))
+            .await
+            .expect("timeout waiting for runIfWaitingForDebugger");
+        assert_eq!(frame["method"], "Runtime.runIfWaitingForDebugger");
+        assert_eq!(frame["sessionId"], "S-chain-continues");
+
+        // Prove the second observer actually ran (not just that a release
+        // frame appeared for some other reason).
+        let recorded = calls.lock().unwrap().clone();
+        assert_eq!(
+            recorded,
+            vec![
+                ("slow-best-effort", "S-chain-continues".to_string()),
+                ("after", "S-chain-continues".to_string()),
+            ]
+        );
 
         conn.shutdown();
     }

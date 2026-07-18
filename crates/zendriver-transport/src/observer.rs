@@ -10,12 +10,16 @@ use crate::error::CallError;
 /// The actor walks every registered observer serially (registration order)
 /// on each new target. An observer can fail three ways: it returns `Err`, it
 /// panics, or it exceeds the observer timeout. `Err` and panics always fail
-/// closed — the actor detaches the session via `Target.detachFromTarget`.
-/// What happens on *timeout* depends on [`TargetObserver::failure_policy`]:
-/// [`ObserverFailurePolicy::Required`] (the default) also fails closed and
-/// detaches; [`ObserverFailurePolicy::BestEffort`] fails open and releases
-/// the debugger anyway so a non-critical, slow observer can't hang the
-/// target.
+/// closed — the actor detaches the session via `Target.detachFromTarget` and
+/// stops the chain; no later observer runs. What happens on *timeout*
+/// depends on [`TargetObserver::failure_policy`]:
+/// [`ObserverFailurePolicy::Required`] (the default) also fails closed,
+/// detaches, and stops the chain the same as `Err`/panic;
+/// [`ObserverFailurePolicy::BestEffort`] fails open on timeout only — the
+/// actor skips just that one observer and continues on to the rest of the
+/// chain (registration order preserved), then releases the debugger once
+/// every remaining observer has run, so a non-critical, slow observer can't
+/// hang the target *or* block observers registered after it.
 ///
 /// `zendriver-stealth::StealthObserver` implements this trait to install
 /// patches on every new page target before the page's first script runs.
@@ -45,9 +49,11 @@ pub trait TargetObserver: Send + Sync {
     /// now it detaches the target instead, the same way an `Err` or panic
     /// already did. Override to return [`ObserverFailurePolicy::BestEffort`]
     /// to opt a specific, non-critical observer back into the old fail-open
-    /// timeout behavior (log + release). Errors and panics are unaffected by
-    /// this policy — they always detach regardless of which variant is
-    /// returned here.
+    /// timeout behavior: the actor logs and skips *only this observer*, then
+    /// continues running the rest of the chain (registration order
+    /// preserved) exactly as if it had returned `Ok`. Errors and panics are
+    /// unaffected by this policy — they always detach and stop the chain
+    /// regardless of which variant is returned here.
     ///
     /// # Examples
     ///
@@ -92,11 +98,16 @@ pub enum ObserverFailurePolicy {
     /// or a panic — the actor sends `Target.detachFromTarget` and the target
     /// is never handed out (the debugger is not released).
     Required,
-    /// Fail open on timeout only: the actor logs a warning and releases the
-    /// debugger (`Runtime.runIfWaitingForDebugger`) anyway, so the page runs
-    /// without this observer's setup rather than being detached. Errors and
-    /// panics from this observer still detach — only the timeout branch is
-    /// relaxed.
+    /// Fail open on timeout only: the actor logs a warning and skips *just
+    /// this observer*, then continues running any observers registered
+    /// after it (registration order preserved) exactly as if this one had
+    /// returned `Ok`. The debugger is released
+    /// (`Runtime.runIfWaitingForDebugger`) once the rest of the chain has
+    /// run, so the page runs without this observer's setup rather than
+    /// being detached — and observers later in the chain are not abandoned
+    /// on account of this one's timeout. Errors and panics from this
+    /// observer still detach and stop the chain — only the timeout branch
+    /// is relaxed.
     BestEffort,
 }
 
