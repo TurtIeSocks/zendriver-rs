@@ -3,6 +3,28 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.8.0] - 2026-07-18
+
+### Added
+
+- Add loss-accounted raw event stream (opt-in)
+- Add BoundedBody bounded capture with explicit truncation
+- Surface delivery-loss boundaries and bounded bodies instead of silent gaps
+- Opt-in coherent input profile decoupled from stealth selection
+- Add opt-in native-isolation/real-WebGL profile (default unchanged)
+
+### Changed
+
+- Rename BoundedBody.encoded_len/body_encoded_bytes to full_len/body_full_bytes **(BREAKING)**
+
+### Fixed
+
+- Treat responseReceived as headers-only; add opt-in strict loss policy
+- Ready-barrier tab handoff, atomic seed, fail-closed on corrupt identity **(BREAKING)**
+- Browser_open input profile follows stealth by default
+- Default capture_body_max_bytes to 0 (unbounded)
+
+
 ## [0.7.7] - 2026-07-17
 
 ### Added
