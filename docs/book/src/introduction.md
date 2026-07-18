@@ -1,10 +1,14 @@
 # Introduction
 
-**zendriver-rs** is an async-first, undetectable browser-automation library
-for Rust. It drives a real Chrome instance over the [Chrome DevTools
+**zendriver-rs** is an async-first browser-automation library for Rust
+with a coherent stealth identity and explicit anti-detection controls,
+on by default. It drives a real Chrome instance over the [Chrome DevTools
 Protocol] (CDP) directly — no WebDriver shim, no Selenium grid, no JSON
 wire — and ships with anti-detection patches that pass mainstream
-fingerprint batteries out of the box.
+fingerprint checks (e.g. [sannysoft], [areyouheadless]) out of the box.
+No automation stack can guarantee invisibility to a determined,
+adaptively-defended site — see [Stealth](./stealth.md) for what the
+patches actually cover and their limits.
 
 It is a Rust port of the Python [zendriver] / [nodriver] projects, with
 the API redesigned around Rust's type system: builder patterns where Python
@@ -20,8 +24,11 @@ borrow checker tracks instead of letting them drift across `await` points.
 
 - **Scraping sites that block headless browsers.** The `spoofed` stealth
   profile patches `navigator.webdriver`, the Chrome runtime object, the
-  permissions API, and a half-dozen other tells. Cloudflare Turnstile,
-  PerimeterX, and DataDome challenges pass without manual headers.
+  permissions API, and a half-dozen other tells. Many Cloudflare
+  Turnstile, PerimeterX, and DataDome challenges pass without manual
+  headers; sites with more aggressive detection layers may still need
+  the dedicated bypass features (see [Cloudflare](./cloudflare.md) /
+  [DataDome](./datadome.md)) or still catch a scripted session.
 - **End-to-end testing of real-world web apps.** First-class multi-tab,
   cross-origin iframe (OOPIF) support, network interception, and a
   Playwright-style `expect()` pre-register surface make whole-flow tests
@@ -39,10 +46,12 @@ borrow checker tracks instead of letting them drift across `await` points.
 - **CDP-direct.** Every method maps to one or two CDP commands. There is
   no WebDriver-style adapter layer, so latency is one network round-trip
   per call — typically under 1 ms on localhost.
-- **Undetectable by default.** `StealthProfile::native` is the suggested
-  starting point — UA scrub plus Emulation overrides, no JS bootstrap, no
-  prototype patching. `StealthProfile::spoofed` adds Navigator-prototype
-  patches that pass [sannysoft] + [areyouheadless]. Off-by-default for
+- **Anti-detection controls on by default.** `StealthProfile::native` is
+  the suggested starting point — UA scrub plus Emulation overrides, no JS
+  bootstrap, no prototype patching. `StealthProfile::spoofed` adds
+  Navigator-prototype patches that pass [sannysoft] + [areyouheadless].
+  Neither is a guarantee against a determined, adaptive detector — see
+  [Stealth](./stealth.md#when-to-use-which) for the tradeoffs. Use
   `StealthProfile::off` when you want a vanilla browser for reproduction.
 - **Async-first.** Built on Tokio. Every call returns a `Future`. No
   blocking, no `block_on`, no `tokio::task::spawn_blocking`. Browser /

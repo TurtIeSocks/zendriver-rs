@@ -18,6 +18,7 @@ new variants may land in minor releases.
 |---------|-------------|-----|
 | `Browser(BrowserError)` | Chrome launch / discovery failed. | See [BrowserError](#browsererror-variants) below. |
 | `Transport(TransportError)` | WebSocket failure (Chrome crashed, socket reset). | Retry the operation; if recurring, check Chrome's stderr for crash dumps. |
+| `Disconnected` | The connection to Chrome dropped unexpectedly mid-call — no caller-requested `close()` — distinct from the clean-shutdown `Transport` case. | Reconnect via `Browser::reconnect`, then re-acquire any `Tab`/`Frame`/`Element` handles (a reconnect invalidates them) via `Browser::main_tab` / `Browser::tabs`. |
 | `Cdp { code, message, data }` | Chrome returned a CDP RPC error. | Inspect `message` — `Invalid params` usually means a stale `RemoteObjectId` or wrong type signature. |
 | `ElementNotFound { selector }` | Query selector matched zero elements within the timeout. | Confirm the page actually rendered the element (`tab.wait_for_load()` / `wait_for_idle()`); check the selector with `tab.find().css(...).count()`. |
 | `ConflictingSelectors` | A query mixed a single-selector method (`.css`/`.xpath`/`.text`/`.role`) with bs4-like predicate methods (`.tag`/`.attr*`/`.containing_text`/…). | Use one selector style per query — either a single selector *or* combinable predicates, not both. |

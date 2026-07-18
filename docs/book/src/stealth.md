@@ -6,6 +6,11 @@ Pick the profile that matches your target site's detection layer; tweak
 the fingerprint with builder methods when you need to pin a specific
 identity.
 
+None of these profiles is a guarantee of invisibility — no automation
+stack has one against a determined, adaptively-defended site. What they
+provide is a coherent, plausible browser identity plus explicit controls
+over the specific tells that mainstream fingerprint checks probe for.
+
 ## The three profiles
 
 | Profile     | Launch flags | UA scrub | Emulation overrides | JS bootstrap   | Bypass CSP | Use case                                     |

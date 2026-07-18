@@ -1,6 +1,6 @@
 # zendriver-rs
 
-Async-first, undetectable browser automation via the Chrome DevTools Protocol — drive real Chrome from Rust, or hand the keys to an LLM agent over the [Model Context Protocol](https://modelcontextprotocol.io/).
+Async-first browser automation via the Chrome DevTools Protocol, with a coherent stealth identity and explicit anti-detection controls on by default — drive real Chrome from Rust, or hand the keys to an LLM agent over the [Model Context Protocol](https://modelcontextprotocol.io/).
 
 [![crates.io](https://img.shields.io/crates/v/zendriver.svg)](https://crates.io/crates/zendriver)
 [![docs.rs](https://docs.rs/zendriver/badge.svg)](https://docs.rs/zendriver)

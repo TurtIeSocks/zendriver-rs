@@ -1,6 +1,6 @@
 [package]
 name = "zendriver"
-description = "Async-first, undetectable browser automation via the Chrome DevTools Protocol"
+description = "Async-first browser automation via the Chrome DevTools Protocol, with anti-detection controls on by default"
 version = "0.2.30"
 edition.workspace = true
 rust-version.workspace = true

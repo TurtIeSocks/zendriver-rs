@@ -1,10 +1,15 @@
-//! Async, undetectable Chrome automation over the Chrome DevTools Protocol.
+//! Async Chrome automation over the Chrome DevTools Protocol, with a
+//! coherent stealth identity and explicit anti-detection controls on by
+//! default.
 //!
 //! `zendriver` is the high-level browser-automation entry point built on a
 //! CDP-over-WebSocket transport. The crate aims to feel like Playwright /
 //! Puppeteer for Rust while staying explicit about its CDP underpinnings —
 //! every public type maps cleanly to a CDP surface, every action has a
-//! single-call escape hatch, and stealth is on by default.
+//! single-call escape hatch, and stealth is on by default. No automation
+//! stack can guarantee invisibility to a determined, adaptive site; what
+//! this crate provides is a coherent fingerprint identity plus explicit
+//! controls, not a guarantee.
 //!
 //! See the [user guide / mdBook](https://turtiesocks.github.io/zendriver-rs/)
 //! for end-to-end walkthroughs covering [installation][book-install],

@@ -122,8 +122,9 @@ There's no built-in detector. The pragmatic test:
 
 - **`StealthProfile::native()`** — patches only what fingerprinters see
   at the protocol level: UA scrub, launch flags, Emulation overrides.
-  No JS bootstrap. Cheap, undetectable via `Function.prototype.toString`
-  drift. Passes most consumer sites.
+  No JS bootstrap, so there's nothing for a `Function.prototype.toString`
+  check to catch — it's cheap and safe against that specific technique
+  by construction. Passes most consumer sites.
 - **`StealthProfile::spoofed()`** — `native()` plus Navigator-prototype
   JS patches injected via `Page.addScriptToEvaluateOnNewDocument`.
   Restores `navigator.webdriver` to undefined, fixes `navigator.plugins`
