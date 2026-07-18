@@ -174,7 +174,21 @@ impl TargetObserver for StealthObserver {
                 .call("Emulation.setTimezoneOverride", json!({ "timezoneId": tz }))
                 .await?;
         }
-        if let Some(ref locale) = self.fingerprint.locale {
+        // Keep the JS-visible locale (navigator.language, Intl) coherent with
+        // the always-sent Accept-Language. Prefer an explicit fingerprint
+        // locale; otherwise, if the fingerprint pins a `languages` list, derive
+        // the locale from its primary entry — a `languages`-without-`locale`
+        // fingerprint must not leave the JS locale at Chrome's default while the
+        // Accept-Language header says otherwise. A pure-default fingerprint (no
+        // locale, no languages) keeps Chrome's native locale; we don't force one.
+        let effective_locale = self.fingerprint.locale.clone().or_else(|| {
+            self.fingerprint
+                .languages
+                .as_ref()
+                .and_then(|langs| langs.first())
+                .cloned()
+        });
+        if let Some(ref locale) = effective_locale {
             session
                 .call("Emulation.setLocaleOverride", json!({ "locale": locale }))
                 .await?;
@@ -310,6 +324,91 @@ mod tests {
         }
 
         conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn languages_without_locale_still_sets_coherent_locale_override() {
+        // A fingerprint that pins `languages` but no `locale` previously sent a
+        // spoofed Accept-Language while leaving the JS-visible locale
+        // (navigator.language / Intl) at Chrome's default — an incoherent
+        // cross-surface tell. The locale override must be derived from the
+        // pinned languages so both agree.
+        let fp = Fingerprint {
+            platform: Platform::MacIntel,
+            chrome_major: 120,
+            chrome_full: "120.0.6099.234".into(),
+            cpu_count: 10,
+            memory_gb: 8,
+            ua_string: crate::ua::compose_ua_string(Platform::MacIntel, "120.0.6099.234"),
+            ua_metadata: crate::UserAgentMetadata::realistic(
+                Platform::MacIntel,
+                120,
+                "120.0.6099.234",
+            ),
+            timezone: None,
+            locale: None,
+            languages: Some(vec!["de-DE".into(), "de".into()]),
+            screen: None,
+        };
+        let profile = StealthProfile::spoofed();
+        let observer = std::sync::Arc::new(StealthObserver::new(profile, fp));
+        let (mut mock, conn) = MockConnection::pair_with_observers(vec![observer.clone()]);
+
+        mock.emit_event(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": "S1",
+                "targetInfo": {
+                    "targetId": "T1",
+                    "type": "page",
+                    "url": "about:blank",
+                    "attached": true,
+                },
+                "waitingForDebugger": true,
+            }),
+        )
+        .await;
+
+        let mut locale_override: Option<String> = None;
+        let mut accept_language: Option<String> = None;
+        for expected in [
+            "Page.enable",
+            "Emulation.setUserAgentOverride",
+            "Emulation.setDeviceMetricsOverride",
+            "Emulation.setFocusEmulationEnabled",
+            "Emulation.setLocaleOverride",
+            "Page.setBypassCSP",
+            "Page.addScriptToEvaluateOnNewDocument",
+            "Runtime.runIfWaitingForDebugger",
+        ] {
+            let id =
+                tokio::time::timeout(std::time::Duration::from_secs(2), mock.expect_cmd(expected))
+                    .await
+                    .unwrap_or_else(|_| panic!("did not see {expected} within 2s"));
+            if expected == "Emulation.setUserAgentOverride" {
+                accept_language = mock.last_sent()["params"]["acceptLanguage"]
+                    .as_str()
+                    .map(String::from);
+            }
+            if expected == "Emulation.setLocaleOverride" {
+                locale_override = mock.last_sent()["params"]["locale"]
+                    .as_str()
+                    .map(String::from);
+            }
+            mock.reply(id, json!({})).await;
+        }
+        conn.shutdown();
+
+        assert_eq!(
+            accept_language.as_deref(),
+            Some("de-DE,de"),
+            "Accept-Language must reflect the pinned languages"
+        );
+        assert_eq!(
+            locale_override.as_deref(),
+            Some("de-DE"),
+            "locale override must be derived from pinned languages so JS locale stays coherent with Accept-Language"
+        );
     }
 
     #[tokio::test]
