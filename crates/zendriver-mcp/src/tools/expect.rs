@@ -93,8 +93,12 @@ impl ExpectKind {
 /// Applied by the spawned task the instant the dialog opens — so the page's
 /// blocking `alert()` / `confirm()` / `prompt()` call returns promptly and
 /// the matched event carries the chosen action. Omitting `dialog_action`
-/// falls back to Chrome's default handling (the dialog is accepted when the
-/// matched handle is dropped at task end).
+/// leaves the dialog untouched: the matched handle is dropped without
+/// dispatching `Page.handleJavaScriptDialog` (`MatchedDialog` has no `Drop`
+/// impl, so nothing is sent to Chrome), so the dialog stays open and the
+/// page's blocking JS call does not return until something else resolves
+/// it. Use this to merely observe that a dialog opened without acting on
+/// it.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DialogAction {
@@ -164,8 +168,9 @@ pub struct RegisterInput {
     #[serde(default = "default_pre_timeout")]
     pub pre_await_timeout_ms: u64,
     /// Dialog only: drive the matched dialog (`accept` / `dismiss`) instead
-    /// of leaving Chrome's default handling. Decided here, at register time,
-    /// because the matched dialog handle is consumed by the spawned task.
+    /// of leaving it open for observation only. Decided here, at register
+    /// time, because the matched dialog handle is consumed by the spawned
+    /// task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dialog_action: Option<DialogAction>,
     /// Dialog only: prompt answer for `dialog_action: accept` on a `prompt`.
@@ -485,8 +490,9 @@ fn dialog_type_str(d: &DialogType) -> &'static str {
 /// (`accept` / `dismiss`) when `action` is set.
 ///
 /// Fields are captured by reference first so the handle stays intact for the
-/// consuming `accept`/`dismiss` call. With no `action`, the handle is dropped
-/// here and Chrome's default handling applies.
+/// consuming `accept`/`dismiss` call. With no `action`, the handle is merely
+/// dropped here — `MatchedDialog` has no `Drop` impl, so no CDP call is
+/// made and the dialog is left open (observe-only).
 async fn dialog_to_json(
     m: MatchedDialog,
     action: Option<DialogAction>,
