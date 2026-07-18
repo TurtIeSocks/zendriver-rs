@@ -80,7 +80,7 @@ pub struct StartInput {
     /// Maximum bytes of a response body to capture per `http` event when
     /// `capture_bodies` is set (bounding is against the raw decoded length,
     /// never a base64 length). A body larger than this is truncated to that
-    /// many bytes with `body_truncated: true`; `body_encoded_bytes` always
+    /// many bytes with `body_truncated: true`; `body_full_bytes` always
     /// reports the full pre-truncation length. `0` means unbounded — capture
     /// the entire body regardless of size. Ignored when `capture_bodies` is
     /// `false`. Defaults to 1 MiB.
@@ -183,7 +183,7 @@ async fn convert(ev: NetworkEvent, capture: bool, max_bytes: usize) -> MonitorEv
                 body,
                 body_base64,
                 body_truncated,
-                body_encoded_bytes,
+                body_full_bytes,
                 body_capture_error,
             } = captured.unwrap_or_default();
             MonitorEvent::Http {
@@ -194,7 +194,7 @@ async fn convert(ev: NetworkEvent, capture: bool, max_bytes: usize) -> MonitorEv
                 body,
                 body_base64,
                 body_truncated,
-                body_encoded_bytes,
+                body_full_bytes,
                 body_capture_error,
             }
         }
@@ -239,7 +239,7 @@ struct CapturedBody {
     body: Option<String>,
     body_base64: Option<String>,
     body_truncated: Option<bool>,
-    body_encoded_bytes: Option<u64>,
+    body_full_bytes: Option<u64>,
     body_capture_error: Option<String>,
 }
 
@@ -260,7 +260,7 @@ fn wire_body_fields(result: Result<Vec<u8>, ZendriverError>, max_bytes: usize) -
                 body: Some(String::from_utf8_lossy(&bounded.bytes).into_owned()),
                 body_base64: Some(BASE64.encode(&bounded.bytes)),
                 body_truncated: Some(bounded.truncated),
-                body_encoded_bytes: Some(bounded.encoded_len),
+                body_full_bytes: Some(bounded.full_len),
                 body_capture_error: None,
             }
         }
@@ -455,7 +455,7 @@ mod tests {
             body: None,
             body_base64: None,
             body_truncated: None,
-            body_encoded_bytes: None,
+            body_full_bytes: None,
             body_capture_error: None,
         }
     }
@@ -569,12 +569,12 @@ mod tests {
         assert_eq!(fields.body.as_deref(), Some("hello"));
         assert_eq!(fields.body_base64, Some(BASE64.encode(&full)));
         assert_eq!(fields.body_truncated, Some(false));
-        assert_eq!(fields.body_encoded_bytes, Some(full.len() as u64));
+        assert_eq!(fields.body_full_bytes, Some(full.len() as u64));
         assert!(fields.body_capture_error.is_none());
     }
 
     /// A body larger than `max_bytes` must report `body_truncated: true` and
-    /// `body_encoded_bytes` equal to the FULL pre-truncation length — not the
+    /// `body_full_bytes` equal to the FULL pre-truncation length — not the
     /// truncated length — so a caller can tell "captured N of M bytes".
     #[test]
     fn wire_body_fields_over_cap_is_truncated_and_reports_full_length() {
@@ -584,9 +584,9 @@ mod tests {
 
         assert_eq!(fields.body_truncated, Some(true));
         assert_eq!(
-            fields.body_encoded_bytes,
+            fields.body_full_bytes,
             Some(full.len() as u64),
-            "encoded_bytes must be the full length, not the truncated length"
+            "body_full_bytes must be the full length, not the truncated length"
         );
         assert_eq!(
             fields.body.as_ref().map(String::len),
@@ -610,7 +610,7 @@ mod tests {
         let fields = wire_body_fields(Ok(full.clone()), 0);
 
         assert_eq!(fields.body_truncated, Some(false));
-        assert_eq!(fields.body_encoded_bytes, Some(full.len() as u64));
+        assert_eq!(fields.body_full_bytes, Some(full.len() as u64));
         assert_eq!(fields.body.as_ref().map(String::len), Some(full.len()));
     }
 
@@ -630,7 +630,7 @@ mod tests {
         assert!(fields.body.is_none());
         assert!(fields.body_base64.is_none());
         assert!(fields.body_truncated.is_none());
-        assert!(fields.body_encoded_bytes.is_none());
+        assert!(fields.body_full_bytes.is_none());
     }
 
     // ---------- convert_boundary (DeliveryBoundary wire mapping) -----------

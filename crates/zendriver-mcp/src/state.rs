@@ -202,7 +202,7 @@ pub struct InterceptRuleHandle {
 /// One variant per observed network event. HTTP bodies are captured at
 /// observe-time by the drain task (before Chrome evicts them) when the monitor
 /// was started with `capture_bodies` — so `body` / `body_base64` (and the
-/// `body_truncated` / `body_encoded_bytes` / `body_capture_error` triple) are
+/// `body_truncated` / `body_full_bytes` / `body_capture_error` triple) are
 /// present only on `http` events from a body-capturing monitor.
 #[cfg(feature = "monitor")]
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -239,7 +239,7 @@ pub enum MonitorEvent {
         /// regardless of how much was kept in `body` / `body_base64`. Present
         /// only alongside `body`.
         #[serde(skip_serializing_if = "Option::is_none")]
-        body_encoded_bytes: Option<u64>,
+        body_full_bytes: Option<u64>,
         /// Set instead of `body` / `body_base64` when body capture was
         /// requested (`capture_bodies: true`) but the `getResponseBody` fetch
         /// itself failed (e.g. Chrome already evicted the body) — distinct

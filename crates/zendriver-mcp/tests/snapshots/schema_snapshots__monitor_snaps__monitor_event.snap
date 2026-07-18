@@ -4,7 +4,7 @@ expression: "schema_for! (zendriver_mcp::state::MonitorEvent)"
 ---
 $schema: "https://json-schema.org/draft/2020-12/schema"
 title: MonitorEvent
-description: "A serde + JSON-Schema mirror of `zendriver::NetworkEvent` for the MCP wire.\n\nOne variant per observed network event. HTTP bodies are captured at\nobserve-time by the drain task (before Chrome evicts them) when the monitor\nwas started with `capture_bodies` — so `body` / `body_base64` (and the\n`body_truncated` / `body_encoded_bytes` / `body_capture_error` triple) are\npresent only on `http` events from a body-capturing monitor."
+description: "A serde + JSON-Schema mirror of `zendriver::NetworkEvent` for the MCP wire.\n\nOne variant per observed network event. HTTP bodies are captured at\nobserve-time by the drain task (before Chrome evicts them) when the monitor\nwas started with `capture_bodies` — so `body` / `body_base64` (and the\n`body_truncated` / `body_full_bytes` / `body_capture_error` triple) are\npresent only on `http` events from a body-capturing monitor."
 oneOf:
   - description: A completed HTTP request/response pair (or a failed request).
     type: object
@@ -24,7 +24,7 @@ oneOf:
         type:
           - string
           - "null"
-      body_encoded_bytes:
+      body_full_bytes:
         description: "The full (pre-truncation) response body length in bytes,\nregardless of how much was kept in `body` / `body_base64`. Present\nonly alongside `body`."
         type:
           - integer

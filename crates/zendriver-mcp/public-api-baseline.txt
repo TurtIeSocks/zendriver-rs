@@ -3712,7 +3712,7 @@ pub fn zendriver::request::Response::vzip(self) -> V
 pub mod zendriver::response_body
 pub struct zendriver::response_body::BoundedBody
 pub zendriver::response_body::BoundedBody::bytes: alloc::vec::Vec<u8>
-pub zendriver::response_body::BoundedBody::encoded_len: u64
+pub zendriver::response_body::BoundedBody::full_len: u64
 pub zendriver::response_body::BoundedBody::truncated: bool
 impl zendriver::response_body::BoundedBody
 pub fn zendriver::response_body::BoundedBody::capture(&[u8], usize) -> Self
@@ -5874,7 +5874,7 @@ impl<V, T> ppv_lite86::types::VZip<V> for zendriver::error::ZendriverError where
 pub fn zendriver::error::ZendriverError::vzip(self) -> V
 pub struct zendriver::BoundedBody
 pub zendriver::BoundedBody::bytes: alloc::vec::Vec<u8>
-pub zendriver::BoundedBody::encoded_len: u64
+pub zendriver::BoundedBody::full_len: u64
 pub zendriver::BoundedBody::truncated: bool
 impl zendriver::response_body::BoundedBody
 pub fn zendriver::response_body::BoundedBody::capture(&[u8], usize) -> Self

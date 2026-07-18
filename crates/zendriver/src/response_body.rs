@@ -31,7 +31,7 @@ pub struct BoundedBody {
     /// The full (pre-truncation) raw byte length of the body, regardless of
     /// how much of it was kept in `bytes`. Always equal to `bytes.len()` as
     /// a `u64` when `truncated` is `false`.
-    pub encoded_len: u64,
+    pub full_len: u64,
 }
 
 impl BoundedBody {
@@ -42,7 +42,7 @@ impl BoundedBody {
     ///   `false`.
     /// - Otherwise only the first `max_bytes` bytes are kept and `truncated`
     ///   is `true`.
-    /// - `encoded_len` is always `full.len()` as a `u64`, i.e. the full
+    /// - `full_len` is always `full.len()` as a `u64`, i.e. the full
     ///   pre-truncation length — it does not shrink when the body is
     ///   truncated, so callers can report "captured N of M bytes".
     ///
@@ -64,24 +64,24 @@ impl BoundedBody {
     /// let body = BoundedBody::capture(b"hello world", 5);
     /// assert!(body.truncated);
     /// assert_eq!(body.bytes, b"hello");
-    /// assert_eq!(body.encoded_len, 11);
+    /// assert_eq!(body.full_len, 11);
     /// ```
     #[must_use]
     pub fn capture(full: &[u8], max_bytes: usize) -> Self {
-        let encoded_len = full.len() as u64;
+        let full_len = full.len() as u64;
 
         if max_bytes == 0 || full.len() <= max_bytes {
             return Self {
                 bytes: full.to_vec(),
                 truncated: false,
-                encoded_len,
+                full_len,
             };
         }
 
         Self {
             bytes: full[..max_bytes].to_vec(),
             truncated: true,
-            encoded_len,
+            full_len,
         }
     }
 }
@@ -97,7 +97,7 @@ mod tests {
 
         assert!(!result.truncated);
         assert_eq!(result.bytes, full.to_vec());
-        assert_eq!(result.encoded_len, full.len() as u64);
+        assert_eq!(result.full_len, full.len() as u64);
     }
 
     #[test]
@@ -109,7 +109,7 @@ mod tests {
         assert!(result.truncated);
         assert_eq!(result.bytes.len(), max_bytes);
         assert_eq!(result.bytes, full[..max_bytes].to_vec());
-        assert_eq!(result.encoded_len, full.len() as u64);
+        assert_eq!(result.full_len, full.len() as u64);
     }
 
     #[test]
@@ -119,7 +119,7 @@ mod tests {
 
         assert!(!result.truncated);
         assert_eq!(result.bytes, full.to_vec());
-        assert_eq!(result.encoded_len, full.len() as u64);
+        assert_eq!(result.full_len, full.len() as u64);
     }
 
     #[test]
@@ -129,7 +129,7 @@ mod tests {
 
         assert!(!result.truncated);
         assert_eq!(result.bytes, full);
-        assert_eq!(result.encoded_len, full.len() as u64);
+        assert_eq!(result.full_len, full.len() as u64);
     }
 
     /// Bounding must be computed against the RAW decoded byte length, never
@@ -168,7 +168,7 @@ mod tests {
              its base64 encoding would have exceeded max_bytes"
         );
         assert_eq!(result.bytes, full);
-        assert_eq!(result.encoded_len, full.len() as u64);
+        assert_eq!(result.full_len, full.len() as u64);
     }
 
     #[test]
@@ -177,6 +177,6 @@ mod tests {
 
         assert!(!result.truncated);
         assert!(result.bytes.is_empty());
-        assert_eq!(result.encoded_len, 0);
+        assert_eq!(result.full_len, 0);
     }
 }

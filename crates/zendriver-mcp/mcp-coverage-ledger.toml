@@ -499,11 +499,11 @@ covered = "browser_wait_for_idle.strict"
 
 # ── Task 5: BoundedBody bounded body capture ────────────────────────────────
 # Wired into browser_monitor_start (`capture_body_max_bytes`) /
-# browser_monitor_read (`body_truncated` / `body_encoded_bytes`) by Task 8 —
+# browser_monitor_read (`body_truncated` / `body_full_bytes`) by Task 8 —
 # see crates/zendriver-mcp/src/tools/monitor.rs `wire_body_fields`.
 [[entry]]
 api = "zendriver::response_body::BoundedBody"
-covered = "browser_monitor_start.capture_body_max_bytes / browser_monitor_read (body_truncated, body_encoded_bytes)"
+covered = "browser_monitor_start.capture_body_max_bytes / browser_monitor_read (body_truncated, body_full_bytes)"
 
 [[entry]]
 api = "zendriver::response_body::BoundedBody::bytes:"
@@ -514,8 +514,8 @@ api = "zendriver::response_body::BoundedBody::truncated:"
 covered = "browser_monitor_read.body_truncated"
 
 [[entry]]
-api = "zendriver::response_body::BoundedBody::encoded_len:"
-covered = "browser_monitor_read.body_encoded_bytes"
+api = "zendriver::response_body::BoundedBody::full_len:"
+covered = "browser_monitor_read.body_full_bytes"
 
 [[entry]]
 api = "zendriver::response_body::BoundedBody::capture"
@@ -523,7 +523,7 @@ covered = "browser_monitor_start.capture_body_max_bytes (browser_monitor_start.c
 
 [[entry]]
 api = "zendriver::BoundedBody"
-covered = "browser_monitor_start.capture_body_max_bytes / browser_monitor_read (body_truncated, body_encoded_bytes)"
+covered = "browser_monitor_start.capture_body_max_bytes / browser_monitor_read (body_truncated, body_full_bytes)"
 
 [[entry]]
 api = "zendriver::BoundedBody::bytes:"
@@ -534,8 +534,8 @@ api = "zendriver::BoundedBody::truncated:"
 covered = "browser_monitor_read.body_truncated"
 
 [[entry]]
-api = "zendriver::BoundedBody::encoded_len:"
-covered = "browser_monitor_read.body_encoded_bytes"
+api = "zendriver::BoundedBody::full_len:"
+covered = "browser_monitor_read.body_full_bytes"
 
 # ── Task 8: NetworkDeliveryBoundary loss-accounting on the network monitor ──
 # `NetworkEvent::DeliveryBoundary` replaces four previously-silent paths

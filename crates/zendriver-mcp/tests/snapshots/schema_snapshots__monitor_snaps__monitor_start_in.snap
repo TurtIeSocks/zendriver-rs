@@ -12,7 +12,7 @@ properties:
     type: boolean
     default: false
   capture_body_max_bytes:
-    description: "Maximum bytes of a response body to capture per `http` event when\n`capture_bodies` is set (bounding is against the raw decoded length,\nnever a base64 length). A body larger than this is truncated to that\nmany bytes with `body_truncated: true`; `body_encoded_bytes` always\nreports the full pre-truncation length. `0` means unbounded — capture\nthe entire body regardless of size. Ignored when `capture_bodies` is\n`false`. Defaults to 1 MiB."
+    description: "Maximum bytes of a response body to capture per `http` event when\n`capture_bodies` is set (bounding is against the raw decoded length,\nnever a base64 length). A body larger than this is truncated to that\nmany bytes with `body_truncated: true`; `body_full_bytes` always\nreports the full pre-truncation length. `0` means unbounded — capture\nthe entire body regardless of size. Ignored when `capture_bodies` is\n`false`. Defaults to 1 MiB."
     type: integer
     format: uint
     default: 1048576

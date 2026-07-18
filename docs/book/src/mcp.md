@@ -157,7 +157,7 @@ present in the schema but only takes effect when the `geo` feature is enabled.
 `1048576`, i.e. 1 MiB; `0` means unbounded) alongside `capture_bodies: bool` —
 it bounds how much of each HTTP response body is captured per event. A body
 over the cap is truncated to a prefix; `browser_monitor_read`'s `http` events
-report the truncation via `body_truncated: bool` and `body_encoded_bytes:
+report the truncation via `body_truncated: bool` and `body_full_bytes:
 integer` (the full pre-truncation length, regardless of how much was kept).
 A body-fetch failure (e.g. Chrome already evicted the response) sets
 `body_capture_error: string` instead of silently omitting `body` /

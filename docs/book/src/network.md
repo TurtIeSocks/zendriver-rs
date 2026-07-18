@@ -160,7 +160,7 @@ if let zendriver::NetworkEvent::Http(ex) = event {
     let full = ex.body().await?;
     let bounded = BoundedBody::capture(&full, 1024 * 1024); // cap at 1 MiB
     if bounded.truncated {
-        println!("body truncated: kept {} of {} bytes", bounded.bytes.len(), bounded.encoded_len);
+        println!("body truncated: kept {} of {} bytes", bounded.bytes.len(), bounded.full_len);
     }
 }
 ```
@@ -172,7 +172,7 @@ length, never a base64 (or other encoded) representation's length.
 The MCP `browser_monitor_start` tool wires this in for you: its
 `capture_body_max_bytes` input (default 1 MiB, `0` for unbounded) bounds each
 captured body, and `browser_monitor_read`'s `http` events carry
-`body_truncated` / `body_encoded_bytes` alongside `body` / `body_base64`. A
+`body_truncated` / `body_full_bytes` alongside `body` / `body_base64`. A
 body-fetch failure (e.g. Chrome already evicted the response) sets
 `body_capture_error` instead of silently degrading to an indistinguishable
 empty body. See [`mcp.md`](./mcp.md).
