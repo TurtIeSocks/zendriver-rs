@@ -103,6 +103,15 @@ pub struct StealthOverrides {
     /// Toggle Content-Security-Policy bypass.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bypass_csp: Option<bool>,
+    /// Opt in to Chrome's real site isolation (`IsolateOrigins`/
+    /// `site-per-process` stay enabled) and, for `spoof_*` profiles, skip
+    /// the WebGL vendor/renderer patch — the host's real WebGL renderer
+    /// passes through unpatched. **Trade-off, not a strict stealth
+    /// improvement**: dropping the WebGL patch removes an anti-WAF
+    /// coherence defense (see `StealthProfile::native_isolation` rustdoc).
+    /// Off (`false`/unset) by default — existing behavior unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_isolation: Option<bool>,
     /// Derive a coherent `locale` + `languages` from a country code
     /// (ISO 3166-1 alpha-2, e.g. `"US"`). Overridden by an explicit `locale`.
     ///

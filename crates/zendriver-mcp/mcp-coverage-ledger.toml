@@ -608,3 +608,25 @@ covered = "browser_open.input_profile"
 [[entry]]
 api = "zendriver::browser::BrowserBuilder::resolved_input_profile"
 excluded = "read accessor for the composed input-timing profile; internal to launch flow, not needed as an MCP tool (same rationale as resolved_persona above)"
+
+# ── Task 10: opt-in native-isolation / real-WebGL profile ──────────────────
+# `StealthProfile::native_isolation`/`native_isolation_enabled` and
+# `patches::bootstrap_script_native_webgl` live entirely in the
+# `zendriver-stealth` crate's own public API, not `zendriver`'s — same
+# rationale as `InputProfile`'s inherent methods above: `cargo public-api -p
+# zendriver` only surfaces items reachable through `zendriver`'s own paths,
+# and `BrowserBuilder::stealth(profile: StealthProfile)` (already ledgered
+# implicitly via its unchanged signature) passes the whole builder through,
+# so no `zendriver`-crate-rooted item changed — `browser.rs` was not touched
+# by this task. Confirmed no new items surfaced by re-running
+# `cargo +nightly test -p zendriver-mcp --features public-api-check --test
+# public_api` after this change.
+#
+# MCP coverage: wired via the existing `StealthOverrides` fine-grained
+# override mechanism (same extension point as `bypass_csp`). Set via
+# `browser_stealth_set.overrides.native_isolation`, which persists into
+# session state and is applied by `apply_overrides` on every subsequent
+# `browser_open` for that session (same flow as `bypass_csp`/`locale`/etc.).
+[[entry]]
+api = "zendriver_mcp::state::StealthOverrides::native_isolation"
+covered = "browser_stealth_set.overrides.native_isolation -> StealthProfile::native_isolation (applied to browser_open via session state)"

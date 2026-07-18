@@ -83,6 +83,7 @@ pub struct StealthProfile {
     pub(crate) fingerprint_override: Option<Fingerprint>,
     pub(crate) per_field: PerFieldOverride,
     pub(crate) bypass_csp: bool,
+    pub(crate) native_isolation: bool,
     // Wired by `BrowserBuilder::stealth` in Task 17.
     #[allow(dead_code)]
     pub(crate) user_data_dir: Option<PathBuf>,
@@ -108,6 +109,7 @@ impl StealthProfile {
             fingerprint_override: None,
             per_field: PerFieldOverride::default(),
             bypass_csp: false,
+            native_isolation: false,
             user_data_dir: None,
         }
     }
@@ -130,6 +132,7 @@ impl StealthProfile {
             fingerprint_override: None,
             per_field: PerFieldOverride::default(),
             bypass_csp: false,
+            native_isolation: false,
             user_data_dir: None,
         }
     }
@@ -153,6 +156,7 @@ impl StealthProfile {
             fingerprint_override: None,
             per_field: PerFieldOverride::default(),
             bypass_csp: true, // default ON for spoofed; see spec assumption #2
+            native_isolation: false,
             user_data_dir: None,
         }
     }
@@ -283,6 +287,55 @@ impl StealthProfile {
     #[must_use]
     pub fn bypass_csp(mut self, on: bool) -> Self {
         self.bypass_csp = on;
+        self
+    }
+    /// Opt in to Chrome's **real** render-process site isolation
+    /// (`IsolateOrigins`/`site-per-process` stay enabled — the launch flags
+    /// omit the isolation-disabling `--disable-features=...` entries) and,
+    /// for [`spoofed`](Self::spoofed), skip the WebGL vendor/renderer
+    /// value-substitution patch entirely — the host's real
+    /// `WebGLRenderingContext.getParameter`/`getSupportedExtensions` values
+    /// pass through unpatched instead of reporting the coherent
+    /// ANGLE/Direct3D11 Intel identity `patches/webgl.js` spoofs by default.
+    ///
+    /// # This is a trade-off, not a strict improvement
+    ///
+    /// The defaults this opts out of exist for a reason: disabling site
+    /// isolation keeps every frame in one render process (simpler CDP target
+    /// attachment), and the WebGL patch is itself an anti-WAF *coherence*
+    /// defense — some WAFs (Imperva/Incapsula) cross-check the WebGL
+    /// identity against other signals and flag a real, host-specific
+    /// renderer string as a bot tell when it doesn't match the rest of the
+    /// spoofed fingerprint. Turning this on trades that coherence-with-a-
+    /// fake-identity for coherence-with-the-real-host: useful when you need
+    /// the host's actual GPU behavior (WebGL-heavy rendering/testing,
+    /// screenshot fidelity) or want Chrome's stock process-isolation
+    /// security boundary, and evasion is not the priority. It is **not**
+    /// "more stealthy" than the default — it removes an anti-detection
+    /// defense.
+    ///
+    /// Off by default. [`native`](Self::native) and [`spoofed`](Self::spoofed)
+    /// are unaffected unless you call this explicitly, so existing callers
+    /// see no behavior change.
+    ///
+    /// Note: this does not touch the separate WebGPU coherence patch (driven
+    /// by the [`Persona`](crate::Persona) `webgpu` surface, `Value` strategy
+    /// by default) — it still derives a spoofed `navigator.gpu` adapter from
+    /// the hardcoded default renderer even when the WebGL patch above is
+    /// skipped. A caller who wants full WebGL/WebGPU coherence with the real
+    /// host should also set that surface to
+    /// [`Strategy::Native`](crate::Strategy) via
+    /// [`Persona::apply_surface_override`](crate::Persona::apply_surface_override).
+    ///
+    /// ```
+    /// use zendriver_stealth::StealthProfile;
+    /// let p = StealthProfile::spoofed().native_isolation(true);
+    /// assert!(!p.build_flags().iter().any(|f| f.contains("IsolateOrigins")));
+    /// assert!(p.native_isolation_enabled());
+    /// ```
+    #[must_use]
+    pub fn native_isolation(mut self, on: bool) -> Self {
+        self.native_isolation = on;
         self
     }
     /// Add a single extra Chrome launch flag (e.g. `"--proxy-server=..."`).
@@ -420,7 +473,7 @@ impl StealthProfile {
     /// assert!(flags.iter().any(|f| f == "--lang=fr-FR"));
     /// ```
     pub fn build_flags(&self) -> Vec<String> {
-        let mut flags = crate::flags::flags_for_profile(self.kind);
+        let mut flags = crate::flags::flags_for_profile(self.kind, self.native_isolation);
         if let Some(ref locale) = self.per_field.locale {
             flags.push(format!("--lang={locale}"));
         }
@@ -433,6 +486,13 @@ impl StealthProfile {
     /// [`bypass_csp`](Self::bypass_csp) setter toggles it explicitly.
     pub fn bypass_csp_enabled(&self) -> bool {
         self.bypass_csp
+    }
+
+    /// Whether the [`native_isolation`](Self::native_isolation) opt-in is
+    /// active for this profile. `false` unless explicitly set.
+    #[must_use]
+    pub fn native_isolation_enabled(&self) -> bool {
+        self.native_isolation
     }
 
     /// Returns the input-realism profile appropriate for this stealth profile.
@@ -493,6 +553,34 @@ mod profile_tests {
     fn spoofed_profile_default_bypass_csp_on() {
         let p = StealthProfile::spoofed();
         assert!(p.bypass_csp_enabled());
+    }
+
+    #[test]
+    fn native_isolation_off_by_default_on_every_profile() {
+        assert!(!StealthProfile::off().native_isolation_enabled());
+        assert!(!StealthProfile::native().native_isolation_enabled());
+        assert!(!StealthProfile::spoofed().native_isolation_enabled());
+    }
+
+    #[test]
+    fn native_isolation_toggle_sets_flag() {
+        let p = StealthProfile::spoofed().native_isolation(true);
+        assert!(p.native_isolation_enabled());
+    }
+
+    #[test]
+    fn native_isolation_build_flags_omit_isolate_origins() {
+        let flags = StealthProfile::native()
+            .native_isolation(true)
+            .build_flags();
+        assert!(!flags.iter().any(|f| f.contains("IsolateOrigins")));
+    }
+
+    #[test]
+    fn default_native_build_flags_still_disable_isolation_regression_guard() {
+        // Existing default (no opt-in) must be unchanged.
+        let flags = StealthProfile::native().build_flags();
+        assert!(flags.iter().any(|f| f.contains("IsolateOrigins")));
     }
 
     #[test]

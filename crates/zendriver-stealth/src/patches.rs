@@ -67,6 +67,30 @@ const MOUSE: &str = include_str!("patches/mouse.js");
 /// last), then the PRNG definition, then each persona surface.
 #[must_use]
 pub fn bootstrap_script(persona: &Persona, identity: &Fingerprint) -> String {
+    bootstrap_script_impl(persona, identity, true)
+}
+
+/// Like [`bootstrap_script`], but omits the WebGL vendor/renderer
+/// value-substitution patch (`patches/webgl.js`) entirely — the host's real
+/// `WebGLRenderingContext.getParameter`/`getSupportedExtensions` values pass
+/// through unpatched instead of the coherent ANGLE/Direct3D11 Intel identity
+/// the patch spoofs by default. Every other patch (identity IIFE, noise
+/// surfaces, WebGPU, fonts, hardware, webrtc, screen/mouse coherence) is
+/// unaffected — in particular the WebGPU coherence patch still runs with its
+/// own (persona-driven) strategy, so it is NOT automatically kept coherent
+/// with the now-unpatched real WebGL renderer; see
+/// [`StealthProfile::native_isolation`](crate::StealthProfile::native_isolation)
+/// for that caveat and the caller-facing trade-off this backs.
+#[must_use]
+pub fn bootstrap_script_native_webgl(persona: &Persona, identity: &Fingerprint) -> String {
+    bootstrap_script_impl(persona, identity, false)
+}
+
+/// Shared implementation for [`bootstrap_script`] /
+/// [`bootstrap_script_native_webgl`]. `spoof_webgl` gates only the
+/// `push_webgl` call — every other patch is identical between the two
+/// public entry points.
+fn bootstrap_script_impl(persona: &Persona, identity: &Fingerprint, spoof_webgl: bool) -> String {
     // Prelude first: installs the toString override + closure-local helpers
     // that every patch below routes through.
     let mut body = String::from(NATIVE);
@@ -111,7 +135,9 @@ pub fn bootstrap_script(persona: &Persona, identity: &Fingerprint) -> String {
         seed,
     );
 
-    push_webgl(&mut body, persona.webgl.as_ref());
+    if spoof_webgl {
+        push_webgl(&mut body, persona.webgl.as_ref());
+    }
     push_webgpu(&mut body, persona.webgpu.as_ref(), persona.webgl.as_ref());
     push_fonts(&mut body, persona.fonts.as_ref(), seed);
     push_hardware(&mut body, persona.hardware.as_ref());
@@ -564,6 +590,85 @@ mod tests {
     fn s_has_webgl_iife_null(s: &str) -> bool {
         // The appended webgl IIFE ends with its args; null both => `})(null, null);`
         s.contains("})(null, null);")
+    }
+
+    // --- opt-in native-WebGL bootstrap (Task 10) ----------------------------
+
+    #[test]
+    fn native_webgl_bootstrap_omits_webgl_patch_entirely() {
+        // Unlike `Strategy::Native` (which still keeps the hardcoded
+        // 37445/37446 fallback block, just with null persona args — see
+        // `webgl_native_passes_null_and_keeps_hardcoded_block` above), the
+        // profile-level opt-in must drop the whole webgl.js block — no
+        // getParameter/getSupportedExtensions override at all.
+        let s = bootstrap_script_native_webgl(&Persona::default(), &mock_identity());
+        assert!(
+            !s.contains("UNMASKED_VENDOR_WEBGL") && !s.contains("37445"),
+            "native-webgl bootstrap must omit the hardcoded webgl fallback block entirely, got: {s}"
+        );
+        assert!(
+            !s.contains("getSupportedExtensions"),
+            "native-webgl bootstrap must not override getSupportedExtensions"
+        );
+    }
+
+    #[test]
+    fn native_webgl_bootstrap_still_spoofs_persona_webgl_vendor_when_supplied() {
+        // Profile-level opt-in wins over ANY persona.webgl spec — even an
+        // explicit `Value` strategy with vendor/renderer set must not leak
+        // into the script when the caller asked for the real WebGL renderer.
+        let p = Persona {
+            webgl: Some(WebglSpec {
+                strategy: Some(Strategy::Value),
+                unmasked_vendor: Some("Google Inc. (NVIDIA)".into()),
+                unmasked_renderer: Some("ANGLE (NVIDIA GeForce RTX 4090)".into()),
+            }),
+            ..Persona::default()
+        };
+        let s = bootstrap_script_native_webgl(&p, &mock_identity());
+        assert!(
+            !s.contains("ANGLE (NVIDIA GeForce RTX 4090)"),
+            "native-webgl bootstrap must not substitute persona webgl values"
+        );
+        assert!(!s.contains("UNMASKED_VENDOR_WEBGL"));
+    }
+
+    #[test]
+    fn native_webgl_bootstrap_keeps_every_other_patch() {
+        // Only the webgl block is dropped — identity IIFE + other surfaces
+        // are byte-for-byte what `bootstrap_script` would emit.
+        let s = bootstrap_script_native_webgl(&Persona::default(), &mock_identity());
+        assert!(s.contains("webdriver"), "webdriver patch missing");
+        assert!(s.contains("PluginArray"), "plugins patch missing");
+        assert!(s.contains("window.chrome"), "chrome patch missing");
+        assert!(
+            s.contains("Notification.permission"),
+            "permissions patch missing"
+        );
+        assert!(s.contains("canPlayType"), "codecs patch missing");
+        assert!(
+            s.contains("hardwareConcurrency"),
+            "navigator_props patch missing"
+        );
+        assert!(s.contains("userAgentData"), "user_agent_data patch missing");
+        assert!(s.contains("naturalWidth"), "broken_image patch missing");
+        // WebGPU coherence patch is untouched by this opt-in (documented
+        // caveat) — default persona strategy (`Value`) still runs.
+        assert!(
+            s.contains("navigator, 'gpu'")
+                || s.contains("GPUAdapter")
+                || s.contains("requestAdapter"),
+            "webgpu patch should still run (not gated by native-webgl opt-in)"
+        );
+    }
+
+    #[test]
+    fn default_bootstrap_script_still_spoofs_webgl_regression_guard() {
+        // Regression guard: the existing (unmodified) public entry point's
+        // output is unaffected by adding `bootstrap_script_native_webgl`.
+        let s = bootstrap_script(&Persona::default(), &mock_identity());
+        assert!(s.contains("UNMASKED_VENDOR_WEBGL") || s.contains("37445"));
+        assert!(s.contains("getSupportedExtensions"));
     }
 
     #[test]

@@ -336,6 +336,9 @@ fn apply_overrides(mut profile: StealthProfile, overrides: &StealthOverrides) ->
     if let Some(bypass_csp) = overrides.bypass_csp {
         profile = profile.bypass_csp(bypass_csp);
     }
+    if let Some(native_isolation) = overrides.native_isolation {
+        profile = profile.native_isolation(native_isolation);
+    }
     profile
 }
 
@@ -578,6 +581,30 @@ mod tests {
             flags.iter().any(|f| f == "--lang=en-US"),
             "expected --lang=en-US in flags: {flags:?}",
         );
+    }
+
+    #[test]
+    fn native_isolation_override_wires_through_to_profile() {
+        let overrides = StealthOverrides {
+            native_isolation: Some(true),
+            ..Default::default()
+        };
+        let profile = apply_overrides(StealthProfile::spoofed(), &overrides);
+        assert!(profile.native_isolation_enabled());
+        let flags = profile.build_flags();
+        assert!(
+            !flags.iter().any(|f| f.contains("IsolateOrigins")),
+            "native_isolation override must omit the isolation-disable flag: {flags:?}"
+        );
+    }
+
+    #[test]
+    fn absent_native_isolation_override_leaves_default_profile_unchanged() {
+        let overrides = StealthOverrides::default();
+        let profile = apply_overrides(StealthProfile::spoofed(), &overrides);
+        assert!(!profile.native_isolation_enabled());
+        let flags = profile.build_flags();
+        assert!(flags.iter().any(|f| f.contains("IsolateOrigins")));
     }
 
     #[cfg(feature = "interception")]

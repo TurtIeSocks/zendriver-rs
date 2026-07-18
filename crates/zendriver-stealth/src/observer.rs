@@ -11,7 +11,7 @@
 use serde_json::json;
 use zendriver_transport::{ObserverError, PausedSession, TargetObserver};
 
-use crate::patches::bootstrap_script;
+use crate::patches::{bootstrap_script, bootstrap_script_native_webgl};
 use crate::persona::GeoPos;
 use crate::persona::specs::{ScreenSpec, UaMetadata};
 use crate::{Fingerprint, Persona, ProfileKind, StealthProfile};
@@ -67,7 +67,11 @@ impl StealthObserver {
         persona: Persona,
     ) -> Self {
         let bootstrap = if profile.kind() == ProfileKind::Spoofed {
-            bootstrap_script(&persona, &fingerprint)
+            if profile.native_isolation_enabled() {
+                bootstrap_script_native_webgl(&persona, &fingerprint)
+            } else {
+                bootstrap_script(&persona, &fingerprint)
+            }
         } else {
             String::new()
         };
@@ -300,6 +304,77 @@ mod tests {
                 assert!(
                     !al.contains(";q="),
                     "acceptLanguage must be a bare locale list (no q-weights); got: {al}"
+                );
+            }
+            mock.reply(id, json!({})).await;
+        }
+
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn native_isolation_spoofed_observer_omits_webgl_patch_in_bootstrap() {
+        // End-to-end wiring check (Task 10): a spoofed profile with the
+        // native_isolation opt-in must send a bootstrap script that omits
+        // the WebGL vendor/renderer patch, over the actual CDP payload.
+        let fp = Fingerprint {
+            platform: Platform::MacIntel,
+            chrome_major: 120,
+            chrome_full: "120.0.6099.234".into(),
+            cpu_count: 10,
+            memory_gb: 8,
+            ua_string: crate::ua::compose_ua_string(Platform::MacIntel, "120.0.6099.234"),
+            ua_metadata: crate::UserAgentMetadata::realistic(
+                Platform::MacIntel,
+                120,
+                "120.0.6099.234",
+            ),
+            timezone: None,
+            locale: None,
+            languages: None,
+            screen: None,
+        };
+        let profile = StealthProfile::spoofed().native_isolation(true);
+        let observer = std::sync::Arc::new(StealthObserver::new(profile, fp));
+
+        let (mut mock, conn) = MockConnection::pair_with_observers(vec![observer.clone()]);
+
+        mock.emit_event(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": "S1",
+                "targetInfo": {
+                    "targetId": "T1",
+                    "type": "page",
+                    "url": "about:blank",
+                    "attached": true,
+                },
+                "waitingForDebugger": true,
+            }),
+        )
+        .await;
+
+        for expected in [
+            "Page.enable",
+            "Emulation.setUserAgentOverride",
+            "Emulation.setDeviceMetricsOverride",
+            "Emulation.setFocusEmulationEnabled",
+            "Page.setBypassCSP",
+            "Page.addScriptToEvaluateOnNewDocument",
+            "Runtime.runIfWaitingForDebugger",
+        ] {
+            let id =
+                tokio::time::timeout(std::time::Duration::from_secs(2), mock.expect_cmd(expected))
+                    .await
+                    .unwrap_or_else(|_| panic!("did not see {expected} within 2s"));
+            if expected == "Page.addScriptToEvaluateOnNewDocument" {
+                let source = mock.last_sent()["params"]["source"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                assert!(
+                    !source.contains("UNMASKED_VENDOR_WEBGL") && !source.contains("37445"),
+                    "native_isolation bootstrap must omit the webgl patch block"
                 );
             }
             mock.reply(id, json!({})).await;
