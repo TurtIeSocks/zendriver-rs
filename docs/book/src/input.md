@@ -248,5 +248,5 @@ the actionability gate and the realistic-cursor path.
 
 When in doubt, stick with the realistic defaults — the per-call cost is
 small (typically 50-300 ms per click; a few ms per typed character) and
-it keeps you on the "indistinguishable from a real user" path that the
-rest of the stealth machinery is built around.
+it keeps input timing on the human-plausible path that the rest of the
+stealth machinery is built around.
