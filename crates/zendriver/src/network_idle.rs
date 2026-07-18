@@ -19,6 +19,13 @@
 //!    body finishes streaming. Treating it as terminal let `wait_for_idle`
 //!    report idle while a response body was still in flight — see this
 //!    module's `InFlightTracker::run` for the fuller rationale.
+//!
+//!    A consequence worth knowing: a request that legitimately never emits
+//!    `loadingFinished` — an EventSource/SSE stream, a chunked long-poll, a
+//!    hung request — now stays in the in-flight set until
+//!    [`IdleOptions::max_inflight_age`] evicts it, so `wait_for_idle` on such a
+//!    page waits up to that age instead of resolving at header-arrival. Lower
+//!    `max_inflight_age` if a streaming page must be considered idle sooner.
 //! 3. Notifies the [`tokio::sync::Notify`] on every membership change so
 //!    waiters can wake instantly rather than poll on a fixed interval.
 //!
