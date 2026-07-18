@@ -193,8 +193,8 @@ pub use url_matcher::UrlMatcher;
 /// Gated by the `monitor` cargo feature. Drive via [`Tab::monitor`].
 #[cfg(feature = "monitor")]
 pub use monitor::{
-    FrameDirection, MonitorBuilder, MonitoredRequest, MonitoredResponse, NetworkEvent,
-    NetworkExchange, NetworkMonitor,
+    FrameDirection, MonitorBuilder, MonitoredRequest, MonitoredResponse, NetworkDeliveryBoundary,
+    NetworkEvent, NetworkExchange, NetworkMonitor,
 };
 
 /// `expect_request` API re-exports.

@@ -44,13 +44,25 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
-use zendriver::{FrameDirection, NetworkEvent};
+use zendriver::{
+    BoundedBody, FrameDirection, NetworkDeliveryBoundary, NetworkEvent, ZendriverError,
+};
 
 use crate::errors::map_error;
 use crate::state::{MONITOR_BUFFER_CAP, MonitorBuffer, MonitorEvent, MonitorState, SessionState};
 use crate::tools::common::current_tab;
 
 // ---------- browser_monitor_start -----------------------------------------
+
+/// Default cap for `StartInput::capture_body_max_bytes`: 1 MiB. Generous
+/// enough for the overwhelming majority of API responses an agent inspects,
+/// small enough that one enormous body can't blow out an agent's context
+/// window when the event is later read back through `browser_monitor_read`.
+const DEFAULT_CAPTURE_BODY_MAX_BYTES: usize = 1024 * 1024;
+
+fn default_capture_body_max_bytes() -> usize {
+    DEFAULT_CAPTURE_BODY_MAX_BYTES
+}
 
 /// Input for `browser_monitor_start`.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -65,6 +77,15 @@ pub struct StartInput {
     /// exchange; off by default to keep the buffer light.
     #[serde(default)]
     pub capture_bodies: bool,
+    /// Maximum bytes of a response body to capture per `http` event when
+    /// `capture_bodies` is set (bounding is against the raw decoded length,
+    /// never a base64 length). A body larger than this is truncated to that
+    /// many bytes with `body_truncated: true`; `body_encoded_bytes` always
+    /// reports the full pre-truncation length. `0` means unbounded — capture
+    /// the entire body regardless of size. Ignored when `capture_bodies` is
+    /// `false`. Defaults to 1 MiB.
+    #[serde(default = "default_capture_body_max_bytes")]
+    pub capture_body_max_bytes: usize,
 }
 
 /// Output of `browser_monitor_start`.
@@ -101,6 +122,7 @@ pub async fn start(
     let buffer = Arc::new(Mutex::new(MonitorBuffer::default()));
     let cancel = CancellationToken::new();
     let capture = input.capture_bodies;
+    let max_bytes = input.capture_body_max_bytes;
 
     let task = {
         let buffer = buffer.clone();
@@ -114,7 +136,7 @@ pub async fn start(
                         // Convert (and, when capturing, fetch the body) BEFORE
                         // taking the buffer lock so the lock is never held
                         // across the `body().await` CDP round-trip.
-                        let wire = convert(ev, capture).await;
+                        let wire = convert(ev, capture, max_bytes).await;
                         let mut buf = buffer.lock().await;
                         push_capped(&mut buf, wire);
                     }
@@ -145,22 +167,25 @@ fn push_capped(buf: &mut MonitorBuffer, event: MonitorEvent) {
 
 /// Convert a lib-side [`NetworkEvent`] into the wire mirror, fetching the HTTP
 /// response body at observe-time when `capture` is set (before Chrome evicts
-/// it). A body-fetch failure degrades to a body-less event rather than an
-/// error — the exchange's metadata is still worth surfacing.
-async fn convert(ev: NetworkEvent, capture: bool) -> MonitorEvent {
+/// it), bounded at `max_bytes` via [`BoundedBody`]. A body-fetch failure sets
+/// `body_capture_error` (distinct from a genuinely empty body) rather than
+/// silently degrading to a body-less event — the exchange's metadata is still
+/// worth surfacing either way.
+async fn convert(ev: NetworkEvent, capture: bool, max_bytes: usize) -> MonitorEvent {
     match ev {
         NetworkEvent::Http(ex) => {
-            let (body, body_base64) = if capture {
-                match ex.body().await {
-                    Ok(bytes) => (
-                        Some(String::from_utf8_lossy(&bytes).into_owned()),
-                        Some(BASE64.encode(&bytes)),
-                    ),
-                    Err(_) => (None, None),
-                }
+            let captured = if capture {
+                Some(wire_body_fields(ex.body().await, max_bytes))
             } else {
-                (None, None)
+                None
             };
+            let CapturedBody {
+                body,
+                body_base64,
+                body_truncated,
+                body_encoded_bytes,
+                body_capture_error,
+            } = captured.unwrap_or_default();
             MonitorEvent::Http {
                 url: ex.request.url.clone(),
                 method: ex.request.method.clone(),
@@ -168,6 +193,9 @@ async fn convert(ev: NetworkEvent, capture: bool) -> MonitorEvent {
                 error: ex.error.clone(),
                 body,
                 body_base64,
+                body_truncated,
+                body_encoded_bytes,
+                body_capture_error,
             }
         }
         NetworkEvent::WebSocketOpen { request_id, url } => {
@@ -199,6 +227,98 @@ async fn convert(ev: NetworkEvent, capture: bool) -> MonitorEvent {
             event_name,
             event_id,
             data,
+        },
+        NetworkEvent::DeliveryBoundary(boundary) => convert_boundary(boundary),
+    }
+}
+
+/// The wire-level body fields for one `http` [`MonitorEvent`], extracted so
+/// [`wire_body_fields`] is unit-testable without a live CDP body fetch.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct CapturedBody {
+    body: Option<String>,
+    body_base64: Option<String>,
+    body_truncated: Option<bool>,
+    body_encoded_bytes: Option<u64>,
+    body_capture_error: Option<String>,
+}
+
+/// Turn a `NetworkExchange::body()` result into the wire-level body fields,
+/// bounding capture at `max_bytes` via [`BoundedBody::capture`] (`0` means
+/// unbounded — see [`BoundedBody::capture`]'s own docs).
+///
+/// Pulled out as a pure function (rather than inlined in [`convert`]) so the
+/// truncation / error wiring is unit-testable directly against a synthetic
+/// `Ok`/`Err` result, without needing a live `NetworkExchange` (whose
+/// `request_id` / `session` fields are `pub(crate)` to the `zendriver` crate
+/// and can't be constructed from here).
+fn wire_body_fields(result: Result<Vec<u8>, ZendriverError>, max_bytes: usize) -> CapturedBody {
+    match result {
+        Ok(bytes) => {
+            let bounded = BoundedBody::capture(&bytes, max_bytes);
+            CapturedBody {
+                body: Some(String::from_utf8_lossy(&bounded.bytes).into_owned()),
+                body_base64: Some(BASE64.encode(&bounded.bytes)),
+                body_truncated: Some(bounded.truncated),
+                body_encoded_bytes: Some(bounded.encoded_len),
+                body_capture_error: None,
+            }
+        }
+        Err(e) => CapturedBody {
+            body_capture_error: Some(e.to_string()),
+            ..Default::default()
+        },
+    }
+}
+
+/// Convert a lib-side [`NetworkDeliveryBoundary`] into the wire
+/// [`MonitorEvent::DeliveryBoundary`].
+fn convert_boundary(boundary: NetworkDeliveryBoundary) -> MonitorEvent {
+    match boundary {
+        NetworkDeliveryBoundary::Lagged { missed, generation } => MonitorEvent::DeliveryBoundary {
+            boundary: "lagged".to_string(),
+            generation: Some(generation),
+            missed: Some(missed),
+            previous: None,
+            url: None,
+        },
+        NetworkDeliveryBoundary::Reconnected {
+            previous,
+            generation,
+        } => MonitorEvent::DeliveryBoundary {
+            boundary: "reconnected".to_string(),
+            generation: Some(generation),
+            missed: None,
+            previous: Some(previous),
+            url: None,
+        },
+        NetworkDeliveryBoundary::Disconnected { generation } => MonitorEvent::DeliveryBoundary {
+            boundary: "disconnected".to_string(),
+            generation: Some(generation),
+            missed: None,
+            previous: None,
+            url: None,
+        },
+        NetworkDeliveryBoundary::CorrelationEvicted { url } => MonitorEvent::DeliveryBoundary {
+            boundary: "correlation_evicted".to_string(),
+            generation: None,
+            missed: None,
+            previous: None,
+            url: Some(url),
+        },
+        NetworkDeliveryBoundary::DecodeFailed => MonitorEvent::DeliveryBoundary {
+            boundary: "decode_failed".to_string(),
+            generation: None,
+            missed: None,
+            previous: None,
+            url: None,
+        },
+        NetworkDeliveryBoundary::Unknown => MonitorEvent::DeliveryBoundary {
+            boundary: "unknown".to_string(),
+            generation: None,
+            missed: None,
+            previous: None,
+            url: None,
         },
     }
 }
@@ -334,6 +454,9 @@ mod tests {
             error: None,
             body: None,
             body_base64: None,
+            body_truncated: None,
+            body_encoded_bytes: None,
+            body_capture_error: None,
         }
     }
 
@@ -429,5 +552,152 @@ mod tests {
         .await
         .expect("stop is idempotent for unknown handles");
         assert!(!out.stopped, "unknown handle reports stopped=false");
+    }
+
+    // ---------- wire_body_fields (bounded body capture) --------------------
+    //
+    // `NetworkExchange`'s `request_id` / `session` fields are `pub(crate)` to
+    // `zendriver`, so a live exchange can't be constructed from this crate —
+    // `wire_body_fields` is a pure function precisely so the truncation /
+    // error wiring is testable against a synthetic `Ok`/`Err` result instead.
+
+    #[test]
+    fn wire_body_fields_under_cap_is_not_truncated() {
+        let full = b"hello".to_vec();
+        let fields = wire_body_fields(Ok(full.clone()), 1024);
+
+        assert_eq!(fields.body.as_deref(), Some("hello"));
+        assert_eq!(fields.body_base64, Some(BASE64.encode(&full)));
+        assert_eq!(fields.body_truncated, Some(false));
+        assert_eq!(fields.body_encoded_bytes, Some(full.len() as u64));
+        assert!(fields.body_capture_error.is_none());
+    }
+
+    /// A body larger than `max_bytes` must report `body_truncated: true` and
+    /// `body_encoded_bytes` equal to the FULL pre-truncation length — not the
+    /// truncated length — so a caller can tell "captured N of M bytes".
+    #[test]
+    fn wire_body_fields_over_cap_is_truncated_and_reports_full_length() {
+        let full = vec![b'x'; 10_000];
+        let max_bytes = 100;
+        let fields = wire_body_fields(Ok(full.clone()), max_bytes);
+
+        assert_eq!(fields.body_truncated, Some(true));
+        assert_eq!(
+            fields.body_encoded_bytes,
+            Some(full.len() as u64),
+            "encoded_bytes must be the full length, not the truncated length"
+        );
+        assert_eq!(
+            fields.body.as_ref().map(String::len),
+            Some(max_bytes),
+            "the captured body prefix must be exactly max_bytes"
+        );
+        assert_eq!(
+            fields.body_base64,
+            Some(BASE64.encode(&full[..max_bytes])),
+            "body_base64 must be the base64 of the truncated prefix, not the full body"
+        );
+        assert!(fields.body_capture_error.is_none());
+    }
+
+    #[test]
+    fn wire_body_fields_zero_max_bytes_is_unbounded() {
+        // ASCII (not `0xAB`) so UTF-8-lossy decoding doesn't expand each byte
+        // into a multi-byte replacement character — `body.len()` must equal
+        // the raw byte count for this assertion to mean anything.
+        let full = vec![b'z'; 50_000];
+        let fields = wire_body_fields(Ok(full.clone()), 0);
+
+        assert_eq!(fields.body_truncated, Some(false));
+        assert_eq!(fields.body_encoded_bytes, Some(full.len() as u64));
+        assert_eq!(fields.body.as_ref().map(String::len), Some(full.len()));
+    }
+
+    /// A body-fetch failure (e.g. Chrome already evicted the response body)
+    /// must set `body_capture_error` and leave every other field `None` —
+    /// distinct from a genuinely empty body, which would set `body: Some("")`
+    /// / `body_truncated: Some(false)` instead.
+    #[test]
+    fn wire_body_fields_fetch_error_sets_capture_error_only() {
+        let err = zendriver::ZendriverError::NetworkMonitor("getResponseBody: boom".into());
+        let fields = wire_body_fields(Err(err), 1024);
+
+        assert_eq!(
+            fields.body_capture_error.as_deref(),
+            Some("network monitor: getResponseBody: boom")
+        );
+        assert!(fields.body.is_none());
+        assert!(fields.body_base64.is_none());
+        assert!(fields.body_truncated.is_none());
+        assert!(fields.body_encoded_bytes.is_none());
+    }
+
+    // ---------- convert_boundary (DeliveryBoundary wire mapping) -----------
+
+    #[test]
+    fn convert_boundary_maps_every_variant() {
+        let cases = [
+            (
+                NetworkDeliveryBoundary::Lagged {
+                    missed: 3,
+                    generation: 1,
+                },
+                "lagged",
+            ),
+            (
+                NetworkDeliveryBoundary::Reconnected {
+                    previous: 1,
+                    generation: 2,
+                },
+                "reconnected",
+            ),
+            (
+                NetworkDeliveryBoundary::Disconnected { generation: 1 },
+                "disconnected",
+            ),
+            (
+                NetworkDeliveryBoundary::CorrelationEvicted {
+                    url: "https://example.com/evicted".into(),
+                },
+                "correlation_evicted",
+            ),
+            (NetworkDeliveryBoundary::DecodeFailed, "decode_failed"),
+            (NetworkDeliveryBoundary::Unknown, "unknown"),
+        ];
+        for (boundary, expected_kind) in cases {
+            let wire = convert_boundary(boundary);
+            let MonitorEvent::DeliveryBoundary { boundary, .. } = &wire else {
+                panic!("expected MonitorEvent::DeliveryBoundary, got {wire:?}");
+            };
+            assert_eq!(boundary, expected_kind);
+        }
+    }
+
+    #[test]
+    fn convert_boundary_correlation_evicted_carries_url() {
+        let wire = convert_boundary(NetworkDeliveryBoundary::CorrelationEvicted {
+            url: "https://example.com/evicted".into(),
+        });
+        let MonitorEvent::DeliveryBoundary { url, .. } = wire else {
+            panic!("expected MonitorEvent::DeliveryBoundary");
+        };
+        assert_eq!(url.as_deref(), Some("https://example.com/evicted"));
+    }
+
+    #[test]
+    fn convert_boundary_lagged_carries_missed_and_generation() {
+        let wire = convert_boundary(NetworkDeliveryBoundary::Lagged {
+            missed: 7,
+            generation: 4,
+        });
+        let MonitorEvent::DeliveryBoundary {
+            missed, generation, ..
+        } = wire
+        else {
+            panic!("expected MonitorEvent::DeliveryBoundary");
+        };
+        assert_eq!(missed, Some(7));
+        assert_eq!(generation, Some(4));
     }
 }

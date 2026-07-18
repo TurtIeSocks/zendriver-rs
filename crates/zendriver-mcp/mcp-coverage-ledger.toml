@@ -498,45 +498,85 @@ api = "zendriver::IdleOptions::loss_policy:"
 covered = "browser_wait_for_idle.strict"
 
 # ── Task 5: BoundedBody bounded body capture ────────────────────────────────
-# Standalone primitive; deliberately NOT wired into the network monitor by
-# this task (see crates/zendriver/src/response_body.rs doc comment). Task 8
-# wires it into browser_monitor_start / browser_monitor_read and should flip
-# these entries to `covered` at that point.
+# Wired into browser_monitor_start (`capture_body_max_bytes`) /
+# browser_monitor_read (`body_truncated` / `body_encoded_bytes`) by Task 8 —
+# see crates/zendriver-mcp/src/tools/monitor.rs `wire_body_fields`.
 [[entry]]
 api = "zendriver::response_body::BoundedBody"
-excluded = "standalone bounded-capture primitive added in isolation; not yet wired to any MCP tool. Task 8 wires it into the network monitor (browser_monitor_start/browser_monitor_read) and should convert this to `covered`"
+covered = "browser_monitor_start.capture_body_max_bytes / browser_monitor_read (body_truncated, body_encoded_bytes)"
 
 [[entry]]
 api = "zendriver::response_body::BoundedBody::bytes:"
-excluded = "see zendriver::response_body::BoundedBody"
+covered = "browser_monitor_read (body / body_base64, truncated to the captured prefix)"
 
 [[entry]]
 api = "zendriver::response_body::BoundedBody::truncated:"
-excluded = "see zendriver::response_body::BoundedBody"
+covered = "browser_monitor_read.body_truncated"
 
 [[entry]]
 api = "zendriver::response_body::BoundedBody::encoded_len:"
-excluded = "see zendriver::response_body::BoundedBody"
+covered = "browser_monitor_read.body_encoded_bytes"
 
 [[entry]]
 api = "zendriver::response_body::BoundedBody::capture"
-excluded = "see zendriver::response_body::BoundedBody"
+covered = "browser_monitor_start.capture_body_max_bytes (browser_monitor_start.capture_bodies gates whether it is called)"
 
 [[entry]]
 api = "zendriver::BoundedBody"
-excluded = "see zendriver::response_body::BoundedBody"
+covered = "browser_monitor_start.capture_body_max_bytes / browser_monitor_read (body_truncated, body_encoded_bytes)"
 
 [[entry]]
 api = "zendriver::BoundedBody::bytes:"
-excluded = "see zendriver::response_body::BoundedBody"
+covered = "browser_monitor_read (body / body_base64, truncated to the captured prefix)"
 
 [[entry]]
 api = "zendriver::BoundedBody::truncated:"
-excluded = "see zendriver::response_body::BoundedBody"
+covered = "browser_monitor_read.body_truncated"
 
 [[entry]]
 api = "zendriver::BoundedBody::encoded_len:"
-excluded = "see zendriver::response_body::BoundedBody"
+covered = "browser_monitor_read.body_encoded_bytes"
+
+# ── Task 8: NetworkDeliveryBoundary loss-accounting on the network monitor ──
+# `NetworkEvent::DeliveryBoundary` replaces four previously-silent paths
+# (cross-gap stitching, correlation-cap eviction, decode failure, transport
+# disconnect) with an explicit event. Wired into browser_monitor_read as the
+# `delivery_boundary` MonitorEvent variant.
+[[entry]]
+api = "zendriver::monitor::NetworkDeliveryBoundary"
+covered = "browser_monitor_read (delivery_boundary events)"
+
+[[entry]]
+api = "zendriver::monitor::NetworkDeliveryBoundary::Lagged"
+covered = "browser_monitor_read (delivery_boundary: boundary=\"lagged\", missed, generation)"
+
+[[entry]]
+api = "zendriver::monitor::NetworkDeliveryBoundary::Reconnected"
+covered = "browser_monitor_read (delivery_boundary: boundary=\"reconnected\", previous, generation)"
+
+[[entry]]
+api = "zendriver::monitor::NetworkDeliveryBoundary::Disconnected"
+covered = "browser_monitor_read (delivery_boundary: boundary=\"disconnected\", generation)"
+
+[[entry]]
+api = "zendriver::monitor::NetworkDeliveryBoundary::CorrelationEvicted"
+covered = "browser_monitor_read (delivery_boundary: boundary=\"correlation_evicted\", url)"
+
+[[entry]]
+api = "zendriver::monitor::NetworkDeliveryBoundary::DecodeFailed"
+covered = "browser_monitor_read (delivery_boundary: boundary=\"decode_failed\")"
+
+[[entry]]
+api = "zendriver::monitor::NetworkDeliveryBoundary::Unknown"
+covered = "browser_monitor_read (delivery_boundary: boundary=\"unknown\")"
+
+[[entry]]
+api = "zendriver::NetworkDeliveryBoundary"
+covered = "browser_monitor_read (delivery_boundary events)"
+
+[[entry]]
+api = "zendriver::monitor::NetworkEvent::DeliveryBoundary"
+covered = "browser_monitor_read (delivery_boundary events)"
 
 # ── T6 Browser robustness: ready-barrier tab handoff + atomic seed ─────────
 # `resolved_persona` (already ledgered above under #24) becomes fallible;

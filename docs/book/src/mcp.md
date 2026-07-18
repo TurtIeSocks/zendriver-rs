@@ -140,6 +140,30 @@ present in the schema but only takes effect when the `geo` feature is enabled.
   bypasses proxy mirroring — only the bundled default endpoint routes through
   `proxy`.
 
+## `browser_monitor_*` options
+
+`browser_monitor_start` accepts `capture_body_max_bytes: integer` (default
+`1048576`, i.e. 1 MiB; `0` means unbounded) alongside `capture_bodies: bool` —
+it bounds how much of each HTTP response body is captured per event. A body
+over the cap is truncated to a prefix; `browser_monitor_read`'s `http` events
+report the truncation via `body_truncated: bool` and `body_encoded_bytes:
+integer` (the full pre-truncation length, regardless of how much was kept).
+A body-fetch failure (e.g. Chrome already evicted the response) sets
+`body_capture_error: string` instead of silently omitting `body` /
+`body_base64` with no explanation.
+
+`browser_monitor_read` can also return a `delivery_boundary` event: a
+lagged/reconnected/disconnected transport, a correlation-map eviction, or an
+undecodable payload on the underlying event stream, surfaced explicitly
+instead of silently dropped. Its `boundary` field is one of `"lagged"` |
+`"reconnected"` | `"disconnected"` | `"correlation_evicted"` |
+`"decode_failed"` | `"unknown"`, with `generation` / `missed` / `previous` /
+`url` populated depending on which. A `"disconnected"` boundary means the
+underlying monitor's correlator task has ended — no further events will ever
+be buffered for that handle; call `browser_monitor_start` again for a fresh
+one. See [Network monitor & HTTP](./network.md#delivery-loss-boundaries) for
+the full semantics.
+
 ## Stealth
 
 Stealth is on by default (matching the `zendriver` library). Configure

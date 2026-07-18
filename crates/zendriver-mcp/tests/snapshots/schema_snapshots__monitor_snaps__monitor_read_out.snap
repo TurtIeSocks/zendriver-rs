@@ -22,20 +22,37 @@ required:
   - dropped
 $defs:
   MonitorEvent:
-    description: "A serde + JSON-Schema mirror of `zendriver::NetworkEvent` for the MCP wire.\n\nOne variant per observed network event. HTTP bodies are captured at\nobserve-time by the drain task (before Chrome evicts them) when the monitor\nwas started with `capture_bodies` — so `body` / `body_base64` are present\nonly on `http` events from a body-capturing monitor."
+    description: "A serde + JSON-Schema mirror of `zendriver::NetworkEvent` for the MCP wire.\n\nOne variant per observed network event. HTTP bodies are captured at\nobserve-time by the drain task (before Chrome evicts them) when the monitor\nwas started with `capture_bodies` — so `body` / `body_base64` (and the\n`body_truncated` / `body_encoded_bytes` / `body_capture_error` triple) are\npresent only on `http` events from a body-capturing monitor."
     oneOf:
       - description: A completed HTTP request/response pair (or a failed request).
         type: object
         properties:
           body:
-            description: "UTF-8–lossy decode of the captured response body. Present only when\nthe monitor captured bodies and the fetch succeeded."
+            description: "UTF-8–lossy decode of the captured response body, bounded by\n`capture_body_max_bytes`. Present only when the monitor captured\nbodies and the fetch succeeded — a truncated body still decodes\n(lossily) whatever prefix was kept."
             type:
               - string
               - "null"
           body_base64:
-            description: "Base64 of the captured raw response body bytes. Present only when\nthe monitor captured bodies and the fetch succeeded."
+            description: "Base64 of the captured (possibly bounded) raw response body bytes.\nPresent only when the monitor captured bodies and the fetch\nsucceeded."
             type:
               - string
+              - "null"
+          body_capture_error:
+            description: "Set instead of `body` / `body_base64` when body capture was\nrequested (`capture_bodies: true`) but the `getResponseBody` fetch\nitself failed (e.g. Chrome already evicted the body) — distinct\nfrom a genuinely empty body, which decodes to `body: \"\"` rather\nthan setting this field."
+            type:
+              - string
+              - "null"
+          body_encoded_bytes:
+            description: "The full (pre-truncation) response body length in bytes,\nregardless of how much was kept in `body` / `body_base64`. Present\nonly alongside `body`."
+            type:
+              - integer
+              - "null"
+            format: uint64
+            minimum: 0
+          body_truncated:
+            description: "`true` if the body's full length exceeded `capture_body_max_bytes`\nand `body` / `body_base64` hold only a prefix. `false` means the\nentire body was captured. Present only alongside `body`."
+            type:
+              - boolean
               - "null"
           error:
             description: "Network-level error text, if the request failed."
@@ -142,3 +159,41 @@ $defs:
           - event_name
           - event_id
           - data
+      - description: "A delivery-loss boundary on the monitor's underlying event stream (or\nits own correlation bookkeeping) — a wire mirror of\n`zendriver::NetworkDeliveryBoundary`. Previously these losses were\nsilent; they're now explicit events on the same stream. A\n`disconnected` boundary means the underlying lib-side monitor's\ncorrelator task has ended — no further events will be buffered for\nthis handle; start a new monitor to resume."
+        type: object
+        properties:
+          boundary:
+            description: "`\"lagged\"` | `\"reconnected\"` | `\"disconnected\"` |\n`\"correlation_evicted\"` | `\"decode_failed\"` | `\"unknown\"`."
+            type: string
+          generation:
+            description: "Present for `lagged` / `reconnected` / `disconnected`: the\ntransport connection generation active when the boundary occurred."
+            type:
+              - integer
+              - "null"
+            format: uint64
+            minimum: 0
+          kind:
+            type: string
+            const: delivery_boundary
+          missed:
+            description: "Present for `lagged`: number of events this subscription missed."
+            type:
+              - integer
+              - "null"
+            format: uint64
+            minimum: 0
+          previous:
+            description: "Present for `reconnected`: generation of the connection actor that\nwas replaced."
+            type:
+              - integer
+              - "null"
+            format: uint64
+            minimum: 0
+          url:
+            description: "Present for `correlation_evicted`: URL of the evicted in-flight\nexchange."
+            type:
+              - string
+              - "null"
+        required:
+          - kind
+          - boundary

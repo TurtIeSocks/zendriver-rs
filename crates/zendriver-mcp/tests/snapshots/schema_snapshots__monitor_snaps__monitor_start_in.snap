@@ -11,6 +11,12 @@ properties:
     description: "Fetch each HTTP response body at observe-time and inline it on the\n`http` event (`body` + `body_base64`). One extra CDP round-trip per\nexchange; off by default to keep the buffer light."
     type: boolean
     default: false
+  capture_body_max_bytes:
+    description: "Maximum bytes of a response body to capture per `http` event when\n`capture_bodies` is set (bounding is against the raw decoded length,\nnever a base64 length). A body larger than this is truncated to that\nmany bytes with `body_truncated: true`; `body_encoded_bytes` always\nreports the full pre-truncation length. `0` means unbounded — capture\nthe entire body regardless of size. Ignored when `capture_bodies` is\n`false`. Defaults to 1 MiB."
+    type: integer
+    format: uint
+    default: 1048576
+    minimum: 0
   url_pattern:
     description: "Restrict buffered events to those whose URL contains this substring.\nOmit to buffer every observed event."
     type:
