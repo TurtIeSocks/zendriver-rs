@@ -14,7 +14,7 @@ properties:
     description: Effective headless flag for the launched browser.
     type: boolean
   input_profile:
-    description: "Effective input-timing profile for the launched browser (`native`\nunless `input_profile: \"coherent\"` was requested)."
+    description: "Effective input-timing profile for the launched browser — the\nresolved value, not the raw request. When `input_profile` wasn't\nset on input, this reflects what the stealth profile implied\n(`coherent` for spoofed stealth, `native` for `auto`/`native`\nstealth); when it was set, the explicit choice always wins."
     $ref: "#/$defs/InputProfileChoice"
   profile:
     description: Effective stealth profile for the launched browser.
@@ -26,7 +26,7 @@ required:
   - input_profile
 $defs:
   InputProfileChoice:
-    description: "Input-timing profile choice carried over the MCP wire.\n\nWire mirror of `zendriver::stealth::InputProfile`'s two presets.\nDecoupled from [`StealthProfileChoice`] — selecting `Native` here is\nindependent of the chosen stealth profile (an explicit choice always\nwins over anything stealth would otherwise imply); `Native` is the\ndefault whether stealth is on, off, or spoofed."
+    description: "Input-timing profile choice carried over the MCP wire.\n\nWire mirror of `zendriver::stealth::InputProfile`'s two presets.\nDecoupled from [`StealthProfileChoice`] — an explicit choice here always\nwins over anything stealth would otherwise imply. When `browser_open`'s\n`input_profile` field is left unset, the *effective* profile instead\nfollows the resolved stealth profile (spoofed stealth implies\n`Coherent`, `auto`/`native` stealth implies `Native`) — see\n`crate::tools::lifecycle::input_profile_choice_for`. This type's own\n`#[default]` (`Native`) is not consulted on that unset path; nothing in\nthis crate currently calls `InputProfileChoice::default()`."
     oneOf:
       - description: "Zero-overhead, deterministic timing (`InputProfile::native`). Default."
         type: string

@@ -36,10 +36,14 @@ pub struct OpenInput {
     #[serde(default)]
     pub stealth_profile: Option<StealthProfileChoice>,
     /// Select the input-timing profile for synthesized keyboard/mouse
-    /// events, independent of `stealth_profile`. Defaults to `native`
-    /// (zero-overhead, deterministic timing) regardless of the stealth
-    /// setting — pass `coherent` to opt into human-paced typing and jittery
-    /// mouse motion without needing to also spoof the stealth surface.
+    /// events, independent of `stealth_profile`. When unset, the default
+    /// follows the resolved stealth profile (mirrors
+    /// `BrowserBuilder::resolved_input_profile()`): a spoofed stealth
+    /// profile (`spoof_macos`/`spoof_linux`/`spoof_windows`) implies
+    /// `coherent` (human-paced typing, jittery mouse motion), while
+    /// `auto`/`native` stealth implies `native` (zero-overhead,
+    /// deterministic timing). Pass `native` or `coherent` explicitly to pin
+    /// the input timing regardless of the stealth setting.
     #[serde(default)]
     pub input_profile: Option<InputProfileChoice>,
     /// Chrome profile preferences merged into `Default/Preferences` at launch
@@ -121,8 +125,11 @@ pub struct OpenOutput {
     pub headless: bool,
     /// Effective stealth profile for the launched browser.
     pub profile: StealthProfileChoice,
-    /// Effective input-timing profile for the launched browser (`native`
-    /// unless `input_profile: "coherent"` was requested).
+    /// Effective input-timing profile for the launched browser — the
+    /// resolved value, not the raw request. When `input_profile` wasn't
+    /// set on input, this reflects what the stealth profile implied
+    /// (`coherent` for spoofed stealth, `native` for `auto`/`native`
+    /// stealth); when it was set, the explicit choice always wins.
     pub input_profile: InputProfileChoice,
 }
 
@@ -141,11 +148,10 @@ pub async fn open(
     }
     let profile = input.stealth_profile.unwrap_or(s.stealth_profile_choice);
     let stealth = apply_overrides(stealth_profile_for(profile), &s.stealth_overrides);
-    let input_profile_choice = input.input_profile.unwrap_or_default();
-    let mut builder = Browser::builder()
-        .headless(input.headless)
-        .stealth(stealth)
-        .input_profile(input_profile_for(input_profile_choice));
+    let mut builder = Browser::builder().headless(input.headless).stealth(stealth);
+    if let Some(choice) = input.input_profile {
+        builder = builder.input_profile(input_profile_for(choice));
+    }
     if let Some(prefs) = &input.preferences {
         for (k, v) in prefs {
             builder = builder.preference(k.clone(), v.clone());
@@ -205,6 +211,11 @@ pub async fn open(
             None,
         ));
     }
+    // Read the resolved input profile before `.launch()` consumes `builder`
+    // — this is the effective profile (explicit pin if set, else whatever
+    // the stealth profile implies), the single source of truth for the
+    // echoed output field below.
+    let input_profile_choice = input_profile_choice_for(&builder.resolved_input_profile());
     let browser = builder
         .launch()
         .await
@@ -248,6 +259,26 @@ fn input_profile_for(choice: InputProfileChoice) -> zendriver::stealth::InputPro
     match choice {
         InputProfileChoice::Native => zendriver::stealth::InputProfile::native(),
         InputProfileChoice::Coherent => zendriver::stealth::InputProfile::coherent(),
+    }
+}
+
+/// Map a *resolved* [`zendriver::stealth::InputProfile`] back to the
+/// wire-level [`InputProfileChoice`] for `OpenOutput.input_profile`.
+///
+/// The single source of truth for "what timing did we actually get" is
+/// `BrowserBuilder::resolved_input_profile()`, not the raw
+/// `OpenInput.input_profile` request — when the caller didn't pin a
+/// profile, the resolved value already reflects what the stealth profile
+/// implied (see that method's rustdoc). `InputProfile::coherent()` and
+/// `InputProfile::spoofed()` share the same tunables (verified via
+/// `InputProfile`'s derived `PartialEq`), so the two-variant wire enum can
+/// faithfully represent either concrete preset: anything that isn't
+/// `InputProfile::native()` maps to `Coherent`.
+fn input_profile_choice_for(resolved: &zendriver::stealth::InputProfile) -> InputProfileChoice {
+    if *resolved == zendriver::stealth::InputProfile::native() {
+        InputProfileChoice::Native
+    } else {
+        InputProfileChoice::Coherent
     }
 }
 
@@ -584,6 +615,82 @@ mod tests {
             s.rules.is_empty(),
             "rules map must be empty after close (was: {})",
             s.rules.len(),
+        );
+    }
+
+    // `open()` itself launches a real Chrome process and can't be
+    // unit-tested here. Instead these tests exercise the exact composition
+    // `open()` performs — `Browser::builder().stealth(..)` [+ optional
+    // `.input_profile(..)`] `.resolved_input_profile()` fed through
+    // `input_profile_choice_for` — without ever calling `.launch()`, which
+    // covers the regression this fix addresses: a `None` `input_profile`
+    // request must echo the stealth-derived profile, not a hardcoded
+    // `Native`.
+
+    #[test]
+    fn input_profile_choice_for_maps_concrete_profiles() {
+        use zendriver::stealth::InputProfile;
+
+        assert_eq!(
+            input_profile_choice_for(&InputProfile::native()),
+            InputProfileChoice::Native
+        );
+        assert_eq!(
+            input_profile_choice_for(&InputProfile::spoofed()),
+            InputProfileChoice::Coherent
+        );
+        assert_eq!(
+            input_profile_choice_for(&InputProfile::coherent()),
+            InputProfileChoice::Coherent
+        );
+    }
+
+    #[test]
+    fn open_path_none_input_profile_follows_spoofed_stealth() {
+        // input.input_profile: None + a spoofed stealth choice → the
+        // builder never receives an explicit `.input_profile(..)` call
+        // (mirrors `open()`'s `if let Some(choice) = ...` gate), so the
+        // resolved profile must come from the stealth profile alone.
+        let builder = Browser::builder().stealth(StealthProfile::spoofed());
+        assert_eq!(
+            input_profile_choice_for(&builder.resolved_input_profile()),
+            InputProfileChoice::Coherent,
+            "None input_profile + spoofed stealth must resolve to Coherent, not the old hardcoded Native"
+        );
+    }
+
+    #[test]
+    fn open_path_none_input_profile_follows_native_stealth() {
+        let builder = Browser::builder().stealth(StealthProfile::native());
+        assert_eq!(
+            input_profile_choice_for(&builder.resolved_input_profile()),
+            InputProfileChoice::Native,
+            "None input_profile + native stealth must resolve to Native"
+        );
+    }
+
+    #[test]
+    fn open_path_explicit_input_profile_pins_regardless_of_stealth() {
+        // input.input_profile: Some(Coherent) with native stealth — the
+        // explicit choice must win even though stealth alone would imply
+        // Native.
+        let builder = Browser::builder()
+            .stealth(StealthProfile::native())
+            .input_profile(input_profile_for(InputProfileChoice::Coherent));
+        assert_eq!(
+            input_profile_choice_for(&builder.resolved_input_profile()),
+            InputProfileChoice::Coherent,
+            "explicit Coherent pin must win over native stealth"
+        );
+
+        // And the reverse: explicit Native must win over spoofed stealth.
+        let builder = Browser::builder()
+            .stealth(StealthProfile::spoofed())
+            .input_profile(input_profile_for(InputProfileChoice::Native));
+        assert_eq!(
+            input_profile_choice_for(&builder.resolved_input_profile()),
+            InputProfileChoice::Native,
+            "explicit Native pin must win over spoofed stealth"
         );
     }
 }

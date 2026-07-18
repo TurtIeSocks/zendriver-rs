@@ -26,7 +26,7 @@ properties:
     type: boolean
     default: true
   input_profile:
-    description: "Select the input-timing profile for synthesized keyboard/mouse\nevents, independent of `stealth_profile`. Defaults to `native`\n(zero-overhead, deterministic timing) regardless of the stealth\nsetting — pass `coherent` to opt into human-paced typing and jittery\nmouse motion without needing to also spoof the stealth surface."
+    description: "Select the input-timing profile for synthesized keyboard/mouse\nevents, independent of `stealth_profile`. When unset, the default\nfollows the resolved stealth profile (mirrors\n`BrowserBuilder::resolved_input_profile()`): a spoofed stealth\nprofile (`spoof_macos`/`spoof_linux`/`spoof_windows`) implies\n`coherent` (human-paced typing, jittery mouse motion), while\n`auto`/`native` stealth implies `native` (zero-overhead,\ndeterministic timing). Pass `native` or `coherent` explicitly to pin\nthe input timing regardless of the stealth setting."
     anyOf:
       - $ref: "#/$defs/InputProfileChoice"
       - type: "null"
@@ -58,7 +58,7 @@ properties:
 additionalProperties: false
 $defs:
   InputProfileChoice:
-    description: "Input-timing profile choice carried over the MCP wire.\n\nWire mirror of `zendriver::stealth::InputProfile`'s two presets.\nDecoupled from [`StealthProfileChoice`] — selecting `Native` here is\nindependent of the chosen stealth profile (an explicit choice always\nwins over anything stealth would otherwise imply); `Native` is the\ndefault whether stealth is on, off, or spoofed."
+    description: "Input-timing profile choice carried over the MCP wire.\n\nWire mirror of `zendriver::stealth::InputProfile`'s two presets.\nDecoupled from [`StealthProfileChoice`] — an explicit choice here always\nwins over anything stealth would otherwise imply. When `browser_open`'s\n`input_profile` field is left unset, the *effective* profile instead\nfollows the resolved stealth profile (spoofed stealth implies\n`Coherent`, `auto`/`native` stealth implies `Native`) — see\n`crate::tools::lifecycle::input_profile_choice_for`. This type's own\n`#[default]` (`Native`) is not consulted on that unset path; nothing in\nthis crate currently calls `InputProfileChoice::default()`."
     oneOf:
       - description: "Zero-overhead, deterministic timing (`InputProfile::native`). Default."
         type: string

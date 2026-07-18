@@ -116,10 +116,14 @@ pub struct StealthOverrides {
 /// Input-timing profile choice carried over the MCP wire.
 ///
 /// Wire mirror of `zendriver::stealth::InputProfile`'s two presets.
-/// Decoupled from [`StealthProfileChoice`] — selecting `Native` here is
-/// independent of the chosen stealth profile (an explicit choice always
-/// wins over anything stealth would otherwise imply); `Native` is the
-/// default whether stealth is on, off, or spoofed.
+/// Decoupled from [`StealthProfileChoice`] — an explicit choice here always
+/// wins over anything stealth would otherwise imply. When `browser_open`'s
+/// `input_profile` field is left unset, the *effective* profile instead
+/// follows the resolved stealth profile (spoofed stealth implies
+/// `Coherent`, `auto`/`native` stealth implies `Native`) — see
+/// `crate::tools::lifecycle::input_profile_choice_for`. This type's own
+/// `#[default]` (`Native`) is not consulted on that unset path; nothing in
+/// this crate currently calls `InputProfileChoice::default()`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum InputProfileChoice {
