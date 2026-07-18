@@ -82,6 +82,12 @@ where
                         None
                     }
                 }
+                // coverage: `Reconnected` shares this arm with `Lagged` /
+                // `Disconnected`. Each boundary has its own end-to-end test
+                // (`expect_response_returns_event_stream_incomplete_on_{reconnect,disconnect}`,
+                // plus the `Lagged` capacity harness) — if this arm is ever
+                // split (e.g. reconnect-specific retry semantics), keep those
+                // per-boundary tests so coverage doesn't silently regress.
                 AccountedRawEvent::Lagged { .. }
                 | AccountedRawEvent::Reconnected { .. }
                 | AccountedRawEvent::Disconnected { .. } => {

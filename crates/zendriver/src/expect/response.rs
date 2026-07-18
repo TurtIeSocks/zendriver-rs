@@ -426,6 +426,34 @@ mod tests {
         conn.shutdown();
     }
 
+    /// Register an expectation, then simulate a transport *reconnect*
+    /// (`AccountedRawEvent::Reconnected`, via `MockConnection::reconnect`)
+    /// before any matching response arrives. Like the disconnect case, the
+    /// wait must resolve with `EventStreamIncomplete`, not `Timeout` — a
+    /// reconnect resets the event stream, so any awaited event that would have
+    /// arrived on the old socket can no longer be proven absent. This gives
+    /// the `Reconnected` boundary its own end-to-end coverage at the `expect`
+    /// layer, independent of the shared `Lagged`/`Disconnected` match arm.
+    #[tokio::test]
+    async fn expect_response_returns_event_stream_incomplete_on_reconnect() {
+        let (mut mock, conn) = MockConnection::pair();
+        let session = SessionHandle::new(conn.clone(), "S1");
+
+        let expectation = register(&session, UrlMatcher::from("/api/"));
+
+        mock.reconnect(&conn);
+
+        let res = tokio::time::timeout(Duration::from_secs(2), expectation)
+            .await
+            .expect("expectation did not resolve within 2s after reconnect");
+        assert!(
+            matches!(res, Err(ZendriverError::EventStreamIncomplete)),
+            "expected EventStreamIncomplete after transport reconnect, got {res:?}",
+        );
+
+        conn.shutdown();
+    }
+
     /// Call `MatchedResponse::body()`, assert the outgoing CDP request is
     /// `Network.getResponseBody { requestId }`, reply with a base64-encoded
     /// payload, and assert the helper returns the decoded bytes.

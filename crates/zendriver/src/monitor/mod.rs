@@ -693,6 +693,11 @@ async fn run_monitor(
                             return;
                         }
                     }
+                    // coverage: exercised end-to-end by
+                    // `reconnected_mid_exchange_clears_partial_and_emits_boundary`
+                    // (its own arm, structurally mirroring `Lagged` above) —
+                    // keep that test if this arm's handling ever diverges from
+                    // `Lagged` (e.g. reconnect-specific resume semantics).
                     AccountedRawEvent::Reconnected { previous, generation } => {
                         partial.clear();
                         urls.clear();
@@ -1188,6 +1193,58 @@ mod tests {
         mock.emit_event_for_session(
             "Network.loadingFinished",
             json!({ "requestId": "mid1" }),
+            SID,
+        )
+        .await;
+        assert_no_event(&mut monitor).await;
+
+        monitor.stop();
+        conn.shutdown();
+    }
+
+    /// A `Reconnected` boundary mid-exchange must clear correlation state (so
+    /// no exchange is stitched across the socket swap) and surface an explicit
+    /// `DeliveryBoundary::Reconnected`. Gives the `Reconnected` arm its own
+    /// end-to-end coverage, distinct from the structurally-identical `Lagged`
+    /// arm it mirrors.
+    #[tokio::test]
+    async fn reconnected_mid_exchange_clears_partial_and_emits_boundary() {
+        let (mut monitor, mut mock, conn) = spawn_monitor(None).await;
+
+        // Start (but never finish) an exchange, and give the correlator a
+        // chance to correlate it before the reconnect — so this distinguishes
+        // "cleared by the Reconnected handler" from "never inserted".
+        mock.emit_event_for_session(
+            "Network.requestWillBeSent",
+            json!({
+                "requestId": "recon1",
+                "request": { "url": "https://example.com/recon", "method": "GET" }
+            }),
+            SID,
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Swap onto a fresh socket: bumps generation 1 -> 2, emits Reconnected.
+        mock.reconnect(&conn);
+
+        match next_event(&mut monitor).await {
+            NetworkEvent::DeliveryBoundary(NetworkDeliveryBoundary::Reconnected {
+                previous,
+                generation,
+            }) => {
+                assert_eq!(previous, 1);
+                assert_eq!(generation, 2);
+            }
+            other => panic!("expected DeliveryBoundary::Reconnected, got {other:?}"),
+        }
+
+        // The matching `loadingFinished` for the pre-reconnect request (emitted
+        // over the new socket) must NOT stitch into a bogus "complete"
+        // exchange — the partial entry was cleared on the boundary.
+        mock.emit_event_for_session(
+            "Network.loadingFinished",
+            json!({ "requestId": "recon1" }),
             SID,
         )
         .await;
