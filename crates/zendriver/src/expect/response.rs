@@ -161,7 +161,7 @@ impl MatchedResponse {
 /// Playwright-style fluent API.
 #[derive(Debug)]
 pub struct ResponseExpectation {
-    rx: oneshot::Receiver<MatchedResponse>,
+    rx: oneshot::Receiver<Result<MatchedResponse>>,
     timeout: Duration,
     sleep: Option<Pin<Box<Sleep>>>,
 }
@@ -215,11 +215,19 @@ impl Future for ResponseExpectation {
         // Poll the oneshot first — if the subscriber already sent, return
         // without ever arming the sleep timer.
         match Pin::new(&mut self.rx).poll(cx) {
-            Poll::Ready(Ok(resp)) => return Poll::Ready(Ok(resp)),
+            Poll::Ready(Ok(Ok(resp))) => return Poll::Ready(Ok(resp)),
+            // Subscriber observed a delivery-loss boundary (disconnect,
+            // reconnect, lag, or a same-method decode failure) before a
+            // matching response arrived — see `crate::expect::watch`. We
+            // can no longer prove the response didn't arrive just before
+            // the boundary, so reporting a plain timeout would be a lie.
+            Poll::Ready(Ok(Err(e))) => return Poll::Ready(Err(e)),
             Poll::Ready(Err(_)) => {
-                // Sender dropped without sending — subscriber task exited
-                // (transport closed). Surface as timeout: same observable
-                // shape (no event arrived), avoids inventing a new error.
+                // Sender dropped without sending anything — the accounted
+                // stream itself ended (e.g. a clean `Connection::shutdown`,
+                // which never emits a `Disconnected` boundary) with no
+                // boundary and no match observed. Surface as timeout: same
+                // observable shape as a genuine no-show.
                 return Poll::Ready(Err(ZendriverError::Timeout(self.timeout)));
             }
             Poll::Pending => {}
@@ -264,23 +272,34 @@ struct ResponsePayload {
 /// a trigger action cannot slip past us.
 pub(crate) fn register(session: &SessionHandle, matcher: UrlMatcher) -> ResponseExpectation {
     let (tx, rx) = oneshot::channel();
-    let mut stream = session.subscribe::<ResponseReceivedEvent>("Network.responseReceived");
+    let mut stream =
+        crate::expect::watch::<ResponseReceivedEvent>(session, "Network.responseReceived");
     let session_for_match = session.clone();
     tokio::spawn(async move {
-        while let Some(ev) = stream.next().await {
-            if matcher.matches(&ev.response.url) {
-                let matched = MatchedResponse {
-                    url: ev.response.url,
-                    status: ev.response.status,
-                    status_text: ev.response.status_text,
-                    headers: ev.response.headers,
-                    request_id: ev.request_id,
-                    session: session_for_match,
-                };
-                // Send is fallible only if the receiver was dropped; in
-                // that case the caller no longer cares and we just exit.
-                let _ = tx.send(matched);
-                return;
+        while let Some(res) = stream.next().await {
+            match res {
+                Ok(ev) => {
+                    if matcher.matches(&ev.response.url) {
+                        let matched = MatchedResponse {
+                            url: ev.response.url,
+                            status: ev.response.status,
+                            status_text: ev.response.status_text,
+                            headers: ev.response.headers,
+                            request_id: ev.request_id,
+                            session: session_for_match,
+                        };
+                        // Send is fallible only if the receiver was
+                        // dropped; in that case the caller no longer
+                        // cares and we just exit.
+                        let _ = tx.send(Ok(matched));
+                        return;
+                    }
+                    // Non-matching response — keep waiting.
+                }
+                Err(e) => {
+                    let _ = tx.send(Err(e));
+                    return;
+                }
             }
         }
     });
@@ -355,6 +374,53 @@ mod tests {
         assert_eq!(
             matched.headers.get("content-type").map(String::as_str),
             Some("application/json"),
+        );
+
+        conn.shutdown();
+    }
+
+    /// Register an expectation with a 50ms timeout, emit no events, and
+    /// assert a genuine no-show still returns `ZendriverError::Timeout` —
+    /// the teardown fix must not change this path.
+    #[tokio::test]
+    async fn expect_response_times_out() {
+        let (_mock, conn) = MockConnection::pair();
+        let session = SessionHandle::new(conn.clone(), "S1");
+
+        let expectation =
+            register(&session, UrlMatcher::from("/api/")).timeout(Duration::from_millis(50));
+
+        let res = expectation.await;
+        match res {
+            Err(ZendriverError::Timeout(d)) => {
+                assert_eq!(d, Duration::from_millis(50));
+            }
+            other => panic!("expected Timeout(50ms), got {other:?}"),
+        }
+
+        conn.shutdown();
+    }
+
+    /// Register an expectation, then simulate a transport teardown
+    /// (`AccountedRawEvent::Disconnected`, via `MockConnection::disconnect`)
+    /// before any matching response arrives. The wait must resolve with
+    /// `EventStreamIncomplete`, not `Timeout` — we lost the ability to
+    /// observe the event, we didn't observe its genuine absence.
+    #[tokio::test]
+    async fn expect_response_returns_event_stream_incomplete_on_disconnect() {
+        let (mock, conn) = MockConnection::pair();
+        let session = SessionHandle::new(conn.clone(), "S1");
+
+        let expectation = register(&session, UrlMatcher::from("/api/"));
+
+        mock.disconnect();
+
+        let res = tokio::time::timeout(Duration::from_secs(2), expectation)
+            .await
+            .expect("expectation did not resolve within 2s after disconnect");
+        assert!(
+            matches!(res, Err(ZendriverError::EventStreamIncomplete)),
+            "expected EventStreamIncomplete after transport teardown, got {res:?}",
         );
 
         conn.shutdown();

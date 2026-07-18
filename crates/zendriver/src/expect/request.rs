@@ -57,7 +57,7 @@ pub struct MatchedRequest {
 /// Playwright-style fluent API.
 #[derive(Debug)]
 pub struct RequestExpectation {
-    rx: oneshot::Receiver<MatchedRequest>,
+    rx: oneshot::Receiver<Result<MatchedRequest>>,
     timeout: Duration,
     sleep: Option<Pin<Box<Sleep>>>,
 }
@@ -112,11 +112,19 @@ impl Future for RequestExpectation {
         // Poll the oneshot first — if the subscriber already sent, return
         // without ever arming the sleep timer.
         match Pin::new(&mut self.rx).poll(cx) {
-            Poll::Ready(Ok(req)) => return Poll::Ready(Ok(req)),
+            Poll::Ready(Ok(Ok(req))) => return Poll::Ready(Ok(req)),
+            // Subscriber observed a delivery-loss boundary (disconnect,
+            // reconnect, lag, or a same-method decode failure) before a
+            // matching request arrived — see `crate::expect::watch`. We can
+            // no longer prove the request didn't fire just before the
+            // boundary, so reporting a plain timeout would be a lie.
+            Poll::Ready(Ok(Err(e))) => return Poll::Ready(Err(e)),
             Poll::Ready(Err(_)) => {
-                // Sender dropped without sending — subscriber task exited
-                // (transport closed). Surface as timeout: same observable
-                // shape (no event arrived), avoids inventing a new error.
+                // Sender dropped without sending anything — the accounted
+                // stream itself ended (e.g. a clean `Connection::shutdown`,
+                // which never emits a `Disconnected` boundary) with no
+                // boundary and no match observed. Surface as timeout: same
+                // observable shape as a genuine no-show.
                 return Poll::Ready(Err(ZendriverError::Timeout(self.timeout)));
             }
             Poll::Pending => {}
@@ -161,21 +169,32 @@ struct RequestPayload {
 /// immediately after a trigger action cannot slip past us.
 pub(crate) fn register(session: &SessionHandle, matcher: UrlMatcher) -> RequestExpectation {
     let (tx, rx) = oneshot::channel();
-    let mut stream = session.subscribe::<RequestWillBeSentEvent>("Network.requestWillBeSent");
+    let mut stream =
+        crate::expect::watch::<RequestWillBeSentEvent>(session, "Network.requestWillBeSent");
     tokio::spawn(async move {
-        while let Some(ev) = stream.next().await {
-            if matcher.matches(&ev.request.url) {
-                let matched = MatchedRequest {
-                    url: ev.request.url,
-                    method: ev.request.method,
-                    headers: ev.request.headers,
-                    post_data: ev.request.post_data.map(String::into_bytes),
-                    request_id: ev.request_id,
-                };
-                // Send is fallible only if the receiver was dropped; in
-                // that case the caller no longer cares and we just exit.
-                let _ = tx.send(matched);
-                return;
+        while let Some(res) = stream.next().await {
+            match res {
+                Ok(ev) => {
+                    if matcher.matches(&ev.request.url) {
+                        let matched = MatchedRequest {
+                            url: ev.request.url,
+                            method: ev.request.method,
+                            headers: ev.request.headers,
+                            post_data: ev.request.post_data.map(String::into_bytes),
+                            request_id: ev.request_id,
+                        };
+                        // Send is fallible only if the receiver was
+                        // dropped; in that case the caller no longer
+                        // cares and we just exit.
+                        let _ = tx.send(Ok(matched));
+                        return;
+                    }
+                    // Non-matching request — keep waiting.
+                }
+                Err(e) => {
+                    let _ = tx.send(Err(e));
+                    return;
+                }
             }
         }
     });
@@ -275,6 +294,62 @@ mod tests {
             }
             other => panic!("expected Timeout(50ms), got {other:?}"),
         }
+
+        conn.shutdown();
+    }
+
+    /// Register an expectation, then simulate a transport teardown
+    /// (`AccountedRawEvent::Disconnected`, via `MockConnection::disconnect`)
+    /// before any matching request arrives. The wait must resolve with
+    /// `EventStreamIncomplete`, not `Timeout` — we lost the ability to
+    /// observe the event, we didn't observe its genuine absence.
+    #[tokio::test]
+    async fn expect_request_returns_event_stream_incomplete_on_disconnect() {
+        let (mock, conn) = MockConnection::pair();
+        let session = SessionHandle::new(conn.clone(), "S1");
+
+        let expectation = register(&session, UrlMatcher::from("/api/"));
+
+        mock.disconnect();
+
+        let res = tokio::time::timeout(Duration::from_secs(2), expectation)
+            .await
+            .expect("expectation did not resolve within 2s after disconnect");
+        assert!(
+            matches!(res, Err(ZendriverError::EventStreamIncomplete)),
+            "expected EventStreamIncomplete after transport teardown, got {res:?}",
+        );
+
+        conn.shutdown();
+    }
+
+    /// Sibling of the disconnect test above, forcing a `Lagged` boundary
+    /// instead: `MockConnection::pair_with_accounted_capacity(2)` gives the
+    /// accounted bus a 2-slot capacity, so pushing 5 unrelated events
+    /// overflows it and the next accounted poll reports `Lagged`. Per the
+    /// documented policy on [`crate::expect::watch`], `Lagged` can't prove
+    /// the awaited request wasn't among the dropped frames, so it also
+    /// surfaces as `EventStreamIncomplete` rather than `Timeout`.
+    #[tokio::test]
+    async fn expect_request_returns_event_stream_incomplete_on_lagged_boundary() {
+        let (mock, conn) = MockConnection::pair_with_accounted_capacity(2);
+        let session = SessionHandle::new(conn.clone(), "S1");
+
+        let expectation = register(&session, UrlMatcher::from("/api/"));
+
+        // Overflow the 2-slot accounted bus with unrelated events before the
+        // expectation's subscriber ever gets to poll it.
+        for i in 0..5u32 {
+            mock.emit_event("Test.dummy", json!({ "i": i })).await;
+        }
+
+        let res = tokio::time::timeout(Duration::from_secs(2), expectation)
+            .await
+            .expect("expectation did not resolve within 2s after the lag");
+        assert!(
+            matches!(res, Err(ZendriverError::EventStreamIncomplete)),
+            "expected EventStreamIncomplete after a Lagged boundary, got {res:?}",
+        );
 
         conn.shutdown();
     }

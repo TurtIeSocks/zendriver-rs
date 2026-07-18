@@ -345,7 +345,7 @@ impl MatchedDownload {
 /// Playwright-style fluent API.
 #[derive(Debug)]
 pub struct DownloadExpectation {
-    rx: oneshot::Receiver<MatchedDownload>,
+    rx: oneshot::Receiver<Result<MatchedDownload>>,
     timeout: Duration,
     sleep: Option<Pin<Box<Sleep>>>,
 }
@@ -399,11 +399,19 @@ impl Future for DownloadExpectation {
         // Poll the oneshot first — if the subscriber already sent, return
         // without ever arming the sleep timer.
         match Pin::new(&mut self.rx).poll(cx) {
-            Poll::Ready(Ok(d)) => return Poll::Ready(Ok(d)),
+            Poll::Ready(Ok(Ok(d))) => return Poll::Ready(Ok(d)),
+            // Subscriber observed a delivery-loss boundary (disconnect,
+            // reconnect, lag, or a same-method decode failure) before a
+            // download began — see `crate::expect::watch`. We can no
+            // longer prove a download didn't begin just before the
+            // boundary, so reporting a plain timeout would be a lie.
+            Poll::Ready(Ok(Err(e))) => return Poll::Ready(Err(e)),
             Poll::Ready(Err(_)) => {
-                // Sender dropped without sending — subscriber task exited
-                // (transport closed). Surface as timeout: same observable
-                // shape (no event arrived), avoids inventing a new error.
+                // Sender dropped without sending anything — the accounted
+                // stream itself ended (e.g. a clean `Connection::shutdown`,
+                // which never emits a `Disconnected` boundary) with no
+                // boundary and no match observed. Surface as timeout: same
+                // observable shape as a genuine no-show.
                 return Poll::Ready(Err(ZendriverError::Timeout(self.timeout)));
             }
             Poll::Pending => {}
@@ -454,34 +462,41 @@ pub(crate) fn register(
     coordinator: Arc<DownloadCoordinator>,
 ) -> DownloadExpectation {
     let (tx, rx) = oneshot::channel();
-    let mut stream = session.subscribe::<DownloadWillBeginEvent>("Page.downloadWillBegin");
+    let mut stream =
+        crate::expect::watch::<DownloadWillBeginEvent>(session, "Page.downloadWillBegin");
     let session_for_match = session.clone();
     tokio::spawn(async move {
-        if let Some(ev) = stream.next().await {
-            // Register the per-download state cell BEFORE handing off the
-            // MatchedDownload. The progress subscriber walks this map on
-            // every Page.downloadProgress event; missing the registration
-            // would drop progress for races where progress fires before
-            // the caller awaits the expectation.
-            let state: SharedDownloadState =
-                Arc::new(tokio::sync::Mutex::new(DownloadState::default()));
-            coordinator
-                .states
-                .lock()
-                .await
-                .insert(ev.guid.clone(), state.clone());
+        if let Some(res) = stream.next().await {
+            let outcome = match res {
+                Ok(ev) => {
+                    // Register the per-download state cell BEFORE handing
+                    // off the MatchedDownload. The progress subscriber
+                    // walks this map on every Page.downloadProgress event;
+                    // missing the registration would drop progress for
+                    // races where progress fires before the caller awaits
+                    // the expectation.
+                    let state: SharedDownloadState =
+                        Arc::new(tokio::sync::Mutex::new(DownloadState::default()));
+                    coordinator
+                        .states
+                        .lock()
+                        .await
+                        .insert(ev.guid.clone(), state.clone());
 
-            let matched = MatchedDownload {
-                url: ev.url,
-                suggested_filename: ev.suggested_filename,
-                guid: ev.guid,
-                state,
-                session: session_for_match,
-                download_dir: coordinator.download_dir().clone(),
+                    Ok(MatchedDownload {
+                        url: ev.url,
+                        suggested_filename: ev.suggested_filename,
+                        guid: ev.guid,
+                        state,
+                        session: session_for_match,
+                        download_dir: coordinator.download_dir().clone(),
+                    })
+                }
+                Err(e) => Err(e),
             };
             // Send is fallible only if the receiver was dropped; in that
             // case the caller no longer cares and we just exit.
-            let _ = tx.send(matched);
+            let _ = tx.send(outcome);
         }
     });
     DownloadExpectation {
@@ -554,6 +569,67 @@ mod tests {
         assert!(
             matched.path().await.is_none(),
             "path() must be None until state == Completed",
+        );
+
+        conn.shutdown();
+    }
+
+    /// Register an expectation with a short timeout, emit no
+    /// `Page.downloadWillBegin` and no teardown, and assert a genuine
+    /// no-show still returns `ZendriverError::Timeout` — the teardown fix
+    /// must not change this path.
+    #[tokio::test]
+    async fn expect_download_times_out() {
+        let (_mock, conn) = MockConnection::pair();
+        let session = SessionHandle::new(conn.clone(), "S1");
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let coord = Arc::new(DownloadCoordinator {
+            _tempdir: tempdir,
+            download_dir: PathBuf::new(),
+            states: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        });
+
+        let expectation = register(&session, coord).timeout(Duration::from_millis(50));
+
+        let res = expectation.await;
+        match res {
+            Err(ZendriverError::Timeout(d)) => {
+                assert_eq!(d, Duration::from_millis(50));
+            }
+            other => panic!("expected Timeout(50ms), got {other:?}"),
+        }
+
+        conn.shutdown();
+    }
+
+    /// Register an expectation, then simulate a transport teardown
+    /// (`AccountedRawEvent::Disconnected`, via `MockConnection::disconnect`)
+    /// before any download begins. The wait must resolve with
+    /// `EventStreamIncomplete`, not `Timeout` — we lost the ability to
+    /// observe the event, we didn't observe its genuine absence.
+    #[tokio::test]
+    async fn expect_download_returns_event_stream_incomplete_on_disconnect() {
+        let (mock, conn) = MockConnection::pair();
+        let session = SessionHandle::new(conn.clone(), "S1");
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let coord = Arc::new(DownloadCoordinator {
+            _tempdir: tempdir,
+            download_dir: PathBuf::new(),
+            states: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        });
+
+        let expectation = register(&session, coord);
+
+        mock.disconnect();
+
+        let res = tokio::time::timeout(Duration::from_secs(2), expectation)
+            .await
+            .expect("expectation did not resolve within 2s after disconnect");
+        assert!(
+            matches!(res, Err(ZendriverError::EventStreamIncomplete)),
+            "expected EventStreamIncomplete after transport teardown, got {res:?}",
         );
 
         conn.shutdown();
