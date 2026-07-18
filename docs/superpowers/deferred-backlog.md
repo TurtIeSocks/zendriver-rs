@@ -37,9 +37,9 @@ Legend: ⏸ parked (blocked on an external decision, not a bug) · 🐞 shipped-
 - **`geo_auto` exact timezone from ip-api's `timezone` field** — *resolved, see §-closed*.
 
 ### Network / cookies / tabs / frames
-- **Transparent handle-preserving reconnect** (session-id remap so live `Tab` handles survive) + feature re-arm. `reconnect` clears the tab map (new sessionIds → invalidated handles). — `crates/zendriver/src/browser.rs:3479` (doc `:3436-3438`)
+- **Transparent handle-preserving reconnect** (session-id remap so live `Tab` handles survive) + feature re-arm. `reconnect` clears the tab map (new sessionIds → invalidated handles). — `crates/zendriver/src/browser.rs:3479` (doc `:3436-3438`). *Update (PR #89): reconnection is now **observable** — the event stream surfaces a `"reconnected"` delivery boundary + connection generation — so the invalidation is no longer silent. The handle-preservation itself is still open (handles still die on reconnect).*
 - **`partition_key` as a structured object** — *resolved, see §-closed*.
-- **Streaming response bodies** (monitor + HTTP `request()`); whole-body only, needs a Fetch-interception path. — `crates/zendriver/src/monitor/mod.rs:188`, `request.rs:346-380`
+- **Streaming response bodies** (monitor + HTTP `request()`); true chunked streaming still needs a Fetch-interception path. — `crates/zendriver/src/monitor/mod.rs:188`, `request.rs:346-380`. *Update (PR #89): the *unbounded-memory* half is handled — `BoundedBody` + the monitor's `capture_body_max_bytes` (MCP: `body_truncated` / `body_full_bytes`) now cap whole-body capture. What remains is genuine chunked/streaming delivery, not just bounding.*
 - **Frame OOPIF placeholder** — *resolved, see §-closed* (backlog previously mis-cited a test fixture).
 - **Frame-scoped `.text()`/`.xpath()`/`.text_regex()` selectors ignoring CDP `contextId`** — *resolved, see §-closed*.
 - **Cross-frame result ordering is non-deterministic** — *resolved, see §-closed*.
