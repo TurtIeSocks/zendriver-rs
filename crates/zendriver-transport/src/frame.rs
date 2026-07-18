@@ -100,10 +100,14 @@ pub enum AccountedRawEvent {
         /// Generation this event belongs to.
         generation: u64,
         /// Monotonic, per-generation position of this event, starting at 1.
-        /// A gap between two observed `sequence` values is exactly the
-        /// `missed` count reported by an intervening
+        /// Within a single generation, a gap between two observed `sequence`
+        /// values equals the `missed` count of an intervening
         /// [`AccountedRawEvent::Lagged`] — `sequence` resumes after a loss
-        /// rather than resetting.
+        /// rather than resetting. Do NOT compare `sequence` across a
+        /// [`AccountedRawEvent::Reconnected`]: the counter restarts at 1 for
+        /// the new generation, and a `Lagged`'s `missed` may also count the
+        /// non-sequenced `Reconnected`/`Disconnected` markers, so only
+        /// same-`generation` values are comparable.
         sequence: u64,
         /// The underlying raw CDP event.
         event: RawEvent,
