@@ -1592,9 +1592,11 @@ pub(crate) struct BrowserInner {
     /// the transport, and no `Child` is held so `kill_on_drop` never fires).
     pub(crate) owns_process: bool,
     /// Cached [`InputProfile`], resolved via
-    /// [`BrowserBuilder::resolved_input_profile`] — independent of the
-    /// active `StealthProfile`; `InputProfile::native` unless the caller
-    /// opted in via `BrowserBuilder::input_profile`. `Browser::new_tab` and
+    /// [`BrowserBuilder::resolved_input_profile`]. When the caller does not
+    /// call [`BrowserBuilder::input_profile`], this follows the timing implied
+    /// by the active `StealthProfile` (`Spoofed` → humanized `spoofed()`,
+    /// `Native`/`Off` → `native()`); an explicit `input_profile(..)` decouples
+    /// input timing from the stealth selection. `Browser::new_tab` and
     /// the [`TabRegistrar`] observer read this to build a fresh per-Tab
     /// [`InputController`] for each new tab without re-resolving the
     /// profile.
@@ -2889,12 +2891,13 @@ impl BrowserBuilder {
         // `BrowserInner` below so the extracted dirs outlive Chrome.
         let extension_dirs = resolve_extension_dirs(&mut self.extensions).await?;
 
-        // 2. Resolve the per-tab InputProfile. Decoupled from the active
-        // `StealthProfile` (see `resolved_input_profile`): defaults to
-        // zero-overhead `native` unless the caller opted in explicitly via
-        // `.input_profile(..)`. Cached on `BrowserInner` so `Browser::new_tab`
-        // + the `TabRegistrar` observer can build fresh per-Tab controllers
-        // without re-resolving the profile each time.
+        // 2. Resolve the per-tab InputProfile. When `.input_profile(..)` was
+        // not called this follows the active `StealthProfile`'s timing
+        // (`Spoofed` → humanized `spoofed()`, `Native`/`Off` → `native()`); an
+        // explicit `.input_profile(..)` decouples input timing from the stealth
+        // selection (see `resolved_input_profile`). Cached on `BrowserInner` so
+        // `Browser::new_tab` + the `TabRegistrar` observer can build fresh
+        // per-Tab controllers without re-resolving the profile each time.
         let input_profile = self.resolved_input_profile();
 
         // 3. Build the `TabRegistrar` observer. Holds a `OnceLock` for the
