@@ -14,7 +14,7 @@
 
 mod events;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -469,6 +469,12 @@ async fn run_monitor(
     // requestId → url, kept so frame/close/SSE events (which omit the URL) can
     // still be matched against `filter`.
     let mut urls: HashMap<String, String> = HashMap::new();
+    // Insertion order of tracked requestIds, so an over-cap eviction drops the
+    // OLDEST tracked request (the one most likely abandoned) rather than a
+    // hash-arbitrary one. Holds lazy tombstones for ids already removed by
+    // normal completion; compacted when it drifts past the live cap so it
+    // can't grow without bound on a long-lived page.
+    let mut order: VecDeque<String> = VecDeque::new();
 
     // Fire-and-forget `Network.enable` so the monitor works on its own even if
     // nothing else enabled the domain. We don't await the reply: the mock test
@@ -503,8 +509,9 @@ async fn run_monitor(
                                     continue;
                                 };
                                 urls.insert(p.request_id.clone(), p.request.url.clone());
+                                track_order(&mut order, &urls, p.request_id.clone());
                                 if urls.len() > MAX_TRACKED {
-                                    let evicted = evict_one(&mut urls, &mut partial);
+                                    let evicted = evict_oldest(&mut urls, &mut partial, &mut order);
                                     if let Some(url) = evicted {
                                         if emit_boundary(&tx, NetworkDeliveryBoundary::CorrelationEvicted { url })
                                             .await
@@ -591,8 +598,9 @@ async fn run_monitor(
                                     continue;
                                 };
                                 urls.insert(p.request_id.clone(), p.url.clone());
+                                track_order(&mut order, &urls, p.request_id.clone());
                                 if urls.len() > MAX_TRACKED {
-                                    let evicted = evict_one(&mut urls, &mut partial);
+                                    let evicted = evict_oldest(&mut urls, &mut partial, &mut order);
                                     if let Some(url) = evicted {
                                         if emit_boundary(&tx, NetworkDeliveryBoundary::CorrelationEvicted { url })
                                             .await
@@ -763,34 +771,49 @@ fn filter_allows(filter: Option<&UrlMatcher>, url: Option<&str>) -> bool {
     }
 }
 
-/// Evict one entry from the correlation maps once they exceed [`MAX_TRACKED`].
-/// Bounds memory against a pathological page that opens requests it never
-/// finishes. Returns the evicted entry's URL so the caller can emit
-/// [`NetworkDeliveryBoundary::CorrelationEvicted`] — this eviction used to be
-/// silent (a `tracing` warning only); it no longer is.
+/// Record a newly-inserted `requestId` in insertion order for FIFO eviction.
 ///
-/// The victim is an arbitrary key (`HashMap` has no insertion order, so this
-/// is not strictly the oldest entry). Preferring a `partial` key when one
-/// exists keeps stuck HTTP exchanges — the dominant leak source — from
-/// accumulating, and removes its mirrored `urls` entry in the same pass.
-/// Returns `None` only when both maps are already empty (a defensive no-op —
-/// the caller only invokes this once `urls.len() > MAX_TRACKED`, so this case
-/// shouldn't occur in practice).
-fn evict_one(
+/// Appends to `order`, then — only when the deque has drifted past twice the
+/// live cap — drops tombstones (ids already removed from `urls` by normal
+/// completion) so `order` stays bounded on a long-lived page that never
+/// exceeds the concurrent cap. The compaction preserves relative order and is
+/// amortized O(1) (it runs at most once per `MAX_TRACKED` insertions).
+fn track_order(order: &mut VecDeque<String>, urls: &HashMap<String, String>, id: String) {
+    order.push_back(id);
+    if order.len() > MAX_TRACKED * 2 {
+        order.retain(|k| urls.contains_key(k));
+    }
+}
+
+/// Evict the insertion-oldest still-live entry from the correlation maps once
+/// they exceed [`MAX_TRACKED`]. Bounds memory against a pathological page that
+/// opens requests it never finishes. Returns the evicted entry's URL so the
+/// caller can emit [`NetworkDeliveryBoundary::CorrelationEvicted`] — this
+/// eviction used to be silent (a `tracing` warning only); it no longer is.
+///
+/// FIFO by insertion order (via `order`): the oldest still-tracked request is
+/// the one most likely abandoned, so dropping it targets the actual leak
+/// source rather than a hash-arbitrary victim (which could drop a request
+/// about to complete while a stuck one survives). Removing the id from `urls`
+/// drops both the entry and its mirrored `partial` row in one pass. `order`
+/// carries lazy tombstones for ids already removed by normal completion; they
+/// are skipped here. Returns `None` only when no live entry remains (a
+/// defensive no-op — the caller only invokes this once
+/// `urls.len() > MAX_TRACKED`, so this shouldn't occur in practice).
+fn evict_oldest(
     urls: &mut HashMap<String, String>,
     partial: &mut HashMap<String, PartialExchange>,
+    order: &mut VecDeque<String>,
 ) -> Option<String> {
-    let evicted_url = if let Some(k) = partial.keys().next().cloned() {
-        let url = partial.remove(&k).map(|(req, _resp)| req.url);
-        urls.remove(&k);
-        url
-    } else if let Some(k) = urls.keys().next().cloned() {
-        urls.remove(&k)
-    } else {
-        None
-    };
-    warn!("network monitor correlation map exceeded {MAX_TRACKED}; evicting an entry");
-    evicted_url
+    while let Some(id) = order.pop_front() {
+        if let Some(url) = urls.remove(&id) {
+            partial.remove(&id);
+            warn!("network monitor correlation map exceeded {MAX_TRACKED}; evicting oldest entry");
+            return Some(url);
+        }
+        // Tombstone: `id` was already removed by normal completion — skip it.
+    }
+    None
 }
 
 #[cfg(test)]
@@ -1504,16 +1527,18 @@ mod tests {
     }
 
     #[test]
-    fn evict_one_prefers_partial_and_drops_mirrored_url() {
+    fn evict_oldest_drops_partial_and_mirrored_url() {
         // An in-flight HTTP exchange has a key in BOTH maps (mirrored on the
         // `requestWillBeSent` path). Evicting must remove it from both so the
         // bound actually shrinks the live correlation state.
         let mut partial: HashMap<String, PartialExchange> = HashMap::new();
         let mut urls: HashMap<String, String> = HashMap::new();
+        let mut order: VecDeque<String> = VecDeque::new();
         partial.insert("req1".into(), partial_entry("https://example.com/a"));
         urls.insert("req1".into(), "https://example.com/a".into());
+        track_order(&mut order, &urls, "req1".into());
 
-        let evicted = evict_one(&mut urls, &mut partial);
+        let evicted = evict_oldest(&mut urls, &mut partial, &mut order);
 
         assert_eq!(
             evicted.as_deref(),
@@ -1528,27 +1553,105 @@ mod tests {
     }
 
     #[test]
-    fn evict_one_falls_back_to_urls_when_partial_empty() {
+    fn evict_oldest_falls_back_to_urls_only_entry() {
         // A WebSocket / completed-handshake entry lives only in `urls` (no
-        // `partial` row). With `partial` empty, eviction must still drop a
-        // `urls` entry rather than no-op and leave the map over the bound.
+        // `partial` row). Eviction must still drop it rather than no-op and
+        // leave the map over the bound.
         let mut partial: HashMap<String, PartialExchange> = HashMap::new();
         let mut urls: HashMap<String, String> = HashMap::new();
+        let mut order: VecDeque<String> = VecDeque::new();
         urls.insert("ws1".into(), "wss://echo.example.com".into());
+        track_order(&mut order, &urls, "ws1".into());
 
-        let evicted = evict_one(&mut urls, &mut partial);
+        let evicted = evict_oldest(&mut urls, &mut partial, &mut order);
 
         assert_eq!(evicted.as_deref(), Some("wss://echo.example.com"));
         assert!(urls.is_empty(), "urls-only entry must be evicted");
     }
 
     #[test]
-    fn evict_one_on_empty_maps_is_a_noop() {
-        // Defensive: never panic when called against empty maps.
+    fn evict_oldest_evicts_in_insertion_order() {
+        // FIFO: the oldest-inserted request is evicted first, deterministically
+        // — not a hash-arbitrary victim that could drop a fresh request while a
+        // stuck one survives.
         let mut partial: HashMap<String, PartialExchange> = HashMap::new();
         let mut urls: HashMap<String, String> = HashMap::new();
-        let evicted = evict_one(&mut urls, &mut partial);
+        let mut order: VecDeque<String> = VecDeque::new();
+        for (id, url) in [
+            ("req1", "https://example.com/1"),
+            ("req2", "https://example.com/2"),
+            ("req3", "https://example.com/3"),
+        ] {
+            urls.insert(id.into(), url.into());
+            track_order(&mut order, &urls, id.into());
+        }
+
+        assert_eq!(
+            evict_oldest(&mut urls, &mut partial, &mut order).as_deref(),
+            Some("https://example.com/1"),
+            "oldest (req1) evicted first"
+        );
+        assert_eq!(
+            evict_oldest(&mut urls, &mut partial, &mut order).as_deref(),
+            Some("https://example.com/2"),
+            "then req2"
+        );
+        assert_eq!(
+            evict_oldest(&mut urls, &mut partial, &mut order).as_deref(),
+            Some("https://example.com/3"),
+            "then req3"
+        );
+    }
+
+    #[test]
+    fn evict_oldest_skips_tombstones_for_completed_requests() {
+        // A request removed by normal completion leaves a tombstone in `order`;
+        // eviction skips it and drops the oldest still-LIVE request.
+        let mut partial: HashMap<String, PartialExchange> = HashMap::new();
+        let mut urls: HashMap<String, String> = HashMap::new();
+        let mut order: VecDeque<String> = VecDeque::new();
+        urls.insert("req1".into(), "https://example.com/1".into());
+        track_order(&mut order, &urls, "req1".into());
+        urls.insert("req2".into(), "https://example.com/2".into());
+        track_order(&mut order, &urls, "req2".into());
+        // req1 completes normally: removed from `urls`, tombstone stays in `order`.
+        urls.remove("req1");
+
+        assert_eq!(
+            evict_oldest(&mut urls, &mut partial, &mut order).as_deref(),
+            Some("https://example.com/2"),
+            "req1 tombstone skipped; oldest live (req2) evicted"
+        );
+    }
+
+    #[test]
+    fn evict_oldest_on_empty_is_a_noop() {
+        // Defensive: never panic when nothing is tracked.
+        let mut partial: HashMap<String, PartialExchange> = HashMap::new();
+        let mut urls: HashMap<String, String> = HashMap::new();
+        let mut order: VecDeque<String> = VecDeque::new();
+        let evicted = evict_oldest(&mut urls, &mut partial, &mut order);
         assert!(evicted.is_none());
         assert!(partial.is_empty() && urls.is_empty());
+    }
+
+    #[test]
+    fn track_order_stays_bounded_despite_tombstones() {
+        // A long-lived page that opens + completes far more requests than the
+        // cap (without ever exceeding the concurrent cap) must not let `order`
+        // grow without bound: completed-request tombstones get compacted away.
+        let mut urls: HashMap<String, String> = HashMap::new();
+        let mut order: VecDeque<String> = VecDeque::new();
+        for i in 0..(MAX_TRACKED * 2 + 5) {
+            let id = format!("req{i}");
+            urls.insert(id.clone(), "https://example.com/x".into());
+            track_order(&mut order, &urls, id.clone());
+            urls.remove(&id); // completes immediately → becomes a tombstone
+        }
+        assert!(
+            order.len() <= MAX_TRACKED * 2,
+            "order must stay bounded via compaction; grew to {}",
+            order.len()
+        );
     }
 }
