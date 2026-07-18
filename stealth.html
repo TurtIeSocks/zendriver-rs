@@ -187,6 +187,10 @@ tradeoffs between launch overhead, detectability, and CSP compatibility.
 Pick the profile that matches your target site's detection layer; tweak
 the fingerprint with builder methods when you need to pin a specific
 identity.</p>
+<p>None of these profiles is a guarantee of invisibility — no automation
+stack has one against a determined, adaptively-defended site. What they
+provide is a coherent, plausible browser identity plus explicit controls
+over the specific tells that mainstream fingerprint checks probe for.</p>
 <h2 id="the-three-profiles"><a class="header" href="#the-three-profiles">The three profiles</a></h2>
 <div class="table-wrapper"><table><thead><tr><th>Profile</th><th>Launch flags</th><th>UA scrub</th><th>Emulation overrides</th><th>JS bootstrap</th><th>Bypass CSP</th><th>Use case</th></tr></thead><tbody>
 <tr><td><code>off()</code></td><td>none</td><td>no</td><td>no</td><td>none</td><td>no</td><td>Reproducing issues in vanilla Chrome.</td></tr>
@@ -321,6 +325,60 @@ let browser = Browser::builder()
 <p><code>user_agent()</code> skips the auto-composition step entirely — prefer
 <code>platform()</code> + <code>chrome_version()</code> unless you need a bit-for-bit
 specific UA.</p>
+<h2 id="opting-into-real-site-isolation--real-webgl-native_isolation"><a class="header" href="#opting-into-real-site-isolation--real-webgl-native_isolation">Opting into real site isolation + real WebGL (<code>native_isolation</code>)</a></h2>
+<p><code>native()</code> and <code>spoofed()</code> both disable Chrome's render-process site
+isolation (<code>--disable-features=IsolateOrigins,...,site-per-process</code>),
+and <code>spoofed()</code> additionally patches
+<code>WebGLRenderingContext.getParameter()</code> /<code>getSupportedExtensions()</code> to
+report a coherent ANGLE/Direct3D11 Intel identity regardless of the
+host's actual GPU. <code>.native_isolation(true)</code> opts a profile <strong>out</strong> of
+both:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::{Browser, StealthProfile};
+
+<span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span>let profile = StealthProfile::spoofed().native_isolation(true);
+
+let browser = Browser::builder()
+    .stealth(profile)
+    .launch()
+    .await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p>With this set:</p>
+<ul>
+<li>The launch flags omit <code>IsolateOrigins</code>/<code>site-per-process</code> from
+<code>--disable-features=...</code> — Chrome runs with its normal render-process
+isolation boundary. (The unrelated
+<code>DisableLoadExtensionCommandLineSwitch</code> feature name stays disabled
+either way — it controls <code>--load-extension</code>, not isolation.)</li>
+<li>For <code>spoofed()</code>, the bootstrap script omits the WebGL
+vendor/renderer patch entirely — <code>getParameter(UNMASKED_VENDOR_WEBGL)</code>
+etc. return the host's real values instead of the spoofed default.</li>
+</ul>
+<p><strong>This is a trade-off, not a strict stealth improvement.</strong> The defaults
+it opts out of exist as anti-detection measures: the WebGL patch in
+particular is an anti-WAF <em>coherence</em> defense — some WAFs
+(Imperva/Incapsula) cross-check the WebGL identity against the rest of
+the fingerprint and flag a real, host-specific renderer string as a bot
+tell when it doesn't match. Reach for <code>native_isolation(true)</code> when you
+need the host's actual GPU behavior (WebGL-heavy rendering, screenshot
+fidelity, visual regression testing) or want Chrome's stock
+process-isolation security boundary, and evasion isn't the priority —
+not because it's "more stealthy." It isn't; it removes a defense.</p>
+<p>It's off by default on every profile, so existing <code>native()</code> /
+<code>spoofed()</code> callers see no behavior change unless they opt in
+explicitly.</p>
+<p><strong>WebGL and WebGPU stay coherent.</strong> When <code>native_isolation</code> drops the
+WebGL patch, the WebGPU <strong>value</strong> adapter spoof (<code>navigator.gpu</code>,
+driven by the
+<a href="https://docs.rs/zendriver-stealth/latest/zendriver_stealth/struct.Persona.html"><code>Persona</code></a>
+<code>webgpu</code> surface) is skipped along with it, so <code>navigator.gpu</code> reports
+the real host adapter instead of one derived from a renderer the WebGL
+patch no longer applies — no cross-API mismatch. An explicit <code>Webgpu</code>
+<code>Block</code> (hiding <code>navigator.gpu</code>) is renderer-neutral, so it is still
+honored if you set it.</p>
 <h2 id="end-to-end-example"><a class="header" href="#end-to-end-example">End-to-end example</a></h2>
 <p>This example launches with a custom UA, locale, and platform, then
 reads them back via <code>navigator.*</code> to prove the overrides took:</p>

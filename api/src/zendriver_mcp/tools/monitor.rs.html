@@ -44,391 +44,656 @@
 <a href=#44 id=44 data-nosnippet>44</a><span class="kw">use </span>serde::{Deserialize, Serialize};
 <a href=#45 id=45 data-nosnippet>45</a><span class="kw">use </span>tokio::sync::Mutex;
 <a href=#46 id=46 data-nosnippet>46</a><span class="kw">use </span>tokio_util::sync::CancellationToken;
-<a href=#47 id=47 data-nosnippet>47</a><span class="kw">use </span>zendriver::{FrameDirection, NetworkEvent};
-<a href=#48 id=48 data-nosnippet>48</a>
-<a href=#49 id=49 data-nosnippet>49</a><span class="kw">use </span><span class="kw">crate</span>::errors::map_error;
-<a href=#50 id=50 data-nosnippet>50</a><span class="kw">use </span><span class="kw">crate</span>::state::{MONITOR_BUFFER_CAP, MonitorBuffer, MonitorEvent, MonitorState, SessionState};
-<a href=#51 id=51 data-nosnippet>51</a><span class="kw">use </span><span class="kw">crate</span>::tools::common::current_tab;
-<a href=#52 id=52 data-nosnippet>52</a>
-<a href=#53 id=53 data-nosnippet>53</a><span class="comment">// ---------- browser_monitor_start -----------------------------------------
+<a href=#47 id=47 data-nosnippet>47</a><span class="kw">use </span>zendriver::{
+<a href=#48 id=48 data-nosnippet>48</a>    BoundedBody, FrameDirection, NetworkDeliveryBoundary, NetworkEvent, ZendriverError,
+<a href=#49 id=49 data-nosnippet>49</a>};
+<a href=#50 id=50 data-nosnippet>50</a>
+<a href=#51 id=51 data-nosnippet>51</a><span class="kw">use </span><span class="kw">crate</span>::errors::map_error;
+<a href=#52 id=52 data-nosnippet>52</a><span class="kw">use </span><span class="kw">crate</span>::state::{MONITOR_BUFFER_CAP, MonitorBuffer, MonitorEvent, MonitorState, SessionState};
+<a href=#53 id=53 data-nosnippet>53</a><span class="kw">use </span><span class="kw">crate</span>::tools::common::current_tab;
 <a href=#54 id=54 data-nosnippet>54</a>
-<a href=#55 id=55 data-nosnippet>55</a></span><span class="doccomment">/// Input for `browser_monitor_start`.
-<a href=#56 id=56 data-nosnippet>56</a></span><span class="attr">#[derive(Debug, Deserialize, JsonSchema)]
-<a href=#57 id=57 data-nosnippet>57</a>#[serde(deny_unknown_fields)]
-<a href=#58 id=58 data-nosnippet>58</a></span><span class="kw">pub struct </span>StartInput {
-<a href=#59 id=59 data-nosnippet>59</a>    <span class="doccomment">/// Restrict buffered events to those whose URL contains this substring.
-<a href=#60 id=60 data-nosnippet>60</a>    /// Omit to buffer every observed event.
-<a href=#61 id=61 data-nosnippet>61</a>    </span><span class="attr">#[serde(default, skip_serializing_if = <span class="string">"Option::is_none"</span>)]
-<a href=#62 id=62 data-nosnippet>62</a>    </span><span class="kw">pub </span>url_pattern: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#63 id=63 data-nosnippet>63</a>    <span class="doccomment">/// Fetch each HTTP response body at observe-time and inline it on the
-<a href=#64 id=64 data-nosnippet>64</a>    /// `http` event (`body` + `body_base64`). One extra CDP round-trip per
-<a href=#65 id=65 data-nosnippet>65</a>    /// exchange; off by default to keep the buffer light.
-<a href=#66 id=66 data-nosnippet>66</a>    </span><span class="attr">#[serde(default)]
-<a href=#67 id=67 data-nosnippet>67</a>    </span><span class="kw">pub </span>capture_bodies: bool,
-<a href=#68 id=68 data-nosnippet>68</a>}
-<a href=#69 id=69 data-nosnippet>69</a>
-<a href=#70 id=70 data-nosnippet>70</a><span class="doccomment">/// Output of `browser_monitor_start`.
-<a href=#71 id=71 data-nosnippet>71</a></span><span class="attr">#[derive(Debug, Serialize, JsonSchema)]
-<a href=#72 id=72 data-nosnippet>72</a></span><span class="kw">pub struct </span>StartOutput {
-<a href=#73 id=73 data-nosnippet>73</a>    <span class="doccomment">/// Opaque handle for the running monitor. Pass to `browser_monitor_read`
-<a href=#74 id=74 data-nosnippet>74</a>    /// and `browser_monitor_stop`.
-<a href=#75 id=75 data-nosnippet>75</a>    </span><span class="kw">pub </span>handle: String,
-<a href=#76 id=76 data-nosnippet>76</a>}
-<a href=#77 id=77 data-nosnippet>77</a>
-<a href=#78 id=78 data-nosnippet>78</a><span class="doccomment">/// Start a network monitor over the current tab and begin buffering events.
-<a href=#79 id=79 data-nosnippet>79</a>///
-<a href=#80 id=80 data-nosnippet>80</a>/// Resolves the current tab, builds the lib-side monitor stream, spawns the
-<a href=#81 id=81 data-nosnippet>81</a>/// drain task, and registers the resulting [`MonitorState`] under a fresh
-<a href=#82 id=82 data-nosnippet>82</a>/// handle. Returns immediately — events accumulate in the background.
-<a href=#83 id=83 data-nosnippet>83</a></span><span class="kw">pub async fn </span>start(
-<a href=#84 id=84 data-nosnippet>84</a>    state: Arc&lt;Mutex&lt;SessionState&gt;&gt;,
-<a href=#85 id=85 data-nosnippet>85</a>    input: StartInput,
-<a href=#86 id=86 data-nosnippet>86</a>) -&gt; <span class="prelude-ty">Result</span>&lt;StartOutput, ErrorData&gt; {
-<a href=#87 id=87 data-nosnippet>87</a>    <span class="kw">let </span>tab = {
-<a href=#88 id=88 data-nosnippet>88</a>        <span class="kw">let </span>s = state.lock().<span class="kw">await</span>;
-<a href=#89 id=89 data-nosnippet>89</a>        current_tab(<span class="kw-2">&amp;</span>s).<span class="kw">await</span><span class="question-mark">?
-<a href=#90 id=90 data-nosnippet>90</a>    </span>};
-<a href=#91 id=91 data-nosnippet>91</a>
-<a href=#92 id=92 data-nosnippet>92</a>    <span class="kw">let </span><span class="kw-2">mut </span>mb = tab.monitor();
-<a href=#93 id=93 data-nosnippet>93</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(p) = <span class="kw-2">&amp;</span>input.url_pattern {
-<a href=#94 id=94 data-nosnippet>94</a>        mb = mb.url_pattern(p.clone());
-<a href=#95 id=95 data-nosnippet>95</a>    }
-<a href=#96 id=96 data-nosnippet>96</a>    <span class="kw">let </span><span class="kw-2">mut </span>stream = mb.start().<span class="kw">await</span>.map_err(map_error)<span class="question-mark">?</span>;
-<a href=#97 id=97 data-nosnippet>97</a>
-<a href=#98 id=98 data-nosnippet>98</a>    <span class="comment">// Build the shared ring + cancel token FIRST, then spawn the drain task
-<a href=#99 id=99 data-nosnippet>99</a>    // capturing clones, then construct `MonitorState` with the real join
-<a href=#100 id=100 data-nosnippet>100</a>    // handle — no placeholder spawn, no self-referential cycle.
-<a href=#101 id=101 data-nosnippet>101</a>    </span><span class="kw">let </span>buffer = Arc::new(Mutex::new(MonitorBuffer::default()));
-<a href=#102 id=102 data-nosnippet>102</a>    <span class="kw">let </span>cancel = CancellationToken::new();
-<a href=#103 id=103 data-nosnippet>103</a>    <span class="kw">let </span>capture = input.capture_bodies;
-<a href=#104 id=104 data-nosnippet>104</a>
-<a href=#105 id=105 data-nosnippet>105</a>    <span class="kw">let </span>task = {
-<a href=#106 id=106 data-nosnippet>106</a>        <span class="kw">let </span>buffer = buffer.clone();
-<a href=#107 id=107 data-nosnippet>107</a>        <span class="kw">let </span>cancel = cancel.clone();
-<a href=#108 id=108 data-nosnippet>108</a>        tokio::spawn(<span class="kw">async move </span>{
-<a href=#109 id=109 data-nosnippet>109</a>            <span class="kw">loop </span>{
-<a href=#110 id=110 data-nosnippet>110</a>                <span class="macro">tokio::select!</span> {
-<a href=#111 id=111 data-nosnippet>111</a>                    () = cancel.cancelled() =&gt; <span class="kw">break</span>,
-<a href=#112 id=112 data-nosnippet>112</a>                    next = stream.next() =&gt; {
-<a href=#113 id=113 data-nosnippet>113</a>                        <span class="kw">let </span><span class="prelude-val">Some</span>(ev) = next <span class="kw">else </span>{ <span class="kw">break </span>};
-<a href=#114 id=114 data-nosnippet>114</a>                        <span class="comment">// Convert (and, when capturing, fetch the body) BEFORE
-<a href=#115 id=115 data-nosnippet>115</a>                        // taking the buffer lock so the lock is never held
-<a href=#116 id=116 data-nosnippet>116</a>                        // across the `body().await` CDP round-trip.
-<a href=#117 id=117 data-nosnippet>117</a>                        </span><span class="kw">let </span>wire = convert(ev, capture).<span class="kw">await</span>;
-<a href=#118 id=118 data-nosnippet>118</a>                        <span class="kw">let </span><span class="kw-2">mut </span>buf = buffer.lock().<span class="kw">await</span>;
-<a href=#119 id=119 data-nosnippet>119</a>                        push_capped(<span class="kw-2">&amp;mut </span>buf, wire);
-<a href=#120 id=120 data-nosnippet>120</a>                    }
-<a href=#121 id=121 data-nosnippet>121</a>                }
-<a href=#122 id=122 data-nosnippet>122</a>            }
-<a href=#123 id=123 data-nosnippet>123</a>        })
-<a href=#124 id=124 data-nosnippet>124</a>    };
-<a href=#125 id=125 data-nosnippet>125</a>
-<a href=#126 id=126 data-nosnippet>126</a>    <span class="kw">let </span>handle = uuid::Uuid::new_v4().to_string();
-<a href=#127 id=127 data-nosnippet>127</a>    <span class="kw">let </span>mon = Arc::new(Mutex::new(MonitorState {
-<a href=#128 id=128 data-nosnippet>128</a>        buffer,
-<a href=#129 id=129 data-nosnippet>129</a>        cancel,
-<a href=#130 id=130 data-nosnippet>130</a>        task,
-<a href=#131 id=131 data-nosnippet>131</a>    }));
-<a href=#132 id=132 data-nosnippet>132</a>    state.lock().<span class="kw">await</span>.monitors.insert(handle.clone(), mon);
-<a href=#133 id=133 data-nosnippet>133</a>    <span class="prelude-val">Ok</span>(StartOutput { handle })
-<a href=#134 id=134 data-nosnippet>134</a>}
-<a href=#135 id=135 data-nosnippet>135</a>
-<a href=#136 id=136 data-nosnippet>136</a><span class="doccomment">/// Push `event` into the bounded ring, evicting the oldest (and bumping
-<a href=#137 id=137 data-nosnippet>137</a>/// `dropped`) when the ring is already at [`MONITOR_BUFFER_CAP`].
-<a href=#138 id=138 data-nosnippet>138</a></span><span class="kw">fn </span>push_capped(buf: <span class="kw-2">&amp;mut </span>MonitorBuffer, event: MonitorEvent) {
-<a href=#139 id=139 data-nosnippet>139</a>    <span class="kw">if </span>buf.events.len() &gt;= MONITOR_BUFFER_CAP {
-<a href=#140 id=140 data-nosnippet>140</a>        buf.events.pop_front();
-<a href=#141 id=141 data-nosnippet>141</a>        buf.dropped += <span class="number">1</span>;
-<a href=#142 id=142 data-nosnippet>142</a>    }
-<a href=#143 id=143 data-nosnippet>143</a>    buf.events.push_back(event);
-<a href=#144 id=144 data-nosnippet>144</a>}
-<a href=#145 id=145 data-nosnippet>145</a>
-<a href=#146 id=146 data-nosnippet>146</a><span class="doccomment">/// Convert a lib-side [`NetworkEvent`] into the wire mirror, fetching the HTTP
-<a href=#147 id=147 data-nosnippet>147</a>/// response body at observe-time when `capture` is set (before Chrome evicts
-<a href=#148 id=148 data-nosnippet>148</a>/// it). A body-fetch failure degrades to a body-less event rather than an
-<a href=#149 id=149 data-nosnippet>149</a>/// error — the exchange's metadata is still worth surfacing.
-<a href=#150 id=150 data-nosnippet>150</a></span><span class="kw">async fn </span>convert(ev: NetworkEvent, capture: bool) -&gt; MonitorEvent {
-<a href=#151 id=151 data-nosnippet>151</a>    <span class="kw">match </span>ev {
-<a href=#152 id=152 data-nosnippet>152</a>        NetworkEvent::Http(ex) =&gt; {
-<a href=#153 id=153 data-nosnippet>153</a>            <span class="kw">let </span>(body, body_base64) = <span class="kw">if </span>capture {
-<a href=#154 id=154 data-nosnippet>154</a>                <span class="kw">match </span>ex.body().<span class="kw">await </span>{
-<a href=#155 id=155 data-nosnippet>155</a>                    <span class="prelude-val">Ok</span>(bytes) =&gt; (
-<a href=#156 id=156 data-nosnippet>156</a>                        <span class="prelude-val">Some</span>(String::from_utf8_lossy(<span class="kw-2">&amp;</span>bytes).into_owned()),
-<a href=#157 id=157 data-nosnippet>157</a>                        <span class="prelude-val">Some</span>(BASE64.encode(<span class="kw-2">&amp;</span>bytes)),
-<a href=#158 id=158 data-nosnippet>158</a>                    ),
-<a href=#159 id=159 data-nosnippet>159</a>                    <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>),
-<a href=#160 id=160 data-nosnippet>160</a>                }
-<a href=#161 id=161 data-nosnippet>161</a>            } <span class="kw">else </span>{
-<a href=#162 id=162 data-nosnippet>162</a>                (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
-<a href=#163 id=163 data-nosnippet>163</a>            };
-<a href=#164 id=164 data-nosnippet>164</a>            MonitorEvent::Http {
-<a href=#165 id=165 data-nosnippet>165</a>                url: ex.request.url.clone(),
-<a href=#166 id=166 data-nosnippet>166</a>                method: ex.request.method.clone(),
-<a href=#167 id=167 data-nosnippet>167</a>                status: ex.status(),
-<a href=#168 id=168 data-nosnippet>168</a>                error: ex.error.clone(),
-<a href=#169 id=169 data-nosnippet>169</a>                body,
-<a href=#170 id=170 data-nosnippet>170</a>                body_base64,
-<a href=#171 id=171 data-nosnippet>171</a>            }
-<a href=#172 id=172 data-nosnippet>172</a>        }
-<a href=#173 id=173 data-nosnippet>173</a>        NetworkEvent::WebSocketOpen { request_id, url } =&gt; {
-<a href=#174 id=174 data-nosnippet>174</a>            MonitorEvent::WebSocketOpen { request_id, url }
-<a href=#175 id=175 data-nosnippet>175</a>        }
-<a href=#176 id=176 data-nosnippet>176</a>        NetworkEvent::WebSocketFrame {
-<a href=#177 id=177 data-nosnippet>177</a>            request_id,
-<a href=#178 id=178 data-nosnippet>178</a>            direction,
-<a href=#179 id=179 data-nosnippet>179</a>            opcode,
-<a href=#180 id=180 data-nosnippet>180</a>            payload,
-<a href=#181 id=181 data-nosnippet>181</a>        } =&gt; MonitorEvent::WebSocketFrame {
-<a href=#182 id=182 data-nosnippet>182</a>            request_id,
-<a href=#183 id=183 data-nosnippet>183</a>            direction: <span class="kw">match </span>direction {
-<a href=#184 id=184 data-nosnippet>184</a>                FrameDirection::Sent =&gt; <span class="string">"sent"</span>,
-<a href=#185 id=185 data-nosnippet>185</a>                FrameDirection::Received =&gt; <span class="string">"received"</span>,
-<a href=#186 id=186 data-nosnippet>186</a>            }
-<a href=#187 id=187 data-nosnippet>187</a>            .to_string(),
-<a href=#188 id=188 data-nosnippet>188</a>            opcode,
-<a href=#189 id=189 data-nosnippet>189</a>            payload,
-<a href=#190 id=190 data-nosnippet>190</a>        },
-<a href=#191 id=191 data-nosnippet>191</a>        NetworkEvent::WebSocketClose { request_id } =&gt; MonitorEvent::WebSocketClose { request_id },
-<a href=#192 id=192 data-nosnippet>192</a>        NetworkEvent::EventSourceMessage {
-<a href=#193 id=193 data-nosnippet>193</a>            request_id,
-<a href=#194 id=194 data-nosnippet>194</a>            event_name,
-<a href=#195 id=195 data-nosnippet>195</a>            event_id,
-<a href=#196 id=196 data-nosnippet>196</a>            data,
-<a href=#197 id=197 data-nosnippet>197</a>        } =&gt; MonitorEvent::EventSourceMessage {
-<a href=#198 id=198 data-nosnippet>198</a>            request_id,
-<a href=#199 id=199 data-nosnippet>199</a>            event_name,
-<a href=#200 id=200 data-nosnippet>200</a>            event_id,
-<a href=#201 id=201 data-nosnippet>201</a>            data,
-<a href=#202 id=202 data-nosnippet>202</a>        },
-<a href=#203 id=203 data-nosnippet>203</a>    }
-<a href=#204 id=204 data-nosnippet>204</a>}
-<a href=#205 id=205 data-nosnippet>205</a>
-<a href=#206 id=206 data-nosnippet>206</a><span class="comment">// ---------- browser_monitor_read ------------------------------------------
-<a href=#207 id=207 data-nosnippet>207</a>
-<a href=#208 id=208 data-nosnippet>208</a></span><span class="doccomment">/// Input for `browser_monitor_read`.
-<a href=#209 id=209 data-nosnippet>209</a></span><span class="attr">#[derive(Debug, Deserialize, JsonSchema)]
-<a href=#210 id=210 data-nosnippet>210</a>#[serde(deny_unknown_fields)]
-<a href=#211 id=211 data-nosnippet>211</a></span><span class="kw">pub struct </span>ReadInput {
-<a href=#212 id=212 data-nosnippet>212</a>    <span class="doccomment">/// Handle returned by an earlier `browser_monitor_start`.
-<a href=#213 id=213 data-nosnippet>213</a>    </span><span class="kw">pub </span>handle: String,
-<a href=#214 id=214 data-nosnippet>214</a>    <span class="doccomment">/// Maximum number of events to drain this call. Omit to drain all buffered
-<a href=#215 id=215 data-nosnippet>215</a>    /// events.
-<a href=#216 id=216 data-nosnippet>216</a>    </span><span class="attr">#[serde(default, skip_serializing_if = <span class="string">"Option::is_none"</span>)]
-<a href=#217 id=217 data-nosnippet>217</a>    </span><span class="kw">pub </span>max: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-<a href=#218 id=218 data-nosnippet>218</a>}
-<a href=#219 id=219 data-nosnippet>219</a>
-<a href=#220 id=220 data-nosnippet>220</a><span class="doccomment">/// Output of `browser_monitor_read`.
-<a href=#221 id=221 data-nosnippet>221</a></span><span class="attr">#[derive(Debug, Serialize, JsonSchema)]
-<a href=#222 id=222 data-nosnippet>222</a></span><span class="kw">pub struct </span>ReadOutput {
-<a href=#223 id=223 data-nosnippet>223</a>    <span class="doccomment">/// Drained events, oldest first.
-<a href=#224 id=224 data-nosnippet>224</a>    </span><span class="kw">pub </span>events: Vec&lt;MonitorEvent&gt;,
-<a href=#225 id=225 data-nosnippet>225</a>    <span class="doccomment">/// Events evicted (ring full) since the previous `read`. Non-zero means the
-<a href=#226 id=226 data-nosnippet>226</a>    /// buffer overflowed — read more often or stop the monitor.
-<a href=#227 id=227 data-nosnippet>227</a>    </span><span class="kw">pub </span>dropped: usize,
+<a href=#55 id=55 data-nosnippet>55</a><span class="comment">// ---------- browser_monitor_start -----------------------------------------
+<a href=#56 id=56 data-nosnippet>56</a>
+<a href=#57 id=57 data-nosnippet>57</a></span><span class="doccomment">/// Input for `browser_monitor_start`.
+<a href=#58 id=58 data-nosnippet>58</a></span><span class="attr">#[derive(Debug, Deserialize, JsonSchema)]
+<a href=#59 id=59 data-nosnippet>59</a>#[serde(deny_unknown_fields)]
+<a href=#60 id=60 data-nosnippet>60</a></span><span class="kw">pub struct </span>StartInput {
+<a href=#61 id=61 data-nosnippet>61</a>    <span class="doccomment">/// Restrict buffered events to those whose URL contains this substring.
+<a href=#62 id=62 data-nosnippet>62</a>    /// Omit to buffer every observed event.
+<a href=#63 id=63 data-nosnippet>63</a>    </span><span class="attr">#[serde(default, skip_serializing_if = <span class="string">"Option::is_none"</span>)]
+<a href=#64 id=64 data-nosnippet>64</a>    </span><span class="kw">pub </span>url_pattern: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#65 id=65 data-nosnippet>65</a>    <span class="doccomment">/// Fetch each HTTP response body at observe-time and inline it on the
+<a href=#66 id=66 data-nosnippet>66</a>    /// `http` event (`body` + `body_base64`). One extra CDP round-trip per
+<a href=#67 id=67 data-nosnippet>67</a>    /// exchange; off by default to keep the buffer light.
+<a href=#68 id=68 data-nosnippet>68</a>    </span><span class="attr">#[serde(default)]
+<a href=#69 id=69 data-nosnippet>69</a>    </span><span class="kw">pub </span>capture_bodies: bool,
+<a href=#70 id=70 data-nosnippet>70</a>    <span class="doccomment">/// Maximum bytes of a response body to capture per `http` event when
+<a href=#71 id=71 data-nosnippet>71</a>    /// `capture_bodies` is set (bounding is against the raw decoded length,
+<a href=#72 id=72 data-nosnippet>72</a>    /// never a base64 length). A body larger than this is truncated to that
+<a href=#73 id=73 data-nosnippet>73</a>    /// many bytes with `body_truncated: true`; `body_full_bytes` always
+<a href=#74 id=74 data-nosnippet>74</a>    /// reports the full pre-truncation length. Ignored when `capture_bodies`
+<a href=#75 id=75 data-nosnippet>75</a>    /// is `false`.
+<a href=#76 id=76 data-nosnippet>76</a>    ///
+<a href=#77 id=77 data-nosnippet>77</a>    /// Defaults to `0` (unbounded) — `capture_bodies` keeps its historical
+<a href=#78 id=78 data-nosnippet>78</a>    /// full-body behavior when the field is omitted. Set a positive cap
+<a href=#79 id=79 data-nosnippet>79</a>    /// (`1048576` = 1 MiB is a sensible choice when an agent forwards bodies
+<a href=#80 id=80 data-nosnippet>80</a>    /// into its own context) to bound large bodies and keep
+<a href=#81 id=81 data-nosnippet>81</a>    /// `browser_monitor_read` output manageable.
+<a href=#82 id=82 data-nosnippet>82</a>    </span><span class="attr">#[serde(default)]
+<a href=#83 id=83 data-nosnippet>83</a>    </span><span class="kw">pub </span>capture_body_max_bytes: usize,
+<a href=#84 id=84 data-nosnippet>84</a>}
+<a href=#85 id=85 data-nosnippet>85</a>
+<a href=#86 id=86 data-nosnippet>86</a><span class="doccomment">/// Output of `browser_monitor_start`.
+<a href=#87 id=87 data-nosnippet>87</a></span><span class="attr">#[derive(Debug, Serialize, JsonSchema)]
+<a href=#88 id=88 data-nosnippet>88</a></span><span class="kw">pub struct </span>StartOutput {
+<a href=#89 id=89 data-nosnippet>89</a>    <span class="doccomment">/// Opaque handle for the running monitor. Pass to `browser_monitor_read`
+<a href=#90 id=90 data-nosnippet>90</a>    /// and `browser_monitor_stop`.
+<a href=#91 id=91 data-nosnippet>91</a>    </span><span class="kw">pub </span>handle: String,
+<a href=#92 id=92 data-nosnippet>92</a>}
+<a href=#93 id=93 data-nosnippet>93</a>
+<a href=#94 id=94 data-nosnippet>94</a><span class="doccomment">/// Start a network monitor over the current tab and begin buffering events.
+<a href=#95 id=95 data-nosnippet>95</a>///
+<a href=#96 id=96 data-nosnippet>96</a>/// Resolves the current tab, builds the lib-side monitor stream, spawns the
+<a href=#97 id=97 data-nosnippet>97</a>/// drain task, and registers the resulting [`MonitorState`] under a fresh
+<a href=#98 id=98 data-nosnippet>98</a>/// handle. Returns immediately — events accumulate in the background.
+<a href=#99 id=99 data-nosnippet>99</a></span><span class="kw">pub async fn </span>start(
+<a href=#100 id=100 data-nosnippet>100</a>    state: Arc&lt;Mutex&lt;SessionState&gt;&gt;,
+<a href=#101 id=101 data-nosnippet>101</a>    input: StartInput,
+<a href=#102 id=102 data-nosnippet>102</a>) -&gt; <span class="prelude-ty">Result</span>&lt;StartOutput, ErrorData&gt; {
+<a href=#103 id=103 data-nosnippet>103</a>    <span class="kw">let </span>tab = {
+<a href=#104 id=104 data-nosnippet>104</a>        <span class="kw">let </span>s = state.lock().<span class="kw">await</span>;
+<a href=#105 id=105 data-nosnippet>105</a>        current_tab(<span class="kw-2">&amp;</span>s).<span class="kw">await</span><span class="question-mark">?
+<a href=#106 id=106 data-nosnippet>106</a>    </span>};
+<a href=#107 id=107 data-nosnippet>107</a>
+<a href=#108 id=108 data-nosnippet>108</a>    <span class="kw">let </span><span class="kw-2">mut </span>mb = tab.monitor();
+<a href=#109 id=109 data-nosnippet>109</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(p) = <span class="kw-2">&amp;</span>input.url_pattern {
+<a href=#110 id=110 data-nosnippet>110</a>        mb = mb.url_pattern(p.clone());
+<a href=#111 id=111 data-nosnippet>111</a>    }
+<a href=#112 id=112 data-nosnippet>112</a>    <span class="kw">let </span><span class="kw-2">mut </span>stream = mb.start().<span class="kw">await</span>.map_err(map_error)<span class="question-mark">?</span>;
+<a href=#113 id=113 data-nosnippet>113</a>
+<a href=#114 id=114 data-nosnippet>114</a>    <span class="comment">// Build the shared ring + cancel token FIRST, then spawn the drain task
+<a href=#115 id=115 data-nosnippet>115</a>    // capturing clones, then construct `MonitorState` with the real join
+<a href=#116 id=116 data-nosnippet>116</a>    // handle — no placeholder spawn, no self-referential cycle.
+<a href=#117 id=117 data-nosnippet>117</a>    </span><span class="kw">let </span>buffer = Arc::new(Mutex::new(MonitorBuffer::default()));
+<a href=#118 id=118 data-nosnippet>118</a>    <span class="kw">let </span>cancel = CancellationToken::new();
+<a href=#119 id=119 data-nosnippet>119</a>    <span class="kw">let </span>capture = input.capture_bodies;
+<a href=#120 id=120 data-nosnippet>120</a>    <span class="kw">let </span>max_bytes = input.capture_body_max_bytes;
+<a href=#121 id=121 data-nosnippet>121</a>
+<a href=#122 id=122 data-nosnippet>122</a>    <span class="kw">let </span>task = {
+<a href=#123 id=123 data-nosnippet>123</a>        <span class="kw">let </span>buffer = buffer.clone();
+<a href=#124 id=124 data-nosnippet>124</a>        <span class="kw">let </span>cancel = cancel.clone();
+<a href=#125 id=125 data-nosnippet>125</a>        tokio::spawn(<span class="kw">async move </span>{
+<a href=#126 id=126 data-nosnippet>126</a>            <span class="kw">loop </span>{
+<a href=#127 id=127 data-nosnippet>127</a>                <span class="macro">tokio::select!</span> {
+<a href=#128 id=128 data-nosnippet>128</a>                    () = cancel.cancelled() =&gt; <span class="kw">break</span>,
+<a href=#129 id=129 data-nosnippet>129</a>                    next = stream.next() =&gt; {
+<a href=#130 id=130 data-nosnippet>130</a>                        <span class="kw">let </span><span class="prelude-val">Some</span>(ev) = next <span class="kw">else </span>{ <span class="kw">break </span>};
+<a href=#131 id=131 data-nosnippet>131</a>                        <span class="comment">// Convert (and, when capturing, fetch the body) BEFORE
+<a href=#132 id=132 data-nosnippet>132</a>                        // taking the buffer lock so the lock is never held
+<a href=#133 id=133 data-nosnippet>133</a>                        // across the `body().await` CDP round-trip.
+<a href=#134 id=134 data-nosnippet>134</a>                        </span><span class="kw">let </span>wire = convert(ev, capture, max_bytes).<span class="kw">await</span>;
+<a href=#135 id=135 data-nosnippet>135</a>                        <span class="kw">let </span><span class="kw-2">mut </span>buf = buffer.lock().<span class="kw">await</span>;
+<a href=#136 id=136 data-nosnippet>136</a>                        push_capped(<span class="kw-2">&amp;mut </span>buf, wire);
+<a href=#137 id=137 data-nosnippet>137</a>                    }
+<a href=#138 id=138 data-nosnippet>138</a>                }
+<a href=#139 id=139 data-nosnippet>139</a>            }
+<a href=#140 id=140 data-nosnippet>140</a>        })
+<a href=#141 id=141 data-nosnippet>141</a>    };
+<a href=#142 id=142 data-nosnippet>142</a>
+<a href=#143 id=143 data-nosnippet>143</a>    <span class="kw">let </span>handle = uuid::Uuid::new_v4().to_string();
+<a href=#144 id=144 data-nosnippet>144</a>    <span class="kw">let </span>mon = Arc::new(Mutex::new(MonitorState {
+<a href=#145 id=145 data-nosnippet>145</a>        buffer,
+<a href=#146 id=146 data-nosnippet>146</a>        cancel,
+<a href=#147 id=147 data-nosnippet>147</a>        task,
+<a href=#148 id=148 data-nosnippet>148</a>    }));
+<a href=#149 id=149 data-nosnippet>149</a>    state.lock().<span class="kw">await</span>.monitors.insert(handle.clone(), mon);
+<a href=#150 id=150 data-nosnippet>150</a>    <span class="prelude-val">Ok</span>(StartOutput { handle })
+<a href=#151 id=151 data-nosnippet>151</a>}
+<a href=#152 id=152 data-nosnippet>152</a>
+<a href=#153 id=153 data-nosnippet>153</a><span class="doccomment">/// Push `event` into the bounded ring, evicting the oldest (and bumping
+<a href=#154 id=154 data-nosnippet>154</a>/// `dropped`) when the ring is already at [`MONITOR_BUFFER_CAP`].
+<a href=#155 id=155 data-nosnippet>155</a></span><span class="kw">fn </span>push_capped(buf: <span class="kw-2">&amp;mut </span>MonitorBuffer, event: MonitorEvent) {
+<a href=#156 id=156 data-nosnippet>156</a>    <span class="kw">if </span>buf.events.len() &gt;= MONITOR_BUFFER_CAP {
+<a href=#157 id=157 data-nosnippet>157</a>        buf.events.pop_front();
+<a href=#158 id=158 data-nosnippet>158</a>        buf.dropped += <span class="number">1</span>;
+<a href=#159 id=159 data-nosnippet>159</a>    }
+<a href=#160 id=160 data-nosnippet>160</a>    buf.events.push_back(event);
+<a href=#161 id=161 data-nosnippet>161</a>}
+<a href=#162 id=162 data-nosnippet>162</a>
+<a href=#163 id=163 data-nosnippet>163</a><span class="doccomment">/// Convert a lib-side [`NetworkEvent`] into the wire mirror, fetching the HTTP
+<a href=#164 id=164 data-nosnippet>164</a>/// response body at observe-time when `capture` is set (before Chrome evicts
+<a href=#165 id=165 data-nosnippet>165</a>/// it), bounded at `max_bytes` via [`BoundedBody`]. A body-fetch failure sets
+<a href=#166 id=166 data-nosnippet>166</a>/// `body_capture_error` (distinct from a genuinely empty body) rather than
+<a href=#167 id=167 data-nosnippet>167</a>/// silently degrading to a body-less event — the exchange's metadata is still
+<a href=#168 id=168 data-nosnippet>168</a>/// worth surfacing either way.
+<a href=#169 id=169 data-nosnippet>169</a></span><span class="kw">async fn </span>convert(ev: NetworkEvent, capture: bool, max_bytes: usize) -&gt; MonitorEvent {
+<a href=#170 id=170 data-nosnippet>170</a>    <span class="kw">match </span>ev {
+<a href=#171 id=171 data-nosnippet>171</a>        NetworkEvent::Http(ex) =&gt; {
+<a href=#172 id=172 data-nosnippet>172</a>            <span class="kw">let </span>captured = <span class="kw">if </span>capture {
+<a href=#173 id=173 data-nosnippet>173</a>                <span class="prelude-val">Some</span>(wire_body_fields(ex.body().<span class="kw">await</span>, max_bytes))
+<a href=#174 id=174 data-nosnippet>174</a>            } <span class="kw">else </span>{
+<a href=#175 id=175 data-nosnippet>175</a>                <span class="prelude-val">None
+<a href=#176 id=176 data-nosnippet>176</a>            </span>};
+<a href=#177 id=177 data-nosnippet>177</a>            <span class="kw">let </span>CapturedBody {
+<a href=#178 id=178 data-nosnippet>178</a>                body,
+<a href=#179 id=179 data-nosnippet>179</a>                body_base64,
+<a href=#180 id=180 data-nosnippet>180</a>                body_truncated,
+<a href=#181 id=181 data-nosnippet>181</a>                body_full_bytes,
+<a href=#182 id=182 data-nosnippet>182</a>                body_capture_error,
+<a href=#183 id=183 data-nosnippet>183</a>            } = captured.unwrap_or_default();
+<a href=#184 id=184 data-nosnippet>184</a>            MonitorEvent::Http {
+<a href=#185 id=185 data-nosnippet>185</a>                url: ex.request.url.clone(),
+<a href=#186 id=186 data-nosnippet>186</a>                method: ex.request.method.clone(),
+<a href=#187 id=187 data-nosnippet>187</a>                status: ex.status(),
+<a href=#188 id=188 data-nosnippet>188</a>                error: ex.error.clone(),
+<a href=#189 id=189 data-nosnippet>189</a>                body,
+<a href=#190 id=190 data-nosnippet>190</a>                body_base64,
+<a href=#191 id=191 data-nosnippet>191</a>                body_truncated,
+<a href=#192 id=192 data-nosnippet>192</a>                body_full_bytes,
+<a href=#193 id=193 data-nosnippet>193</a>                body_capture_error,
+<a href=#194 id=194 data-nosnippet>194</a>            }
+<a href=#195 id=195 data-nosnippet>195</a>        }
+<a href=#196 id=196 data-nosnippet>196</a>        NetworkEvent::WebSocketOpen { request_id, url } =&gt; {
+<a href=#197 id=197 data-nosnippet>197</a>            MonitorEvent::WebSocketOpen { request_id, url }
+<a href=#198 id=198 data-nosnippet>198</a>        }
+<a href=#199 id=199 data-nosnippet>199</a>        NetworkEvent::WebSocketFrame {
+<a href=#200 id=200 data-nosnippet>200</a>            request_id,
+<a href=#201 id=201 data-nosnippet>201</a>            direction,
+<a href=#202 id=202 data-nosnippet>202</a>            opcode,
+<a href=#203 id=203 data-nosnippet>203</a>            payload,
+<a href=#204 id=204 data-nosnippet>204</a>        } =&gt; MonitorEvent::WebSocketFrame {
+<a href=#205 id=205 data-nosnippet>205</a>            request_id,
+<a href=#206 id=206 data-nosnippet>206</a>            direction: <span class="kw">match </span>direction {
+<a href=#207 id=207 data-nosnippet>207</a>                FrameDirection::Sent =&gt; <span class="string">"sent"</span>,
+<a href=#208 id=208 data-nosnippet>208</a>                FrameDirection::Received =&gt; <span class="string">"received"</span>,
+<a href=#209 id=209 data-nosnippet>209</a>            }
+<a href=#210 id=210 data-nosnippet>210</a>            .to_string(),
+<a href=#211 id=211 data-nosnippet>211</a>            opcode,
+<a href=#212 id=212 data-nosnippet>212</a>            payload,
+<a href=#213 id=213 data-nosnippet>213</a>        },
+<a href=#214 id=214 data-nosnippet>214</a>        NetworkEvent::WebSocketClose { request_id } =&gt; MonitorEvent::WebSocketClose { request_id },
+<a href=#215 id=215 data-nosnippet>215</a>        NetworkEvent::EventSourceMessage {
+<a href=#216 id=216 data-nosnippet>216</a>            request_id,
+<a href=#217 id=217 data-nosnippet>217</a>            event_name,
+<a href=#218 id=218 data-nosnippet>218</a>            event_id,
+<a href=#219 id=219 data-nosnippet>219</a>            data,
+<a href=#220 id=220 data-nosnippet>220</a>        } =&gt; MonitorEvent::EventSourceMessage {
+<a href=#221 id=221 data-nosnippet>221</a>            request_id,
+<a href=#222 id=222 data-nosnippet>222</a>            event_name,
+<a href=#223 id=223 data-nosnippet>223</a>            event_id,
+<a href=#224 id=224 data-nosnippet>224</a>            data,
+<a href=#225 id=225 data-nosnippet>225</a>        },
+<a href=#226 id=226 data-nosnippet>226</a>        NetworkEvent::DeliveryBoundary(boundary) =&gt; convert_boundary(boundary),
+<a href=#227 id=227 data-nosnippet>227</a>    }
 <a href=#228 id=228 data-nosnippet>228</a>}
 <a href=#229 id=229 data-nosnippet>229</a>
-<a href=#230 id=230 data-nosnippet>230</a><span class="doccomment">/// Drain up to `max` buffered events from a running monitor.
-<a href=#231 id=231 data-nosnippet>231</a>///
-<a href=#232 id=232 data-nosnippet>232</a>/// Looks the handle up in the session registry, then drains its ring. The
-<a href=#233 id=233 data-nosnippet>233</a>/// running `dropped` count is returned and reset to 0.
-<a href=#234 id=234 data-nosnippet>234</a></span><span class="kw">pub async fn </span>read(
-<a href=#235 id=235 data-nosnippet>235</a>    state: Arc&lt;Mutex&lt;SessionState&gt;&gt;,
-<a href=#236 id=236 data-nosnippet>236</a>    input: ReadInput,
-<a href=#237 id=237 data-nosnippet>237</a>) -&gt; <span class="prelude-ty">Result</span>&lt;ReadOutput, ErrorData&gt; {
-<a href=#238 id=238 data-nosnippet>238</a>    <span class="kw">let </span>mon = {
-<a href=#239 id=239 data-nosnippet>239</a>        <span class="kw">let </span>s = state.lock().<span class="kw">await</span>;
-<a href=#240 id=240 data-nosnippet>240</a>        s.monitors.get(<span class="kw-2">&amp;</span>input.handle).cloned()
-<a href=#241 id=241 data-nosnippet>241</a>    }
-<a href=#242 id=242 data-nosnippet>242</a>    .ok_or_else(|| unknown_handle(<span class="kw-2">&amp;</span>input.handle))<span class="question-mark">?</span>;
-<a href=#243 id=243 data-nosnippet>243</a>
-<a href=#244 id=244 data-nosnippet>244</a>    <span class="comment">// Lock the MonitorState briefly to reach its shared ring, then the ring
-<a href=#245 id=245 data-nosnippet>245</a>    // itself — neither lock is held across an `.await` that the drain task
-<a href=#246 id=246 data-nosnippet>246</a>    // waits on.
-<a href=#247 id=247 data-nosnippet>247</a>    </span><span class="kw">let </span>buffer = {
-<a href=#248 id=248 data-nosnippet>248</a>        <span class="kw">let </span>m = mon.lock().<span class="kw">await</span>;
-<a href=#249 id=249 data-nosnippet>249</a>        m.buffer.clone()
-<a href=#250 id=250 data-nosnippet>250</a>    };
-<a href=#251 id=251 data-nosnippet>251</a>    <span class="kw">let </span><span class="kw-2">mut </span>buf = buffer.lock().<span class="kw">await</span>;
-<a href=#252 id=252 data-nosnippet>252</a>    <span class="kw">let </span>(events, dropped) = drain(<span class="kw-2">&amp;mut </span>buf, input.max.unwrap_or(usize::MAX));
-<a href=#253 id=253 data-nosnippet>253</a>    <span class="prelude-val">Ok</span>(ReadOutput { events, dropped })
-<a href=#254 id=254 data-nosnippet>254</a>}
-<a href=#255 id=255 data-nosnippet>255</a>
-<a href=#256 id=256 data-nosnippet>256</a><span class="doccomment">/// Drain up to `max` events from `buf`, returning them (oldest first) plus the
-<a href=#257 id=257 data-nosnippet>257</a>/// `dropped` count, which is reset to 0.
-<a href=#258 id=258 data-nosnippet>258</a>///
-<a href=#259 id=259 data-nosnippet>259</a>/// Extracted as a free fn so the drain + dropped-reset semantics are
-<a href=#260 id=260 data-nosnippet>260</a>/// unit-testable without a browser, a `SessionState`, or the drain task.
-<a href=#261 id=261 data-nosnippet>261</a></span><span class="kw">fn </span>drain(buf: <span class="kw-2">&amp;mut </span>MonitorBuffer, max: usize) -&gt; (Vec&lt;MonitorEvent&gt;, usize) {
-<a href=#262 id=262 data-nosnippet>262</a>    <span class="kw">let </span>take = max.min(buf.events.len());
-<a href=#263 id=263 data-nosnippet>263</a>    <span class="kw">let </span>events: Vec&lt;MonitorEvent&gt; = buf.events.drain(..take).collect();
-<a href=#264 id=264 data-nosnippet>264</a>    <span class="kw">let </span>dropped = std::mem::take(<span class="kw-2">&amp;mut </span>buf.dropped);
-<a href=#265 id=265 data-nosnippet>265</a>    (events, dropped)
-<a href=#266 id=266 data-nosnippet>266</a>}
-<a href=#267 id=267 data-nosnippet>267</a>
-<a href=#268 id=268 data-nosnippet>268</a><span class="comment">// ---------- browser_monitor_stop ------------------------------------------
-<a href=#269 id=269 data-nosnippet>269</a>
-<a href=#270 id=270 data-nosnippet>270</a></span><span class="doccomment">/// Input for `browser_monitor_stop`.
-<a href=#271 id=271 data-nosnippet>271</a></span><span class="attr">#[derive(Debug, Deserialize, JsonSchema)]
-<a href=#272 id=272 data-nosnippet>272</a>#[serde(deny_unknown_fields)]
-<a href=#273 id=273 data-nosnippet>273</a></span><span class="kw">pub struct </span>StopInput {
-<a href=#274 id=274 data-nosnippet>274</a>    <span class="doccomment">/// Handle returned by an earlier `browser_monitor_start`.
-<a href=#275 id=275 data-nosnippet>275</a>    </span><span class="kw">pub </span>handle: String,
-<a href=#276 id=276 data-nosnippet>276</a>}
-<a href=#277 id=277 data-nosnippet>277</a>
-<a href=#278 id=278 data-nosnippet>278</a><span class="doccomment">/// Output of `browser_monitor_stop`.
-<a href=#279 id=279 data-nosnippet>279</a></span><span class="attr">#[derive(Debug, Serialize, JsonSchema)]
-<a href=#280 id=280 data-nosnippet>280</a></span><span class="kw">pub struct </span>StopOutput {
-<a href=#281 id=281 data-nosnippet>281</a>    <span class="doccomment">/// `true` if a live monitor was found and stopped; `false` if the handle
-<a href=#282 id=282 data-nosnippet>282</a>    /// was unknown (already stopped, or never started).
-<a href=#283 id=283 data-nosnippet>283</a>    </span><span class="kw">pub </span>stopped: bool,
-<a href=#284 id=284 data-nosnippet>284</a>}
-<a href=#285 id=285 data-nosnippet>285</a>
-<a href=#286 id=286 data-nosnippet>286</a><span class="doccomment">/// Stop a running monitor: cancel its drain task and drop its registry entry.
-<a href=#287 id=287 data-nosnippet>287</a>///
-<a href=#288 id=288 data-nosnippet>288</a>/// Removing the handle from the registry drops the `MonitorState` (and its
-<a href=#289 id=289 data-nosnippet>289</a>/// shared ring) once this function's lock guard releases; cancelling + aborting
-<a href=#290 id=290 data-nosnippet>290</a>/// the task first guarantees it stops touching the stream promptly. An unknown
-<a href=#291 id=291 data-nosnippet>291</a>/// handle returns `{ stopped: false }` (idempotent stop) rather than an error.
-<a href=#292 id=292 data-nosnippet>292</a></span><span class="kw">pub async fn </span>stop(
-<a href=#293 id=293 data-nosnippet>293</a>    state: Arc&lt;Mutex&lt;SessionState&gt;&gt;,
-<a href=#294 id=294 data-nosnippet>294</a>    input: StopInput,
-<a href=#295 id=295 data-nosnippet>295</a>) -&gt; <span class="prelude-ty">Result</span>&lt;StopOutput, ErrorData&gt; {
-<a href=#296 id=296 data-nosnippet>296</a>    <span class="kw">let </span><span class="prelude-val">Some</span>(mon) = state.lock().<span class="kw">await</span>.monitors.remove(<span class="kw-2">&amp;</span>input.handle) <span class="kw">else </span>{
-<a href=#297 id=297 data-nosnippet>297</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(StopOutput { stopped: <span class="bool-val">false </span>});
-<a href=#298 id=298 data-nosnippet>298</a>    };
-<a href=#299 id=299 data-nosnippet>299</a>    <span class="kw">let </span>m = mon.lock().<span class="kw">await</span>;
-<a href=#300 id=300 data-nosnippet>300</a>    m.cancel.cancel();
-<a href=#301 id=301 data-nosnippet>301</a>    m.task.abort();
-<a href=#302 id=302 data-nosnippet>302</a>    <span class="prelude-val">Ok</span>(StopOutput { stopped: <span class="bool-val">true </span>})
-<a href=#303 id=303 data-nosnippet>303</a>}
-<a href=#304 id=304 data-nosnippet>304</a>
-<a href=#305 id=305 data-nosnippet>305</a><span class="doccomment">/// Wire error for a `read` / `stop` against a handle that isn't registered.
-<a href=#306 id=306 data-nosnippet>306</a></span><span class="kw">fn </span>unknown_handle(handle: <span class="kw-2">&amp;</span>str) -&gt; ErrorData {
-<a href=#307 id=307 data-nosnippet>307</a>    ErrorData::invalid_params(
-<a href=#308 id=308 data-nosnippet>308</a>        <span class="macro">format!</span>(
-<a href=#309 id=309 data-nosnippet>309</a>            <span class="string">"unknown monitor handle `{handle}`. Start one with `browser_monitor_start`; the handle may have already been stopped."
-<a href=#310 id=310 data-nosnippet>310</a>        </span>),
-<a href=#311 id=311 data-nosnippet>311</a>        <span class="prelude-val">None</span>,
-<a href=#312 id=312 data-nosnippet>312</a>    )
-<a href=#313 id=313 data-nosnippet>313</a>}
-<a href=#314 id=314 data-nosnippet>314</a>
-<a href=#315 id=315 data-nosnippet>315</a><span class="attr">#[cfg(test)]
-<a href=#316 id=316 data-nosnippet>316</a>#[allow(clippy::panic, clippy::unwrap_used)]
-<a href=#317 id=317 data-nosnippet>317</a></span><span class="kw">mod </span>tests {
-<a href=#318 id=318 data-nosnippet>318</a>    <span class="doccomment">//! No-browser unit coverage of the buffer drain + cap-eviction logic.
-<a href=#319 id=319 data-nosnippet>319</a>    //!
-<a href=#320 id=320 data-nosnippet>320</a>    //! The drain-task path (which constructs a real `tab.monitor()` stream and
-<a href=#321 id=321 data-nosnippet>321</a>    //! spawns the correlator) needs a live Chrome and is exercised in the gated
-<a href=#322 id=322 data-nosnippet>322</a>    //! integration tests. Here we drive `drain` / `push_capped` directly against
-<a href=#323 id=323 data-nosnippet>323</a>    //! a synthetic `MonitorBuffer`.
-<a href=#324 id=324 data-nosnippet>324</a>    </span><span class="kw">use </span>std::collections::VecDeque;
-<a href=#325 id=325 data-nosnippet>325</a>
-<a href=#326 id=326 data-nosnippet>326</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
-<a href=#327 id=327 data-nosnippet>327</a>
-<a href=#328 id=328 data-nosnippet>328</a>    <span class="doccomment">/// A cheap synthetic event for buffer tests.
-<a href=#329 id=329 data-nosnippet>329</a>    </span><span class="kw">fn </span>ev(n: usize) -&gt; MonitorEvent {
-<a href=#330 id=330 data-nosnippet>330</a>        MonitorEvent::Http {
-<a href=#331 id=331 data-nosnippet>331</a>            url: <span class="macro">format!</span>(<span class="string">"https://example.com/{n}"</span>),
-<a href=#332 id=332 data-nosnippet>332</a>            method: <span class="string">"GET"</span>.into(),
-<a href=#333 id=333 data-nosnippet>333</a>            status: <span class="prelude-val">Some</span>(<span class="number">200</span>),
-<a href=#334 id=334 data-nosnippet>334</a>            error: <span class="prelude-val">None</span>,
-<a href=#335 id=335 data-nosnippet>335</a>            body: <span class="prelude-val">None</span>,
-<a href=#336 id=336 data-nosnippet>336</a>            body_base64: <span class="prelude-val">None</span>,
-<a href=#337 id=337 data-nosnippet>337</a>        }
-<a href=#338 id=338 data-nosnippet>338</a>    }
-<a href=#339 id=339 data-nosnippet>339</a>
-<a href=#340 id=340 data-nosnippet>340</a>    <span class="attr">#[test]
-<a href=#341 id=341 data-nosnippet>341</a>    </span><span class="kw">fn </span>drain_returns_up_to_max_and_clears_them() {
-<a href=#342 id=342 data-nosnippet>342</a>        <span class="kw">let </span><span class="kw-2">mut </span>buf = MonitorBuffer {
-<a href=#343 id=343 data-nosnippet>343</a>            events: (<span class="number">0</span>..<span class="number">5</span>).map(ev).collect(),
-<a href=#344 id=344 data-nosnippet>344</a>            dropped: <span class="number">0</span>,
-<a href=#345 id=345 data-nosnippet>345</a>        };
-<a href=#346 id=346 data-nosnippet>346</a>        <span class="kw">let </span>(events, dropped) = drain(<span class="kw-2">&amp;mut </span>buf, <span class="number">3</span>);
-<a href=#347 id=347 data-nosnippet>347</a>        <span class="macro">assert_eq!</span>(events.len(), <span class="number">3</span>, <span class="string">"drains exactly `max`"</span>);
-<a href=#348 id=348 data-nosnippet>348</a>        <span class="macro">assert_eq!</span>(events[<span class="number">0</span>], ev(<span class="number">0</span>), <span class="string">"oldest first"</span>);
-<a href=#349 id=349 data-nosnippet>349</a>        <span class="macro">assert_eq!</span>(events[<span class="number">2</span>], ev(<span class="number">2</span>));
-<a href=#350 id=350 data-nosnippet>350</a>        <span class="macro">assert_eq!</span>(dropped, <span class="number">0</span>);
-<a href=#351 id=351 data-nosnippet>351</a>        <span class="comment">// Remaining events stay, in order, for the next read.
-<a href=#352 id=352 data-nosnippet>352</a>        </span><span class="macro">assert_eq!</span>(buf.events.len(), <span class="number">2</span>);
-<a href=#353 id=353 data-nosnippet>353</a>        <span class="macro">assert_eq!</span>(buf.events.front().unwrap(), <span class="kw-2">&amp;</span>ev(<span class="number">3</span>));
-<a href=#354 id=354 data-nosnippet>354</a>    }
-<a href=#355 id=355 data-nosnippet>355</a>
-<a href=#356 id=356 data-nosnippet>356</a>    <span class="attr">#[test]
-<a href=#357 id=357 data-nosnippet>357</a>    </span><span class="kw">fn </span>drain_caps_at_buffer_len_when_max_exceeds_it() {
-<a href=#358 id=358 data-nosnippet>358</a>        <span class="kw">let </span><span class="kw-2">mut </span>buf = MonitorBuffer {
-<a href=#359 id=359 data-nosnippet>359</a>            events: (<span class="number">0</span>..<span class="number">2</span>).map(ev).collect(),
-<a href=#360 id=360 data-nosnippet>360</a>            dropped: <span class="number">0</span>,
-<a href=#361 id=361 data-nosnippet>361</a>        };
-<a href=#362 id=362 data-nosnippet>362</a>        <span class="kw">let </span>(events, <span class="kw">_</span>) = drain(<span class="kw-2">&amp;mut </span>buf, usize::MAX);
-<a href=#363 id=363 data-nosnippet>363</a>        <span class="macro">assert_eq!</span>(events.len(), <span class="number">2</span>, <span class="string">"never over-drains past what's buffered"</span>);
-<a href=#364 id=364 data-nosnippet>364</a>        <span class="macro">assert!</span>(buf.events.is_empty());
-<a href=#365 id=365 data-nosnippet>365</a>    }
-<a href=#366 id=366 data-nosnippet>366</a>
-<a href=#367 id=367 data-nosnippet>367</a>    <span class="attr">#[test]
-<a href=#368 id=368 data-nosnippet>368</a>    </span><span class="kw">fn </span>drain_returns_and_resets_dropped() {
-<a href=#369 id=369 data-nosnippet>369</a>        <span class="kw">let </span><span class="kw-2">mut </span>buf = MonitorBuffer {
-<a href=#370 id=370 data-nosnippet>370</a>            events: VecDeque::new(),
-<a href=#371 id=371 data-nosnippet>371</a>            dropped: <span class="number">3</span>,
-<a href=#372 id=372 data-nosnippet>372</a>        };
-<a href=#373 id=373 data-nosnippet>373</a>        <span class="kw">let </span>(events, dropped) = drain(<span class="kw-2">&amp;mut </span>buf, usize::MAX);
-<a href=#374 id=374 data-nosnippet>374</a>        <span class="macro">assert!</span>(events.is_empty());
-<a href=#375 id=375 data-nosnippet>375</a>        <span class="macro">assert_eq!</span>(dropped, <span class="number">3</span>, <span class="string">"reports the running dropped count"</span>);
-<a href=#376 id=376 data-nosnippet>376</a>        <span class="macro">assert_eq!</span>(buf.dropped, <span class="number">0</span>, <span class="string">"and resets it to zero"</span>);
-<a href=#377 id=377 data-nosnippet>377</a>    }
-<a href=#378 id=378 data-nosnippet>378</a>
-<a href=#379 id=379 data-nosnippet>379</a>    <span class="attr">#[test]
-<a href=#380 id=380 data-nosnippet>380</a>    </span><span class="kw">fn </span>push_capped_evicts_oldest_and_counts_dropped_over_cap() {
-<a href=#381 id=381 data-nosnippet>381</a>        <span class="kw">let </span><span class="kw-2">mut </span>buf = MonitorBuffer::default();
-<a href=#382 id=382 data-nosnippet>382</a>        <span class="comment">// Fill exactly to capacity — no drops yet.
-<a href=#383 id=383 data-nosnippet>383</a>        </span><span class="kw">for </span>n <span class="kw">in </span><span class="number">0</span>..MONITOR_BUFFER_CAP {
-<a href=#384 id=384 data-nosnippet>384</a>            push_capped(<span class="kw-2">&amp;mut </span>buf, ev(n));
-<a href=#385 id=385 data-nosnippet>385</a>        }
-<a href=#386 id=386 data-nosnippet>386</a>        <span class="macro">assert_eq!</span>(buf.events.len(), MONITOR_BUFFER_CAP);
-<a href=#387 id=387 data-nosnippet>387</a>        <span class="macro">assert_eq!</span>(buf.dropped, <span class="number">0</span>);
-<a href=#388 id=388 data-nosnippet>388</a>
-<a href=#389 id=389 data-nosnippet>389</a>        <span class="comment">// One more over the cap evicts the oldest (event 0) and counts it.
-<a href=#390 id=390 data-nosnippet>390</a>        </span>push_capped(<span class="kw-2">&amp;mut </span>buf, ev(MONITOR_BUFFER_CAP));
-<a href=#391 id=391 data-nosnippet>391</a>        <span class="macro">assert_eq!</span>(buf.events.len(), MONITOR_BUFFER_CAP, <span class="string">"stays at the cap"</span>);
-<a href=#392 id=392 data-nosnippet>392</a>        <span class="macro">assert_eq!</span>(buf.dropped, <span class="number">1</span>, <span class="string">"the evicted event is counted"</span>);
-<a href=#393 id=393 data-nosnippet>393</a>        <span class="macro">assert_eq!</span>(
-<a href=#394 id=394 data-nosnippet>394</a>            buf.events.front().unwrap(),
-<a href=#395 id=395 data-nosnippet>395</a>            <span class="kw-2">&amp;</span>ev(<span class="number">1</span>),
-<a href=#396 id=396 data-nosnippet>396</a>            <span class="string">"event 0 was evicted; event 1 is now oldest"
-<a href=#397 id=397 data-nosnippet>397</a>        </span>);
-<a href=#398 id=398 data-nosnippet>398</a>        <span class="macro">assert_eq!</span>(
-<a href=#399 id=399 data-nosnippet>399</a>            buf.events.back().unwrap(),
-<a href=#400 id=400 data-nosnippet>400</a>            <span class="kw-2">&amp;</span>ev(MONITOR_BUFFER_CAP),
-<a href=#401 id=401 data-nosnippet>401</a>            <span class="string">"the newest push is retained"
-<a href=#402 id=402 data-nosnippet>402</a>        </span>);
-<a href=#403 id=403 data-nosnippet>403</a>    }
-<a href=#404 id=404 data-nosnippet>404</a>
-<a href=#405 id=405 data-nosnippet>405</a>    <span class="attr">#[tokio::test]
-<a href=#406 id=406 data-nosnippet>406</a>    </span><span class="kw">async fn </span>read_unknown_handle_is_invalid_params() {
-<a href=#407 id=407 data-nosnippet>407</a>        <span class="kw">let </span>state = Arc::new(Mutex::new(SessionState::new()));
-<a href=#408 id=408 data-nosnippet>408</a>        <span class="kw">let </span>err = read(
-<a href=#409 id=409 data-nosnippet>409</a>            state,
-<a href=#410 id=410 data-nosnippet>410</a>            ReadInput {
-<a href=#411 id=411 data-nosnippet>411</a>                handle: <span class="string">"nope"</span>.into(),
-<a href=#412 id=412 data-nosnippet>412</a>                max: <span class="prelude-val">None</span>,
-<a href=#413 id=413 data-nosnippet>413</a>            },
-<a href=#414 id=414 data-nosnippet>414</a>        )
-<a href=#415 id=415 data-nosnippet>415</a>        .<span class="kw">await
-<a href=#416 id=416 data-nosnippet>416</a>        </span>.expect_err(<span class="string">"expected unknown-handle error"</span>);
-<a href=#417 id=417 data-nosnippet>417</a>        <span class="macro">assert!</span>(err.message.contains(<span class="string">"unknown monitor handle"</span>));
-<a href=#418 id=418 data-nosnippet>418</a>    }
+<a href=#230 id=230 data-nosnippet>230</a><span class="doccomment">/// The wire-level body fields for one `http` [`MonitorEvent`], extracted so
+<a href=#231 id=231 data-nosnippet>231</a>/// [`wire_body_fields`] is unit-testable without a live CDP body fetch.
+<a href=#232 id=232 data-nosnippet>232</a></span><span class="attr">#[derive(Debug, Default, PartialEq, Eq)]
+<a href=#233 id=233 data-nosnippet>233</a></span><span class="kw">struct </span>CapturedBody {
+<a href=#234 id=234 data-nosnippet>234</a>    body: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#235 id=235 data-nosnippet>235</a>    body_base64: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#236 id=236 data-nosnippet>236</a>    body_truncated: <span class="prelude-ty">Option</span>&lt;bool&gt;,
+<a href=#237 id=237 data-nosnippet>237</a>    body_full_bytes: <span class="prelude-ty">Option</span>&lt;u64&gt;,
+<a href=#238 id=238 data-nosnippet>238</a>    body_capture_error: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#239 id=239 data-nosnippet>239</a>}
+<a href=#240 id=240 data-nosnippet>240</a>
+<a href=#241 id=241 data-nosnippet>241</a><span class="doccomment">/// Turn a `NetworkExchange::body()` result into the wire-level body fields,
+<a href=#242 id=242 data-nosnippet>242</a>/// bounding capture at `max_bytes` via [`BoundedBody::capture`] (`0` means
+<a href=#243 id=243 data-nosnippet>243</a>/// unbounded — see [`BoundedBody::capture`]'s own docs).
+<a href=#244 id=244 data-nosnippet>244</a>///
+<a href=#245 id=245 data-nosnippet>245</a>/// Pulled out as a pure function (rather than inlined in [`convert`]) so the
+<a href=#246 id=246 data-nosnippet>246</a>/// truncation / error wiring is unit-testable directly against a synthetic
+<a href=#247 id=247 data-nosnippet>247</a>/// `Ok`/`Err` result, without needing a live `NetworkExchange` (whose
+<a href=#248 id=248 data-nosnippet>248</a>/// `request_id` / `session` fields are `pub(crate)` to the `zendriver` crate
+<a href=#249 id=249 data-nosnippet>249</a>/// and can't be constructed from here).
+<a href=#250 id=250 data-nosnippet>250</a></span><span class="kw">fn </span>wire_body_fields(result: <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, ZendriverError&gt;, max_bytes: usize) -&gt; CapturedBody {
+<a href=#251 id=251 data-nosnippet>251</a>    <span class="kw">match </span>result {
+<a href=#252 id=252 data-nosnippet>252</a>        <span class="prelude-val">Ok</span>(bytes) =&gt; {
+<a href=#253 id=253 data-nosnippet>253</a>            <span class="kw">let </span>bounded = BoundedBody::capture(<span class="kw-2">&amp;</span>bytes, max_bytes);
+<a href=#254 id=254 data-nosnippet>254</a>            CapturedBody {
+<a href=#255 id=255 data-nosnippet>255</a>                body: <span class="prelude-val">Some</span>(String::from_utf8_lossy(<span class="kw-2">&amp;</span>bounded.bytes).into_owned()),
+<a href=#256 id=256 data-nosnippet>256</a>                body_base64: <span class="prelude-val">Some</span>(BASE64.encode(<span class="kw-2">&amp;</span>bounded.bytes)),
+<a href=#257 id=257 data-nosnippet>257</a>                body_truncated: <span class="prelude-val">Some</span>(bounded.truncated),
+<a href=#258 id=258 data-nosnippet>258</a>                body_full_bytes: <span class="prelude-val">Some</span>(bounded.full_len),
+<a href=#259 id=259 data-nosnippet>259</a>                body_capture_error: <span class="prelude-val">None</span>,
+<a href=#260 id=260 data-nosnippet>260</a>            }
+<a href=#261 id=261 data-nosnippet>261</a>        }
+<a href=#262 id=262 data-nosnippet>262</a>        <span class="prelude-val">Err</span>(e) =&gt; CapturedBody {
+<a href=#263 id=263 data-nosnippet>263</a>            body_capture_error: <span class="prelude-val">Some</span>(e.to_string()),
+<a href=#264 id=264 data-nosnippet>264</a>            ..Default::default()
+<a href=#265 id=265 data-nosnippet>265</a>        },
+<a href=#266 id=266 data-nosnippet>266</a>    }
+<a href=#267 id=267 data-nosnippet>267</a>}
+<a href=#268 id=268 data-nosnippet>268</a>
+<a href=#269 id=269 data-nosnippet>269</a><span class="doccomment">/// Convert a lib-side [`NetworkDeliveryBoundary`] into the wire
+<a href=#270 id=270 data-nosnippet>270</a>/// [`MonitorEvent::DeliveryBoundary`].
+<a href=#271 id=271 data-nosnippet>271</a></span><span class="kw">fn </span>convert_boundary(boundary: NetworkDeliveryBoundary) -&gt; MonitorEvent {
+<a href=#272 id=272 data-nosnippet>272</a>    <span class="kw">match </span>boundary {
+<a href=#273 id=273 data-nosnippet>273</a>        NetworkDeliveryBoundary::Lagged { missed, generation } =&gt; MonitorEvent::DeliveryBoundary {
+<a href=#274 id=274 data-nosnippet>274</a>            boundary: <span class="string">"lagged"</span>.to_string(),
+<a href=#275 id=275 data-nosnippet>275</a>            generation: <span class="prelude-val">Some</span>(generation),
+<a href=#276 id=276 data-nosnippet>276</a>            missed: <span class="prelude-val">Some</span>(missed),
+<a href=#277 id=277 data-nosnippet>277</a>            previous: <span class="prelude-val">None</span>,
+<a href=#278 id=278 data-nosnippet>278</a>            url: <span class="prelude-val">None</span>,
+<a href=#279 id=279 data-nosnippet>279</a>        },
+<a href=#280 id=280 data-nosnippet>280</a>        NetworkDeliveryBoundary::Reconnected {
+<a href=#281 id=281 data-nosnippet>281</a>            previous,
+<a href=#282 id=282 data-nosnippet>282</a>            generation,
+<a href=#283 id=283 data-nosnippet>283</a>        } =&gt; MonitorEvent::DeliveryBoundary {
+<a href=#284 id=284 data-nosnippet>284</a>            boundary: <span class="string">"reconnected"</span>.to_string(),
+<a href=#285 id=285 data-nosnippet>285</a>            generation: <span class="prelude-val">Some</span>(generation),
+<a href=#286 id=286 data-nosnippet>286</a>            missed: <span class="prelude-val">None</span>,
+<a href=#287 id=287 data-nosnippet>287</a>            previous: <span class="prelude-val">Some</span>(previous),
+<a href=#288 id=288 data-nosnippet>288</a>            url: <span class="prelude-val">None</span>,
+<a href=#289 id=289 data-nosnippet>289</a>        },
+<a href=#290 id=290 data-nosnippet>290</a>        NetworkDeliveryBoundary::Disconnected { generation } =&gt; MonitorEvent::DeliveryBoundary {
+<a href=#291 id=291 data-nosnippet>291</a>            boundary: <span class="string">"disconnected"</span>.to_string(),
+<a href=#292 id=292 data-nosnippet>292</a>            generation: <span class="prelude-val">Some</span>(generation),
+<a href=#293 id=293 data-nosnippet>293</a>            missed: <span class="prelude-val">None</span>,
+<a href=#294 id=294 data-nosnippet>294</a>            previous: <span class="prelude-val">None</span>,
+<a href=#295 id=295 data-nosnippet>295</a>            url: <span class="prelude-val">None</span>,
+<a href=#296 id=296 data-nosnippet>296</a>        },
+<a href=#297 id=297 data-nosnippet>297</a>        NetworkDeliveryBoundary::CorrelationEvicted { url } =&gt; MonitorEvent::DeliveryBoundary {
+<a href=#298 id=298 data-nosnippet>298</a>            boundary: <span class="string">"correlation_evicted"</span>.to_string(),
+<a href=#299 id=299 data-nosnippet>299</a>            generation: <span class="prelude-val">None</span>,
+<a href=#300 id=300 data-nosnippet>300</a>            missed: <span class="prelude-val">None</span>,
+<a href=#301 id=301 data-nosnippet>301</a>            previous: <span class="prelude-val">None</span>,
+<a href=#302 id=302 data-nosnippet>302</a>            url: <span class="prelude-val">Some</span>(url),
+<a href=#303 id=303 data-nosnippet>303</a>        },
+<a href=#304 id=304 data-nosnippet>304</a>        NetworkDeliveryBoundary::DecodeFailed =&gt; MonitorEvent::DeliveryBoundary {
+<a href=#305 id=305 data-nosnippet>305</a>            boundary: <span class="string">"decode_failed"</span>.to_string(),
+<a href=#306 id=306 data-nosnippet>306</a>            generation: <span class="prelude-val">None</span>,
+<a href=#307 id=307 data-nosnippet>307</a>            missed: <span class="prelude-val">None</span>,
+<a href=#308 id=308 data-nosnippet>308</a>            previous: <span class="prelude-val">None</span>,
+<a href=#309 id=309 data-nosnippet>309</a>            url: <span class="prelude-val">None</span>,
+<a href=#310 id=310 data-nosnippet>310</a>        },
+<a href=#311 id=311 data-nosnippet>311</a>        NetworkDeliveryBoundary::Unknown =&gt; MonitorEvent::DeliveryBoundary {
+<a href=#312 id=312 data-nosnippet>312</a>            boundary: <span class="string">"unknown"</span>.to_string(),
+<a href=#313 id=313 data-nosnippet>313</a>            generation: <span class="prelude-val">None</span>,
+<a href=#314 id=314 data-nosnippet>314</a>            missed: <span class="prelude-val">None</span>,
+<a href=#315 id=315 data-nosnippet>315</a>            previous: <span class="prelude-val">None</span>,
+<a href=#316 id=316 data-nosnippet>316</a>            url: <span class="prelude-val">None</span>,
+<a href=#317 id=317 data-nosnippet>317</a>        },
+<a href=#318 id=318 data-nosnippet>318</a>    }
+<a href=#319 id=319 data-nosnippet>319</a>}
+<a href=#320 id=320 data-nosnippet>320</a>
+<a href=#321 id=321 data-nosnippet>321</a><span class="comment">// ---------- browser_monitor_read ------------------------------------------
+<a href=#322 id=322 data-nosnippet>322</a>
+<a href=#323 id=323 data-nosnippet>323</a></span><span class="doccomment">/// Input for `browser_monitor_read`.
+<a href=#324 id=324 data-nosnippet>324</a></span><span class="attr">#[derive(Debug, Deserialize, JsonSchema)]
+<a href=#325 id=325 data-nosnippet>325</a>#[serde(deny_unknown_fields)]
+<a href=#326 id=326 data-nosnippet>326</a></span><span class="kw">pub struct </span>ReadInput {
+<a href=#327 id=327 data-nosnippet>327</a>    <span class="doccomment">/// Handle returned by an earlier `browser_monitor_start`.
+<a href=#328 id=328 data-nosnippet>328</a>    </span><span class="kw">pub </span>handle: String,
+<a href=#329 id=329 data-nosnippet>329</a>    <span class="doccomment">/// Maximum number of events to drain this call. Omit to drain all buffered
+<a href=#330 id=330 data-nosnippet>330</a>    /// events.
+<a href=#331 id=331 data-nosnippet>331</a>    </span><span class="attr">#[serde(default, skip_serializing_if = <span class="string">"Option::is_none"</span>)]
+<a href=#332 id=332 data-nosnippet>332</a>    </span><span class="kw">pub </span>max: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+<a href=#333 id=333 data-nosnippet>333</a>}
+<a href=#334 id=334 data-nosnippet>334</a>
+<a href=#335 id=335 data-nosnippet>335</a><span class="doccomment">/// Output of `browser_monitor_read`.
+<a href=#336 id=336 data-nosnippet>336</a></span><span class="attr">#[derive(Debug, Serialize, JsonSchema)]
+<a href=#337 id=337 data-nosnippet>337</a></span><span class="kw">pub struct </span>ReadOutput {
+<a href=#338 id=338 data-nosnippet>338</a>    <span class="doccomment">/// Drained events, oldest first.
+<a href=#339 id=339 data-nosnippet>339</a>    </span><span class="kw">pub </span>events: Vec&lt;MonitorEvent&gt;,
+<a href=#340 id=340 data-nosnippet>340</a>    <span class="doccomment">/// Events evicted (ring full) since the previous `read`. Non-zero means the
+<a href=#341 id=341 data-nosnippet>341</a>    /// buffer overflowed — read more often or stop the monitor.
+<a href=#342 id=342 data-nosnippet>342</a>    </span><span class="kw">pub </span>dropped: usize,
+<a href=#343 id=343 data-nosnippet>343</a>}
+<a href=#344 id=344 data-nosnippet>344</a>
+<a href=#345 id=345 data-nosnippet>345</a><span class="doccomment">/// Drain up to `max` buffered events from a running monitor.
+<a href=#346 id=346 data-nosnippet>346</a>///
+<a href=#347 id=347 data-nosnippet>347</a>/// Looks the handle up in the session registry, then drains its ring. The
+<a href=#348 id=348 data-nosnippet>348</a>/// running `dropped` count is returned and reset to 0.
+<a href=#349 id=349 data-nosnippet>349</a></span><span class="kw">pub async fn </span>read(
+<a href=#350 id=350 data-nosnippet>350</a>    state: Arc&lt;Mutex&lt;SessionState&gt;&gt;,
+<a href=#351 id=351 data-nosnippet>351</a>    input: ReadInput,
+<a href=#352 id=352 data-nosnippet>352</a>) -&gt; <span class="prelude-ty">Result</span>&lt;ReadOutput, ErrorData&gt; {
+<a href=#353 id=353 data-nosnippet>353</a>    <span class="kw">let </span>mon = {
+<a href=#354 id=354 data-nosnippet>354</a>        <span class="kw">let </span>s = state.lock().<span class="kw">await</span>;
+<a href=#355 id=355 data-nosnippet>355</a>        s.monitors.get(<span class="kw-2">&amp;</span>input.handle).cloned()
+<a href=#356 id=356 data-nosnippet>356</a>    }
+<a href=#357 id=357 data-nosnippet>357</a>    .ok_or_else(|| unknown_handle(<span class="kw-2">&amp;</span>input.handle))<span class="question-mark">?</span>;
+<a href=#358 id=358 data-nosnippet>358</a>
+<a href=#359 id=359 data-nosnippet>359</a>    <span class="comment">// Lock the MonitorState briefly to reach its shared ring, then the ring
+<a href=#360 id=360 data-nosnippet>360</a>    // itself — neither lock is held across an `.await` that the drain task
+<a href=#361 id=361 data-nosnippet>361</a>    // waits on.
+<a href=#362 id=362 data-nosnippet>362</a>    </span><span class="kw">let </span>buffer = {
+<a href=#363 id=363 data-nosnippet>363</a>        <span class="kw">let </span>m = mon.lock().<span class="kw">await</span>;
+<a href=#364 id=364 data-nosnippet>364</a>        m.buffer.clone()
+<a href=#365 id=365 data-nosnippet>365</a>    };
+<a href=#366 id=366 data-nosnippet>366</a>    <span class="kw">let </span><span class="kw-2">mut </span>buf = buffer.lock().<span class="kw">await</span>;
+<a href=#367 id=367 data-nosnippet>367</a>    <span class="kw">let </span>(events, dropped) = drain(<span class="kw-2">&amp;mut </span>buf, input.max.unwrap_or(usize::MAX));
+<a href=#368 id=368 data-nosnippet>368</a>    <span class="prelude-val">Ok</span>(ReadOutput { events, dropped })
+<a href=#369 id=369 data-nosnippet>369</a>}
+<a href=#370 id=370 data-nosnippet>370</a>
+<a href=#371 id=371 data-nosnippet>371</a><span class="doccomment">/// Drain up to `max` events from `buf`, returning them (oldest first) plus the
+<a href=#372 id=372 data-nosnippet>372</a>/// `dropped` count, which is reset to 0.
+<a href=#373 id=373 data-nosnippet>373</a>///
+<a href=#374 id=374 data-nosnippet>374</a>/// Extracted as a free fn so the drain + dropped-reset semantics are
+<a href=#375 id=375 data-nosnippet>375</a>/// unit-testable without a browser, a `SessionState`, or the drain task.
+<a href=#376 id=376 data-nosnippet>376</a></span><span class="kw">fn </span>drain(buf: <span class="kw-2">&amp;mut </span>MonitorBuffer, max: usize) -&gt; (Vec&lt;MonitorEvent&gt;, usize) {
+<a href=#377 id=377 data-nosnippet>377</a>    <span class="kw">let </span>take = max.min(buf.events.len());
+<a href=#378 id=378 data-nosnippet>378</a>    <span class="kw">let </span>events: Vec&lt;MonitorEvent&gt; = buf.events.drain(..take).collect();
+<a href=#379 id=379 data-nosnippet>379</a>    <span class="kw">let </span>dropped = std::mem::take(<span class="kw-2">&amp;mut </span>buf.dropped);
+<a href=#380 id=380 data-nosnippet>380</a>    (events, dropped)
+<a href=#381 id=381 data-nosnippet>381</a>}
+<a href=#382 id=382 data-nosnippet>382</a>
+<a href=#383 id=383 data-nosnippet>383</a><span class="comment">// ---------- browser_monitor_stop ------------------------------------------
+<a href=#384 id=384 data-nosnippet>384</a>
+<a href=#385 id=385 data-nosnippet>385</a></span><span class="doccomment">/// Input for `browser_monitor_stop`.
+<a href=#386 id=386 data-nosnippet>386</a></span><span class="attr">#[derive(Debug, Deserialize, JsonSchema)]
+<a href=#387 id=387 data-nosnippet>387</a>#[serde(deny_unknown_fields)]
+<a href=#388 id=388 data-nosnippet>388</a></span><span class="kw">pub struct </span>StopInput {
+<a href=#389 id=389 data-nosnippet>389</a>    <span class="doccomment">/// Handle returned by an earlier `browser_monitor_start`.
+<a href=#390 id=390 data-nosnippet>390</a>    </span><span class="kw">pub </span>handle: String,
+<a href=#391 id=391 data-nosnippet>391</a>}
+<a href=#392 id=392 data-nosnippet>392</a>
+<a href=#393 id=393 data-nosnippet>393</a><span class="doccomment">/// Output of `browser_monitor_stop`.
+<a href=#394 id=394 data-nosnippet>394</a></span><span class="attr">#[derive(Debug, Serialize, JsonSchema)]
+<a href=#395 id=395 data-nosnippet>395</a></span><span class="kw">pub struct </span>StopOutput {
+<a href=#396 id=396 data-nosnippet>396</a>    <span class="doccomment">/// `true` if a live monitor was found and stopped; `false` if the handle
+<a href=#397 id=397 data-nosnippet>397</a>    /// was unknown (already stopped, or never started).
+<a href=#398 id=398 data-nosnippet>398</a>    </span><span class="kw">pub </span>stopped: bool,
+<a href=#399 id=399 data-nosnippet>399</a>}
+<a href=#400 id=400 data-nosnippet>400</a>
+<a href=#401 id=401 data-nosnippet>401</a><span class="doccomment">/// Stop a running monitor: cancel its drain task and drop its registry entry.
+<a href=#402 id=402 data-nosnippet>402</a>///
+<a href=#403 id=403 data-nosnippet>403</a>/// Removing the handle from the registry drops the `MonitorState` (and its
+<a href=#404 id=404 data-nosnippet>404</a>/// shared ring) once this function's lock guard releases; cancelling + aborting
+<a href=#405 id=405 data-nosnippet>405</a>/// the task first guarantees it stops touching the stream promptly. An unknown
+<a href=#406 id=406 data-nosnippet>406</a>/// handle returns `{ stopped: false }` (idempotent stop) rather than an error.
+<a href=#407 id=407 data-nosnippet>407</a></span><span class="kw">pub async fn </span>stop(
+<a href=#408 id=408 data-nosnippet>408</a>    state: Arc&lt;Mutex&lt;SessionState&gt;&gt;,
+<a href=#409 id=409 data-nosnippet>409</a>    input: StopInput,
+<a href=#410 id=410 data-nosnippet>410</a>) -&gt; <span class="prelude-ty">Result</span>&lt;StopOutput, ErrorData&gt; {
+<a href=#411 id=411 data-nosnippet>411</a>    <span class="kw">let </span><span class="prelude-val">Some</span>(mon) = state.lock().<span class="kw">await</span>.monitors.remove(<span class="kw-2">&amp;</span>input.handle) <span class="kw">else </span>{
+<a href=#412 id=412 data-nosnippet>412</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(StopOutput { stopped: <span class="bool-val">false </span>});
+<a href=#413 id=413 data-nosnippet>413</a>    };
+<a href=#414 id=414 data-nosnippet>414</a>    <span class="kw">let </span>m = mon.lock().<span class="kw">await</span>;
+<a href=#415 id=415 data-nosnippet>415</a>    m.cancel.cancel();
+<a href=#416 id=416 data-nosnippet>416</a>    m.task.abort();
+<a href=#417 id=417 data-nosnippet>417</a>    <span class="prelude-val">Ok</span>(StopOutput { stopped: <span class="bool-val">true </span>})
+<a href=#418 id=418 data-nosnippet>418</a>}
 <a href=#419 id=419 data-nosnippet>419</a>
-<a href=#420 id=420 data-nosnippet>420</a>    <span class="attr">#[tokio::test]
-<a href=#421 id=421 data-nosnippet>421</a>    </span><span class="kw">async fn </span>stop_unknown_handle_reports_not_stopped() {
-<a href=#422 id=422 data-nosnippet>422</a>        <span class="kw">let </span>state = Arc::new(Mutex::new(SessionState::new()));
-<a href=#423 id=423 data-nosnippet>423</a>        <span class="kw">let </span>out = stop(
-<a href=#424 id=424 data-nosnippet>424</a>            state,
-<a href=#425 id=425 data-nosnippet>425</a>            StopInput {
-<a href=#426 id=426 data-nosnippet>426</a>                handle: <span class="string">"nope"</span>.into(),
-<a href=#427 id=427 data-nosnippet>427</a>            },
-<a href=#428 id=428 data-nosnippet>428</a>        )
-<a href=#429 id=429 data-nosnippet>429</a>        .<span class="kw">await
-<a href=#430 id=430 data-nosnippet>430</a>        </span>.expect(<span class="string">"stop is idempotent for unknown handles"</span>);
-<a href=#431 id=431 data-nosnippet>431</a>        <span class="macro">assert!</span>(!out.stopped, <span class="string">"unknown handle reports stopped=false"</span>);
-<a href=#432 id=432 data-nosnippet>432</a>    }
-<a href=#433 id=433 data-nosnippet>433</a>}
+<a href=#420 id=420 data-nosnippet>420</a><span class="doccomment">/// Wire error for a `read` / `stop` against a handle that isn't registered.
+<a href=#421 id=421 data-nosnippet>421</a></span><span class="kw">fn </span>unknown_handle(handle: <span class="kw-2">&amp;</span>str) -&gt; ErrorData {
+<a href=#422 id=422 data-nosnippet>422</a>    ErrorData::invalid_params(
+<a href=#423 id=423 data-nosnippet>423</a>        <span class="macro">format!</span>(
+<a href=#424 id=424 data-nosnippet>424</a>            <span class="string">"unknown monitor handle `{handle}`. Start one with `browser_monitor_start`; the handle may have already been stopped."
+<a href=#425 id=425 data-nosnippet>425</a>        </span>),
+<a href=#426 id=426 data-nosnippet>426</a>        <span class="prelude-val">None</span>,
+<a href=#427 id=427 data-nosnippet>427</a>    )
+<a href=#428 id=428 data-nosnippet>428</a>}
+<a href=#429 id=429 data-nosnippet>429</a>
+<a href=#430 id=430 data-nosnippet>430</a><span class="attr">#[cfg(test)]
+<a href=#431 id=431 data-nosnippet>431</a>#[allow(clippy::panic, clippy::unwrap_used)]
+<a href=#432 id=432 data-nosnippet>432</a></span><span class="kw">mod </span>tests {
+<a href=#433 id=433 data-nosnippet>433</a>    <span class="doccomment">//! No-browser unit coverage of the buffer drain + cap-eviction logic.
+<a href=#434 id=434 data-nosnippet>434</a>    //!
+<a href=#435 id=435 data-nosnippet>435</a>    //! The drain-task path (which constructs a real `tab.monitor()` stream and
+<a href=#436 id=436 data-nosnippet>436</a>    //! spawns the correlator) needs a live Chrome and is exercised in the gated
+<a href=#437 id=437 data-nosnippet>437</a>    //! integration tests. Here we drive `drain` / `push_capped` directly against
+<a href=#438 id=438 data-nosnippet>438</a>    //! a synthetic `MonitorBuffer`.
+<a href=#439 id=439 data-nosnippet>439</a>    </span><span class="kw">use </span>std::collections::VecDeque;
+<a href=#440 id=440 data-nosnippet>440</a>
+<a href=#441 id=441 data-nosnippet>441</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#442 id=442 data-nosnippet>442</a>
+<a href=#443 id=443 data-nosnippet>443</a>    <span class="doccomment">/// A cheap synthetic event for buffer tests.
+<a href=#444 id=444 data-nosnippet>444</a>    </span><span class="kw">fn </span>ev(n: usize) -&gt; MonitorEvent {
+<a href=#445 id=445 data-nosnippet>445</a>        MonitorEvent::Http {
+<a href=#446 id=446 data-nosnippet>446</a>            url: <span class="macro">format!</span>(<span class="string">"https://example.com/{n}"</span>),
+<a href=#447 id=447 data-nosnippet>447</a>            method: <span class="string">"GET"</span>.into(),
+<a href=#448 id=448 data-nosnippet>448</a>            status: <span class="prelude-val">Some</span>(<span class="number">200</span>),
+<a href=#449 id=449 data-nosnippet>449</a>            error: <span class="prelude-val">None</span>,
+<a href=#450 id=450 data-nosnippet>450</a>            body: <span class="prelude-val">None</span>,
+<a href=#451 id=451 data-nosnippet>451</a>            body_base64: <span class="prelude-val">None</span>,
+<a href=#452 id=452 data-nosnippet>452</a>            body_truncated: <span class="prelude-val">None</span>,
+<a href=#453 id=453 data-nosnippet>453</a>            body_full_bytes: <span class="prelude-val">None</span>,
+<a href=#454 id=454 data-nosnippet>454</a>            body_capture_error: <span class="prelude-val">None</span>,
+<a href=#455 id=455 data-nosnippet>455</a>        }
+<a href=#456 id=456 data-nosnippet>456</a>    }
+<a href=#457 id=457 data-nosnippet>457</a>
+<a href=#458 id=458 data-nosnippet>458</a>    <span class="attr">#[test]
+<a href=#459 id=459 data-nosnippet>459</a>    </span><span class="kw">fn </span>drain_returns_up_to_max_and_clears_them() {
+<a href=#460 id=460 data-nosnippet>460</a>        <span class="kw">let </span><span class="kw-2">mut </span>buf = MonitorBuffer {
+<a href=#461 id=461 data-nosnippet>461</a>            events: (<span class="number">0</span>..<span class="number">5</span>).map(ev).collect(),
+<a href=#462 id=462 data-nosnippet>462</a>            dropped: <span class="number">0</span>,
+<a href=#463 id=463 data-nosnippet>463</a>        };
+<a href=#464 id=464 data-nosnippet>464</a>        <span class="kw">let </span>(events, dropped) = drain(<span class="kw-2">&amp;mut </span>buf, <span class="number">3</span>);
+<a href=#465 id=465 data-nosnippet>465</a>        <span class="macro">assert_eq!</span>(events.len(), <span class="number">3</span>, <span class="string">"drains exactly `max`"</span>);
+<a href=#466 id=466 data-nosnippet>466</a>        <span class="macro">assert_eq!</span>(events[<span class="number">0</span>], ev(<span class="number">0</span>), <span class="string">"oldest first"</span>);
+<a href=#467 id=467 data-nosnippet>467</a>        <span class="macro">assert_eq!</span>(events[<span class="number">2</span>], ev(<span class="number">2</span>));
+<a href=#468 id=468 data-nosnippet>468</a>        <span class="macro">assert_eq!</span>(dropped, <span class="number">0</span>);
+<a href=#469 id=469 data-nosnippet>469</a>        <span class="comment">// Remaining events stay, in order, for the next read.
+<a href=#470 id=470 data-nosnippet>470</a>        </span><span class="macro">assert_eq!</span>(buf.events.len(), <span class="number">2</span>);
+<a href=#471 id=471 data-nosnippet>471</a>        <span class="macro">assert_eq!</span>(buf.events.front().unwrap(), <span class="kw-2">&amp;</span>ev(<span class="number">3</span>));
+<a href=#472 id=472 data-nosnippet>472</a>    }
+<a href=#473 id=473 data-nosnippet>473</a>
+<a href=#474 id=474 data-nosnippet>474</a>    <span class="attr">#[test]
+<a href=#475 id=475 data-nosnippet>475</a>    </span><span class="kw">fn </span>drain_caps_at_buffer_len_when_max_exceeds_it() {
+<a href=#476 id=476 data-nosnippet>476</a>        <span class="kw">let </span><span class="kw-2">mut </span>buf = MonitorBuffer {
+<a href=#477 id=477 data-nosnippet>477</a>            events: (<span class="number">0</span>..<span class="number">2</span>).map(ev).collect(),
+<a href=#478 id=478 data-nosnippet>478</a>            dropped: <span class="number">0</span>,
+<a href=#479 id=479 data-nosnippet>479</a>        };
+<a href=#480 id=480 data-nosnippet>480</a>        <span class="kw">let </span>(events, <span class="kw">_</span>) = drain(<span class="kw-2">&amp;mut </span>buf, usize::MAX);
+<a href=#481 id=481 data-nosnippet>481</a>        <span class="macro">assert_eq!</span>(events.len(), <span class="number">2</span>, <span class="string">"never over-drains past what's buffered"</span>);
+<a href=#482 id=482 data-nosnippet>482</a>        <span class="macro">assert!</span>(buf.events.is_empty());
+<a href=#483 id=483 data-nosnippet>483</a>    }
+<a href=#484 id=484 data-nosnippet>484</a>
+<a href=#485 id=485 data-nosnippet>485</a>    <span class="attr">#[test]
+<a href=#486 id=486 data-nosnippet>486</a>    </span><span class="kw">fn </span>drain_returns_and_resets_dropped() {
+<a href=#487 id=487 data-nosnippet>487</a>        <span class="kw">let </span><span class="kw-2">mut </span>buf = MonitorBuffer {
+<a href=#488 id=488 data-nosnippet>488</a>            events: VecDeque::new(),
+<a href=#489 id=489 data-nosnippet>489</a>            dropped: <span class="number">3</span>,
+<a href=#490 id=490 data-nosnippet>490</a>        };
+<a href=#491 id=491 data-nosnippet>491</a>        <span class="kw">let </span>(events, dropped) = drain(<span class="kw-2">&amp;mut </span>buf, usize::MAX);
+<a href=#492 id=492 data-nosnippet>492</a>        <span class="macro">assert!</span>(events.is_empty());
+<a href=#493 id=493 data-nosnippet>493</a>        <span class="macro">assert_eq!</span>(dropped, <span class="number">3</span>, <span class="string">"reports the running dropped count"</span>);
+<a href=#494 id=494 data-nosnippet>494</a>        <span class="macro">assert_eq!</span>(buf.dropped, <span class="number">0</span>, <span class="string">"and resets it to zero"</span>);
+<a href=#495 id=495 data-nosnippet>495</a>    }
+<a href=#496 id=496 data-nosnippet>496</a>
+<a href=#497 id=497 data-nosnippet>497</a>    <span class="attr">#[test]
+<a href=#498 id=498 data-nosnippet>498</a>    </span><span class="kw">fn </span>push_capped_evicts_oldest_and_counts_dropped_over_cap() {
+<a href=#499 id=499 data-nosnippet>499</a>        <span class="kw">let </span><span class="kw-2">mut </span>buf = MonitorBuffer::default();
+<a href=#500 id=500 data-nosnippet>500</a>        <span class="comment">// Fill exactly to capacity — no drops yet.
+<a href=#501 id=501 data-nosnippet>501</a>        </span><span class="kw">for </span>n <span class="kw">in </span><span class="number">0</span>..MONITOR_BUFFER_CAP {
+<a href=#502 id=502 data-nosnippet>502</a>            push_capped(<span class="kw-2">&amp;mut </span>buf, ev(n));
+<a href=#503 id=503 data-nosnippet>503</a>        }
+<a href=#504 id=504 data-nosnippet>504</a>        <span class="macro">assert_eq!</span>(buf.events.len(), MONITOR_BUFFER_CAP);
+<a href=#505 id=505 data-nosnippet>505</a>        <span class="macro">assert_eq!</span>(buf.dropped, <span class="number">0</span>);
+<a href=#506 id=506 data-nosnippet>506</a>
+<a href=#507 id=507 data-nosnippet>507</a>        <span class="comment">// One more over the cap evicts the oldest (event 0) and counts it.
+<a href=#508 id=508 data-nosnippet>508</a>        </span>push_capped(<span class="kw-2">&amp;mut </span>buf, ev(MONITOR_BUFFER_CAP));
+<a href=#509 id=509 data-nosnippet>509</a>        <span class="macro">assert_eq!</span>(buf.events.len(), MONITOR_BUFFER_CAP, <span class="string">"stays at the cap"</span>);
+<a href=#510 id=510 data-nosnippet>510</a>        <span class="macro">assert_eq!</span>(buf.dropped, <span class="number">1</span>, <span class="string">"the evicted event is counted"</span>);
+<a href=#511 id=511 data-nosnippet>511</a>        <span class="macro">assert_eq!</span>(
+<a href=#512 id=512 data-nosnippet>512</a>            buf.events.front().unwrap(),
+<a href=#513 id=513 data-nosnippet>513</a>            <span class="kw-2">&amp;</span>ev(<span class="number">1</span>),
+<a href=#514 id=514 data-nosnippet>514</a>            <span class="string">"event 0 was evicted; event 1 is now oldest"
+<a href=#515 id=515 data-nosnippet>515</a>        </span>);
+<a href=#516 id=516 data-nosnippet>516</a>        <span class="macro">assert_eq!</span>(
+<a href=#517 id=517 data-nosnippet>517</a>            buf.events.back().unwrap(),
+<a href=#518 id=518 data-nosnippet>518</a>            <span class="kw-2">&amp;</span>ev(MONITOR_BUFFER_CAP),
+<a href=#519 id=519 data-nosnippet>519</a>            <span class="string">"the newest push is retained"
+<a href=#520 id=520 data-nosnippet>520</a>        </span>);
+<a href=#521 id=521 data-nosnippet>521</a>    }
+<a href=#522 id=522 data-nosnippet>522</a>
+<a href=#523 id=523 data-nosnippet>523</a>    <span class="attr">#[tokio::test]
+<a href=#524 id=524 data-nosnippet>524</a>    </span><span class="kw">async fn </span>read_unknown_handle_is_invalid_params() {
+<a href=#525 id=525 data-nosnippet>525</a>        <span class="kw">let </span>state = Arc::new(Mutex::new(SessionState::new()));
+<a href=#526 id=526 data-nosnippet>526</a>        <span class="kw">let </span>err = read(
+<a href=#527 id=527 data-nosnippet>527</a>            state,
+<a href=#528 id=528 data-nosnippet>528</a>            ReadInput {
+<a href=#529 id=529 data-nosnippet>529</a>                handle: <span class="string">"nope"</span>.into(),
+<a href=#530 id=530 data-nosnippet>530</a>                max: <span class="prelude-val">None</span>,
+<a href=#531 id=531 data-nosnippet>531</a>            },
+<a href=#532 id=532 data-nosnippet>532</a>        )
+<a href=#533 id=533 data-nosnippet>533</a>        .<span class="kw">await
+<a href=#534 id=534 data-nosnippet>534</a>        </span>.expect_err(<span class="string">"expected unknown-handle error"</span>);
+<a href=#535 id=535 data-nosnippet>535</a>        <span class="macro">assert!</span>(err.message.contains(<span class="string">"unknown monitor handle"</span>));
+<a href=#536 id=536 data-nosnippet>536</a>    }
+<a href=#537 id=537 data-nosnippet>537</a>
+<a href=#538 id=538 data-nosnippet>538</a>    <span class="attr">#[tokio::test]
+<a href=#539 id=539 data-nosnippet>539</a>    </span><span class="kw">async fn </span>stop_unknown_handle_reports_not_stopped() {
+<a href=#540 id=540 data-nosnippet>540</a>        <span class="kw">let </span>state = Arc::new(Mutex::new(SessionState::new()));
+<a href=#541 id=541 data-nosnippet>541</a>        <span class="kw">let </span>out = stop(
+<a href=#542 id=542 data-nosnippet>542</a>            state,
+<a href=#543 id=543 data-nosnippet>543</a>            StopInput {
+<a href=#544 id=544 data-nosnippet>544</a>                handle: <span class="string">"nope"</span>.into(),
+<a href=#545 id=545 data-nosnippet>545</a>            },
+<a href=#546 id=546 data-nosnippet>546</a>        )
+<a href=#547 id=547 data-nosnippet>547</a>        .<span class="kw">await
+<a href=#548 id=548 data-nosnippet>548</a>        </span>.expect(<span class="string">"stop is idempotent for unknown handles"</span>);
+<a href=#549 id=549 data-nosnippet>549</a>        <span class="macro">assert!</span>(!out.stopped, <span class="string">"unknown handle reports stopped=false"</span>);
+<a href=#550 id=550 data-nosnippet>550</a>    }
+<a href=#551 id=551 data-nosnippet>551</a>
+<a href=#552 id=552 data-nosnippet>552</a>    <span class="comment">// ---------- wire_body_fields (bounded body capture) --------------------
+<a href=#553 id=553 data-nosnippet>553</a>    //
+<a href=#554 id=554 data-nosnippet>554</a>    // `NetworkExchange`'s `request_id` / `session` fields are `pub(crate)` to
+<a href=#555 id=555 data-nosnippet>555</a>    // `zendriver`, so a live exchange can't be constructed from this crate —
+<a href=#556 id=556 data-nosnippet>556</a>    // `wire_body_fields` is a pure function precisely so the truncation /
+<a href=#557 id=557 data-nosnippet>557</a>    // error wiring is testable against a synthetic `Ok`/`Err` result instead.
+<a href=#558 id=558 data-nosnippet>558</a>
+<a href=#559 id=559 data-nosnippet>559</a>    </span><span class="attr">#[test]
+<a href=#560 id=560 data-nosnippet>560</a>    </span><span class="kw">fn </span>wire_body_fields_under_cap_is_not_truncated() {
+<a href=#561 id=561 data-nosnippet>561</a>        <span class="kw">let </span>full = <span class="string">b"hello"</span>.to_vec();
+<a href=#562 id=562 data-nosnippet>562</a>        <span class="kw">let </span>fields = wire_body_fields(<span class="prelude-val">Ok</span>(full.clone()), <span class="number">1024</span>);
+<a href=#563 id=563 data-nosnippet>563</a>
+<a href=#564 id=564 data-nosnippet>564</a>        <span class="macro">assert_eq!</span>(fields.body.as_deref(), <span class="prelude-val">Some</span>(<span class="string">"hello"</span>));
+<a href=#565 id=565 data-nosnippet>565</a>        <span class="macro">assert_eq!</span>(fields.body_base64, <span class="prelude-val">Some</span>(BASE64.encode(<span class="kw-2">&amp;</span>full)));
+<a href=#566 id=566 data-nosnippet>566</a>        <span class="macro">assert_eq!</span>(fields.body_truncated, <span class="prelude-val">Some</span>(<span class="bool-val">false</span>));
+<a href=#567 id=567 data-nosnippet>567</a>        <span class="macro">assert_eq!</span>(fields.body_full_bytes, <span class="prelude-val">Some</span>(full.len() <span class="kw">as </span>u64));
+<a href=#568 id=568 data-nosnippet>568</a>        <span class="macro">assert!</span>(fields.body_capture_error.is_none());
+<a href=#569 id=569 data-nosnippet>569</a>    }
+<a href=#570 id=570 data-nosnippet>570</a>
+<a href=#571 id=571 data-nosnippet>571</a>    <span class="doccomment">/// A body larger than `max_bytes` must report `body_truncated: true` and
+<a href=#572 id=572 data-nosnippet>572</a>    /// `body_full_bytes` equal to the FULL pre-truncation length — not the
+<a href=#573 id=573 data-nosnippet>573</a>    /// truncated length — so a caller can tell "captured N of M bytes".
+<a href=#574 id=574 data-nosnippet>574</a>    </span><span class="attr">#[test]
+<a href=#575 id=575 data-nosnippet>575</a>    </span><span class="kw">fn </span>wire_body_fields_over_cap_is_truncated_and_reports_full_length() {
+<a href=#576 id=576 data-nosnippet>576</a>        <span class="kw">let </span>full = <span class="macro">vec!</span>[<span class="string">b'x'</span>; <span class="number">10_000</span>];
+<a href=#577 id=577 data-nosnippet>577</a>        <span class="kw">let </span>max_bytes = <span class="number">100</span>;
+<a href=#578 id=578 data-nosnippet>578</a>        <span class="kw">let </span>fields = wire_body_fields(<span class="prelude-val">Ok</span>(full.clone()), max_bytes);
+<a href=#579 id=579 data-nosnippet>579</a>
+<a href=#580 id=580 data-nosnippet>580</a>        <span class="macro">assert_eq!</span>(fields.body_truncated, <span class="prelude-val">Some</span>(<span class="bool-val">true</span>));
+<a href=#581 id=581 data-nosnippet>581</a>        <span class="macro">assert_eq!</span>(
+<a href=#582 id=582 data-nosnippet>582</a>            fields.body_full_bytes,
+<a href=#583 id=583 data-nosnippet>583</a>            <span class="prelude-val">Some</span>(full.len() <span class="kw">as </span>u64),
+<a href=#584 id=584 data-nosnippet>584</a>            <span class="string">"body_full_bytes must be the full length, not the truncated length"
+<a href=#585 id=585 data-nosnippet>585</a>        </span>);
+<a href=#586 id=586 data-nosnippet>586</a>        <span class="macro">assert_eq!</span>(
+<a href=#587 id=587 data-nosnippet>587</a>            fields.body.as_ref().map(String::len),
+<a href=#588 id=588 data-nosnippet>588</a>            <span class="prelude-val">Some</span>(max_bytes),
+<a href=#589 id=589 data-nosnippet>589</a>            <span class="string">"the captured body prefix must be exactly max_bytes"
+<a href=#590 id=590 data-nosnippet>590</a>        </span>);
+<a href=#591 id=591 data-nosnippet>591</a>        <span class="macro">assert_eq!</span>(
+<a href=#592 id=592 data-nosnippet>592</a>            fields.body_base64,
+<a href=#593 id=593 data-nosnippet>593</a>            <span class="prelude-val">Some</span>(BASE64.encode(<span class="kw-2">&amp;</span>full[..max_bytes])),
+<a href=#594 id=594 data-nosnippet>594</a>            <span class="string">"body_base64 must be the base64 of the truncated prefix, not the full body"
+<a href=#595 id=595 data-nosnippet>595</a>        </span>);
+<a href=#596 id=596 data-nosnippet>596</a>        <span class="macro">assert!</span>(fields.body_capture_error.is_none());
+<a href=#597 id=597 data-nosnippet>597</a>    }
+<a href=#598 id=598 data-nosnippet>598</a>
+<a href=#599 id=599 data-nosnippet>599</a>    <span class="attr">#[test]
+<a href=#600 id=600 data-nosnippet>600</a>    </span><span class="kw">fn </span>wire_body_fields_zero_max_bytes_is_unbounded() {
+<a href=#601 id=601 data-nosnippet>601</a>        <span class="comment">// ASCII (not `0xAB`) so UTF-8-lossy decoding doesn't expand each byte
+<a href=#602 id=602 data-nosnippet>602</a>        // into a multi-byte replacement character — `body.len()` must equal
+<a href=#603 id=603 data-nosnippet>603</a>        // the raw byte count for this assertion to mean anything.
+<a href=#604 id=604 data-nosnippet>604</a>        </span><span class="kw">let </span>full = <span class="macro">vec!</span>[<span class="string">b'z'</span>; <span class="number">50_000</span>];
+<a href=#605 id=605 data-nosnippet>605</a>        <span class="kw">let </span>fields = wire_body_fields(<span class="prelude-val">Ok</span>(full.clone()), <span class="number">0</span>);
+<a href=#606 id=606 data-nosnippet>606</a>
+<a href=#607 id=607 data-nosnippet>607</a>        <span class="macro">assert_eq!</span>(fields.body_truncated, <span class="prelude-val">Some</span>(<span class="bool-val">false</span>));
+<a href=#608 id=608 data-nosnippet>608</a>        <span class="macro">assert_eq!</span>(fields.body_full_bytes, <span class="prelude-val">Some</span>(full.len() <span class="kw">as </span>u64));
+<a href=#609 id=609 data-nosnippet>609</a>        <span class="macro">assert_eq!</span>(fields.body.as_ref().map(String::len), <span class="prelude-val">Some</span>(full.len()));
+<a href=#610 id=610 data-nosnippet>610</a>    }
+<a href=#611 id=611 data-nosnippet>611</a>
+<a href=#612 id=612 data-nosnippet>612</a>    <span class="doccomment">/// A body-fetch failure (e.g. Chrome already evicted the response body)
+<a href=#613 id=613 data-nosnippet>613</a>    /// must set `body_capture_error` and leave every other field `None` —
+<a href=#614 id=614 data-nosnippet>614</a>    /// distinct from a genuinely empty body, which would set `body: Some("")`
+<a href=#615 id=615 data-nosnippet>615</a>    /// / `body_truncated: Some(false)` instead.
+<a href=#616 id=616 data-nosnippet>616</a>    </span><span class="attr">#[test]
+<a href=#617 id=617 data-nosnippet>617</a>    </span><span class="kw">fn </span>wire_body_fields_fetch_error_sets_capture_error_only() {
+<a href=#618 id=618 data-nosnippet>618</a>        <span class="kw">let </span>err = zendriver::ZendriverError::NetworkMonitor(<span class="string">"getResponseBody: boom"</span>.into());
+<a href=#619 id=619 data-nosnippet>619</a>        <span class="kw">let </span>fields = wire_body_fields(<span class="prelude-val">Err</span>(err), <span class="number">1024</span>);
+<a href=#620 id=620 data-nosnippet>620</a>
+<a href=#621 id=621 data-nosnippet>621</a>        <span class="macro">assert_eq!</span>(
+<a href=#622 id=622 data-nosnippet>622</a>            fields.body_capture_error.as_deref(),
+<a href=#623 id=623 data-nosnippet>623</a>            <span class="prelude-val">Some</span>(<span class="string">"network monitor: getResponseBody: boom"</span>)
+<a href=#624 id=624 data-nosnippet>624</a>        );
+<a href=#625 id=625 data-nosnippet>625</a>        <span class="macro">assert!</span>(fields.body.is_none());
+<a href=#626 id=626 data-nosnippet>626</a>        <span class="macro">assert!</span>(fields.body_base64.is_none());
+<a href=#627 id=627 data-nosnippet>627</a>        <span class="macro">assert!</span>(fields.body_truncated.is_none());
+<a href=#628 id=628 data-nosnippet>628</a>        <span class="macro">assert!</span>(fields.body_full_bytes.is_none());
+<a href=#629 id=629 data-nosnippet>629</a>    }
+<a href=#630 id=630 data-nosnippet>630</a>
+<a href=#631 id=631 data-nosnippet>631</a>    <span class="comment">// ---------- convert_boundary (DeliveryBoundary wire mapping) -----------
+<a href=#632 id=632 data-nosnippet>632</a>
+<a href=#633 id=633 data-nosnippet>633</a>    </span><span class="attr">#[test]
+<a href=#634 id=634 data-nosnippet>634</a>    </span><span class="kw">fn </span>convert_boundary_maps_every_variant() {
+<a href=#635 id=635 data-nosnippet>635</a>        <span class="kw">let </span>cases = [
+<a href=#636 id=636 data-nosnippet>636</a>            (
+<a href=#637 id=637 data-nosnippet>637</a>                NetworkDeliveryBoundary::Lagged {
+<a href=#638 id=638 data-nosnippet>638</a>                    missed: <span class="number">3</span>,
+<a href=#639 id=639 data-nosnippet>639</a>                    generation: <span class="number">1</span>,
+<a href=#640 id=640 data-nosnippet>640</a>                },
+<a href=#641 id=641 data-nosnippet>641</a>                <span class="string">"lagged"</span>,
+<a href=#642 id=642 data-nosnippet>642</a>            ),
+<a href=#643 id=643 data-nosnippet>643</a>            (
+<a href=#644 id=644 data-nosnippet>644</a>                NetworkDeliveryBoundary::Reconnected {
+<a href=#645 id=645 data-nosnippet>645</a>                    previous: <span class="number">1</span>,
+<a href=#646 id=646 data-nosnippet>646</a>                    generation: <span class="number">2</span>,
+<a href=#647 id=647 data-nosnippet>647</a>                },
+<a href=#648 id=648 data-nosnippet>648</a>                <span class="string">"reconnected"</span>,
+<a href=#649 id=649 data-nosnippet>649</a>            ),
+<a href=#650 id=650 data-nosnippet>650</a>            (
+<a href=#651 id=651 data-nosnippet>651</a>                NetworkDeliveryBoundary::Disconnected { generation: <span class="number">1 </span>},
+<a href=#652 id=652 data-nosnippet>652</a>                <span class="string">"disconnected"</span>,
+<a href=#653 id=653 data-nosnippet>653</a>            ),
+<a href=#654 id=654 data-nosnippet>654</a>            (
+<a href=#655 id=655 data-nosnippet>655</a>                NetworkDeliveryBoundary::CorrelationEvicted {
+<a href=#656 id=656 data-nosnippet>656</a>                    url: <span class="string">"https://example.com/evicted"</span>.into(),
+<a href=#657 id=657 data-nosnippet>657</a>                },
+<a href=#658 id=658 data-nosnippet>658</a>                <span class="string">"correlation_evicted"</span>,
+<a href=#659 id=659 data-nosnippet>659</a>            ),
+<a href=#660 id=660 data-nosnippet>660</a>            (NetworkDeliveryBoundary::DecodeFailed, <span class="string">"decode_failed"</span>),
+<a href=#661 id=661 data-nosnippet>661</a>            (NetworkDeliveryBoundary::Unknown, <span class="string">"unknown"</span>),
+<a href=#662 id=662 data-nosnippet>662</a>        ];
+<a href=#663 id=663 data-nosnippet>663</a>        <span class="kw">for </span>(boundary, expected_kind) <span class="kw">in </span>cases {
+<a href=#664 id=664 data-nosnippet>664</a>            <span class="kw">let </span>wire = convert_boundary(boundary);
+<a href=#665 id=665 data-nosnippet>665</a>            <span class="kw">let </span>MonitorEvent::DeliveryBoundary { boundary, .. } = <span class="kw-2">&amp;</span>wire <span class="kw">else </span>{
+<a href=#666 id=666 data-nosnippet>666</a>                <span class="macro">panic!</span>(<span class="string">"expected MonitorEvent::DeliveryBoundary, got {wire:?}"</span>);
+<a href=#667 id=667 data-nosnippet>667</a>            };
+<a href=#668 id=668 data-nosnippet>668</a>            <span class="macro">assert_eq!</span>(boundary, expected_kind);
+<a href=#669 id=669 data-nosnippet>669</a>        }
+<a href=#670 id=670 data-nosnippet>670</a>    }
+<a href=#671 id=671 data-nosnippet>671</a>
+<a href=#672 id=672 data-nosnippet>672</a>    <span class="attr">#[test]
+<a href=#673 id=673 data-nosnippet>673</a>    </span><span class="kw">fn </span>convert_boundary_correlation_evicted_carries_url() {
+<a href=#674 id=674 data-nosnippet>674</a>        <span class="kw">let </span>wire = convert_boundary(NetworkDeliveryBoundary::CorrelationEvicted {
+<a href=#675 id=675 data-nosnippet>675</a>            url: <span class="string">"https://example.com/evicted"</span>.into(),
+<a href=#676 id=676 data-nosnippet>676</a>        });
+<a href=#677 id=677 data-nosnippet>677</a>        <span class="kw">let </span>MonitorEvent::DeliveryBoundary { url, .. } = wire <span class="kw">else </span>{
+<a href=#678 id=678 data-nosnippet>678</a>            <span class="macro">panic!</span>(<span class="string">"expected MonitorEvent::DeliveryBoundary"</span>);
+<a href=#679 id=679 data-nosnippet>679</a>        };
+<a href=#680 id=680 data-nosnippet>680</a>        <span class="macro">assert_eq!</span>(url.as_deref(), <span class="prelude-val">Some</span>(<span class="string">"https://example.com/evicted"</span>));
+<a href=#681 id=681 data-nosnippet>681</a>    }
+<a href=#682 id=682 data-nosnippet>682</a>
+<a href=#683 id=683 data-nosnippet>683</a>    <span class="attr">#[test]
+<a href=#684 id=684 data-nosnippet>684</a>    </span><span class="kw">fn </span>convert_boundary_lagged_carries_missed_and_generation() {
+<a href=#685 id=685 data-nosnippet>685</a>        <span class="kw">let </span>wire = convert_boundary(NetworkDeliveryBoundary::Lagged {
+<a href=#686 id=686 data-nosnippet>686</a>            missed: <span class="number">7</span>,
+<a href=#687 id=687 data-nosnippet>687</a>            generation: <span class="number">4</span>,
+<a href=#688 id=688 data-nosnippet>688</a>        });
+<a href=#689 id=689 data-nosnippet>689</a>        <span class="kw">let </span>MonitorEvent::DeliveryBoundary {
+<a href=#690 id=690 data-nosnippet>690</a>            missed, generation, ..
+<a href=#691 id=691 data-nosnippet>691</a>        } = wire
+<a href=#692 id=692 data-nosnippet>692</a>        <span class="kw">else </span>{
+<a href=#693 id=693 data-nosnippet>693</a>            <span class="macro">panic!</span>(<span class="string">"expected MonitorEvent::DeliveryBoundary"</span>);
+<a href=#694 id=694 data-nosnippet>694</a>        };
+<a href=#695 id=695 data-nosnippet>695</a>        <span class="macro">assert_eq!</span>(missed, <span class="prelude-val">Some</span>(<span class="number">7</span>));
+<a href=#696 id=696 data-nosnippet>696</a>        <span class="macro">assert_eq!</span>(generation, <span class="prelude-val">Some</span>(<span class="number">4</span>));
+<a href=#697 id=697 data-nosnippet>697</a>    }
+<a href=#698 id=698 data-nosnippet>698</a>}
 </code></pre></div></section></main></body></html>

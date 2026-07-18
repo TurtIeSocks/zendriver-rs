@@ -180,11 +180,15 @@
                 <div id="content" class="content">
                     <main>
                         <h1 id="introduction"><a class="header" href="#introduction">Introduction</a></h1>
-<p><strong>zendriver-rs</strong> is an async-first, undetectable browser-automation library
-for Rust. It drives a real Chrome instance over the <a href="https://chromedevtools.github.io/devtools-protocol/">Chrome DevTools
+<p><strong>zendriver-rs</strong> is an async-first browser-automation library for Rust
+with a coherent stealth identity and explicit anti-detection controls,
+on by default. It drives a real Chrome instance over the <a href="https://chromedevtools.github.io/devtools-protocol/">Chrome DevTools
 Protocol</a> (CDP) directly — no WebDriver shim, no Selenium grid, no JSON
 wire — and ships with anti-detection patches that pass mainstream
-fingerprint batteries out of the box.</p>
+fingerprint checks (e.g. <a href="https://bot.sannysoft.com/">sannysoft</a>, <a href="https://arh.antoinevastel.com/bots/areyouheadless">areyouheadless</a>) out of the box.
+No automation stack can guarantee invisibility to a determined,
+adaptively-defended site — see <a href="./stealth.html">Stealth</a> for what the
+patches actually cover and their limits.</p>
 <p>It is a Rust port of the Python <a href="https://github.com/cdpdriver/zendriver">zendriver</a> / <a href="https://github.com/ultrafunkamsterdam/nodriver">nodriver</a> projects, with
 the API redesigned around Rust's type system: builder patterns where Python
 uses kwargs, traits where Python uses duck-typed protocols, <code>Result</code> where
@@ -194,8 +198,11 @@ borrow checker tracks instead of letting them drift across <code>await</code> po
 <ul>
 <li><strong>Scraping sites that block headless browsers.</strong> The <code>spoofed</code> stealth
 profile patches <code>navigator.webdriver</code>, the Chrome runtime object, the
-permissions API, and a half-dozen other tells. Cloudflare Turnstile,
-PerimeterX, and DataDome challenges pass without manual headers.</li>
+permissions API, and a half-dozen other tells. Many Cloudflare
+Turnstile, PerimeterX, and DataDome challenges pass without manual
+headers; sites with more aggressive detection layers may still need
+the dedicated bypass features (see <a href="./cloudflare.html">Cloudflare</a> /
+<a href="./datadome.html">DataDome</a>) or still catch a scripted session.</li>
 <li><strong>End-to-end testing of real-world web apps.</strong> First-class multi-tab,
 cross-origin iframe (OOPIF) support, network interception, and a
 Playwright-style <code>expect()</code> pre-register surface make whole-flow tests
@@ -215,10 +222,12 @@ instead of hand-rolling <code>Page.querySelector</code> calls.</li>
 <li><strong>CDP-direct.</strong> Every method maps to one or two CDP commands. There is
 no WebDriver-style adapter layer, so latency is one network round-trip
 per call — typically under 1 ms on localhost.</li>
-<li><strong>Undetectable by default.</strong> <code>StealthProfile::native</code> is the suggested
-starting point — UA scrub plus Emulation overrides, no JS bootstrap, no
-prototype patching. <code>StealthProfile::spoofed</code> adds Navigator-prototype
-patches that pass <a href="https://bot.sannysoft.com/">sannysoft</a> + <a href="https://arh.antoinevastel.com/bots/areyouheadless">areyouheadless</a>. Off-by-default for
+<li><strong>Anti-detection controls on by default.</strong> <code>StealthProfile::native</code> is
+the suggested starting point — UA scrub plus Emulation overrides, no JS
+bootstrap, no prototype patching. <code>StealthProfile::spoofed</code> adds
+Navigator-prototype patches that pass <a href="https://bot.sannysoft.com/">sannysoft</a> + <a href="https://arh.antoinevastel.com/bots/areyouheadless">areyouheadless</a>.
+Neither is a guarantee against a determined, adaptive detector — see
+<a href="./stealth.html#when-to-use-which">Stealth</a> for the tradeoffs. Use
 <code>StealthProfile::off</code> when you want a vanilla browser for reproduction.</li>
 <li><strong>Async-first.</strong> Built on Tokio. Every call returns a <code>Future</code>. No
 blocking, no <code>block_on</code>, no <code>tokio::task::spawn_blocking</code>. Browser /
@@ -498,6 +507,10 @@ tradeoffs between launch overhead, detectability, and CSP compatibility.
 Pick the profile that matches your target site's detection layer; tweak
 the fingerprint with builder methods when you need to pin a specific
 identity.</p>
+<p>None of these profiles is a guarantee of invisibility — no automation
+stack has one against a determined, adaptively-defended site. What they
+provide is a coherent, plausible browser identity plus explicit controls
+over the specific tells that mainstream fingerprint checks probe for.</p>
 <h2 id="the-three-profiles"><a class="header" href="#the-three-profiles">The three profiles</a></h2>
 <div class="table-wrapper"><table><thead><tr><th>Profile</th><th>Launch flags</th><th>UA scrub</th><th>Emulation overrides</th><th>JS bootstrap</th><th>Bypass CSP</th><th>Use case</th></tr></thead><tbody>
 <tr><td><code>off()</code></td><td>none</td><td>no</td><td>no</td><td>none</td><td>no</td><td>Reproducing issues in vanilla Chrome.</td></tr>
@@ -632,6 +645,60 @@ let browser = Browser::builder()
 <p><code>user_agent()</code> skips the auto-composition step entirely — prefer
 <code>platform()</code> + <code>chrome_version()</code> unless you need a bit-for-bit
 specific UA.</p>
+<h2 id="opting-into-real-site-isolation--real-webgl-native_isolation"><a class="header" href="#opting-into-real-site-isolation--real-webgl-native_isolation">Opting into real site isolation + real WebGL (<code>native_isolation</code>)</a></h2>
+<p><code>native()</code> and <code>spoofed()</code> both disable Chrome's render-process site
+isolation (<code>--disable-features=IsolateOrigins,...,site-per-process</code>),
+and <code>spoofed()</code> additionally patches
+<code>WebGLRenderingContext.getParameter()</code> /<code>getSupportedExtensions()</code> to
+report a coherent ANGLE/Direct3D11 Intel identity regardless of the
+host's actual GPU. <code>.native_isolation(true)</code> opts a profile <strong>out</strong> of
+both:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::{Browser, StealthProfile};
+
+<span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span>let profile = StealthProfile::spoofed().native_isolation(true);
+
+let browser = Browser::builder()
+    .stealth(profile)
+    .launch()
+    .await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p>With this set:</p>
+<ul>
+<li>The launch flags omit <code>IsolateOrigins</code>/<code>site-per-process</code> from
+<code>--disable-features=...</code> — Chrome runs with its normal render-process
+isolation boundary. (The unrelated
+<code>DisableLoadExtensionCommandLineSwitch</code> feature name stays disabled
+either way — it controls <code>--load-extension</code>, not isolation.)</li>
+<li>For <code>spoofed()</code>, the bootstrap script omits the WebGL
+vendor/renderer patch entirely — <code>getParameter(UNMASKED_VENDOR_WEBGL)</code>
+etc. return the host's real values instead of the spoofed default.</li>
+</ul>
+<p><strong>This is a trade-off, not a strict stealth improvement.</strong> The defaults
+it opts out of exist as anti-detection measures: the WebGL patch in
+particular is an anti-WAF <em>coherence</em> defense — some WAFs
+(Imperva/Incapsula) cross-check the WebGL identity against the rest of
+the fingerprint and flag a real, host-specific renderer string as a bot
+tell when it doesn't match. Reach for <code>native_isolation(true)</code> when you
+need the host's actual GPU behavior (WebGL-heavy rendering, screenshot
+fidelity, visual regression testing) or want Chrome's stock
+process-isolation security boundary, and evasion isn't the priority —
+not because it's "more stealthy." It isn't; it removes a defense.</p>
+<p>It's off by default on every profile, so existing <code>native()</code> /
+<code>spoofed()</code> callers see no behavior change unless they opt in
+explicitly.</p>
+<p><strong>WebGL and WebGPU stay coherent.</strong> When <code>native_isolation</code> drops the
+WebGL patch, the WebGPU <strong>value</strong> adapter spoof (<code>navigator.gpu</code>,
+driven by the
+<a href="https://docs.rs/zendriver-stealth/latest/zendriver_stealth/struct.Persona.html"><code>Persona</code></a>
+<code>webgpu</code> surface) is skipped along with it, so <code>navigator.gpu</code> reports
+the real host adapter instead of one derived from a renderer the WebGL
+patch no longer applies — no cross-API mismatch. An explicit <code>Webgpu</code>
+<code>Block</code> (hiding <code>navigator.gpu</code>) is renderer-neutral, so it is still
+honored if you set it.</p>
 <h2 id="end-to-end-example"><a class="header" href="#end-to-end-example">End-to-end example</a></h2>
 <p>This example launches with a custom UA, locale, and platform, then
 reads them back via <code>navigator.*</code> to prove the overrides took:</p>
@@ -1651,18 +1718,51 @@ btn.click_fast().await?;
 <tr><td><code>type_text_fast(s)</code></td><td>per-char, no delay</td><td>focus gate</td><td>Tests; trusted automation.</td></tr>
 </tbody></table>
 </div>
-<p>The realism comes from the active <a href="https://docs.rs/zendriver/latest/zendriver/stealth/struct.StealthProfile.html"><code>StealthProfile</code></a>'s <code>InputProfile</code>:</p>
+<p>By default, the realism comes from the active <a href="https://docs.rs/zendriver/latest/zendriver/stealth/struct.StealthProfile.html"><code>StealthProfile</code></a>'s
+<code>InputProfile</code>:</p>
 <ul>
-<li><code>StealthProfile::native()</code> and <code>::spoofed()</code> install a realistic
-profile by default — Bezier control points with deterministic-but-
-jittered timing, per-character keyboard delays of 30-200 ms,
-occasional 1-2% typo + correction events.</li>
-<li><code>StealthProfile::off()</code> installs a no-op profile — even realistic
-methods just do the dispatch without realism.</li>
+<li><code>StealthProfile::spoofed()</code> installs a realistic profile by default —
+Bezier control points with deterministic-but-jittered timing,
+per-character keyboard delays of 30-200 ms, occasional 1-2% typo +
+correction events.</li>
+<li><code>StealthProfile::native()</code> and <code>::off()</code> install a zero-overhead,
+deterministic profile by default — even realistic methods just do
+the dispatch without added realism.</li>
 </ul>
 <p>When realism matters but you also want determinism (e.g. snapshots
 inside tests), seed the profile with a fixed RNG — see the
 <a href="https://docs.rs/zendriver_stealth/latest/zendriver_stealth/struct.InputProfile.html"><code>InputProfile</code></a> rustdoc.</p>
+<h3 id="opt-in-decoupling-input-timing-from-stealth"><a class="header" href="#opt-in-decoupling-input-timing-from-stealth">Opt-in: decoupling input timing from stealth</a></h3>
+<p><a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.input_profile"><code>BrowserBuilder::input_profile()</code></a> lets you pick the <a href="https://docs.rs/zendriver_stealth/latest/zendriver_stealth/struct.InputProfile.html"><code>InputProfile</code></a>
+explicitly, <strong>independent</strong> of <code>StealthProfile</code>. This is opt-in only —
+it does not change any default. With no <code>.input_profile(..)</code> call, timing
+still resolves to whatever the active <code>StealthProfile</code> implies (the same
+mapping described above — <code>InputProfile::spoofed()</code> under
+<code>StealthProfile::spoofed()</code>, <code>InputProfile::native()</code> under <code>::native()</code>
+or <code>::off()</code>), exactly as before this method existed.</p>
+<p>Use it when you want to <em>decouple</em> timing from the stealth setting —
+e.g. humanized timing without also turning on stealth's surface patches
+(canvas/WebGL/navigator overrides), or stealth on but deterministic
+zero-delay input for a test:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::stealth::{InputProfile, StealthProfile};
+
+<span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span>// Stealth off (stock Chrome launch), but keep human-paced typing and
+// jittery mouse motion — previously impossible, since input timing was
+// derived from the stealth profile.
+let browser = zendriver::Browser::builder()
+    .stealth(StealthProfile::off())
+    .input_profile(InputProfile::coherent())
+    .launch()
+    .await?;
+<span class="boring">browser.close().await?;
+</span><span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p><code>BrowserBuilder::resolved_input_profile()</code> returns the effective profile
+before launch, for tests/inspection — same pattern as
+<code>resolved_persona()</code>.</p>
 <h2 id="clickoptions-for-fine-control"><a class="header" href="#clickoptions-for-fine-control"><code>ClickOptions</code> for fine control</a></h2>
 <p>Both <code>click()</code> and <code>click_fast()</code> are wrappers around <a href="https://docs.rs/zendriver/latest/zendriver/struct.Element.html#method.click_with"><code>Element::click_with()</code></a>,
 which takes a <a href="https://docs.rs/zendriver/latest/zendriver/struct.ClickOptions.html"><code>ClickOptions</code></a> struct for full control:</p>
@@ -1844,8 +1944,8 @@ real interaction starts). Save realism for the moments that matter.</li>
 </ul>
 <p>When in doubt, stick with the realistic defaults — the per-call cost is
 small (typically 50-300 ms per click; a few ms per typed character) and
-it keeps you on the "indistinguishable from a real user" path that the
-rest of the stealth machinery is built around.</p>
+it keeps input timing on the human-plausible path that the rest of the
+stealth machinery is built around.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="interception"><a class="header" href="#interception">Interception</a></h1>
 <p>The <code>interception</code> Cargo feature wraps Chrome's <a href="https://chromedevtools.github.io/devtools-protocol/tot/Fetch/"><code>Fetch</code></a> CDP domain in a
 fluent rule-based API plus a lower-level <code>Stream</code> of paused requests. It
@@ -2270,6 +2370,19 @@ let exp = tab.expect_request("/api/")
 <a href="https://docs.rs/zendriver/latest/zendriver/enum.ZendriverError.html#variant.Timeout"><code>ZendriverError::Timeout</code></a>.
 The subscriber task is canceled before the error returns, so there's no
 leaked listener.</p>
+<p>If the connection to Chrome drops, reconnects, or a broadcast subscriber
+falls behind while an expectation is waiting, the future instead resolves to
+<a href="https://docs.rs/zendriver/latest/zendriver/enum.ZendriverError.html#variant.EventStreamIncomplete"><code>ZendriverError::EventStreamIncomplete</code></a>
+— distinct from <code>Timeout</code> because the awaited event may in fact have fired,
+but the delivery gap means it can no longer be confirmed either way. Treat it
+as "re-establish and re-wait", not as "it didn't happen".</p>
+<blockquote>
+<p><strong>Note:</strong> the delivery lag that triggers this is connection-wide, not
+scoped to the awaited event — a <code>Lagged</code> boundary on the shared CDP
+broadcast can abort an <code>expect_*</code> wait even when the lag was on
+unrelated traffic, so callers on event-heavy pages may see
+<code>EventStreamIncomplete</code> more often.</p>
+</blockquote>
 <h2 id="when-to-use-which-1"><a class="header" href="#when-to-use-which-1">When to use which</a></h2>
 <ul>
 <li><strong><code>expect_response</code></strong> — confirm an API call returned (covers status +
@@ -2363,9 +2476,66 @@ matched. Unmatched events are dropped before they reach the stream.</p>
 <h3 id="lifecycle"><a class="header" href="#lifecycle">Lifecycle</a></h3>
 <p><a href="https://docs.rs/zendriver/latest/zendriver/struct.NetworkMonitor.html"><code>NetworkMonitor</code></a> owns the correlator task. Dropping the monitor — or
 calling <a href="https://docs.rs/zendriver/latest/zendriver/struct.NetworkMonitor.html#method.stop"><code>NetworkMonitor::stop</code></a> — cancels that task; there is no leaked
-subscriber. The correlation map is bounded (10k in-flight requests); a
-pathological page that opens requests it never finishes evicts old entries
-with a <code>tracing</code> warning rather than growing without limit.</p>
+subscriber. The correlation map is bounded (10k in-flight requests).</p>
+<h3 id="delivery-loss-boundaries"><a class="header" href="#delivery-loss-boundaries">Delivery-loss boundaries</a></h3>
+<p><code>Http</code> exchanges are assembled by correlating <code>requestWillBeSent</code> →
+<code>responseReceived</code> → <code>loadingFinished</code> / <code>loadingFailed</code> by <code>requestId</code>. The
+correlator rides the transport's loss-accounted event stream, so instead of
+ever silently stitching a possibly-bogus "complete" exchange across a gap,
+silently evicting a stuck correlation entry, or silently skipping a payload
+it couldn't decode, every one of those cases surfaces as an explicit
+<a href="https://docs.rs/zendriver/latest/zendriver/enum.NetworkEvent.html#variant.DeliveryBoundary"><code>NetworkEvent::DeliveryBoundary</code></a><code>(</code><a href="https://docs.rs/zendriver/latest/zendriver/enum.NetworkDeliveryBoundary.html"><code>NetworkDeliveryBoundary</code></a><code>)</code> on the
+same stream:</p>
+<div class="table-wrapper"><table><thead><tr><th>Variant</th><th>Emitted when</th><th>The correlator also…</th></tr></thead><tbody>
+<tr><td><code>Lagged { missed, generation }</code></td><td>this subscription fell behind the connection's accounted event bus</td><td>clears all in-flight correlation state — a gap means any partial exchange spanning it can't be trusted</td></tr>
+<tr><td><code>Reconnected { previous, generation }</code></td><td>the transport re-established a fresh WebSocket</td><td>clears all in-flight correlation state — nothing from the old socket will ever complete</td></tr>
+<tr><td><code>Disconnected { generation }</code></td><td>the transport's WebSocket died unexpectedly</td><td>clears state, then <strong>ends the monitor task</strong> — see below</td></tr>
+<tr><td><code>CorrelationEvicted { url }</code></td><td>the in-flight correlation map exceeded its 10k bound</td><td>evicts one entry (previously silent beyond a <code>tracing</code> warning)</td></tr>
+<tr><td><code>DecodeFailed</code></td><td>a CDP payload didn't match the shape expected for its method</td><td>skips that one event only — no raw payload is ever included</td></tr>
+<tr><td><code>Unknown</code></td><td>a future transport-level variant this correlator doesn't yet recognize</td><td>conservatively clears state, but keeps running</td></tr>
+</tbody></table>
+</div>
+<p><code>DeliveryBoundary</code> events bypass any <a href="https://docs.rs/zendriver/latest/zendriver/struct.MonitorBuilder.html#method.url_pattern"><code>MonitorBuilder::url_pattern</code></a> filter —
+they describe the monitor's own health, not a specific exchange. A consumer
+that ignores this variant still sees every fully-observed exchange exactly as
+before; it just loses the ability to tell "nothing happened" apart from
+"something was lost and I was never told."</p>
+<pre><code class="language-rust ignore">match event {
+    zendriver::NetworkEvent::DeliveryBoundary(b) =&gt; {
+        eprintln!("network monitor gap: {b:?}");
+        // Decide whether to resync, alert, or (for `Disconnected`) restart
+        // the monitor.
+    }
+    _ =&gt; { /* handle the fully-observed variants as usual */ }
+}</code></pre>
+<p><strong><code>Disconnected</code> ends the monitor task — fail closed.</strong> There is no
+automatic reconnect: once a <code>Disconnected</code> boundary is emitted, the
+correlator task returns and the <a href="https://docs.rs/zendriver/latest/zendriver/struct.NetworkMonitor.html"><code>NetworkMonitor</code></a> stream ends (<code>None</code> on the
+next poll). A consumer that wants to keep observing across a transport blip
+must call <code>tab.monitor()...start()</code> again to spawn a fresh correlator.</p>
+<h3 id="bounded-response-bodies"><a class="header" href="#bounded-response-bodies">Bounded response bodies</a></h3>
+<p><a href="https://docs.rs/zendriver/latest/zendriver/struct.NetworkExchange.html#method.body"><code>NetworkExchange::body</code></a> / <a href="https://docs.rs/zendriver/latest/zendriver/struct.NetworkExchange.html#method.text"><code>text</code></a> are unbounded —
+they fetch and return the entire body every time, unchanged by this section.
+For a size cap, wrap the fetched bytes yourself with <a href="https://docs.rs/zendriver/latest/zendriver/struct.BoundedBody.html#method.capture"><code>BoundedBody::capture</code></a>:</p>
+<pre><code class="language-rust ignore">use zendriver::BoundedBody;
+
+if let zendriver::NetworkEvent::Http(ex) = event {
+    let full = ex.body().await?;
+    let bounded = BoundedBody::capture(&amp;full, 1024 * 1024); // cap at 1 MiB
+    if bounded.truncated {
+        println!("body truncated: kept {} of {} bytes", bounded.bytes.len(), bounded.full_len);
+    }
+}</code></pre>
+<p><code>max_bytes == 0</code> means unbounded — every byte is kept and <code>truncated</code> is
+always <code>false</code>. Bounding is always computed against the raw decoded byte
+length, never a base64 (or other encoded) representation's length.</p>
+<p>The MCP <code>browser_monitor_start</code> tool wires this in for you: its
+<code>capture_body_max_bytes</code> input (default 1 MiB, <code>0</code> for unbounded) bounds each
+captured body, and <code>browser_monitor_read</code>'s <code>http</code> events carry
+<code>body_truncated</code> / <code>body_full_bytes</code> alongside <code>body</code> / <code>body_base64</code>. A
+body-fetch failure (e.g. Chrome already evicted the response) sets
+<code>body_capture_error</code> instead of silently degrading to an indistinguishable
+empty body. See <a href="./mcp.html"><code>mcp.md</code></a>.</p>
 <h3 id="full-example"><a class="header" href="#full-example">Full example</a></h3>
 <pre><pre class="playground"><code class="language-rust no_run">//! Demonstrates the network monitor API (`tab.monitor()`).
 //!
@@ -2383,7 +2553,7 @@ with a <code>tracing</code> warning rather than growing without limit.</p>
 
 use futures::StreamExt;
 use zendriver::Browser;
-use zendriver::monitor::{FrameDirection, NetworkEvent};
+use zendriver::monitor::{FrameDirection, NetworkDeliveryBoundary, NetworkEvent};
 
 #[tokio::main]
 #[allow(clippy::result_large_err)] // example boundary; users wrap in their own Error
@@ -2443,6 +2613,20 @@ async fn main() -&gt; zendriver::Result&lt;()&gt; {
                 ..
             } =&gt; {
                 println!("[SSE ] id={request_id} event={event_name:?} data={data:?}");
+            }
+            // A delivery-loss boundary — a lagged/reconnected/disconnected
+            // transport, a correlation-map eviction, or an undecodable
+            // payload. Ignoring this variant is fine (every fully-observed
+            // exchange above still arrives); printing it here just shows
+            // where a real consumer would decide whether to resync, alert,
+            // or restart the monitor. `Disconnected` in particular means
+            // this monitor's correlator task has already ended — see
+            // `NetworkDeliveryBoundary::Disconnected`.
+            NetworkEvent::DeliveryBoundary(boundary) =&gt; {
+                println!("[GAP ] {boundary:?}");
+                if matches!(boundary, NetworkDeliveryBoundary::Disconnected { .. }) {
+                    break;
+                }
             }
         }
     }
@@ -3341,7 +3525,38 @@ the schema (ignored with a logged warning on a non-<code>geo</code> build).</li>
 <code>http://ip-api.com/json</code>); only meaningful with <code>geo_auto: true</code>. Note this
 bypasses proxy mirroring — only the bundled default endpoint routes through
 <code>proxy</code>.</li>
+<li><code>input_profile: "native" | "coherent"</code> — select input-timing realism
+(keyboard/mouse), <strong>independent</strong> of <code>stealth_profile</code>. When unset, the
+default follows the resolved stealth profile: a spoofed stealth profile
+(<code>spoof_macos</code>/<code>spoof_linux</code>/<code>spoof_windows</code>) implies <code>"coherent"</code>
+(human-paced typing, jittery mouse motion), while <code>auto</code>/<code>native</code> stealth
+implies <code>"native"</code> (zero-overhead, deterministic timing) — mirroring
+<code>BrowserBuilder::resolved_input_profile()</code>. Pass <code>"native"</code> or
+<code>"coherent"</code> explicitly to pin the input timing regardless of the stealth
+setting. Wraps <code>zendriver::stealth::InputProfile</code> via
+<code>BrowserBuilder::input_profile</code>; the output <code>input_profile</code> field always
+echoes the <em>resolved</em> value, not the raw request.</li>
 </ul>
+<h2 id="browser_monitor_-options"><a class="header" href="#browser_monitor_-options"><code>browser_monitor_*</code> options</a></h2>
+<p><code>browser_monitor_start</code> accepts <code>capture_body_max_bytes: integer</code> (default
+<code>1048576</code>, i.e. 1 MiB; <code>0</code> means unbounded) alongside <code>capture_bodies: bool</code> —
+it bounds how much of each HTTP response body is captured per event. A body
+over the cap is truncated to a prefix; <code>browser_monitor_read</code>'s <code>http</code> events
+report the truncation via <code>body_truncated: bool</code> and <code>body_full_bytes: integer</code> (the full pre-truncation length, regardless of how much was kept).
+A body-fetch failure (e.g. Chrome already evicted the response) sets
+<code>body_capture_error: string</code> instead of silently omitting <code>body</code> /
+<code>body_base64</code> with no explanation.</p>
+<p><code>browser_monitor_read</code> can also return a <code>delivery_boundary</code> event: a
+lagged/reconnected/disconnected transport, a correlation-map eviction, or an
+undecodable payload on the underlying event stream, surfaced explicitly
+instead of silently dropped. Its <code>boundary</code> field is one of <code>"lagged"</code> |
+<code>"reconnected"</code> | <code>"disconnected"</code> | <code>"correlation_evicted"</code> |
+<code>"decode_failed"</code> | <code>"unknown"</code>, with <code>generation</code> / <code>missed</code> / <code>previous</code> /
+<code>url</code> populated depending on which. A <code>"disconnected"</code> boundary means the
+underlying monitor's correlator task has ended — no further events will ever
+be buffered for that handle; call <code>browser_monitor_start</code> again for a fresh
+one. See <a href="./network.html#delivery-loss-boundaries">Network monitor &amp; HTTP</a> for
+the full semantics.</p>
 <h2 id="stealth-1"><a class="header" href="#stealth-1">Stealth</a></h2>
 <p>Stealth is on by default (matching the <code>zendriver</code> library). Configure
 the default fingerprint via <code>--stealth-profile</code> at server start; switch
@@ -4222,8 +4437,9 @@ or rate-limit thresholds.</li>
 <ul>
 <li><strong><code>StealthProfile::native()</code></strong> — patches only what fingerprinters see
 at the protocol level: UA scrub, launch flags, Emulation overrides.
-No JS bootstrap. Cheap, undetectable via <code>Function.prototype.toString</code>
-drift. Passes most consumer sites.</li>
+No JS bootstrap, so there's nothing for a <code>Function.prototype.toString</code>
+check to catch — it's cheap and safe against that specific technique
+by construction. Passes most consumer sites.</li>
 <li><strong><code>StealthProfile::spoofed()</code></strong> — <code>native()</code> plus Navigator-prototype
 JS patches injected via <code>Page.addScriptToEvaluateOnNewDocument</code>.
 Restores <code>navigator.webdriver</code> to undefined, fixes <code>navigator.plugins</code>
@@ -4327,6 +4543,35 @@ tab.wait_for_idle_opts(IdleOptions {
 </span><span class="boring">}</span></code></pre></pre>
 <p><code>max_inflight_age</code> defaults to <code>None</code> (the historical
 wait-for-everything behavior).</p>
+<h2 id="does-wait_for_idle-count-a-responses-headers-as-done"><a class="header" href="#does-wait_for_idle-count-a-responses-headers-as-done">Does <code>wait_for_idle</code> count a response's headers as "done"?</a></h2>
+<p>No — only <code>Network.loadingFinished</code> / <code>Network.loadingFailed</code> clear a
+request from the in-flight set. <code>Network.responseReceived</code> (the
+response's <em>headers</em> arriving) is deliberately not treated as
+completion, since the body can still be streaming for an arbitrarily
+long time afterward (a large download, chunked transfer encoding, a
+slow origin).</p>
+<p><code>wait_for_idle</code> is best-effort by default: if the underlying CDP event
+stream loses delivery continuity mid-wait (a lagging subscriber, a
+<a href="https://docs.rs/zendriver/latest/zendriver/struct.Browser.html#method.reconnect"><code>Browser::reconnect</code></a>, or the WebSocket dying), it silently tolerates
+the gap and still resolves on what it <em>did</em> observe —
+<code>IdleOptions::loss_policy: IdleLossPolicy::Lenient</code>, matching every
+prior release's behavior. Opt into <code>IdleLossPolicy::Strict</code> to fail
+loudly with <a href="https://docs.rs/zendriver/latest/zendriver/enum.ZendriverError.html#variant.EventStreamIncomplete"><code>ZendriverError::EventStreamIncomplete</code></a> instead of
+risking a possibly-wrong idle:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span><span class="boring">let browser = zendriver::Browser::builder().launch().await?;
+</span><span class="boring">let tab = browser.main_tab();
+</span>use zendriver::{IdleLossPolicy, IdleOptions};
+
+tab.wait_for_idle_opts(IdleOptions {
+    loss_policy: IdleLossPolicy::Strict,
+    ..Default::default()
+})
+.await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
 <h2 id="where-do-i-find-the-full-list-of-errors"><a class="header" href="#where-do-i-find-the-full-list-of-errors">Where do I find the full list of errors?</a></h2>
 <p><a href="./error-reference.html">Error Reference</a> — every public variant of
 <code>ZendriverError</code> plus the sub-crate errors that flow into it.</p>
@@ -4343,10 +4588,12 @@ new variants may land in minor releases.</p>
 <div class="table-wrapper"><table><thead><tr><th>Variant</th><th>Common cause</th><th>Fix</th></tr></thead><tbody>
 <tr><td><code>Browser(BrowserError)</code></td><td>Chrome launch / discovery failed.</td><td>See <a href="error-reference.html#browsererror-variants">BrowserError</a> below.</td></tr>
 <tr><td><code>Transport(TransportError)</code></td><td>WebSocket failure (Chrome crashed, socket reset).</td><td>Retry the operation; if recurring, check Chrome's stderr for crash dumps.</td></tr>
+<tr><td><code>Disconnected</code></td><td>The connection to Chrome dropped unexpectedly mid-call — no caller-requested <code>close()</code> — distinct from the clean-shutdown <code>Transport</code> case.</td><td>Reconnect via <code>Browser::reconnect</code>, then re-acquire any <code>Tab</code>/<code>Frame</code>/<code>Element</code> handles (a reconnect invalidates them) via <code>Browser::main_tab</code> / <code>Browser::tabs</code>.</td></tr>
 <tr><td><code>Cdp { code, message, data }</code></td><td>Chrome returned a CDP RPC error.</td><td>Inspect <code>message</code> — <code>Invalid params</code> usually means a stale <code>RemoteObjectId</code> or wrong type signature.</td></tr>
 <tr><td><code>ElementNotFound { selector }</code></td><td>Query selector matched zero elements within the timeout.</td><td>Confirm the page actually rendered the element (<code>tab.wait_for_load()</code> / <code>wait_for_idle()</code>); check the selector with <code>tab.find().css(...).count()</code>.</td></tr>
 <tr><td><code>ConflictingSelectors</code></td><td>A query mixed a single-selector method (<code>.css</code>/<code>.xpath</code>/<code>.text</code>/<code>.role</code>) with bs4-like predicate methods (<code>.tag</code>/<code>.attr*</code>/<code>.containing_text</code>/…).</td><td>Use one selector style per query — either a single selector <em>or</em> combinable predicates, not both.</td></tr>
 <tr><td><code>Timeout(Duration)</code></td><td>Generic operation timeout.</td><td>Increase the timeout via the builder, or address the underlying slow operation.</td></tr>
+<tr><td><code>EventStreamIncomplete</code></td><td><code>tab.wait_for_idle_opts(IdleOptions { loss_policy: IdleLossPolicy::Strict, .. })</code> observed a delivery gap (a lagging subscriber, a reconnect, or the WebSocket dying) mid-wait.</td><td>Re-issue the wait — after <code>Browser::reconnect</code> first if the connection itself dropped. Switch to <code>IdleLossPolicy::Lenient</code> (the default) to tolerate gaps instead.</td></tr>
 <tr><td><code>Navigation(String)</code></td><td>Page navigation failed (DNS, refused, crashed) <strong>or</strong> an in-flight call lost its context to a navigation.</td><td>Check the URL / DNS / network; for the context-lost case, sequence the action after <code>tab.wait_for_load()</code>.</td></tr>
 <tr><td><code>JsException(String)</code></td><td>A JS expression in <code>evaluate()</code> raised an exception.</td><td>Wrap the JS in <code>try { ... } catch (e) { return null; }</code> if you want a soft failure; otherwise fix the JS.</td></tr>
 <tr><td><code>ElementStale</code></td><td>An element's CDP handle invalidated <strong>and</strong> the auto-refresh path failed.</td><td>Re-issue the original query manually.</td></tr>

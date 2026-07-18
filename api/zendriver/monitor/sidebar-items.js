@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["FrameDirection","NetworkEvent"],"struct":["MonitorBuilder","MonitoredRequest","MonitoredResponse","NetworkExchange","NetworkMonitor"]};
+window.SIDEBAR_ITEMS = {"enum":["FrameDirection","NetworkDeliveryBoundary","NetworkEvent"],"struct":["MonitorBuilder","MonitoredRequest","MonitoredResponse","NetworkExchange","NetworkMonitor"]};

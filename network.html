@@ -260,9 +260,66 @@ matched. Unmatched events are dropped before they reach the stream.</p>
 <h3 id="lifecycle"><a class="header" href="#lifecycle">Lifecycle</a></h3>
 <p><a href="https://docs.rs/zendriver/latest/zendriver/struct.NetworkMonitor.html"><code>NetworkMonitor</code></a> owns the correlator task. Dropping the monitor — or
 calling <a href="https://docs.rs/zendriver/latest/zendriver/struct.NetworkMonitor.html#method.stop"><code>NetworkMonitor::stop</code></a> — cancels that task; there is no leaked
-subscriber. The correlation map is bounded (10k in-flight requests); a
-pathological page that opens requests it never finishes evicts old entries
-with a <code>tracing</code> warning rather than growing without limit.</p>
+subscriber. The correlation map is bounded (10k in-flight requests).</p>
+<h3 id="delivery-loss-boundaries"><a class="header" href="#delivery-loss-boundaries">Delivery-loss boundaries</a></h3>
+<p><code>Http</code> exchanges are assembled by correlating <code>requestWillBeSent</code> →
+<code>responseReceived</code> → <code>loadingFinished</code> / <code>loadingFailed</code> by <code>requestId</code>. The
+correlator rides the transport's loss-accounted event stream, so instead of
+ever silently stitching a possibly-bogus "complete" exchange across a gap,
+silently evicting a stuck correlation entry, or silently skipping a payload
+it couldn't decode, every one of those cases surfaces as an explicit
+<a href="https://docs.rs/zendriver/latest/zendriver/enum.NetworkEvent.html#variant.DeliveryBoundary"><code>NetworkEvent::DeliveryBoundary</code></a><code>(</code><a href="https://docs.rs/zendriver/latest/zendriver/enum.NetworkDeliveryBoundary.html"><code>NetworkDeliveryBoundary</code></a><code>)</code> on the
+same stream:</p>
+<div class="table-wrapper"><table><thead><tr><th>Variant</th><th>Emitted when</th><th>The correlator also…</th></tr></thead><tbody>
+<tr><td><code>Lagged { missed, generation }</code></td><td>this subscription fell behind the connection's accounted event bus</td><td>clears all in-flight correlation state — a gap means any partial exchange spanning it can't be trusted</td></tr>
+<tr><td><code>Reconnected { previous, generation }</code></td><td>the transport re-established a fresh WebSocket</td><td>clears all in-flight correlation state — nothing from the old socket will ever complete</td></tr>
+<tr><td><code>Disconnected { generation }</code></td><td>the transport's WebSocket died unexpectedly</td><td>clears state, then <strong>ends the monitor task</strong> — see below</td></tr>
+<tr><td><code>CorrelationEvicted { url }</code></td><td>the in-flight correlation map exceeded its 10k bound</td><td>evicts one entry (previously silent beyond a <code>tracing</code> warning)</td></tr>
+<tr><td><code>DecodeFailed</code></td><td>a CDP payload didn't match the shape expected for its method</td><td>skips that one event only — no raw payload is ever included</td></tr>
+<tr><td><code>Unknown</code></td><td>a future transport-level variant this correlator doesn't yet recognize</td><td>conservatively clears state, but keeps running</td></tr>
+</tbody></table>
+</div>
+<p><code>DeliveryBoundary</code> events bypass any <a href="https://docs.rs/zendriver/latest/zendriver/struct.MonitorBuilder.html#method.url_pattern"><code>MonitorBuilder::url_pattern</code></a> filter —
+they describe the monitor's own health, not a specific exchange. A consumer
+that ignores this variant still sees every fully-observed exchange exactly as
+before; it just loses the ability to tell "nothing happened" apart from
+"something was lost and I was never told."</p>
+<pre><code class="language-rust ignore">match event {
+    zendriver::NetworkEvent::DeliveryBoundary(b) =&gt; {
+        eprintln!("network monitor gap: {b:?}");
+        // Decide whether to resync, alert, or (for `Disconnected`) restart
+        // the monitor.
+    }
+    _ =&gt; { /* handle the fully-observed variants as usual */ }
+}</code></pre>
+<p><strong><code>Disconnected</code> ends the monitor task — fail closed.</strong> There is no
+automatic reconnect: once a <code>Disconnected</code> boundary is emitted, the
+correlator task returns and the <a href="https://docs.rs/zendriver/latest/zendriver/struct.NetworkMonitor.html"><code>NetworkMonitor</code></a> stream ends (<code>None</code> on the
+next poll). A consumer that wants to keep observing across a transport blip
+must call <code>tab.monitor()...start()</code> again to spawn a fresh correlator.</p>
+<h3 id="bounded-response-bodies"><a class="header" href="#bounded-response-bodies">Bounded response bodies</a></h3>
+<p><a href="https://docs.rs/zendriver/latest/zendriver/struct.NetworkExchange.html#method.body"><code>NetworkExchange::body</code></a> / <a href="https://docs.rs/zendriver/latest/zendriver/struct.NetworkExchange.html#method.text"><code>text</code></a> are unbounded —
+they fetch and return the entire body every time, unchanged by this section.
+For a size cap, wrap the fetched bytes yourself with <a href="https://docs.rs/zendriver/latest/zendriver/struct.BoundedBody.html#method.capture"><code>BoundedBody::capture</code></a>:</p>
+<pre><code class="language-rust ignore">use zendriver::BoundedBody;
+
+if let zendriver::NetworkEvent::Http(ex) = event {
+    let full = ex.body().await?;
+    let bounded = BoundedBody::capture(&amp;full, 1024 * 1024); // cap at 1 MiB
+    if bounded.truncated {
+        println!("body truncated: kept {} of {} bytes", bounded.bytes.len(), bounded.full_len);
+    }
+}</code></pre>
+<p><code>max_bytes == 0</code> means unbounded — every byte is kept and <code>truncated</code> is
+always <code>false</code>. Bounding is always computed against the raw decoded byte
+length, never a base64 (or other encoded) representation's length.</p>
+<p>The MCP <code>browser_monitor_start</code> tool wires this in for you: its
+<code>capture_body_max_bytes</code> input (default 1 MiB, <code>0</code> for unbounded) bounds each
+captured body, and <code>browser_monitor_read</code>'s <code>http</code> events carry
+<code>body_truncated</code> / <code>body_full_bytes</code> alongside <code>body</code> / <code>body_base64</code>. A
+body-fetch failure (e.g. Chrome already evicted the response) sets
+<code>body_capture_error</code> instead of silently degrading to an indistinguishable
+empty body. See <a href="./mcp.html"><code>mcp.md</code></a>.</p>
 <h3 id="full-example"><a class="header" href="#full-example">Full example</a></h3>
 <pre><pre class="playground"><code class="language-rust no_run">//! Demonstrates the network monitor API (`tab.monitor()`).
 //!
@@ -280,7 +337,7 @@ with a <code>tracing</code> warning rather than growing without limit.</p>
 
 use futures::StreamExt;
 use zendriver::Browser;
-use zendriver::monitor::{FrameDirection, NetworkEvent};
+use zendriver::monitor::{FrameDirection, NetworkDeliveryBoundary, NetworkEvent};
 
 #[tokio::main]
 #[allow(clippy::result_large_err)] // example boundary; users wrap in their own Error
@@ -340,6 +397,20 @@ async fn main() -&gt; zendriver::Result&lt;()&gt; {
                 ..
             } =&gt; {
                 println!("[SSE ] id={request_id} event={event_name:?} data={data:?}");
+            }
+            // A delivery-loss boundary — a lagged/reconnected/disconnected
+            // transport, a correlation-map eviction, or an undecodable
+            // payload. Ignoring this variant is fine (every fully-observed
+            // exchange above still arrives); printing it here just shows
+            // where a real consumer would decide whether to resync, alert,
+            // or restart the monitor. `Disconnected` in particular means
+            // this monitor's correlator task has already ended — see
+            // `NetworkDeliveryBoundary::Disconnected`.
+            NetworkEvent::DeliveryBoundary(boundary) =&gt; {
+                println!("[GAP ] {boundary:?}");
+                if matches!(boundary, NetworkDeliveryBoundary::Disconnected { .. }) {
+                    break;
+                }
             }
         }
     }

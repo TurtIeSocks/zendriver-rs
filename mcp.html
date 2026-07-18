@@ -296,7 +296,38 @@ the schema (ignored with a logged warning on a non-<code>geo</code> build).</li>
 <code>http://ip-api.com/json</code>); only meaningful with <code>geo_auto: true</code>. Note this
 bypasses proxy mirroring — only the bundled default endpoint routes through
 <code>proxy</code>.</li>
+<li><code>input_profile: "native" | "coherent"</code> — select input-timing realism
+(keyboard/mouse), <strong>independent</strong> of <code>stealth_profile</code>. When unset, the
+default follows the resolved stealth profile: a spoofed stealth profile
+(<code>spoof_macos</code>/<code>spoof_linux</code>/<code>spoof_windows</code>) implies <code>"coherent"</code>
+(human-paced typing, jittery mouse motion), while <code>auto</code>/<code>native</code> stealth
+implies <code>"native"</code> (zero-overhead, deterministic timing) — mirroring
+<code>BrowserBuilder::resolved_input_profile()</code>. Pass <code>"native"</code> or
+<code>"coherent"</code> explicitly to pin the input timing regardless of the stealth
+setting. Wraps <code>zendriver::stealth::InputProfile</code> via
+<code>BrowserBuilder::input_profile</code>; the output <code>input_profile</code> field always
+echoes the <em>resolved</em> value, not the raw request.</li>
 </ul>
+<h2 id="browser_monitor_-options"><a class="header" href="#browser_monitor_-options"><code>browser_monitor_*</code> options</a></h2>
+<p><code>browser_monitor_start</code> accepts <code>capture_body_max_bytes: integer</code> (default
+<code>1048576</code>, i.e. 1 MiB; <code>0</code> means unbounded) alongside <code>capture_bodies: bool</code> —
+it bounds how much of each HTTP response body is captured per event. A body
+over the cap is truncated to a prefix; <code>browser_monitor_read</code>'s <code>http</code> events
+report the truncation via <code>body_truncated: bool</code> and <code>body_full_bytes: integer</code> (the full pre-truncation length, regardless of how much was kept).
+A body-fetch failure (e.g. Chrome already evicted the response) sets
+<code>body_capture_error: string</code> instead of silently omitting <code>body</code> /
+<code>body_base64</code> with no explanation.</p>
+<p><code>browser_monitor_read</code> can also return a <code>delivery_boundary</code> event: a
+lagged/reconnected/disconnected transport, a correlation-map eviction, or an
+undecodable payload on the underlying event stream, surfaced explicitly
+instead of silently dropped. Its <code>boundary</code> field is one of <code>"lagged"</code> |
+<code>"reconnected"</code> | <code>"disconnected"</code> | <code>"correlation_evicted"</code> |
+<code>"decode_failed"</code> | <code>"unknown"</code>, with <code>generation</code> / <code>missed</code> / <code>previous</code> /
+<code>url</code> populated depending on which. A <code>"disconnected"</code> boundary means the
+underlying monitor's correlator task has ended — no further events will ever
+be buffered for that handle; call <code>browser_monitor_start</code> again for a fresh
+one. See <a href="./network.html#delivery-loss-boundaries">Network monitor &amp; HTTP</a> for
+the full semantics.</p>
 <h2 id="stealth"><a class="header" href="#stealth">Stealth</a></h2>
 <p>Stealth is on by default (matching the <code>zendriver</code> library). Configure
 the default fingerprint via <code>--stealth-profile</code> at server start; switch

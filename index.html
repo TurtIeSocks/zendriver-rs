@@ -182,11 +182,15 @@
                 <div id="content" class="content">
                     <main>
                         <h1 id="introduction"><a class="header" href="#introduction">Introduction</a></h1>
-<p><strong>zendriver-rs</strong> is an async-first, undetectable browser-automation library
-for Rust. It drives a real Chrome instance over the <a href="https://chromedevtools.github.io/devtools-protocol/">Chrome DevTools
+<p><strong>zendriver-rs</strong> is an async-first browser-automation library for Rust
+with a coherent stealth identity and explicit anti-detection controls,
+on by default. It drives a real Chrome instance over the <a href="https://chromedevtools.github.io/devtools-protocol/">Chrome DevTools
 Protocol</a> (CDP) directly — no WebDriver shim, no Selenium grid, no JSON
 wire — and ships with anti-detection patches that pass mainstream
-fingerprint batteries out of the box.</p>
+fingerprint checks (e.g. <a href="https://bot.sannysoft.com/">sannysoft</a>, <a href="https://arh.antoinevastel.com/bots/areyouheadless">areyouheadless</a>) out of the box.
+No automation stack can guarantee invisibility to a determined,
+adaptively-defended site — see <a href="./stealth.html">Stealth</a> for what the
+patches actually cover and their limits.</p>
 <p>It is a Rust port of the Python <a href="https://github.com/cdpdriver/zendriver">zendriver</a> / <a href="https://github.com/ultrafunkamsterdam/nodriver">nodriver</a> projects, with
 the API redesigned around Rust's type system: builder patterns where Python
 uses kwargs, traits where Python uses duck-typed protocols, <code>Result</code> where
@@ -196,8 +200,11 @@ borrow checker tracks instead of letting them drift across <code>await</code> po
 <ul>
 <li><strong>Scraping sites that block headless browsers.</strong> The <code>spoofed</code> stealth
 profile patches <code>navigator.webdriver</code>, the Chrome runtime object, the
-permissions API, and a half-dozen other tells. Cloudflare Turnstile,
-PerimeterX, and DataDome challenges pass without manual headers.</li>
+permissions API, and a half-dozen other tells. Many Cloudflare
+Turnstile, PerimeterX, and DataDome challenges pass without manual
+headers; sites with more aggressive detection layers may still need
+the dedicated bypass features (see <a href="./cloudflare.html">Cloudflare</a> /
+<a href="./datadome.html">DataDome</a>) or still catch a scripted session.</li>
 <li><strong>End-to-end testing of real-world web apps.</strong> First-class multi-tab,
 cross-origin iframe (OOPIF) support, network interception, and a
 Playwright-style <code>expect()</code> pre-register surface make whole-flow tests
@@ -217,10 +224,12 @@ instead of hand-rolling <code>Page.querySelector</code> calls.</li>
 <li><strong>CDP-direct.</strong> Every method maps to one or two CDP commands. There is
 no WebDriver-style adapter layer, so latency is one network round-trip
 per call — typically under 1 ms on localhost.</li>
-<li><strong>Undetectable by default.</strong> <code>StealthProfile::native</code> is the suggested
-starting point — UA scrub plus Emulation overrides, no JS bootstrap, no
-prototype patching. <code>StealthProfile::spoofed</code> adds Navigator-prototype
-patches that pass <a href="https://bot.sannysoft.com/">sannysoft</a> + <a href="https://arh.antoinevastel.com/bots/areyouheadless">areyouheadless</a>. Off-by-default for
+<li><strong>Anti-detection controls on by default.</strong> <code>StealthProfile::native</code> is
+the suggested starting point — UA scrub plus Emulation overrides, no JS
+bootstrap, no prototype patching. <code>StealthProfile::spoofed</code> adds
+Navigator-prototype patches that pass <a href="https://bot.sannysoft.com/">sannysoft</a> + <a href="https://arh.antoinevastel.com/bots/areyouheadless">areyouheadless</a>.
+Neither is a guarantee against a determined, adaptive detector — see
+<a href="./stealth.html#when-to-use-which">Stealth</a> for the tradeoffs. Use
 <code>StealthProfile::off</code> when you want a vanilla browser for reproduction.</li>
 <li><strong>Async-first.</strong> Built on Tokio. Every call returns a <code>Future</code>. No
 blocking, no <code>block_on</code>, no <code>tokio::task::spawn_blocking</code>. Browser /

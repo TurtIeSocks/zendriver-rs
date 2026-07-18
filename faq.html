@@ -284,8 +284,9 @@ or rate-limit thresholds.</li>
 <ul>
 <li><strong><code>StealthProfile::native()</code></strong> — patches only what fingerprinters see
 at the protocol level: UA scrub, launch flags, Emulation overrides.
-No JS bootstrap. Cheap, undetectable via <code>Function.prototype.toString</code>
-drift. Passes most consumer sites.</li>
+No JS bootstrap, so there's nothing for a <code>Function.prototype.toString</code>
+check to catch — it's cheap and safe against that specific technique
+by construction. Passes most consumer sites.</li>
 <li><strong><code>StealthProfile::spoofed()</code></strong> — <code>native()</code> plus Navigator-prototype
 JS patches injected via <code>Page.addScriptToEvaluateOnNewDocument</code>.
 Restores <code>navigator.webdriver</code> to undefined, fixes <code>navigator.plugins</code>
@@ -389,6 +390,35 @@ tab.wait_for_idle_opts(IdleOptions {
 </span><span class="boring">}</span></code></pre></pre>
 <p><code>max_inflight_age</code> defaults to <code>None</code> (the historical
 wait-for-everything behavior).</p>
+<h2 id="does-wait_for_idle-count-a-responses-headers-as-done"><a class="header" href="#does-wait_for_idle-count-a-responses-headers-as-done">Does <code>wait_for_idle</code> count a response's headers as "done"?</a></h2>
+<p>No — only <code>Network.loadingFinished</code> / <code>Network.loadingFailed</code> clear a
+request from the in-flight set. <code>Network.responseReceived</code> (the
+response's <em>headers</em> arriving) is deliberately not treated as
+completion, since the body can still be streaming for an arbitrarily
+long time afterward (a large download, chunked transfer encoding, a
+slow origin).</p>
+<p><code>wait_for_idle</code> is best-effort by default: if the underlying CDP event
+stream loses delivery continuity mid-wait (a lagging subscriber, a
+<a href="https://docs.rs/zendriver/latest/zendriver/struct.Browser.html#method.reconnect"><code>Browser::reconnect</code></a>, or the WebSocket dying), it silently tolerates
+the gap and still resolves on what it <em>did</em> observe —
+<code>IdleOptions::loss_policy: IdleLossPolicy::Lenient</code>, matching every
+prior release's behavior. Opt into <code>IdleLossPolicy::Strict</code> to fail
+loudly with <a href="https://docs.rs/zendriver/latest/zendriver/enum.ZendriverError.html#variant.EventStreamIncomplete"><code>ZendriverError::EventStreamIncomplete</code></a> instead of
+risking a possibly-wrong idle:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span><span class="boring">let browser = zendriver::Browser::builder().launch().await?;
+</span><span class="boring">let tab = browser.main_tab();
+</span>use zendriver::{IdleLossPolicy, IdleOptions};
+
+tab.wait_for_idle_opts(IdleOptions {
+    loss_policy: IdleLossPolicy::Strict,
+    ..Default::default()
+})
+.await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
 <h2 id="where-do-i-find-the-full-list-of-errors"><a class="header" href="#where-do-i-find-the-full-list-of-errors">Where do I find the full list of errors?</a></h2>
 <p><a href="./error-reference.html">Error Reference</a> — every public variant of
 <code>ZendriverError</code> plus the sub-crate errors that flow into it.</p>

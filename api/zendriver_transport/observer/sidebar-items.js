@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["ObserverError"],"struct":["PausedSession","TargetInfo"],"trait":["TargetObserver"]};
+window.SIDEBAR_ITEMS = {"enum":["ObserverError","ObserverFailurePolicy"],"struct":["PausedSession","TargetInfo"],"trait":["TargetObserver"]};

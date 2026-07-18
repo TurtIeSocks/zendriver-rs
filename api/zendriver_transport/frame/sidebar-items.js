@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["CdpInbound"],"struct":["CdpCommand","CdpRpcError","RawEvent"]};
+window.SIDEBAR_ITEMS = {"enum":["AccountedRawEvent","CdpInbound"],"struct":["CdpCommand","CdpRpcError","RawEvent"]};

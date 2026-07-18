@@ -353,6 +353,19 @@ let exp = tab.expect_request("/api/")
 <a href="https://docs.rs/zendriver/latest/zendriver/enum.ZendriverError.html#variant.Timeout"><code>ZendriverError::Timeout</code></a>.
 The subscriber task is canceled before the error returns, so there's no
 leaked listener.</p>
+<p>If the connection to Chrome drops, reconnects, or a broadcast subscriber
+falls behind while an expectation is waiting, the future instead resolves to
+<a href="https://docs.rs/zendriver/latest/zendriver/enum.ZendriverError.html#variant.EventStreamIncomplete"><code>ZendriverError::EventStreamIncomplete</code></a>
+— distinct from <code>Timeout</code> because the awaited event may in fact have fired,
+but the delivery gap means it can no longer be confirmed either way. Treat it
+as "re-establish and re-wait", not as "it didn't happen".</p>
+<blockquote>
+<p><strong>Note:</strong> the delivery lag that triggers this is connection-wide, not
+scoped to the awaited event — a <code>Lagged</code> boundary on the shared CDP
+broadcast can abort an <code>expect_*</code> wait even when the lag was on
+unrelated traffic, so callers on event-heavy pages may see
+<code>EventStreamIncomplete</code> more often.</p>
+</blockquote>
 <h2 id="when-to-use-which"><a class="header" href="#when-to-use-which">When to use which</a></h2>
 <ul>
 <li><strong><code>expect_response</code></strong> — confirm an API call returned (covers status +

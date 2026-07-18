@@ -218,18 +218,51 @@ btn.click_fast().await?;
 <tr><td><code>type_text_fast(s)</code></td><td>per-char, no delay</td><td>focus gate</td><td>Tests; trusted automation.</td></tr>
 </tbody></table>
 </div>
-<p>The realism comes from the active <a href="https://docs.rs/zendriver/latest/zendriver/stealth/struct.StealthProfile.html"><code>StealthProfile</code></a>'s <code>InputProfile</code>:</p>
+<p>By default, the realism comes from the active <a href="https://docs.rs/zendriver/latest/zendriver/stealth/struct.StealthProfile.html"><code>StealthProfile</code></a>'s
+<code>InputProfile</code>:</p>
 <ul>
-<li><code>StealthProfile::native()</code> and <code>::spoofed()</code> install a realistic
-profile by default — Bezier control points with deterministic-but-
-jittered timing, per-character keyboard delays of 30-200 ms,
-occasional 1-2% typo + correction events.</li>
-<li><code>StealthProfile::off()</code> installs a no-op profile — even realistic
-methods just do the dispatch without realism.</li>
+<li><code>StealthProfile::spoofed()</code> installs a realistic profile by default —
+Bezier control points with deterministic-but-jittered timing,
+per-character keyboard delays of 30-200 ms, occasional 1-2% typo +
+correction events.</li>
+<li><code>StealthProfile::native()</code> and <code>::off()</code> install a zero-overhead,
+deterministic profile by default — even realistic methods just do
+the dispatch without added realism.</li>
 </ul>
 <p>When realism matters but you also want determinism (e.g. snapshots
 inside tests), seed the profile with a fixed RNG — see the
 <a href="https://docs.rs/zendriver_stealth/latest/zendriver_stealth/struct.InputProfile.html"><code>InputProfile</code></a> rustdoc.</p>
+<h3 id="opt-in-decoupling-input-timing-from-stealth"><a class="header" href="#opt-in-decoupling-input-timing-from-stealth">Opt-in: decoupling input timing from stealth</a></h3>
+<p><a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.input_profile"><code>BrowserBuilder::input_profile()</code></a> lets you pick the <a href="https://docs.rs/zendriver_stealth/latest/zendriver_stealth/struct.InputProfile.html"><code>InputProfile</code></a>
+explicitly, <strong>independent</strong> of <code>StealthProfile</code>. This is opt-in only —
+it does not change any default. With no <code>.input_profile(..)</code> call, timing
+still resolves to whatever the active <code>StealthProfile</code> implies (the same
+mapping described above — <code>InputProfile::spoofed()</code> under
+<code>StealthProfile::spoofed()</code>, <code>InputProfile::native()</code> under <code>::native()</code>
+or <code>::off()</code>), exactly as before this method existed.</p>
+<p>Use it when you want to <em>decouple</em> timing from the stealth setting —
+e.g. humanized timing without also turning on stealth's surface patches
+(canvas/WebGL/navigator overrides), or stealth on but deterministic
+zero-delay input for a test:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::stealth::{InputProfile, StealthProfile};
+
+<span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span>// Stealth off (stock Chrome launch), but keep human-paced typing and
+// jittery mouse motion — previously impossible, since input timing was
+// derived from the stealth profile.
+let browser = zendriver::Browser::builder()
+    .stealth(StealthProfile::off())
+    .input_profile(InputProfile::coherent())
+    .launch()
+    .await?;
+<span class="boring">browser.close().await?;
+</span><span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p><code>BrowserBuilder::resolved_input_profile()</code> returns the effective profile
+before launch, for tests/inspection — same pattern as
+<code>resolved_persona()</code>.</p>
 <h2 id="clickoptions-for-fine-control"><a class="header" href="#clickoptions-for-fine-control"><code>ClickOptions</code> for fine control</a></h2>
 <p>Both <code>click()</code> and <code>click_fast()</code> are wrappers around <a href="https://docs.rs/zendriver/latest/zendriver/struct.Element.html#method.click_with"><code>Element::click_with()</code></a>,
 which takes a <a href="https://docs.rs/zendriver/latest/zendriver/struct.ClickOptions.html"><code>ClickOptions</code></a> struct for full control:</p>
@@ -411,8 +444,8 @@ real interaction starts). Save realism for the moments that matter.</li>
 </ul>
 <p>When in doubt, stick with the realistic defaults — the per-call cost is
 small (typically 50-300 ms per click; a few ms per typed character) and
-it keeps you on the "indistinguishable from a real user" path that the
-rest of the stealth machinery is built around.</p>
+it keeps input timing on the human-plausible path that the rest of the
+stealth machinery is built around.</p>
 
                     </main>
 
