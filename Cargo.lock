@@ -3513,7 +3513,7 @@ dependencies = [
 
 [[package]]
 name = "zendriver-fingerprints"
-version = "0.2.16"
+version = "0.3.0"
 dependencies = [
  "dirs",
  "fastrand",
@@ -3568,7 +3568,7 @@ dependencies = [
 
 [[package]]
 name = "zendriver-mcp"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "async-trait",
  "axum",
