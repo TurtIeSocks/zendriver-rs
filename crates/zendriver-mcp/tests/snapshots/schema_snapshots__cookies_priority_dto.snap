@@ -1,0 +1,17 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::cookies::CookiePriorityDto)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: CookiePriorityDto
+description: "Eviction-priority mirror of [`zendriver::CookiePriority`].\n\nSerializes as `\"Low\"` / `\"Medium\"` / `\"High\"`, matching the lib's enum\n(and CDP's `Network.CookiePriority`) exactly."
+oneOf:
+  - description: Lowest retention priority — evicted first under storage pressure.
+    type: string
+    const: Low
+  - description: Default priority when the attribute is unspecified.
+    type: string
+    const: Medium
+  - description: Highest retention priority — evicted last.
+    type: string
+    const: High

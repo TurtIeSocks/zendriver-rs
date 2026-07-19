@@ -1,0 +1,18 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::cookies::CookiePartitionKeyDto)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: CookiePartitionKeyDto
+description: "CHIPS partition-key mirror of [`zendriver::CookiePartitionKey`]."
+type: object
+properties:
+  has_cross_site_ancestor:
+    description: "`true` if the cookie was set from a cross-site context."
+    type: boolean
+    default: false
+  top_level_site:
+    description: "The top-level site (e.g. `\"https://example.com\"`)."
+    type: string
+required:
+  - top_level_site

@@ -163,6 +163,15 @@ schema_snap!(eval_out, tools::eval::EvalOutput);
 // ---------- cookies --------------------------------------------------------
 
 schema_snap!(cookies_same_site_dto, tools::cookies::SameSiteDto);
+schema_snap!(cookies_priority_dto, tools::cookies::CookiePriorityDto);
+schema_snap!(
+    cookies_source_scheme_dto,
+    tools::cookies::CookieSourceSchemeDto
+);
+schema_snap!(
+    cookies_partition_key_dto,
+    tools::cookies::CookiePartitionKeyDto
+);
 schema_snap!(cookies_cookie_dto, tools::cookies::CookieDto);
 schema_snap!(cookies_get_in, tools::cookies::CookiesGetInput);
 schema_snap!(cookies_get_out, tools::cookies::CookiesGetOutput);

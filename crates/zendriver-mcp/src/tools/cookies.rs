@@ -67,13 +67,109 @@ impl From<SameSiteDto> for zendriver::SameSite {
     }
 }
 
+/// Eviction-priority mirror of [`zendriver::CookiePriority`].
+///
+/// Serializes as `"Low"` / `"Medium"` / `"High"`, matching the lib's enum
+/// (and CDP's `Network.CookiePriority`) exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum CookiePriorityDto {
+    /// Lowest retention priority — evicted first under storage pressure.
+    Low,
+    /// Default priority when the attribute is unspecified.
+    Medium,
+    /// Highest retention priority — evicted last.
+    High,
+}
+
+impl From<zendriver::CookiePriority> for CookiePriorityDto {
+    fn from(p: zendriver::CookiePriority) -> Self {
+        match p {
+            zendriver::CookiePriority::Low => Self::Low,
+            zendriver::CookiePriority::Medium => Self::Medium,
+            zendriver::CookiePriority::High => Self::High,
+        }
+    }
+}
+
+impl From<CookiePriorityDto> for zendriver::CookiePriority {
+    fn from(p: CookiePriorityDto) -> Self {
+        match p {
+            CookiePriorityDto::Low => Self::Low,
+            CookiePriorityDto::Medium => Self::Medium,
+            CookiePriorityDto::High => Self::High,
+        }
+    }
+}
+
+/// Source-scheme mirror of [`zendriver::CookieSourceScheme`].
+///
+/// Serializes as `"Unset"` / `"NonSecure"` / `"Secure"`, matching the lib's
+/// enum (and CDP's `Network.CookieSourceScheme`) exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum CookieSourceSchemeDto {
+    /// Scheme unknown / not recorded.
+    Unset,
+    /// Cookie was set over a non-secure (`http`) origin.
+    NonSecure,
+    /// Cookie was set over a secure (`https`) origin.
+    Secure,
+}
+
+impl From<zendriver::CookieSourceScheme> for CookieSourceSchemeDto {
+    fn from(s: zendriver::CookieSourceScheme) -> Self {
+        match s {
+            zendriver::CookieSourceScheme::Unset => Self::Unset,
+            zendriver::CookieSourceScheme::NonSecure => Self::NonSecure,
+            zendriver::CookieSourceScheme::Secure => Self::Secure,
+        }
+    }
+}
+
+impl From<CookieSourceSchemeDto> for zendriver::CookieSourceScheme {
+    fn from(s: CookieSourceSchemeDto) -> Self {
+        match s {
+            CookieSourceSchemeDto::Unset => Self::Unset,
+            CookieSourceSchemeDto::NonSecure => Self::NonSecure,
+            CookieSourceSchemeDto::Secure => Self::Secure,
+        }
+    }
+}
+
+/// CHIPS partition-key mirror of [`zendriver::CookiePartitionKey`].
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct CookiePartitionKeyDto {
+    /// The top-level site (e.g. `"https://example.com"`).
+    pub top_level_site: String,
+    /// `true` if the cookie was set from a cross-site context.
+    #[serde(default)]
+    pub has_cross_site_ancestor: bool,
+}
+
+impl From<zendriver::CookiePartitionKey> for CookiePartitionKeyDto {
+    fn from(k: zendriver::CookiePartitionKey) -> Self {
+        Self {
+            top_level_site: k.top_level_site,
+            has_cross_site_ancestor: k.has_cross_site_ancestor,
+        }
+    }
+}
+
+impl From<CookiePartitionKeyDto> for zendriver::CookiePartitionKey {
+    fn from(k: CookiePartitionKeyDto) -> Self {
+        Self {
+            top_level_site: k.top_level_site,
+            has_cross_site_ancestor: k.has_cross_site_ancestor,
+        }
+    }
+}
+
 /// Wire-only mirror of [`zendriver::Cookie`] — see module docs.
 ///
 /// Field set + serde shape match the lib's `Cookie` exactly, so a `Vec<Cookie>`
 /// serialized by the lib parses cleanly as `Vec<CookieDto>` and vice versa.
 /// Adding [`JsonSchema`] here (without touching the lib) lets rmcp synthesize
 /// tool schemas.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct CookieDto {
     /// Cookie name.
     pub name: String,
@@ -101,6 +197,27 @@ pub struct CookieDto {
     /// `secure` when present. Always `None` on cookies returned by reads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Eviction-priority hint (`Network.CookiePriority`). `None` lets
+    /// Chrome apply its default (`Medium`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<CookiePriorityDto>,
+    /// First-Party Sets membership flag (`sameParty`). Rarely set by hand;
+    /// populated by CDP on reads when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub same_party: Option<bool>,
+    /// Scheme of the origin that set the cookie
+    /// (`Network.CookieSourceScheme`). Drives schemeful same-site.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_scheme: Option<CookieSourceSchemeDto>,
+    /// Source port of the origin that set the cookie. `-1` in CDP means
+    /// "unspecified"; modeled as a plain `Option<i32>` here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_port: Option<i32>,
+    /// CHIPS partition key — the top-level site the partitioned cookie is
+    /// scoped to, plus whether it was set from a cross-site context.
+    /// Mirrors CDP's `Network.CookiePartitionKey` (M119+).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition_key: Option<CookiePartitionKeyDto>,
 }
 
 impl From<zendriver::Cookie> for CookieDto {
@@ -115,16 +232,17 @@ impl From<zendriver::Cookie> for CookieDto {
             secure: c.secure,
             same_site: c.same_site.map(SameSiteDto::from),
             url: c.url,
+            priority: c.priority.map(CookiePriorityDto::from),
+            same_party: c.same_party,
+            source_scheme: c.source_scheme.map(CookieSourceSchemeDto::from),
+            source_port: c.source_port,
+            partition_key: c.partition_key.map(CookiePartitionKeyDto::from),
         }
     }
 }
 
 impl From<CookieDto> for zendriver::Cookie {
     fn from(c: CookieDto) -> Self {
-        // CookieDto is a wire-only mirror that does not (yet) model the CHIPS /
-        // priority extension fields added to `zendriver::Cookie`; leave them at
-        // their `Default` (all `None`). Extending the DTO with those fields is
-        // a separate change.
         Self {
             name: c.name,
             value: c.value,
@@ -135,7 +253,11 @@ impl From<CookieDto> for zendriver::Cookie {
             secure: c.secure,
             same_site: c.same_site.map(zendriver::SameSite::from),
             url: c.url,
-            ..Default::default()
+            priority: c.priority.map(zendriver::CookiePriority::from),
+            same_party: c.same_party,
+            source_scheme: c.source_scheme.map(zendriver::CookieSourceScheme::from),
+            source_port: c.source_port,
+            partition_key: c.partition_key.map(zendriver::CookiePartitionKey::from),
         }
     }
 }
@@ -495,8 +617,56 @@ mod tests {
             secure: true,
             same_site: Some(SameSiteDto::Lax),
             url: Some("https://example.com/".into()),
+            priority: None,
+            same_party: None,
+            source_scheme: None,
+            source_port: None,
+            partition_key: None,
         };
         let lib: zendriver::Cookie = original.clone().into();
+        let back: CookieDto = lib.into();
+        assert_eq!(original, back);
+    }
+
+    /// Lossless round-trip of the extended CHIPS / priority fields
+    /// (`priority`, `same_party`, `source_scheme`, `source_port`,
+    /// `partition_key`) — the fields the DTO used to drop on the floor.
+    #[test]
+    fn cookie_dto_extended_fields_round_trip_through_lib_cookie() {
+        let original = CookieDto {
+            name: "sid".into(),
+            value: "abc".into(),
+            domain: ".example.com".into(),
+            path: "/".into(),
+            expires: None,
+            http_only: false,
+            secure: true,
+            same_site: None,
+            url: None,
+            priority: Some(CookiePriorityDto::High),
+            same_party: Some(true),
+            source_scheme: Some(CookieSourceSchemeDto::Secure),
+            source_port: Some(443),
+            partition_key: Some(CookiePartitionKeyDto {
+                top_level_site: "https://top.example".into(),
+                has_cross_site_ancestor: true,
+            }),
+        };
+        let lib: zendriver::Cookie = original.clone().into();
+        assert_eq!(lib.priority, Some(zendriver::CookiePriority::High));
+        assert_eq!(lib.same_party, Some(true));
+        assert_eq!(
+            lib.source_scheme,
+            Some(zendriver::CookieSourceScheme::Secure)
+        );
+        assert_eq!(lib.source_port, Some(443));
+        assert_eq!(
+            lib.partition_key,
+            Some(zendriver::CookiePartitionKey {
+                top_level_site: "https://top.example".into(),
+                has_cross_site_ancestor: true,
+            })
+        );
         let back: CookieDto = lib.into();
         assert_eq!(original, back);
     }
@@ -522,6 +692,7 @@ mod tests {
                 secure: false,
                 same_site: None,
                 url: None,
+                ..Default::default()
             },
             CookieDto {
                 name: "b".into(),
@@ -533,6 +704,14 @@ mod tests {
                 secure: true,
                 same_site: Some(SameSiteDto::Strict),
                 url: None,
+                priority: Some(CookiePriorityDto::Low),
+                same_party: None,
+                source_scheme: Some(CookieSourceSchemeDto::NonSecure),
+                source_port: None,
+                partition_key: Some(CookiePartitionKeyDto {
+                    top_level_site: "https://top.example".into(),
+                    has_cross_site_ancestor: false,
+                }),
             },
         ];
 
