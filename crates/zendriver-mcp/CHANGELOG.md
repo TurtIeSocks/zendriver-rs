@@ -3,6 +3,16 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.10.0] - 2026-07-19
+
+### Added
+
+- Expose extended cookie fields (partition_key, priority, ...)
+- Expose method/post_data overrides in intercept modify_request
+- Add Browser::version() (CDP Browser.getVersion); wire MCP chrome_version
+- Mirror the browser proxy into a custom geo_endpoint resolver
+
+
 ## [0.9.0] - 2026-07-19
 
 ### Fixed
