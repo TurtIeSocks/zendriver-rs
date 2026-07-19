@@ -3576,6 +3576,7 @@ dependencies = [
  "clap",
  "futures",
  "insta",
+ "percent-encoding",
  "regex",
  "rmcp",
  "schemars",

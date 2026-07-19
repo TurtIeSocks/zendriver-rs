@@ -70,13 +70,13 @@ impl IpApiResolver {
     /// `Display`.
     ///
     /// Called by `BrowserBuilder::geo_auto`, wiring `self.proxy` from
-    /// [`crate::browser::BrowserBuilder::proxy`] through here.
+    /// [`crate::browser::BrowserBuilder::proxy`] through here. Public so
+    /// callers building a custom-endpoint resolver by hand (e.g.
+    /// `zendriver-mcp`'s `geo_endpoint` option) can mirror the same proxy
+    /// the browser itself uses, the same way `geo_auto`'s bundled default
+    /// does.
     #[must_use]
-    pub(crate) fn with_proxy(
-        mut self,
-        server: Option<String>,
-        auth: Option<(String, String)>,
-    ) -> Self {
+    pub fn with_proxy(mut self, server: Option<String>, auth: Option<(String, String)>) -> Self {
         self.proxy = server;
         self.proxy_auth = auth;
         self

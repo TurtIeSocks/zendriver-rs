@@ -87,11 +87,10 @@ pub struct OpenInput {
     pub geo_auto: bool,
     /// Override the geo-probe endpoint (default `http://ip-api.com/json`).
     /// Only meaningful together with `geo_auto: true`; ignored otherwise.
-    /// Same feature gating as `geo_auto`. Note: this bypasses proxy
-    /// mirroring — the probe against a custom endpoint is NOT routed through
-    /// `proxy` above (the underlying `IpApiResolver::with_proxy` wiring is
-    /// crate-private to `zendriver`); only the bundled default endpoint gets
-    /// proxy mirroring.
+    /// Same feature gating as `geo_auto`. Mirrors `proxy` above, same as the
+    /// bundled default endpoint — the probe against the custom endpoint is
+    /// routed through the same upstream proxy Chrome uses, so its exit IP
+    /// matches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geo_endpoint: Option<String>,
 }
@@ -172,12 +171,18 @@ pub async fn open(
         if input.geo_auto {
             builder = match &input.geo_endpoint {
                 Some(endpoint) => {
-                    if input.proxy.is_some() {
-                        tracing::warn!(
-                            "geo_endpoint overrides the default ip-api.com probe but is NOT proxy-mirrored (unlike geo_auto's bundled default) — the probe will hit this endpoint directly from the host, not through `proxy`, so its exit IP may not match the browser's"
-                        );
+                    let mut resolver = zendriver::IpApiResolver::new().endpoint(endpoint.clone());
+                    if let Some(proxy) = &input.proxy {
+                        match split_proxy_for_geo(proxy) {
+                            Some((server, creds)) => {
+                                resolver = resolver.with_proxy(Some(server), creds);
+                            }
+                            None => tracing::warn!(
+                                "geo_endpoint: failed to parse `proxy` for mirroring; probing the custom endpoint directly from the host"
+                            ),
+                        }
                     }
-                    builder.geo_resolver(zendriver::IpApiResolver::new().endpoint(endpoint.clone()))
+                    builder.geo_resolver(resolver)
                 }
                 None => builder.geo_auto(),
             };
@@ -242,6 +247,42 @@ pub async fn open(
         profile,
         input_profile: input_profile_choice,
     })
+}
+
+/// Split `scheme://[user[:pass]@]host:port[/...]` into a userinfo-free
+/// `scheme://host:port` server string and optional `(user, pass)`
+/// credentials — a small local mirror of `zendriver::proxy::split_proxy_url`
+/// (crate-private to `zendriver`, so unreachable from here). Used to feed
+/// `input.proxy` into `IpApiResolver::with_proxy` so a custom `geo_endpoint`
+/// probe is mirrored through the same upstream proxy as the browser, the
+/// same way `geo_auto`'s bundled default already is.
+///
+/// Returns `None` on anything unparseable (missing host, no `:` scheme
+/// separator, ...) — the caller falls back to probing without proxy
+/// mirroring rather than failing `browser_open` over it.
+#[cfg(feature = "geo")]
+fn split_proxy_for_geo(raw: &str) -> Option<(String, Option<(String, String)>)> {
+    let u = url::Url::parse(raw).ok()?;
+    let host = u.host_str().filter(|h| !h.is_empty())?;
+    let port = match u.port_or_known_default() {
+        Some(port) => port,
+        None if matches!(u.scheme(), "socks4" | "socks5") => 1080,
+        None => return None,
+    };
+    let server = format!("{}://{}:{}", u.scheme(), host, port);
+    let credentials = if u.username().is_empty() {
+        None
+    } else {
+        Some((
+            percent_encoding::percent_decode_str(u.username())
+                .decode_utf8_lossy()
+                .into_owned(),
+            percent_encoding::percent_decode_str(u.password().unwrap_or_default())
+                .decode_utf8_lossy()
+                .into_owned(),
+        ))
+    };
+    Some((server, credentials))
 }
 
 /// Map the wire-level [`StealthProfileChoice`] to a concrete
@@ -733,6 +774,105 @@ mod tests {
             input_profile_choice_for(&builder.resolved_input_profile()),
             InputProfileChoice::Native,
             "explicit Native pin must win over spoofed stealth"
+        );
+    }
+
+    // ----- geo_endpoint proxy-mirroring (split_proxy_for_geo) --------------
+
+    #[cfg(feature = "geo")]
+    #[test]
+    fn split_proxy_for_geo_splits_userinfo_from_server() {
+        let (server, creds) =
+            split_proxy_for_geo("http://bob:s3cret@proxy.example:8080").expect("parses");
+        assert_eq!(server, "http://proxy.example:8080");
+        assert_eq!(creds, Some(("bob".into(), "s3cret".into())));
+    }
+
+    #[cfg(feature = "geo")]
+    #[test]
+    fn split_proxy_for_geo_no_userinfo_yields_no_credentials() {
+        let (server, creds) = split_proxy_for_geo("http://proxy.example:8080").expect("parses");
+        assert_eq!(server, "http://proxy.example:8080");
+        assert_eq!(creds, None);
+    }
+
+    #[cfg(feature = "geo")]
+    #[test]
+    fn split_proxy_for_geo_decodes_percent_encoded_userinfo() {
+        let (_server, creds) =
+            split_proxy_for_geo("http://bob:p%40ss%3Aword@proxy.example:8080").expect("parses");
+        assert_eq!(creds, Some(("bob".into(), "p@ss:word".into())));
+    }
+
+    #[cfg(feature = "geo")]
+    #[test]
+    fn split_proxy_for_geo_unparseable_yields_none() {
+        assert_eq!(split_proxy_for_geo("not a url"), None);
+        assert_eq!(split_proxy_for_geo("http://"), None);
+    }
+
+    /// End-to-end proof that a `geo_endpoint` + `proxy` pair produces an
+    /// `IpApiResolver` that actually routes its probe through the proxy —
+    /// not just that `split_proxy_for_geo` parses correctly in isolation.
+    /// Mirrors `zendriver::geo_resolver`'s own
+    /// `threads_proxy_credentials_into_reqwest_proxy` test: stand a
+    /// wiremock server in for the proxy, require `Proxy-Authorization` on
+    /// it, and confirm the resolver only succeeds when the credentials
+    /// were threaded through `with_proxy`.
+    #[cfg(feature = "geo")]
+    #[tokio::test]
+    async fn geo_endpoint_resolver_mirrors_proxy_credentials() {
+        let proxy = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::header_exists("Proxy-Authorization"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_string(r#"{"countryCode":"DE"}"#),
+            )
+            .mount(&proxy)
+            .await;
+
+        let proxy_url = {
+            let mut u = url::Url::parse(&proxy.uri()).unwrap();
+            u.set_username("bob").unwrap();
+            u.set_password(Some("s3cret")).unwrap();
+            u.to_string()
+        };
+
+        let (server, creds) = split_proxy_for_geo(&proxy_url).expect("parses");
+        let resolver = zendriver::IpApiResolver::new()
+            .endpoint("http://geo-probe.invalid/json")
+            .with_proxy(Some(server), creds);
+
+        use zendriver_stealth::geo::GeoResolver as _;
+        let resolved = resolver.resolve().await;
+        assert_eq!(
+            resolved.map(|g| g.country),
+            Some(zendriver_stealth::geo::Country::try_from("DE").unwrap()),
+            "resolver must have reached the proxy WITH the Proxy-Authorization header \
+             the mock requires — if with_proxy dropped the credentials, the mock \
+             wouldn't match and this would be None"
+        );
+    }
+
+    /// Without a `proxy`, `split_proxy_for_geo` is never even called — this
+    /// locks in that a bare `geo_endpoint` (no `proxy`) still builds a
+    /// working, proxy-less resolver rather than erroring.
+    #[cfg(feature = "geo")]
+    #[tokio::test]
+    async fn geo_endpoint_resolver_without_proxy_still_resolves() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_string(r#"{"countryCode":"FR"}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let resolver = zendriver::IpApiResolver::new().endpoint(server.uri());
+        use zendriver_stealth::geo::GeoResolver as _;
+        assert_eq!(
+            resolver.resolve().await.map(|g| g.country),
+            Some(zendriver_stealth::geo::Country::try_from("FR").unwrap())
         );
     }
 }

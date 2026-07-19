@@ -635,3 +635,8 @@ covered = "browser_stealth_set.overrides.native_isolation -> StealthProfile::nat
 [[entry]]
 api = "zendriver::browser::Browser::version"
 covered = "browser_open.chrome_version"
+
+# ── Phase 1 remainder: IpApiResolver::with_proxy made public ───────────────
+[[entry]]
+api = "zendriver::IpApiResolver::with_proxy"
+covered = "browser_open.geo_auto / browser_open.geo_endpoint (mirrors input.proxy into the custom-endpoint resolver)"

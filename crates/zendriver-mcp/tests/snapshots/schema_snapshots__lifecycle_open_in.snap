@@ -17,7 +17,7 @@ properties:
     type: boolean
     default: false
   geo_endpoint:
-    description: "Override the geo-probe endpoint (default `http://ip-api.com/json`).\nOnly meaningful together with `geo_auto: true`; ignored otherwise.\nSame feature gating as `geo_auto`. Note: this bypasses proxy\nmirroring — the probe against a custom endpoint is NOT routed through\n`proxy` above (the underlying `IpApiResolver::with_proxy` wiring is\ncrate-private to `zendriver`); only the bundled default endpoint gets\nproxy mirroring."
+    description: "Override the geo-probe endpoint (default `http://ip-api.com/json`).\nOnly meaningful together with `geo_auto: true`; ignored otherwise.\nSame feature gating as `geo_auto`. Mirrors `proxy` above, same as the\nbundled default endpoint — the probe against the custom endpoint is\nrouted through the same upstream proxy Chrome uses, so its exit IP\nmatches."
     type:
       - string
       - "null"

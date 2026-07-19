@@ -6922,6 +6922,7 @@ impl zendriver::IpApiResolver
 pub fn zendriver::IpApiResolver::endpoint(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::IpApiResolver::new() -> Self
 pub fn zendriver::IpApiResolver::timeout(self, core::time::Duration) -> Self
+pub fn zendriver::IpApiResolver::with_proxy(self, core::option::Option<alloc::string::String>, core::option::Option<(alloc::string::String, alloc::string::String)>) -> Self
 impl core::default::Default for zendriver::IpApiResolver
 pub fn zendriver::IpApiResolver::default() -> Self
 impl zendriver_stealth::geo::GeoResolver for zendriver::IpApiResolver
