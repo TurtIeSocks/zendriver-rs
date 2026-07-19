@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.12.0] - 2026-07-19
+
+### Added
+
+- Add Tab::expect_file_chooser for button-triggered file pickers
+
+
 ## [0.11.0] - 2026-07-19
 
 ### Added
