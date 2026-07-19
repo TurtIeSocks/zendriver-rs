@@ -883,6 +883,7 @@ pub async fn zendriver::element::Element::mouse_drag(&self, (f64, f64), usize) -
 pub async fn zendriver::element::Element::scroll_into_view(&self) -> zendriver::error::Result<()>
 pub async fn zendriver::element::Element::set_text(&self, impl core::convert::AsRef<str>) -> zendriver::error::Result<()>
 pub async fn zendriver::element::Element::set_value(&self, impl core::convert::AsRef<str>) -> zendriver::error::Result<()>
+pub async fn zendriver::element::Element::tap(&self) -> zendriver::error::Result<()>
 pub async fn zendriver::element::Element::upload_files<P: core::convert::AsRef<std::path::Path>>(&self, &[P]) -> zendriver::error::Result<()>
 impl zendriver::element::Element
 pub async fn zendriver::element::Element::evaluate<T: serde_core::de::DeserializeOwned>(&self, impl core::convert::AsRef<str>) -> zendriver::error::Result<T>
@@ -4408,6 +4409,7 @@ pub fn zendriver::tab::Tab::session(&self) -> &zendriver_transport::session::Ses
 pub fn zendriver::tab::Tab::session_storage(&self) -> zendriver::storage::Storage
 pub async fn zendriver::tab::Tab::set_user_agent(&self, impl core::convert::Into<alloc::string::String>) -> zendriver::error::Result<()>
 pub async fn zendriver::tab::Tab::set_user_agent_with(&self, zendriver::tab::UserAgentOverride) -> zendriver::error::Result<()>
+pub async fn zendriver::tab::Tab::tap(&self, f64, f64) -> zendriver::error::Result<()>
 pub fn zendriver::tab::Tab::target_id(&self) -> &str
 pub async fn zendriver::tab::Tab::title(&self) -> zendriver::error::Result<alloc::string::String>
 pub async fn zendriver::tab::Tab::url(&self) -> zendriver::error::Result<url::Url>
@@ -6859,6 +6861,7 @@ pub async fn zendriver::element::Element::mouse_drag(&self, (f64, f64), usize) -
 pub async fn zendriver::element::Element::scroll_into_view(&self) -> zendriver::error::Result<()>
 pub async fn zendriver::element::Element::set_text(&self, impl core::convert::AsRef<str>) -> zendriver::error::Result<()>
 pub async fn zendriver::element::Element::set_value(&self, impl core::convert::AsRef<str>) -> zendriver::error::Result<()>
+pub async fn zendriver::element::Element::tap(&self) -> zendriver::error::Result<()>
 pub async fn zendriver::element::Element::upload_files<P: core::convert::AsRef<std::path::Path>>(&self, &[P]) -> zendriver::error::Result<()>
 impl zendriver::element::Element
 pub async fn zendriver::element::Element::evaluate<T: serde_core::de::DeserializeOwned>(&self, impl core::convert::AsRef<str>) -> zendriver::error::Result<T>
@@ -8433,6 +8436,7 @@ pub fn zendriver::tab::Tab::session(&self) -> &zendriver_transport::session::Ses
 pub fn zendriver::tab::Tab::session_storage(&self) -> zendriver::storage::Storage
 pub async fn zendriver::tab::Tab::set_user_agent(&self, impl core::convert::Into<alloc::string::String>) -> zendriver::error::Result<()>
 pub async fn zendriver::tab::Tab::set_user_agent_with(&self, zendriver::tab::UserAgentOverride) -> zendriver::error::Result<()>
+pub async fn zendriver::tab::Tab::tap(&self, f64, f64) -> zendriver::error::Result<()>
 pub fn zendriver::tab::Tab::target_id(&self) -> &str
 pub async fn zendriver::tab::Tab::title(&self) -> zendriver::error::Result<alloc::string::String>
 pub async fn zendriver::tab::Tab::url(&self) -> zendriver::error::Result<url::Url>

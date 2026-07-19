@@ -15,3 +15,6 @@ oneOf:
   - description: "Press at `(x, y)`, drag to `(to_x, to_y)` over `steps`, release."
     type: string
     const: drag
+  - description: "Tap at `(x, y)`: a bare `touchStart`/`touchEnd` pair, no mouse\nevents. Touch only — see [`zendriver::Tab::tap`]'s rustdoc for the\ntouch-capability-emulation caveat."
+    type: string
+    const: tap

@@ -1,7 +1,7 @@
 # MCP server (`zendriver-mcp`)
 
 `zendriver-mcp` is a [Model Context Protocol](https://modelcontextprotocol.io/)
-server that exposes zendriver-rs through 70 MCP tools (71 with the
+server that exposes zendriver-rs through 71 MCP tools (72 with the
 optional `fingerprints` feature), so any
 MCP-compatible client (Claude Desktop, Claude Code, custom agents) can
 drive a real, stealth-by-default Chrome browser.
@@ -66,7 +66,7 @@ OPTIONS:
 
 ## Tool surface
 
-70 tools across these categories (71 with the optional `fingerprints`
+71 tools across these categories (72 with the optional `fingerprints`
 feature):
 
 | Category               | Tools                                                                                                                       | Count |
@@ -76,7 +76,7 @@ feature):
 | Scroll / Window        | `browser_scroll / _get_window / _set_window`                                                                                |     3 |
 | Tabs                   | `browser_tab_list / _new / _switch / _close / _activate`                                                                    |     5 |
 | Find                   | `browser_find / _find_all`                                                                                                  |     2 |
-| Actions                | `browser_click / _hover / _type / _press / _key_sequence / _mouse / _set_value / _clear / _focus / _scroll_into_view / _upload` |    11 |
+| Actions                | `browser_click / _hover / _tap / _type / _press / _key_sequence / _mouse / _set_value / _clear / _focus / _scroll_into_view / _upload` |    12 |
 | Reads                  | `browser_element_state / _get_links / _search_resources`                                                                    |     3 |
 | Snapshots / Export     | `browser_html / _screenshot / _pdf / _save_mhtml`                                                                           |     4 |
 | Eval                   | `browser_evaluate / _evaluate_main`                                                                                         |     2 |

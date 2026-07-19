@@ -261,6 +261,40 @@ pub async fn hover(
     ok_with_snapshot(&tab, input.return_snapshot).await
 }
 
+// ---------- browser_tap ---------------------------------------------------
+
+/// Input for `browser_tap`.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TapInput {
+    #[serde(flatten)]
+    pub selector: Selector,
+    /// When `true`, include the trimmed page HTML in the response.
+    #[serde(default)]
+    pub return_snapshot: bool,
+}
+
+/// Tap an element's bbox center: a touch `touchStart`/`touchEnd` pair, not
+/// a mouse click.
+///
+/// Same scroll/actionability-gate/bbox-center path as `browser_click`, but
+/// dispatches `Input.dispatchTouchEvent` instead of `Input.dispatchMouseEvent`
+/// — for pages that branch on touch vs mouse input. Touch only (no pen /
+/// pressure / tilt); see [`zendriver::Element::tap`]'s rustdoc for the
+/// touch-capability-emulation caveat.
+pub async fn tap(
+    state: Arc<Mutex<SessionState>>,
+    input: TapInput,
+) -> Result<ActionOutput, ErrorData> {
+    let s = state.lock().await;
+    let tab = current_tab(&s).await?;
+    let el = resolve(&tab, &input.selector).await?;
+    el.tap()
+        .await
+        .map_err(|e| map_error(McpServerError::from(e)))?;
+    ok_with_snapshot(&tab, input.return_snapshot).await
+}
+
 // ---------- browser_type -------------------------------------------------
 
 /// Input for `browser_type`.
@@ -671,6 +705,20 @@ mod tests {
             fresh(),
             HoverInput {
                 selector: css("a"),
+                return_snapshot: false,
+            },
+        )
+        .await
+        .expect_err("must error without an open browser");
+        assert_suggests_browser_open(&err);
+    }
+
+    #[tokio::test]
+    async fn tap_with_no_browser_suggests_browser_open() {
+        let err = tap(
+            fresh(),
+            TapInput {
+                selector: css("button"),
                 return_snapshot: false,
             },
         )

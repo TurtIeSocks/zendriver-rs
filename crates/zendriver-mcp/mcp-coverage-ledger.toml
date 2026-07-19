@@ -742,3 +742,23 @@ covered = "browser_expect_await surfaces it as the expectation's failed(...) err
 [[entry]]
 api = "zendriver::tab::Tab::expect_file_chooser"
 covered = "browser_expect_register (kind: file_chooser)"
+
+# ── Phase 3 remainder: Tab::tap / Element::tap (touch input) ────────────────
+# New touch dispatch: `Tab::tap(x, y)` (`Input.dispatchTouchEvent`
+# touchStart -> touchEnd, no `Emulation.setTouchEmulationEnabled` preamble —
+# see the rustdoc for why a bare dispatch is enough and what it deliberately
+# doesn't emulate) + `Element::tap()` (mirrors `Element::click`'s
+# scroll/actionability-gate/bbox-center path, ending in `Tab::tap` instead of
+# a mouse press/release). Scope is touch only — pen/pressure/tilt stays open
+# in the backlog, deprioritized to Phase 7 (with mobile emulation).
+#
+# MCP coverage: `browser_mouse` gained a `tap` action (coordinate form, mirrors
+# `move`/`click`/`drag`) and a new `browser_tap` tool (element form, mirrors
+# `browser_click`/`browser_hover`) was added — published MCP tool count +1.
+[[entry]]
+api = "zendriver::tab::Tab::tap"
+covered = "browser_mouse (action: tap)"
+
+[[entry]]
+api = "zendriver::element::Element::tap"
+covered = "browser_tap"

@@ -1,0 +1,119 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::actions::TapInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: TapInput
+description: "Input for `browser_tap`."
+type: object
+properties:
+  attrs:
+    description: Attribute predicates (AND-ed). Predicate mode only.
+    type: array
+    items:
+      $ref: "#/$defs/AttrPredicate"
+  css:
+    type:
+      - string
+      - "null"
+  frame_id:
+    type:
+      - string
+      - "null"
+  nth:
+    type:
+      - integer
+      - "null"
+    format: uint
+    minimum: 0
+  return_snapshot:
+    description: "When `true`, include the trimmed page HTML in the response."
+    type: boolean
+    default: false
+  role:
+    type:
+      - string
+      - "null"
+  role_name:
+    type:
+      - string
+      - "null"
+  tag:
+    description: "HTML tag name filter (e.g. `\"button\"`, `\"a\"`). Predicate mode only."
+    type:
+      - string
+      - "null"
+  text:
+    type:
+      - string
+      - "null"
+  text_case_insensitive:
+    description: "Compare the predicate-mode text post-filter case-insensitively\n(`text` → `containing_text_i`, `text_exact` → `text_equals_i`).\nPredicate mode only; ignored in single-selector mode, where `text`\nis already a case-insensitive substring match and `text_exact` has\nno case-insensitive single-selector form."
+    type: boolean
+    default: false
+  text_exact:
+    type:
+      - string
+      - "null"
+  text_regex:
+    type:
+      - string
+      - "null"
+  timeout_ms:
+    type: integer
+    format: uint64
+    default: 5000
+    minimum: 0
+  visible_only:
+    type: boolean
+    default: true
+  xpath:
+    type:
+      - string
+      - "null"
+additionalProperties: false
+$defs:
+  AttrOp:
+    description: "Attribute-value comparison operator used in [`AttrPredicate`].\n\nDetermines how the actual element attribute value is compared against\nthe `value` field. When `op` is [`AttrOp::Has`], `value` is ignored."
+    oneOf:
+      - description: "`[name=\"value\"]` — exact match."
+        type: string
+        const: eq
+      - description: "`[name*=\"value\"]` — contains substring."
+        type: string
+        const: contains
+      - description: "`[name^=\"value\"]` — starts with."
+        type: string
+        const: starts_with
+      - description: "`[name$=\"value\"]` — ends with."
+        type: string
+        const: ends_with
+      - description: "`[name]` — attribute is present regardless of value."
+        type: string
+        const: has
+      - description: JS regex test on the attribute value (post-filter).
+        type: string
+        const: regex
+  AttrPredicate:
+    description: "One attribute predicate in a predicate-mode [`Selector`].\n\nCombine multiple predicates via `attrs: [...]`; they are AND-ed.\n`value` is required for every `op` except [`AttrOp::Has`]."
+    type: object
+    properties:
+      case_insensitive:
+        description: "Compare case-insensitively (CSS `[name=value i]`). Valid only for\n`eq`/`contains`/`starts_with`/`ends_with` — `has` has no value to\ncompare and `regex` is already case-insensitive via an inline\n`(?i)` pattern flag, so setting this with either is a validation\nerror."
+        type: boolean
+        default: false
+      name:
+        description: "Attribute name (e.g. `\"data-role\"`, `\"class\"`, `\"href\"`)."
+        type: string
+      op:
+        description: Comparison operator.
+        $ref: "#/$defs/AttrOp"
+      value:
+        description: "Comparison value. Required for all operators except `has`."
+        type:
+          - string
+          - "null"
+    additionalProperties: false
+    required:
+      - name
+      - op

@@ -152,6 +152,51 @@ The full `ClickOptions` shape:
 [`Element::click_with()`]: https://docs.rs/zendriver/latest/zendriver/struct.Element.html#method.click_with
 [`ClickOptions`]: https://docs.rs/zendriver/latest/zendriver/struct.ClickOptions.html
 
+## Touch / tap
+
+[`Element::tap()`] taps an element's bbox center via a real touch dispatch
+(`Input.dispatchTouchEvent` `touchStart` → `touchEnd`), not a mouse click.
+It mirrors `click()`'s scroll-into-view + actionability-gate + bbox-center
+path, but ends in a touch event pair instead of `mousePressed`/`mouseReleased`
+— for pages that branch their handling on touch vs mouse input (an
+`ontouchstart` listener, or `pointerType` checks).
+
+[`Tab::tap(x, y)`] is the coordinate-level equivalent, for canvas / custom
+widgets with no element to target — mirrors [`Tab::mouse_click()`].
+
+```rust,no_run
+# async fn ex() -> zendriver::Result<()> {
+# let browser = zendriver::Browser::builder().launch().await?;
+# let tab = browser.main_tab();
+let btn = tab.find().css("button").one().await?;
+btn.tap().await?;
+
+// Or at a raw coordinate:
+tab.tap(120.0, 240.0).await?;
+# Ok(()) }
+```
+
+`touchEnd` carries an empty `touchPoints` array — that's the CDP contract
+for a lifted finger, not a bug.
+
+**Capability-emulation caveat:** `tap()` does *not* call
+`Emulation.setTouchEmulationEnabled`, so it doesn't flip touch-*capability*
+signals a page might probe — `'ontouchstart' in window`,
+`navigator.maxTouchPoints`, `matchMedia('(pointer: coarse)')`. The bare
+`dispatchTouchEvent` still fires the page's real `touchstart`/`touchend`
+handlers (and, on a clickable element, the browser's own synthesized
+`click`), which is what a tap needs; a page that *gates* its behavior on
+those capability signals before wiring up touch listeners won't see them
+flip. Full capability emulation belongs with mobile device emulation
+(viewport + UA + touch capability together) — a later, larger feature, not
+part of this tap primitive.
+
+Scope is touch only: no pressure, pen/stylus, or tilt input yet.
+
+[`Element::tap()`]: https://docs.rs/zendriver/latest/zendriver/struct.Element.html#method.tap
+[`Tab::tap(x, y)`]: https://docs.rs/zendriver/latest/zendriver/struct.Tab.html#method.tap
+[`Tab::mouse_click()`]: https://docs.rs/zendriver/latest/zendriver/struct.Tab.html#method.mouse_click
+
 ## Keyboard: `Key`, `KeyModifiers`, `SpecialKey`
 
 For single-key dispatches (Enter, Tab, arrow keys, Ctrl+A, etc.):

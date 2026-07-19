@@ -109,6 +109,39 @@ async fn hover_triggers_mouseover_event() {
     browser.close().await.unwrap();
 }
 
+// Bucketed into the nightly-only `#[ignore]` lane (per the
+// `nightly-ignored-tests` job / this project's convention — see
+// `expect_file_chooser_intercepts_button_triggered_hidden_input` in
+// `integration_phase5.rs` for the precedent) rather than the per-PR gate:
+// this exercises a brand-new CDP flow (`Input.dispatchTouchEvent`) rather
+// than an already-covered dispatch path. Verified locally against real
+// headless Chrome before landing.
+#[tokio::test]
+#[serial]
+#[ignore = "new Input.dispatchTouchEvent flow; nightly-only per project convention"]
+async fn tap_triggers_touchstart_event() {
+    let mock = fixture_with_html(
+        r#"<!doctype html><html><body>
+          <button id="b" ontouchstart="window.tapped = true">x</button>
+        </body></html>"#,
+    )
+    .await;
+    let browser = Browser::builder().headless(true).launch().await.unwrap();
+    let tab = browser.main_tab();
+    tab.goto(&mock.uri()).await.unwrap();
+    tab.wait_for_load().await.unwrap();
+
+    let btn = tab.find().css("#b").one().await.unwrap();
+    btn.tap().await.unwrap();
+
+    // `ontouchstart` writes to the page's main world; default `evaluate` is
+    // isolated, so read via `evaluate_main`.
+    let tapped: bool = tab.evaluate_main("!!window.tapped").await.unwrap();
+    assert!(tapped, "tap should have fired the touchstart handler");
+
+    browser.close().await.unwrap();
+}
+
 #[tokio::test]
 #[serial]
 async fn scroll_into_view_scrolls_deep_child() {

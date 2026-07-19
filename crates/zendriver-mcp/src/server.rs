@@ -394,6 +394,18 @@ impl ZendriverServer {
         actions::hover(self.state.clone(), input).await.map(Json)
     }
 
+    /// Tap an element's bbox center (touch, not mouse).
+    #[tool(
+        name = "browser_tap",
+        description = "Tap an element's bbox center: a touch `touchStart`/`touchEnd` pair (not a mouse click) via `Input.dispatchTouchEvent`. Same scroll/actionability-gate/bbox-center path as `browser_click`. Touch only — no pen/pressure/tilt. `return_snapshot: true` includes the post-tap trimmed page HTML."
+    )]
+    pub async fn browser_tap(
+        &self,
+        Parameters(input): Parameters<actions::TapInput>,
+    ) -> Result<Json<actions::ActionOutput>, ErrorData> {
+        actions::tap(self.state.clone(), input).await.map(Json)
+    }
+
     /// Type text into an element with realistic per-character timing.
     #[tool(
         name = "browser_type",
@@ -749,7 +761,7 @@ impl ZendriverServer {
     /// Dispatch a coordinate-anchored mouse action.
     #[tool(
         name = "browser_mouse",
-        description = "Dispatch a coordinate-anchored pointer action for canvas / drag-and-drop / map / game interactions not reachable via element-targeted tools. `action`: `move` (Bezier path to `x,y`), `click` (at `x,y`, with optional `button` / `click_count` / `modifiers`), or `drag` (press at `x,y`, drag to `to_x,to_y` over `steps`, release). Coordinates are viewport CSS pixels. Returns `{ ok }` (and trimmed HTML when `return_snapshot: true`)."
+        description = "Dispatch a coordinate-anchored pointer action for canvas / drag-and-drop / map / game interactions not reachable via element-targeted tools. `action`: `move` (Bezier path to `x,y`), `click` (at `x,y`, with optional `button` / `click_count` / `modifiers`), `drag` (press at `x,y`, drag to `to_x,to_y` over `steps`, release), or `tap` (touch `touchStart`/`touchEnd` at `x,y`, no mouse events). Coordinates are viewport CSS pixels. Returns `{ ok }` (and trimmed HTML when `return_snapshot: true`)."
     )]
     pub async fn browser_mouse(
         &self,

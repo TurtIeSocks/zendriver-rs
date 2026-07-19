@@ -9,6 +9,9 @@
 //! - [`KeyModifiers`] — composable modifier bitflags.
 //! - [`KeySequence`] — mixed text / key / chord builder for `type_keys`.
 //! - [`MouseButton`] — mouse button enum.
+//!
+//! Touch dispatch ([`touch::tap_at`]) is a separate, internal-only module —
+//! see [`crate::Tab::tap`] / [`crate::Element::tap`] for the public surface.
 
 use std::sync::Arc;
 
@@ -22,6 +25,7 @@ pub mod bezier;
 pub mod keyboard;
 pub mod mouse;
 pub mod pointer_state;
+pub(crate) mod touch;
 
 pub use keyboard::{Key, KeyModifiers, KeySequence, SpecialKey};
 pub use mouse::MouseButton;

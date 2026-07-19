@@ -247,6 +247,55 @@ impl Element {
         .await
     }
 
+    /// Tap this element's bbox center.
+    ///
+    /// Mirrors [`Element::click`]'s dispatch shape — `scroll_into_view` →
+    /// full actionability gate → bbox center — but ends in
+    /// [`crate::Tab::tap`] (a `touchStart`/`touchEnd` pair) instead of a
+    /// mouse press/release. No `Emulation.setTouchEmulationEnabled` call:
+    /// see [`crate::Tab::tap`]'s rustdoc for why a bare dispatch is enough
+    /// and what it deliberately does *not* emulate (touch-capability
+    /// signals — `ontouchstart`/`maxTouchPoints` — belong with Phase-7
+    /// mobile device emulation).
+    ///
+    /// Scope is touch only: no pressure / pen / stylus / tilt input.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::NotActionable`] when the actionability gate
+    /// times out, [`ZendriverError::ElementStale`] when the handle can't be
+    /// refreshed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let btn = tab.find().css("button#submit").one().await?;
+    /// btn.tap().await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn tap(&self) -> Result<()> {
+        self.with_refresh(|| async move {
+            self.scroll_into_view().await?;
+            actionability::wait_actionable(
+                self,
+                ActionabilityCheck::FULL,
+                DEFAULT_ACTIONABILITY_TIMEOUT,
+            )
+            .await?;
+            let bbox = self
+                .bounding_box()
+                .await?
+                .ok_or_else(|| ZendriverError::Navigation("element has no bounding box".into()))?;
+            let cx = bbox.x + bbox.width / 2.0;
+            let cy = bbox.y + bbox.height / 2.0;
+            self.inner.tab.tap(cx, cy).await
+        })
+        .await
+    }
+
     /// Hover the cursor over this element's bbox center.
     ///
     /// Uses a realistic Bezier-interpolated mouse path. See module docs for
@@ -1007,6 +1056,72 @@ mod tests {
             last_kind, "mouseReleased",
             "final dispatch should be mouseReleased"
         );
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn tap_dispatches_touchstart_at_bbox_center_then_touchend_empty() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+        let el = Element::from_jsret(tab.clone(), 99, "R1".to_string());
+
+        let fut = tokio::spawn({
+            let e = el.clone();
+            async move { e.tap().await }
+        });
+
+        // Step 1: scroll_into_view → Runtime.callFunctionOn.
+        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        mock.reply(id, json!({ "result": { "type": "undefined" } }))
+            .await;
+
+        // Step 2: actionability gate (FULL = visible → enabled → stable →
+        // receives_pointer); reply true to each, matching `click`'s gate.
+        for _ in 0..4 {
+            let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+            mock.reply(
+                id,
+                json!({ "result": { "value": true, "type": "boolean" } }),
+            )
+            .await;
+        }
+
+        // Step 3: bounding_box → DOM.getBoxModel. Box top-left (10,20),
+        // 100x50 ⇒ center (60, 45).
+        let id = mock.expect_cmd("DOM.getBoxModel").await;
+        mock.reply(
+            id,
+            json!({
+                "model": {
+                    "content": [10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0],
+                    "padding": [10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0],
+                    "border":  [10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0],
+                    "margin":  [10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0],
+                    "width":  100,
+                    "height": 50
+                }
+            }),
+        )
+        .await;
+
+        // Step 4: touchStart at the bbox center, then touchEnd empty.
+        let id = mock.expect_cmd("Input.dispatchTouchEvent").await;
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["type"], "touchStart");
+        let points = sent["params"]["touchPoints"].as_array().unwrap();
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0]["x"], 60.0);
+        assert_eq!(points[0]["y"], 45.0);
+        mock.reply(id, json!({})).await;
+
+        let id = mock.expect_cmd("Input.dispatchTouchEvent").await;
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["type"], "touchEnd");
+        assert_eq!(sent["params"]["touchPoints"].as_array().unwrap().len(), 0);
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
         conn.shutdown();
     }
 
