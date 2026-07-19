@@ -2213,12 +2213,13 @@ by the time <code>expect_*</code> returns, so the event cannot slip past.</p>
 <pre><code class="language-toml">[dependencies]
 zendriver = { version = "0.1", features = ["expect"] }
 </code></pre>
-<p>Four entry points on <a href="https://docs.rs/zendriver/latest/zendriver/struct.Tab.html"><code>Tab</code></a>:</p>
+<p>Five entry points on <a href="https://docs.rs/zendriver/latest/zendriver/struct.Tab.html"><code>Tab</code></a>:</p>
 <div class="table-wrapper"><table><thead><tr><th>Method</th><th>CDP event</th><th>Returns</th></tr></thead><tbody>
 <tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.Tab.html#method.expect_request"><code>expect_request</code></a></td><td><code>Network.requestWillBeSent</code></td><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.RequestExpectation.html"><code>RequestExpectation</code></a> → <a href="https://docs.rs/zendriver/latest/zendriver/struct.MatchedRequest.html"><code>MatchedRequest</code></a></td></tr>
 <tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.Tab.html#method.expect_response"><code>expect_response</code></a></td><td><code>Network.responseReceived</code></td><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.ResponseExpectation.html"><code>ResponseExpectation</code></a> → <a href="https://docs.rs/zendriver/latest/zendriver/struct.MatchedResponse.html"><code>MatchedResponse</code></a></td></tr>
 <tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.Tab.html#method.expect_dialog"><code>expect_dialog</code></a></td><td><code>Page.javascriptDialogOpened</code></td><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.DialogExpectation.html"><code>DialogExpectation</code></a> → <a href="https://docs.rs/zendriver/latest/zendriver/struct.MatchedDialog.html"><code>MatchedDialog</code></a></td></tr>
 <tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.Tab.html#method.expect_download"><code>expect_download</code></a></td><td><code>Page.downloadWillBegin</code> + progress</td><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.DownloadExpectation.html"><code>DownloadExpectation</code></a> → <a href="https://docs.rs/zendriver/latest/zendriver/struct.MatchedDownload.html"><code>MatchedDownload</code></a></td></tr>
+<tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.Tab.html#method.expect_file_chooser"><code>expect_file_chooser</code></a></td><td><code>Page.fileChooserOpened</code></td><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.FileChooserExpectation.html"><code>FileChooserExpectation</code></a> → <a href="https://docs.rs/zendriver/latest/zendriver/struct.MatchedFileChooser.html"><code>MatchedFileChooser</code></a></td></tr>
 </tbody></table>
 </div>
 <h2 id="the-race-free-pattern"><a class="header" href="#the-race-free-pattern">The race-free pattern</a></h2>
@@ -2247,9 +2248,9 @@ between the spawn point and the trigger action is captured.</p>
 
 let exp1 = tab.expect_response("/api/users");  // substring
 let exp2 = tab.expect_response(Regex::new(r"^https://.*\.example\.com/v\d+/").unwrap());</code></pre>
-<p><code>expect_dialog</code> and <code>expect_download</code> take no matcher — they fire on the
-first event of their kind. If you need to filter further, inspect the
-matched event in your code after <code>.await?</code>.</p>
+<p><code>expect_dialog</code>, <code>expect_download</code>, and <code>expect_file_chooser</code> take no
+matcher — they fire on the first event of their kind. If you need to
+filter further, inspect the matched event in your code after <code>.await?</code>.</p>
 <h2 id="full-example-login-response"><a class="header" href="#full-example-login-response">Full example: login response</a></h2>
 <p>This example renders a tiny form via <code>data:</code> URL, registers a response
 expectation against <code>*/login</code>, clicks submit, and asserts the URL +
@@ -2364,8 +2365,38 @@ matched.save_to(PathBuf::from("/tmp/result.pdf")).await?;</code></pre>
 per-tab tempdir (named by Chrome's CDP <code>guid</code>) and is <code>None</code> until the
 transfer completes. The tempdir lives as long as the <code>Tab</code> does, so call
 <code>save_to</code> to copy the file somewhere stable before the tab drops.</p>
+<h2 id="file-pickers"><a class="header" href="#file-pickers">File pickers</a></h2>
+<p><a href="https://docs.rs/zendriver/latest/zendriver/struct.Element.html#method.upload_files"><code>Element::upload_files</code></a>
+dispatches <code>DOM.setFileInputFiles</code> straight at a direct
+<code>&lt;input type="file"&gt;</code>'s backend node — but it can't reach a button or
+label that opens the picker <em>indirectly</em> (a JS handler that calls
+<code>hiddenInput.click()</code>, or any custom upload widget). <code>expect_file_chooser</code>
+covers that case: it intercepts <code>Page.fileChooserOpened</code> via
+<code>Page.setInterceptFileChooserDialog</code>, so it answers the picker regardless
+of what triggered it — a hidden input, a visible one, or a custom widget
+that ultimately opens a native <code>&lt;input type="file"&gt;</code> chooser.</p>
+<pre><code class="language-rust ignore">let fc = tab.expect_file_chooser(&amp;["/tmp/photo.jpg"]).await?;
+
+let button = tab.find().css("#upload-btn").one().await?;
+button.click().await?; // opens the picker via a hidden input
+
+let matched = fc.await?;
+println!("chooser mode: {:?}", matched.mode); // SelectSingle / SelectMultiple</code></pre>
+<p>Unlike the other four, <code>expect_file_chooser</code> is <code>async</code>: it must await
+<code>Page.setInterceptFileChooserDialog { enabled: true }</code> reaching Chrome
+before returning, or the trigger click could race Chrome into showing the
+real OS dialog instead of firing the intercept event — the same reason
+<code>expect_download</code> is <code>async</code> for its own <code>Browser.setDownloadBehavior</code>
+setup call. It's also the only <em>active</em> expectation: matching doesn't
+just hand back data, it dispatches <code>DOM.setFileInputFiles</code> with the paths
+you passed to <code>expect_file_chooser(...)</code> and disables the intercept
+before resolving — there's nothing left to drive on the returned
+<code>MatchedFileChooser</code>.</p>
+<p>If the expectation is dropped before a chooser opens (timeout, early
+return, panic unwind), the intercept is disabled best-effort so a later
+real file dialog isn't silently swallowed.</p>
 <h2 id="timeout-semantics"><a class="header" href="#timeout-semantics">Timeout semantics</a></h2>
-<p>All four expectations default to 30 s. Override per-call:</p>
+<p>All five expectations default to 30 s. Override per-call:</p>
 <pre><code class="language-rust ignore">use std::time::Duration;
 
 let exp = tab.expect_request("/api/")
@@ -2397,6 +2428,9 @@ method). Useful for verifying CSRF tokens, auth bearer formats.</li>
 whenever the page may pop a dialog or your script will hang.</li>
 <li><strong><code>expect_download</code></strong> — capture file downloads end-to-end; replaces
 the headless-Chrome "downloads vanish silently" footgun.</li>
+<li><strong><code>expect_file_chooser</code></strong> — feed files into a button/label-triggered
+picker; reach for <code>Element::upload_files</code> instead when the target is a
+direct <code>&lt;input type="file"&gt;</code> (no CDP intercept round-trip needed).</li>
 </ul>
 <p>For continuous capture (every request matching a pattern, not just the
 first), drop into <a href="./interception.html"><code>Interception</code></a>'s <code>subscribe()</code>

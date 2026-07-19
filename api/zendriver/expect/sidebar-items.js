@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["UrlMatcher"],"mod":["dialog","download","request","response"]};
+window.SIDEBAR_ITEMS = {"enum":["UrlMatcher"],"mod":["dialog","download","file_chooser","request","response"]};
