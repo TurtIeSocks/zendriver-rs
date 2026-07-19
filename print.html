@@ -811,12 +811,16 @@ touching any CDP internals directly.</p>
 <h2 id="the-5-strategies"><a class="header" href="#the-5-strategies">The 5 strategies</a></h2>
 <div class="table-wrapper"><table><thead><tr><th>Strategy</th><th>Effect</th></tr></thead><tbody>
 <tr><td><code>Native</code></td><td>No patch — raw browser output.</td></tr>
-<tr><td><code>Seeded</code></td><td>Deterministic per-seed noise; same seed → same output every run.</td></tr>
-<tr><td><code>Random</code></td><td>Fresh random noise on every call; maximally unpredictable.</td></tr>
+<tr><td><code>Seeded</code></td><td>Deterministic per-<code>(seed, content)</code> noise: the persona's fixed seed → reproducible across separate runs, and stable across repeat reads of identical content within a page.</td></tr>
+<tr><td><code>Random</code></td><td>Same content-keyed noise as <code>Seeded</code>, but the seed itself is a fresh <code>Math.random()</code> draw made once per page load — so repeat reads within one page load are stable, while separate page loads (a new navigation or browser launch) get independent noise.</td></tr>
 <tr><td><code>Block</code></td><td>Empty / zero output (appropriate for policy surfaces).</td></tr>
 <tr><td><code>Value</code></td><td>Substitute a specific value from the <code>Persona</code> spec.</td></tr>
 </tbody></table>
 </div>
+<p>Both noise strategies key their PRNG by the surface's own content (pixel
+bytes, audio samples, rect geometry) on every read, not one stream that
+advances across the whole page — so neither strategy "reseeds on every call"
+in a way that makes repeat reads of the same content diverge.</p>
 <p>Noise surfaces (Canvas, Audio, ClientRects) accept <code>Native</code>, <code>Seeded</code>,
 <code>Random</code>, <code>Block</code>. Value surfaces (Webgl, Fonts, Hardware) accept <code>Native</code>,
 <code>Value</code>, <code>Block</code>. The policy surface (Webrtc) accepts <code>Native</code>, <code>Block</code>,
@@ -940,7 +944,7 @@ never as fresh and never a panic.</p>
 let browser = Browser::builder()
     .persona(Persona::builder().seed(Seed::from_u64(42)).build())
     .surface(Surface::Webrtc, Strategy::Native)  // allow real IP
-    .surface(Surface::Canvas, Strategy::Random)  // max entropy
+    .surface(Surface::Canvas, Strategy::Random)  // fresh per-page-load seed
     .launch().await?;
 <span class="boring">}</span></code></pre></pre>
 <h2 id="country--locale--timezone-overlay-geo_locale"><a class="header" href="#country--locale--timezone-overlay-geo_locale">Country → locale + timezone overlay (<code>geo_locale</code>)</a></h2>
