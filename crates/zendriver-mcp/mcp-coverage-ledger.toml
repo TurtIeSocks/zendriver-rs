@@ -762,3 +762,38 @@ covered = "browser_mouse (action: tap)"
 [[entry]]
 api = "zendriver::element::Element::tap"
 covered = "browser_tap"
+
+# ── Phase 4: fingerprint download-cache TTL-on-access + force_refresh ──────
+# `zendriver-fingerprints`'s pool/generative download-on-first-use caches were
+# permanent-only (any successful read+parse cache hit short-circuits forever).
+# Added a generic `CachePolicy { ttl: Option<Duration>, force_refresh: bool }`
+# threaded through `pool::load_or_download` and
+# `generative::Generator::load_or_download`/`load_or_download_default`.
+# `CachePolicy::default()` (`ttl: None, force_refresh: false`) reproduces the
+# original permanent-cache behavior byte-for-byte (skips the mtime read
+# entirely). TTL check is on-access at load time, not a background scheduler
+# — see the `ponytail:` doc comment on `zendriver-fingerprints::cache`.
+# `zendriver-fingerprints` is not a `zendriver` crate dependency, so none of
+# this appears in `cargo public-api -p zendriver` — ledgered here anyway for
+# the documentation trail per the MCP-coverage discipline.
+#
+# NOT exposed as an MCP knob: `browser_fingerprint_generate` is a stateless
+# per-call tool (see `crates/zendriver-mcp/src/tools/fingerprints.rs`) with no
+# long-lived in-memory holder to benefit from a cache-freshness setting; it
+# now passes `CachePolicy::default()` explicitly to keep the exact prior
+# behavior.
+[[entry]]
+api = "zendriver_fingerprints::CachePolicy"
+excluded = "cache-lifecycle knob, no agent-facing request/response surface — browser_fingerprint_generate is a stateless per-call tool and always uses CachePolicy::default()"
+
+[[entry]]
+api = "zendriver_fingerprints::pool::load_or_download"
+excluded = "signature grew a CachePolicy param (lib-only cache-freshness knob); MCP call site pins CachePolicy::default(), no new tool surface"
+
+[[entry]]
+api = "zendriver_fingerprints::generative::Generator::load_or_download"
+excluded = "signature grew a CachePolicy param (lib-only cache-freshness knob); MCP call site pins CachePolicy::default(), no new tool surface"
+
+[[entry]]
+api = "zendriver_fingerprints::generative::Generator::load_or_download_default"
+excluded = "signature grew a CachePolicy param (lib-only cache-freshness knob); not called by zendriver-mcp today"

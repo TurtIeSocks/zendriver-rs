@@ -91,18 +91,37 @@ impl Generator {
     }
 
     /// Fetch (or read cached) the network ZIP from `url`, then build.
-    pub async fn load_or_download(url: &str) -> Result<Self, GenError> {
+    ///
+    /// `policy` controls cache freshness — see [`CachePolicy`](crate::CachePolicy).
+    /// Pass `CachePolicy::default()` for the original permanent-cache behavior.
+    ///
+    /// ```no_run
+    /// use zendriver_fingerprints::CachePolicy;
+    /// use zendriver_fingerprints::generative::Generator;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// // Always re-download, ignoring any cached network.
+    /// let generator = Generator::load_or_download(
+    ///     "https://example.com/network.zip",
+    ///     CachePolicy::force_refresh(),
+    /// )
+    /// .await?;
+    /// # let _ = generator;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn load_or_download(url: &str, policy: crate::CachePolicy) -> Result<Self, GenError> {
         let cache = download::cache_path();
-        let bytes = download::fetch_or_cached_bytes(url, &cache).await?;
+        let bytes = download::fetch_or_cached_bytes(url, &cache, policy).await?;
         Self::from_zip_bytes(&bytes)
     }
 
     /// Ergonomic [`load_or_download`](Self::load_or_download): uses
     /// `ZENDRIVER_FP_NETWORK_URL` if set, else [`DEFAULT_NETWORK_URL`].
-    pub async fn load_or_download_default() -> Result<Self, GenError> {
+    pub async fn load_or_download_default(policy: crate::CachePolicy) -> Result<Self, GenError> {
         let url = std::env::var("ZENDRIVER_FP_NETWORK_URL")
             .unwrap_or_else(|_| DEFAULT_NETWORK_URL.to_string());
-        Self::load_or_download(&url).await
+        Self::load_or_download(&url, policy).await
     }
 
     /// Sample a coherent **desktop** persona deterministically from `seed`.
@@ -332,7 +351,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_bytes(TEST_NETWORK_ZIP))
             .mount(&server)
             .await;
-        let g = Generator::load_or_download(&server.uri())
+        let g = Generator::load_or_download(&server.uri(), crate::CachePolicy::default())
             .await
             .expect("load");
         assert!(g.generate(Seed::from_u64(5)).platform.is_some());

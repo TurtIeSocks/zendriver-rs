@@ -124,12 +124,50 @@ zendriver-fingerprints = { version = "0.1", features = ["pool"] }
 use zendriver_fingerprints::pool::PoolSet;
 use zendriver_stealth::Seed;
 
-// Build from a local JSON array (or load with load_or_download(url)).
+// Build from a local JSON array (or load with load_or_download(url, policy)).
 let pool = PoolSet::from_json(include_str!("pool.json"))?;
 let persona = pool.sample(Seed::from_u64(42));
 
 // Pass to Browser::builder() in the zendriver crate.
 ```
+
+### Cache freshness (`CachePolicy`)
+
+`pool::load_or_download` and `generative::Generator::load_or_download` both
+download-on-first-use into a local cache file
+(`dirs::cache_dir()/zendriver/fingerprints/...`). Freshness is controlled by a
+`CachePolicy`, checked **on access** (at load time) — there is no background
+scheduler:
+
+```rust,no_run
+use zendriver_fingerprints::CachePolicy;
+use zendriver_fingerprints::pool::load_or_download;
+use std::time::Duration;
+
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+// Default: permanent cache — a cache hit is used forever (unchanged from
+// before this knob existed).
+let pool = load_or_download("https://example.com/pool.json", CachePolicy::default()).await?;
+
+// Re-download once the cached file is older than a day.
+let pool = load_or_download(
+    "https://example.com/pool.json",
+    CachePolicy::with_ttl(Duration::from_secs(86_400)),
+)
+.await?;
+
+// Always re-download, ignoring any cache hit.
+let pool = load_or_download("https://example.com/pool.json", CachePolicy::force_refresh()).await?;
+# let _ = pool;
+# Ok(())
+# }
+```
+
+`CachePolicy::default()` is byte-for-byte identical to the pre-`CachePolicy`
+behavior: permanent cache, and — since `ttl: None` short-circuits before any
+mtime read — zero added filesystem calls. Clock skew (a cache file with a
+future-dated mtime) fails **closed**: it's treated as stale and re-downloaded,
+never as fresh and never a panic.
 
 ## Per-surface strategy overrides
 

@@ -1,9 +1,9 @@
 //! Illustrates building a `PoolSet`, sampling a `Persona` by seed, and
 //! inspecting the result.
 //!
-//! In real usage you would call `pool::load_or_download(url)` to fetch a
-//! large real-device dataset from a CDN; this example uses a small in-memory
-//! set so it runs offline.
+//! In real usage you would call `pool::load_or_download(url, CachePolicy::default())`
+//! to fetch a large real-device dataset from a CDN; this example uses a small
+//! in-memory set so it runs offline.
 //!
 //! The resulting `Persona` value can be passed directly to
 //! `Browser::builder().persona(p)` in the `zendriver` crate (not a dep here).
