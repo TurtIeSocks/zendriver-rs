@@ -124,472 +124,490 @@
 <a href=#124 id=124 data-nosnippet>124</a>///   — exactly one is applied.
 <a href=#125 id=125 data-nosnippet>125</a>/// - **predicate** (`tag` and/or `attrs`, plus optional `text*` post-filters,
 <a href=#126 id=126 data-nosnippet>126</a>///   all AND-ed) — applies `.tag()`, the `.attr*()` / `.has_attr()` /
-<a href=#127 id=127 data-nosnippet>127</a>///   `.attr_regex()` family, and `.containing_text()` / `.text_equals()` /
-<a href=#128 id=128 data-nosnippet>128</a>///   `.text_matches()`.
-<a href=#129 id=129 data-nosnippet>129</a></span><span class="macro">macro_rules!</span> apply_selector_to {
-<a href=#130 id=130 data-nosnippet>130</a>    (<span class="macro-nonterminal">$builder</span>:expr, <span class="macro-nonterminal">$sel</span>:expr) =&gt; {{
-<a href=#131 id=131 data-nosnippet>131</a>        <span class="kw">let </span><span class="kw-2">mut </span>builder = <span class="macro-nonterminal">$builder</span>;
-<a href=#132 id=132 data-nosnippet>132</a>        <span class="kw">let </span>sel = <span class="macro-nonterminal">$sel</span>;
-<a href=#133 id=133 data-nosnippet>133</a>        <span class="comment">// Predicate mode: tag/attrs present; text* are optional AND-ed
-<a href=#134 id=134 data-nosnippet>134</a>        // post-filters. Single-selector kinds (css/xpath/role) are absent
-<a href=#135 id=135 data-nosnippet>135</a>        // here (validate() enforces the mutual exclusion).
-<a href=#136 id=136 data-nosnippet>136</a>        </span><span class="kw">if </span>sel.tag.is_some() || !sel.attrs.is_empty() {
-<a href=#137 id=137 data-nosnippet>137</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(tag) = sel.tag.as_deref() {
-<a href=#138 id=138 data-nosnippet>138</a>                builder = builder.tag(tag);
-<a href=#139 id=139 data-nosnippet>139</a>            }
-<a href=#140 id=140 data-nosnippet>140</a>            <span class="kw">for </span>ap <span class="kw">in </span><span class="kw-2">&amp;</span>sel.attrs {
-<a href=#141 id=141 data-nosnippet>141</a>                <span class="kw">let </span>name = ap.name.as_str();
-<a href=#142 id=142 data-nosnippet>142</a>                <span class="kw">let </span>value = ap.value.as_deref().unwrap_or(<span class="string">""</span>); <span class="comment">// Has has no value
-<a href=#143 id=143 data-nosnippet>143</a>                </span>builder = <span class="kw">match </span>ap.op {
-<a href=#144 id=144 data-nosnippet>144</a>                    AttrOp::Eq =&gt; builder.attr(name, value),
-<a href=#145 id=145 data-nosnippet>145</a>                    AttrOp::Contains =&gt; builder.attr_contains(name, value),
-<a href=#146 id=146 data-nosnippet>146</a>                    AttrOp::StartsWith =&gt; builder.attr_starts_with(name, value),
-<a href=#147 id=147 data-nosnippet>147</a>                    AttrOp::EndsWith =&gt; builder.attr_ends_with(name, value),
-<a href=#148 id=148 data-nosnippet>148</a>                    AttrOp::Has =&gt; builder.has_attr(name),
-<a href=#149 id=149 data-nosnippet>149</a>                    AttrOp::Regex =&gt; builder.attr_regex(name, value),
-<a href=#150 id=150 data-nosnippet>150</a>                };
-<a href=#151 id=151 data-nosnippet>151</a>            }
-<a href=#152 id=152 data-nosnippet>152</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = sel.text.as_deref() {
-<a href=#153 id=153 data-nosnippet>153</a>                builder = builder.containing_text(t);
-<a href=#154 id=154 data-nosnippet>154</a>            }
-<a href=#155 id=155 data-nosnippet>155</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = sel.text_exact.as_deref() {
-<a href=#156 id=156 data-nosnippet>156</a>                builder = builder.text_equals(t);
-<a href=#157 id=157 data-nosnippet>157</a>            }
-<a href=#158 id=158 data-nosnippet>158</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(pat) = sel.text_regex.as_deref() {
-<a href=#159 id=159 data-nosnippet>159</a>                builder = builder.text_matches(pat);
+<a href=#127 id=127 data-nosnippet>127</a>///   `.attr_regex()` family (or their `_i` case-insensitive siblings when
+<a href=#128 id=128 data-nosnippet>128</a>///   `AttrPredicate.case_insensitive` is set), and `.containing_text()` /
+<a href=#129 id=129 data-nosnippet>129</a>///   `.text_equals()` / `.text_matches()` (or `.containing_text_i()` /
+<a href=#130 id=130 data-nosnippet>130</a>///   `.text_equals_i()` when `Selector.text_case_insensitive` is set).
+<a href=#131 id=131 data-nosnippet>131</a></span><span class="macro">macro_rules!</span> apply_selector_to {
+<a href=#132 id=132 data-nosnippet>132</a>    (<span class="macro-nonterminal">$builder</span>:expr, <span class="macro-nonterminal">$sel</span>:expr) =&gt; {{
+<a href=#133 id=133 data-nosnippet>133</a>        <span class="kw">let </span><span class="kw-2">mut </span>builder = <span class="macro-nonterminal">$builder</span>;
+<a href=#134 id=134 data-nosnippet>134</a>        <span class="kw">let </span>sel = <span class="macro-nonterminal">$sel</span>;
+<a href=#135 id=135 data-nosnippet>135</a>        <span class="comment">// Predicate mode: tag/attrs present; text* are optional AND-ed
+<a href=#136 id=136 data-nosnippet>136</a>        // post-filters. Single-selector kinds (css/xpath/role) are absent
+<a href=#137 id=137 data-nosnippet>137</a>        // here (validate() enforces the mutual exclusion).
+<a href=#138 id=138 data-nosnippet>138</a>        </span><span class="kw">if </span>sel.tag.is_some() || !sel.attrs.is_empty() {
+<a href=#139 id=139 data-nosnippet>139</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(tag) = sel.tag.as_deref() {
+<a href=#140 id=140 data-nosnippet>140</a>                builder = builder.tag(tag);
+<a href=#141 id=141 data-nosnippet>141</a>            }
+<a href=#142 id=142 data-nosnippet>142</a>            <span class="kw">for </span>ap <span class="kw">in </span><span class="kw-2">&amp;</span>sel.attrs {
+<a href=#143 id=143 data-nosnippet>143</a>                <span class="kw">let </span>name = ap.name.as_str();
+<a href=#144 id=144 data-nosnippet>144</a>                <span class="kw">let </span>value = ap.value.as_deref().unwrap_or(<span class="string">""</span>); <span class="comment">// Has has no value
+<a href=#145 id=145 data-nosnippet>145</a>                // `Selector::validate()` already rejects
+<a href=#146 id=146 data-nosnippet>146</a>                // `case_insensitive: true` paired with `Has`/`Regex` (no
+<a href=#147 id=147 data-nosnippet>147</a>                // effect either way), so those two arms ignore the flag.
+<a href=#148 id=148 data-nosnippet>148</a>                </span>builder = <span class="kw">match </span>(<span class="kw-2">&amp;</span>ap.op, ap.case_insensitive) {
+<a href=#149 id=149 data-nosnippet>149</a>                    (AttrOp::Eq, <span class="bool-val">false</span>) =&gt; builder.attr(name, value),
+<a href=#150 id=150 data-nosnippet>150</a>                    (AttrOp::Eq, <span class="bool-val">true</span>) =&gt; builder.attr_i(name, value),
+<a href=#151 id=151 data-nosnippet>151</a>                    (AttrOp::Contains, <span class="bool-val">false</span>) =&gt; builder.attr_contains(name, value),
+<a href=#152 id=152 data-nosnippet>152</a>                    (AttrOp::Contains, <span class="bool-val">true</span>) =&gt; builder.attr_contains_i(name, value),
+<a href=#153 id=153 data-nosnippet>153</a>                    (AttrOp::StartsWith, <span class="bool-val">false</span>) =&gt; builder.attr_starts_with(name, value),
+<a href=#154 id=154 data-nosnippet>154</a>                    (AttrOp::StartsWith, <span class="bool-val">true</span>) =&gt; builder.attr_starts_with_i(name, value),
+<a href=#155 id=155 data-nosnippet>155</a>                    (AttrOp::EndsWith, <span class="bool-val">false</span>) =&gt; builder.attr_ends_with(name, value),
+<a href=#156 id=156 data-nosnippet>156</a>                    (AttrOp::EndsWith, <span class="bool-val">true</span>) =&gt; builder.attr_ends_with_i(name, value),
+<a href=#157 id=157 data-nosnippet>157</a>                    (AttrOp::Has, <span class="kw">_</span>) =&gt; builder.has_attr(name),
+<a href=#158 id=158 data-nosnippet>158</a>                    (AttrOp::Regex, <span class="kw">_</span>) =&gt; builder.attr_regex(name, value),
+<a href=#159 id=159 data-nosnippet>159</a>                };
 <a href=#160 id=160 data-nosnippet>160</a>            }
-<a href=#161 id=161 data-nosnippet>161</a>            <span class="prelude-val">Ok</span>(builder)
-<a href=#162 id=162 data-nosnippet>162</a>        } <span class="kw">else if let </span><span class="prelude-val">Some</span>(css) = sel.css.as_deref() {
-<a href=#163 id=163 data-nosnippet>163</a>            <span class="prelude-val">Ok</span>(builder.css(css))
-<a href=#164 id=164 data-nosnippet>164</a>        } <span class="kw">else if let </span><span class="prelude-val">Some</span>(xp) = sel.xpath.as_deref() {
-<a href=#165 id=165 data-nosnippet>165</a>            <span class="prelude-val">Ok</span>(builder.xpath(xp))
-<a href=#166 id=166 data-nosnippet>166</a>        } <span class="kw">else if let </span><span class="prelude-val">Some</span>(t) = sel.text.as_deref() {
-<a href=#167 id=167 data-nosnippet>167</a>            <span class="prelude-val">Ok</span>(builder.text(t))
-<a href=#168 id=168 data-nosnippet>168</a>        } <span class="kw">else if let </span><span class="prelude-val">Some</span>(t) = sel.text_exact.as_deref() {
-<a href=#169 id=169 data-nosnippet>169</a>            <span class="prelude-val">Ok</span>(builder.text_exact(t))
-<a href=#170 id=170 data-nosnippet>170</a>        } <span class="kw">else if let </span><span class="prelude-val">Some</span>(pat) = sel.text_regex.as_deref() {
-<a href=#171 id=171 data-nosnippet>171</a>            <span class="kw">let </span>re = compile_regex(pat)<span class="question-mark">?</span>;
-<a href=#172 id=172 data-nosnippet>172</a>            <span class="prelude-val">Ok</span>(builder.text_regex(re))
-<a href=#173 id=173 data-nosnippet>173</a>        } <span class="kw">else if let </span><span class="prelude-val">Some</span>(role_str) = sel.role.as_deref() {
-<a href=#174 id=174 data-nosnippet>174</a>            <span class="kw">let </span>role = parse_role(role_str)<span class="question-mark">?</span>;
-<a href=#175 id=175 data-nosnippet>175</a>            <span class="prelude-val">Ok</span>(<span class="kw">match </span>sel.role_name.as_deref() {
-<a href=#176 id=176 data-nosnippet>176</a>                <span class="prelude-val">Some</span>(name) =&gt; builder.role_named(role, name),
-<a href=#177 id=177 data-nosnippet>177</a>                <span class="prelude-val">None </span>=&gt; builder.role(role),
-<a href=#178 id=178 data-nosnippet>178</a>            })
-<a href=#179 id=179 data-nosnippet>179</a>        } <span class="kw">else </span>{
-<a href=#180 id=180 data-nosnippet>180</a>            <span class="comment">// `validate()` already enforces exactly-one-of, so this branch is
-<a href=#181 id=181 data-nosnippet>181</a>            // unreachable in practice — return invalid_params just in case.
-<a href=#182 id=182 data-nosnippet>182</a>            </span><span class="prelude-val">Err</span>(ErrorData::invalid_params(
-<a href=#183 id=183 data-nosnippet>183</a>                <span class="string">"Selector has no selector kind set (validate() should have caught this)"
-<a href=#184 id=184 data-nosnippet>184</a>                    </span>.to_string(),
-<a href=#185 id=185 data-nosnippet>185</a>                <span class="prelude-val">None</span>,
-<a href=#186 id=186 data-nosnippet>186</a>            ))
-<a href=#187 id=187 data-nosnippet>187</a>        }
-<a href=#188 id=188 data-nosnippet>188</a>    }};
-<a href=#189 id=189 data-nosnippet>189</a>}
-<a href=#190 id=190 data-nosnippet>190</a>
-<a href=#191 id=191 data-nosnippet>191</a><span class="doccomment">/// Apply the Selector's chosen kind to a single-match [`FindBuilder`].
-<a href=#192 id=192 data-nosnippet>192</a></span><span class="kw">fn </span>apply_selector&lt;<span class="lifetime">'a</span>&gt;(
-<a href=#193 id=193 data-nosnippet>193</a>    builder: FindBuilder&lt;<span class="lifetime">'a</span>&gt;,
-<a href=#194 id=194 data-nosnippet>194</a>    sel: <span class="kw-2">&amp;</span>Selector,
-<a href=#195 id=195 data-nosnippet>195</a>) -&gt; <span class="prelude-ty">Result</span>&lt;FindBuilder&lt;<span class="lifetime">'a</span>&gt;, ErrorData&gt; {
-<a href=#196 id=196 data-nosnippet>196</a>    <span class="macro">apply_selector_to!</span>(builder, sel)
-<a href=#197 id=197 data-nosnippet>197</a>}
-<a href=#198 id=198 data-nosnippet>198</a>
-<a href=#199 id=199 data-nosnippet>199</a><span class="doccomment">/// Apply the Selector's chosen kind to a [`FindAllBuilder`].
-<a href=#200 id=200 data-nosnippet>200</a></span><span class="kw">fn </span>apply_selector_all&lt;<span class="lifetime">'a</span>&gt;(
-<a href=#201 id=201 data-nosnippet>201</a>    builder: FindAllBuilder&lt;<span class="lifetime">'a</span>&gt;,
-<a href=#202 id=202 data-nosnippet>202</a>    sel: <span class="kw-2">&amp;</span>Selector,
-<a href=#203 id=203 data-nosnippet>203</a>) -&gt; <span class="prelude-ty">Result</span>&lt;FindAllBuilder&lt;<span class="lifetime">'a</span>&gt;, ErrorData&gt; {
-<a href=#204 id=204 data-nosnippet>204</a>    <span class="macro">apply_selector_to!</span>(builder, sel)
-<a href=#205 id=205 data-nosnippet>205</a>}
-<a href=#206 id=206 data-nosnippet>206</a>
-<a href=#207 id=207 data-nosnippet>207</a><span class="kw">fn </span>apply_modifiers&lt;<span class="lifetime">'a</span>&gt;(<span class="kw-2">mut </span>builder: FindBuilder&lt;<span class="lifetime">'a</span>&gt;, sel: <span class="kw-2">&amp;</span>Selector) -&gt; FindBuilder&lt;<span class="lifetime">'a</span>&gt; {
-<a href=#208 id=208 data-nosnippet>208</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(n) = sel.nth {
-<a href=#209 id=209 data-nosnippet>209</a>        builder = builder.nth(n);
-<a href=#210 id=210 data-nosnippet>210</a>    }
-<a href=#211 id=211 data-nosnippet>211</a>    builder = builder.visible_only(sel.visible_only);
-<a href=#212 id=212 data-nosnippet>212</a>    builder = builder.timeout(Duration::from_millis(sel.timeout_ms));
-<a href=#213 id=213 data-nosnippet>213</a>    builder
+<a href=#161 id=161 data-nosnippet>161</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = sel.text.as_deref() {
+<a href=#162 id=162 data-nosnippet>162</a>                builder = <span class="kw">if </span>sel.text_case_insensitive {
+<a href=#163 id=163 data-nosnippet>163</a>                    builder.containing_text_i(t)
+<a href=#164 id=164 data-nosnippet>164</a>                } <span class="kw">else </span>{
+<a href=#165 id=165 data-nosnippet>165</a>                    builder.containing_text(t)
+<a href=#166 id=166 data-nosnippet>166</a>                };
+<a href=#167 id=167 data-nosnippet>167</a>            }
+<a href=#168 id=168 data-nosnippet>168</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = sel.text_exact.as_deref() {
+<a href=#169 id=169 data-nosnippet>169</a>                builder = <span class="kw">if </span>sel.text_case_insensitive {
+<a href=#170 id=170 data-nosnippet>170</a>                    builder.text_equals_i(t)
+<a href=#171 id=171 data-nosnippet>171</a>                } <span class="kw">else </span>{
+<a href=#172 id=172 data-nosnippet>172</a>                    builder.text_equals(t)
+<a href=#173 id=173 data-nosnippet>173</a>                };
+<a href=#174 id=174 data-nosnippet>174</a>            }
+<a href=#175 id=175 data-nosnippet>175</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(pat) = sel.text_regex.as_deref() {
+<a href=#176 id=176 data-nosnippet>176</a>                builder = builder.text_matches(pat);
+<a href=#177 id=177 data-nosnippet>177</a>            }
+<a href=#178 id=178 data-nosnippet>178</a>            <span class="prelude-val">Ok</span>(builder)
+<a href=#179 id=179 data-nosnippet>179</a>        } <span class="kw">else if let </span><span class="prelude-val">Some</span>(css) = sel.css.as_deref() {
+<a href=#180 id=180 data-nosnippet>180</a>            <span class="prelude-val">Ok</span>(builder.css(css))
+<a href=#181 id=181 data-nosnippet>181</a>        } <span class="kw">else if let </span><span class="prelude-val">Some</span>(xp) = sel.xpath.as_deref() {
+<a href=#182 id=182 data-nosnippet>182</a>            <span class="prelude-val">Ok</span>(builder.xpath(xp))
+<a href=#183 id=183 data-nosnippet>183</a>        } <span class="kw">else if let </span><span class="prelude-val">Some</span>(t) = sel.text.as_deref() {
+<a href=#184 id=184 data-nosnippet>184</a>            <span class="prelude-val">Ok</span>(builder.text(t))
+<a href=#185 id=185 data-nosnippet>185</a>        } <span class="kw">else if let </span><span class="prelude-val">Some</span>(t) = sel.text_exact.as_deref() {
+<a href=#186 id=186 data-nosnippet>186</a>            <span class="prelude-val">Ok</span>(builder.text_exact(t))
+<a href=#187 id=187 data-nosnippet>187</a>        } <span class="kw">else if let </span><span class="prelude-val">Some</span>(pat) = sel.text_regex.as_deref() {
+<a href=#188 id=188 data-nosnippet>188</a>            <span class="kw">let </span>re = compile_regex(pat)<span class="question-mark">?</span>;
+<a href=#189 id=189 data-nosnippet>189</a>            <span class="prelude-val">Ok</span>(builder.text_regex(re))
+<a href=#190 id=190 data-nosnippet>190</a>        } <span class="kw">else if let </span><span class="prelude-val">Some</span>(role_str) = sel.role.as_deref() {
+<a href=#191 id=191 data-nosnippet>191</a>            <span class="kw">let </span>role = parse_role(role_str)<span class="question-mark">?</span>;
+<a href=#192 id=192 data-nosnippet>192</a>            <span class="prelude-val">Ok</span>(<span class="kw">match </span>sel.role_name.as_deref() {
+<a href=#193 id=193 data-nosnippet>193</a>                <span class="prelude-val">Some</span>(name) =&gt; builder.role_named(role, name),
+<a href=#194 id=194 data-nosnippet>194</a>                <span class="prelude-val">None </span>=&gt; builder.role(role),
+<a href=#195 id=195 data-nosnippet>195</a>            })
+<a href=#196 id=196 data-nosnippet>196</a>        } <span class="kw">else </span>{
+<a href=#197 id=197 data-nosnippet>197</a>            <span class="comment">// `validate()` already enforces exactly-one-of, so this branch is
+<a href=#198 id=198 data-nosnippet>198</a>            // unreachable in practice — return invalid_params just in case.
+<a href=#199 id=199 data-nosnippet>199</a>            </span><span class="prelude-val">Err</span>(ErrorData::invalid_params(
+<a href=#200 id=200 data-nosnippet>200</a>                <span class="string">"Selector has no selector kind set (validate() should have caught this)"
+<a href=#201 id=201 data-nosnippet>201</a>                    </span>.to_string(),
+<a href=#202 id=202 data-nosnippet>202</a>                <span class="prelude-val">None</span>,
+<a href=#203 id=203 data-nosnippet>203</a>            ))
+<a href=#204 id=204 data-nosnippet>204</a>        }
+<a href=#205 id=205 data-nosnippet>205</a>    }};
+<a href=#206 id=206 data-nosnippet>206</a>}
+<a href=#207 id=207 data-nosnippet>207</a>
+<a href=#208 id=208 data-nosnippet>208</a><span class="doccomment">/// Apply the Selector's chosen kind to a single-match [`FindBuilder`].
+<a href=#209 id=209 data-nosnippet>209</a></span><span class="kw">fn </span>apply_selector&lt;<span class="lifetime">'a</span>&gt;(
+<a href=#210 id=210 data-nosnippet>210</a>    builder: FindBuilder&lt;<span class="lifetime">'a</span>&gt;,
+<a href=#211 id=211 data-nosnippet>211</a>    sel: <span class="kw-2">&amp;</span>Selector,
+<a href=#212 id=212 data-nosnippet>212</a>) -&gt; <span class="prelude-ty">Result</span>&lt;FindBuilder&lt;<span class="lifetime">'a</span>&gt;, ErrorData&gt; {
+<a href=#213 id=213 data-nosnippet>213</a>    <span class="macro">apply_selector_to!</span>(builder, sel)
 <a href=#214 id=214 data-nosnippet>214</a>}
 <a href=#215 id=215 data-nosnippet>215</a>
-<a href=#216 id=216 data-nosnippet>216</a><span class="kw">fn </span>apply_modifiers_all&lt;<span class="lifetime">'a</span>&gt;(<span class="kw-2">mut </span>builder: FindAllBuilder&lt;<span class="lifetime">'a</span>&gt;, sel: <span class="kw-2">&amp;</span>Selector) -&gt; FindAllBuilder&lt;<span class="lifetime">'a</span>&gt; {
-<a href=#217 id=217 data-nosnippet>217</a>    builder = builder.visible_only(sel.visible_only);
-<a href=#218 id=218 data-nosnippet>218</a>    builder = builder.timeout(Duration::from_millis(sel.timeout_ms));
-<a href=#219 id=219 data-nosnippet>219</a>    builder
-<a href=#220 id=220 data-nosnippet>220</a>}
-<a href=#221 id=221 data-nosnippet>221</a>
-<a href=#222 id=222 data-nosnippet>222</a><span class="kw">fn </span>compile_regex(pat: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;regex::Regex, ErrorData&gt; {
-<a href=#223 id=223 data-nosnippet>223</a>    regex::Regex::new(pat)
-<a href=#224 id=224 data-nosnippet>224</a>        .map_err(|e| ErrorData::invalid_params(<span class="macro">format!</span>(<span class="string">"Invalid `text_regex` pattern: {e}"</span>), <span class="prelude-val">None</span>))
-<a href=#225 id=225 data-nosnippet>225</a>}
-<a href=#226 id=226 data-nosnippet>226</a>
-<a href=#227 id=227 data-nosnippet>227</a><span class="doccomment">/// Map the wire `role` string onto a [`zendriver::AriaRole`].
-<a href=#228 id=228 data-nosnippet>228</a>///
-<a href=#229 id=229 data-nosnippet>229</a>/// We accept lowercase ARIA role names. Unknown values surface an
-<a href=#230 id=230 data-nosnippet>230</a>/// `invalid_params` error listing the accepted roles, so an agent that
-<a href=#231 id=231 data-nosnippet>231</a>/// typos `"buttn"` gets a clean signal rather than `AriaRole::Other`
-<a href=#232 id=232 data-nosnippet>232</a>/// silently compiling to a `[role="buttn"]` selector that matches nothing.
-<a href=#233 id=233 data-nosnippet>233</a></span><span class="kw">fn </span>parse_role(s: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;AriaRole, ErrorData&gt; {
-<a href=#234 id=234 data-nosnippet>234</a>    <span class="kw">match </span>s {
-<a href=#235 id=235 data-nosnippet>235</a>        <span class="string">"button" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Button),
-<a href=#236 id=236 data-nosnippet>236</a>        <span class="string">"link" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Link),
-<a href=#237 id=237 data-nosnippet>237</a>        <span class="string">"textbox" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Textbox),
-<a href=#238 id=238 data-nosnippet>238</a>        <span class="string">"combobox" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Combobox),
-<a href=#239 id=239 data-nosnippet>239</a>        <span class="string">"checkbox" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Checkbox),
-<a href=#240 id=240 data-nosnippet>240</a>        <span class="string">"radio" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Radio),
-<a href=#241 id=241 data-nosnippet>241</a>        <span class="string">"tab" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Tab),
-<a href=#242 id=242 data-nosnippet>242</a>        <span class="string">"menu" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Menu),
-<a href=#243 id=243 data-nosnippet>243</a>        <span class="string">"menuitem" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Menuitem),
-<a href=#244 id=244 data-nosnippet>244</a>        <span class="string">"dialog" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Dialog),
-<a href=#245 id=245 data-nosnippet>245</a>        <span class="string">"heading" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Heading),
-<a href=#246 id=246 data-nosnippet>246</a>        <span class="string">"banner" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Banner),
-<a href=#247 id=247 data-nosnippet>247</a>        <span class="string">"navigation" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Navigation),
-<a href=#248 id=248 data-nosnippet>248</a>        <span class="string">"main" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Main),
-<a href=#249 id=249 data-nosnippet>249</a>        <span class="string">"article" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Article),
-<a href=#250 id=250 data-nosnippet>250</a>        <span class="string">"list" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::List),
-<a href=#251 id=251 data-nosnippet>251</a>        <span class="string">"listitem" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Listitem),
-<a href=#252 id=252 data-nosnippet>252</a>        <span class="string">"row" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Row),
-<a href=#253 id=253 data-nosnippet>253</a>        <span class="string">"cell" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Cell),
-<a href=#254 id=254 data-nosnippet>254</a>        <span class="string">"columnheader" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Columnheader),
-<a href=#255 id=255 data-nosnippet>255</a>        <span class="string">"rowheader" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Rowheader),
-<a href=#256 id=256 data-nosnippet>256</a>        other =&gt; <span class="prelude-val">Err</span>(ErrorData::invalid_params(
-<a href=#257 id=257 data-nosnippet>257</a>            <span class="macro">format!</span>(
-<a href=#258 id=258 data-nosnippet>258</a>                <span class="string">"Unknown ARIA role `{other}`. Accepted: button, link, textbox, combobox, checkbox, radio, tab, menu, menuitem, dialog, heading, banner, navigation, main, article, list, listitem, row, cell, columnheader, rowheader."
-<a href=#259 id=259 data-nosnippet>259</a>            </span>),
-<a href=#260 id=260 data-nosnippet>260</a>            <span class="prelude-val">None</span>,
-<a href=#261 id=261 data-nosnippet>261</a>        )),
-<a href=#262 id=262 data-nosnippet>262</a>    }
-<a href=#263 id=263 data-nosnippet>263</a>}
-<a href=#264 id=264 data-nosnippet>264</a>
-<a href=#265 id=265 data-nosnippet>265</a><span class="comment">// ---------- ElementDescriptor / BoundingBox -------------------------------
-<a href=#266 id=266 data-nosnippet>266</a>
-<a href=#267 id=267 data-nosnippet>267</a></span><span class="doccomment">/// Geometry wire shape mirroring [`zendriver::BoundingBox`].
-<a href=#268 id=268 data-nosnippet>268</a>///
-<a href=#269 id=269 data-nosnippet>269</a>/// Wrapped (rather than re-exporting the lib type) so it can derive
-<a href=#270 id=270 data-nosnippet>270</a>/// `Serialize` + `JsonSchema` without forcing those derives on the lib's
-<a href=#271 id=271 data-nosnippet>271</a>/// type.
-<a href=#272 id=272 data-nosnippet>272</a></span><span class="attr">#[derive(Debug, Clone, Copy, Serialize, JsonSchema, PartialEq)]
-<a href=#273 id=273 data-nosnippet>273</a></span><span class="kw">pub struct </span>BoundingBox {
-<a href=#274 id=274 data-nosnippet>274</a>    <span class="kw">pub </span>x: f64,
-<a href=#275 id=275 data-nosnippet>275</a>    <span class="kw">pub </span>y: f64,
-<a href=#276 id=276 data-nosnippet>276</a>    <span class="kw">pub </span>width: f64,
-<a href=#277 id=277 data-nosnippet>277</a>    <span class="kw">pub </span>height: f64,
-<a href=#278 id=278 data-nosnippet>278</a>}
-<a href=#279 id=279 data-nosnippet>279</a>
-<a href=#280 id=280 data-nosnippet>280</a><span class="kw">impl </span>From&lt;zendriver::BoundingBox&gt; <span class="kw">for </span>BoundingBox {
-<a href=#281 id=281 data-nosnippet>281</a>    <span class="kw">fn </span>from(b: zendriver::BoundingBox) -&gt; <span class="self">Self </span>{
-<a href=#282 id=282 data-nosnippet>282</a>        <span class="self">Self </span>{
-<a href=#283 id=283 data-nosnippet>283</a>            x: b.x,
-<a href=#284 id=284 data-nosnippet>284</a>            y: b.y,
-<a href=#285 id=285 data-nosnippet>285</a>            width: b.width,
-<a href=#286 id=286 data-nosnippet>286</a>            height: b.height,
-<a href=#287 id=287 data-nosnippet>287</a>        }
-<a href=#288 id=288 data-nosnippet>288</a>    }
-<a href=#289 id=289 data-nosnippet>289</a>}
-<a href=#290 id=290 data-nosnippet>290</a>
-<a href=#291 id=291 data-nosnippet>291</a><span class="doccomment">/// Element projection returned by `browser_find` (single) and
-<a href=#292 id=292 data-nosnippet>292</a>/// `browser_find_all` (list).
-<a href=#293 id=293 data-nosnippet>293</a>///
-<a href=#294 id=294 data-nosnippet>294</a>/// `tag` is best-effort: the lib has no `Element::tag_name()` so we ask
-<a href=#295 id=295 data-nosnippet>295</a>/// the page via `el.tagName.toLowerCase()`. If the eval call fails (e.g.
-<a href=#296 id=296 data-nosnippet>296</a>/// the element became stale between the find and the describe), we leave
-<a href=#297 id=297 data-nosnippet>297</a>/// `tag` as `None` rather than failing the entire describe — the rest of
-<a href=#298 id=298 data-nosnippet>298</a>/// the projection (attrs, text, geometry) is still useful.
-<a href=#299 id=299 data-nosnippet>299</a></span><span class="attr">#[derive(Debug, Clone, Serialize, JsonSchema)]
-<a href=#300 id=300 data-nosnippet>300</a></span><span class="kw">pub struct </span>ElementDescriptor {
-<a href=#301 id=301 data-nosnippet>301</a>    <span class="doccomment">/// Lowercase tag name, or `None` when the eval probe failed.
-<a href=#302 id=302 data-nosnippet>302</a>    </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
-<a href=#303 id=303 data-nosnippet>303</a>    </span><span class="kw">pub </span>tag: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#304 id=304 data-nosnippet>304</a>    <span class="doccomment">/// First 200 chars of `innerText` (post `chars().take(200)` so we
-<a href=#305 id=305 data-nosnippet>305</a>    /// never split a multibyte codepoint).
-<a href=#306 id=306 data-nosnippet>306</a>    </span><span class="kw">pub </span>text_snippet: String,
-<a href=#307 id=307 data-nosnippet>307</a>    <span class="doccomment">/// All attributes on the element, in stable key order.
-<a href=#308 id=308 data-nosnippet>308</a>    </span><span class="kw">pub </span>attrs: BTreeMap&lt;String, String&gt;,
-<a href=#309 id=309 data-nosnippet>309</a>    <span class="doccomment">/// Viewport-relative bounding box, or `None` when the element has no
-<a href=#310 id=310 data-nosnippet>310</a>    /// box (display: none, detached, etc.).
-<a href=#311 id=311 data-nosnippet>311</a>    </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
-<a href=#312 id=312 data-nosnippet>312</a>    </span><span class="kw">pub </span>bounding_box: <span class="prelude-ty">Option</span>&lt;BoundingBox&gt;,
-<a href=#313 id=313 data-nosnippet>313</a>    <span class="doccomment">/// `true` when the lib's visibility predicate accepts the element.
-<a href=#314 id=314 data-nosnippet>314</a>    </span><span class="kw">pub </span>visible: bool,
-<a href=#315 id=315 data-nosnippet>315</a>    <span class="doccomment">/// `true` when the element is not disabled (form-aware).
-<a href=#316 id=316 data-nosnippet>316</a>    </span><span class="kw">pub </span>enabled: bool,
-<a href=#317 id=317 data-nosnippet>317</a>}
-<a href=#318 id=318 data-nosnippet>318</a>
-<a href=#319 id=319 data-nosnippet>319</a><span class="doccomment">/// Build a descriptor from a live `Element`.
-<a href=#320 id=320 data-nosnippet>320</a>///
-<a href=#321 id=321 data-nosnippet>321</a>/// Attribute / visibility / enabled probes propagate their errors (those
-<a href=#322 id=322 data-nosnippet>322</a>/// failures usually mean the element went stale and the caller should
-<a href=#323 id=323 data-nosnippet>323</a>/// re-find). The tag probe is intentionally swallowed to `None` — see
-<a href=#324 id=324 data-nosnippet>324</a>/// the [`ElementDescriptor::tag`] doc for the rationale.
-<a href=#325 id=325 data-nosnippet>325</a></span><span class="kw">pub async fn </span>describe(el: <span class="kw-2">&amp;</span>Element) -&gt; <span class="prelude-ty">Result</span>&lt;ElementDescriptor, ErrorData&gt; {
-<a href=#326 id=326 data-nosnippet>326</a>    <span class="comment">// Best-effort tag probe — falls back to None on any failure.
-<a href=#327 id=327 data-nosnippet>327</a>    </span><span class="kw">let </span>tag: <span class="prelude-ty">Option</span>&lt;String&gt; = el.evaluate::&lt;String&gt;(<span class="string">"el.tagName.toLowerCase()"</span>).<span class="kw">await</span>.ok();
-<a href=#328 id=328 data-nosnippet>328</a>
-<a href=#329 id=329 data-nosnippet>329</a>    <span class="comment">// Text snippet: cap at 200 chars (not bytes) so we never split a
-<a href=#330 id=330 data-nosnippet>330</a>    // multibyte codepoint, which would yield invalid UTF-8 on output.
-<a href=#331 id=331 data-nosnippet>331</a>    </span><span class="kw">let </span>text_snippet: String = el
-<a href=#332 id=332 data-nosnippet>332</a>        .inner_text()
-<a href=#333 id=333 data-nosnippet>333</a>        .<span class="kw">await
-<a href=#334 id=334 data-nosnippet>334</a>        </span>.unwrap_or_default()
-<a href=#335 id=335 data-nosnippet>335</a>        .chars()
-<a href=#336 id=336 data-nosnippet>336</a>        .take(<span class="number">200</span>)
-<a href=#337 id=337 data-nosnippet>337</a>        .collect();
-<a href=#338 id=338 data-nosnippet>338</a>
-<a href=#339 id=339 data-nosnippet>339</a>    <span class="kw">let </span>attrs_map = el
-<a href=#340 id=340 data-nosnippet>340</a>        .attrs()
-<a href=#341 id=341 data-nosnippet>341</a>        .<span class="kw">await
-<a href=#342 id=342 data-nosnippet>342</a>        </span>.map_err(|e| map_error(McpServerError::from(e)))<span class="question-mark">?</span>;
-<a href=#343 id=343 data-nosnippet>343</a>    <span class="kw">let </span>attrs: BTreeMap&lt;String, String&gt; = attrs_map.into_iter().collect();
-<a href=#344 id=344 data-nosnippet>344</a>
-<a href=#345 id=345 data-nosnippet>345</a>    <span class="kw">let </span>visible = el
-<a href=#346 id=346 data-nosnippet>346</a>        .is_visible()
-<a href=#347 id=347 data-nosnippet>347</a>        .<span class="kw">await
-<a href=#348 id=348 data-nosnippet>348</a>        </span>.map_err(|e| map_error(McpServerError::from(e)))<span class="question-mark">?</span>;
-<a href=#349 id=349 data-nosnippet>349</a>    <span class="kw">let </span>enabled = el
-<a href=#350 id=350 data-nosnippet>350</a>        .is_enabled()
-<a href=#351 id=351 data-nosnippet>351</a>        .<span class="kw">await
-<a href=#352 id=352 data-nosnippet>352</a>        </span>.map_err(|e| map_error(McpServerError::from(e)))<span class="question-mark">?</span>;
-<a href=#353 id=353 data-nosnippet>353</a>    <span class="kw">let </span>bounding_box = el
-<a href=#354 id=354 data-nosnippet>354</a>        .bounding_box()
-<a href=#355 id=355 data-nosnippet>355</a>        .<span class="kw">await
-<a href=#356 id=356 data-nosnippet>356</a>        </span>.ok()
-<a href=#357 id=357 data-nosnippet>357</a>        .flatten()
-<a href=#358 id=358 data-nosnippet>358</a>        .map(BoundingBox::from);
-<a href=#359 id=359 data-nosnippet>359</a>
-<a href=#360 id=360 data-nosnippet>360</a>    <span class="prelude-val">Ok</span>(ElementDescriptor {
-<a href=#361 id=361 data-nosnippet>361</a>        tag,
-<a href=#362 id=362 data-nosnippet>362</a>        text_snippet,
-<a href=#363 id=363 data-nosnippet>363</a>        attrs,
-<a href=#364 id=364 data-nosnippet>364</a>        bounding_box,
-<a href=#365 id=365 data-nosnippet>365</a>        visible,
-<a href=#366 id=366 data-nosnippet>366</a>        enabled,
-<a href=#367 id=367 data-nosnippet>367</a>    })
-<a href=#368 id=368 data-nosnippet>368</a>}
-<a href=#369 id=369 data-nosnippet>369</a>
-<a href=#370 id=370 data-nosnippet>370</a><span class="comment">// ---------- browser_find --------------------------------------------------
-<a href=#371 id=371 data-nosnippet>371</a>
-<a href=#372 id=372 data-nosnippet>372</a></span><span class="doccomment">/// Input for `browser_find`.
-<a href=#373 id=373 data-nosnippet>373</a></span><span class="attr">#[derive(Debug, Deserialize, JsonSchema)]
-<a href=#374 id=374 data-nosnippet>374</a>#[serde(deny_unknown_fields)]
-<a href=#375 id=375 data-nosnippet>375</a></span><span class="kw">pub struct </span>FindInput {
-<a href=#376 id=376 data-nosnippet>376</a>    <span class="attr">#[serde(flatten)]
-<a href=#377 id=377 data-nosnippet>377</a>    </span><span class="kw">pub </span>selector: Selector,
-<a href=#378 id=378 data-nosnippet>378</a>}
-<a href=#379 id=379 data-nosnippet>379</a>
-<a href=#380 id=380 data-nosnippet>380</a><span class="doccomment">/// Output of `browser_find`.
-<a href=#381 id=381 data-nosnippet>381</a></span><span class="attr">#[derive(Debug, Serialize, JsonSchema)]
-<a href=#382 id=382 data-nosnippet>382</a></span><span class="kw">pub struct </span>FindOutput {
-<a href=#383 id=383 data-nosnippet>383</a>    <span class="doccomment">/// `true` iff the selector matched within the timeout.
-<a href=#384 id=384 data-nosnippet>384</a>    </span><span class="kw">pub </span>found: bool,
-<a href=#385 id=385 data-nosnippet>385</a>    <span class="doccomment">/// Element projection when `found` is `true`, otherwise `None`.
-<a href=#386 id=386 data-nosnippet>386</a>    </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
-<a href=#387 id=387 data-nosnippet>387</a>    </span><span class="kw">pub </span>element: <span class="prelude-ty">Option</span>&lt;ElementDescriptor&gt;,
-<a href=#388 id=388 data-nosnippet>388</a>}
-<a href=#389 id=389 data-nosnippet>389</a>
-<a href=#390 id=390 data-nosnippet>390</a><span class="doccomment">/// Resolve a Selector to a single element and return its descriptor.
-<a href=#391 id=391 data-nosnippet>391</a>///
-<a href=#392 id=392 data-nosnippet>392</a>/// Distinct from `browser_element_state` in that "not found" is reported
-<a href=#393 id=393 data-nosnippet>393</a>/// as `{ found: false, element: null }` rather than an error — easier for
-<a href=#394 id=394 data-nosnippet>394</a>/// agents that want to branch on existence without try/catch.
-<a href=#395 id=395 data-nosnippet>395</a></span><span class="kw">pub async fn </span>find(
-<a href=#396 id=396 data-nosnippet>396</a>    state: Arc&lt;Mutex&lt;SessionState&gt;&gt;,
-<a href=#397 id=397 data-nosnippet>397</a>    input: FindInput,
-<a href=#398 id=398 data-nosnippet>398</a>) -&gt; <span class="prelude-ty">Result</span>&lt;FindOutput, ErrorData&gt; {
-<a href=#399 id=399 data-nosnippet>399</a>    <span class="kw">let </span>s = state.lock().<span class="kw">await</span>;
-<a href=#400 id=400 data-nosnippet>400</a>    <span class="kw">let </span>tab = current_tab(<span class="kw-2">&amp;</span>s).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#401 id=401 data-nosnippet>401</a>    <span class="kw">match </span>resolve(<span class="kw-2">&amp;</span>tab, <span class="kw-2">&amp;</span>input.selector).<span class="kw">await </span>{
-<a href=#402 id=402 data-nosnippet>402</a>        <span class="prelude-val">Ok</span>(el) =&gt; {
-<a href=#403 id=403 data-nosnippet>403</a>            <span class="kw">let </span>desc = describe(<span class="kw-2">&amp;</span>el).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#404 id=404 data-nosnippet>404</a>            <span class="prelude-val">Ok</span>(FindOutput {
-<a href=#405 id=405 data-nosnippet>405</a>                found: <span class="bool-val">true</span>,
-<a href=#406 id=406 data-nosnippet>406</a>                element: <span class="prelude-val">Some</span>(desc),
-<a href=#407 id=407 data-nosnippet>407</a>            })
-<a href=#408 id=408 data-nosnippet>408</a>        }
-<a href=#409 id=409 data-nosnippet>409</a>        <span class="prelude-val">Err</span>(err) <span class="kw">if </span>is_not_found(<span class="kw-2">&amp;</span>err) =&gt; <span class="prelude-val">Ok</span>(FindOutput {
-<a href=#410 id=410 data-nosnippet>410</a>            found: <span class="bool-val">false</span>,
-<a href=#411 id=411 data-nosnippet>411</a>            element: <span class="prelude-val">None</span>,
-<a href=#412 id=412 data-nosnippet>412</a>        }),
-<a href=#413 id=413 data-nosnippet>413</a>        <span class="prelude-val">Err</span>(err) =&gt; <span class="prelude-val">Err</span>(err),
-<a href=#414 id=414 data-nosnippet>414</a>    }
-<a href=#415 id=415 data-nosnippet>415</a>}
-<a href=#416 id=416 data-nosnippet>416</a>
-<a href=#417 id=417 data-nosnippet>417</a><span class="doccomment">/// `true` when the `ErrorData` was produced by mapping an
-<a href=#418 id=418 data-nosnippet>418</a>/// [`zendriver::ZendriverError::ElementNotFound`]. We rely on the
-<a href=#419 id=419 data-nosnippet>419</a>/// `_meta.suggested_next == "browser_html"` marker that `map_error`
-<a href=#420 id=420 data-nosnippet>420</a>/// attaches to that variant — checking the message would be brittle
-<a href=#421 id=421 data-nosnippet>421</a>/// across translation tweaks.
-<a href=#422 id=422 data-nosnippet>422</a></span><span class="kw">fn </span>is_not_found(err: <span class="kw-2">&amp;</span>ErrorData) -&gt; bool {
-<a href=#423 id=423 data-nosnippet>423</a>    err.data
-<a href=#424 id=424 data-nosnippet>424</a>        .as_ref()
-<a href=#425 id=425 data-nosnippet>425</a>        .and_then(|v| v.get(<span class="string">"suggested_next"</span>))
-<a href=#426 id=426 data-nosnippet>426</a>        .and_then(|v| v.as_str())
-<a href=#427 id=427 data-nosnippet>427</a>        == <span class="prelude-val">Some</span>(<span class="string">"browser_html"</span>)
-<a href=#428 id=428 data-nosnippet>428</a>        &amp;&amp; err.message.contains(<span class="string">"No element matched"</span>)
-<a href=#429 id=429 data-nosnippet>429</a>}
-<a href=#430 id=430 data-nosnippet>430</a>
-<a href=#431 id=431 data-nosnippet>431</a><span class="comment">// ---------- browser_find_all ----------------------------------------------
-<a href=#432 id=432 data-nosnippet>432</a>
-<a href=#433 id=433 data-nosnippet>433</a></span><span class="doccomment">/// Input for `browser_find_all`.
-<a href=#434 id=434 data-nosnippet>434</a></span><span class="attr">#[derive(Debug, Deserialize, JsonSchema)]
-<a href=#435 id=435 data-nosnippet>435</a>#[serde(deny_unknown_fields)]
-<a href=#436 id=436 data-nosnippet>436</a></span><span class="kw">pub struct </span>FindAllInput {
-<a href=#437 id=437 data-nosnippet>437</a>    <span class="attr">#[serde(flatten)]
-<a href=#438 id=438 data-nosnippet>438</a>    </span><span class="kw">pub </span>selector: Selector,
-<a href=#439 id=439 data-nosnippet>439</a>    <span class="doccomment">/// Maximum number of matches to return. Default 50.
-<a href=#440 id=440 data-nosnippet>440</a>    </span><span class="attr">#[serde(default = <span class="string">"default_limit"</span>)]
-<a href=#441 id=441 data-nosnippet>441</a>    </span><span class="kw">pub </span>limit: usize,
-<a href=#442 id=442 data-nosnippet>442</a>}
-<a href=#443 id=443 data-nosnippet>443</a>
-<a href=#444 id=444 data-nosnippet>444</a><span class="kw">const fn </span>default_limit() -&gt; usize {
-<a href=#445 id=445 data-nosnippet>445</a>    <span class="number">50
-<a href=#446 id=446 data-nosnippet>446</a></span>}
+<a href=#216 id=216 data-nosnippet>216</a><span class="doccomment">/// Apply the Selector's chosen kind to a [`FindAllBuilder`].
+<a href=#217 id=217 data-nosnippet>217</a></span><span class="kw">fn </span>apply_selector_all&lt;<span class="lifetime">'a</span>&gt;(
+<a href=#218 id=218 data-nosnippet>218</a>    builder: FindAllBuilder&lt;<span class="lifetime">'a</span>&gt;,
+<a href=#219 id=219 data-nosnippet>219</a>    sel: <span class="kw-2">&amp;</span>Selector,
+<a href=#220 id=220 data-nosnippet>220</a>) -&gt; <span class="prelude-ty">Result</span>&lt;FindAllBuilder&lt;<span class="lifetime">'a</span>&gt;, ErrorData&gt; {
+<a href=#221 id=221 data-nosnippet>221</a>    <span class="macro">apply_selector_to!</span>(builder, sel)
+<a href=#222 id=222 data-nosnippet>222</a>}
+<a href=#223 id=223 data-nosnippet>223</a>
+<a href=#224 id=224 data-nosnippet>224</a><span class="kw">fn </span>apply_modifiers&lt;<span class="lifetime">'a</span>&gt;(<span class="kw-2">mut </span>builder: FindBuilder&lt;<span class="lifetime">'a</span>&gt;, sel: <span class="kw-2">&amp;</span>Selector) -&gt; FindBuilder&lt;<span class="lifetime">'a</span>&gt; {
+<a href=#225 id=225 data-nosnippet>225</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(n) = sel.nth {
+<a href=#226 id=226 data-nosnippet>226</a>        builder = builder.nth(n);
+<a href=#227 id=227 data-nosnippet>227</a>    }
+<a href=#228 id=228 data-nosnippet>228</a>    builder = builder.visible_only(sel.visible_only);
+<a href=#229 id=229 data-nosnippet>229</a>    builder = builder.timeout(Duration::from_millis(sel.timeout_ms));
+<a href=#230 id=230 data-nosnippet>230</a>    builder
+<a href=#231 id=231 data-nosnippet>231</a>}
+<a href=#232 id=232 data-nosnippet>232</a>
+<a href=#233 id=233 data-nosnippet>233</a><span class="kw">fn </span>apply_modifiers_all&lt;<span class="lifetime">'a</span>&gt;(<span class="kw-2">mut </span>builder: FindAllBuilder&lt;<span class="lifetime">'a</span>&gt;, sel: <span class="kw-2">&amp;</span>Selector) -&gt; FindAllBuilder&lt;<span class="lifetime">'a</span>&gt; {
+<a href=#234 id=234 data-nosnippet>234</a>    builder = builder.visible_only(sel.visible_only);
+<a href=#235 id=235 data-nosnippet>235</a>    builder = builder.timeout(Duration::from_millis(sel.timeout_ms));
+<a href=#236 id=236 data-nosnippet>236</a>    builder
+<a href=#237 id=237 data-nosnippet>237</a>}
+<a href=#238 id=238 data-nosnippet>238</a>
+<a href=#239 id=239 data-nosnippet>239</a><span class="kw">fn </span>compile_regex(pat: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;regex::Regex, ErrorData&gt; {
+<a href=#240 id=240 data-nosnippet>240</a>    regex::Regex::new(pat)
+<a href=#241 id=241 data-nosnippet>241</a>        .map_err(|e| ErrorData::invalid_params(<span class="macro">format!</span>(<span class="string">"Invalid `text_regex` pattern: {e}"</span>), <span class="prelude-val">None</span>))
+<a href=#242 id=242 data-nosnippet>242</a>}
+<a href=#243 id=243 data-nosnippet>243</a>
+<a href=#244 id=244 data-nosnippet>244</a><span class="doccomment">/// Map the wire `role` string onto a [`zendriver::AriaRole`].
+<a href=#245 id=245 data-nosnippet>245</a>///
+<a href=#246 id=246 data-nosnippet>246</a>/// We accept lowercase ARIA role names. Unknown values surface an
+<a href=#247 id=247 data-nosnippet>247</a>/// `invalid_params` error listing the accepted roles, so an agent that
+<a href=#248 id=248 data-nosnippet>248</a>/// typos `"buttn"` gets a clean signal rather than `AriaRole::Other`
+<a href=#249 id=249 data-nosnippet>249</a>/// silently compiling to a `[role="buttn"]` selector that matches nothing.
+<a href=#250 id=250 data-nosnippet>250</a></span><span class="kw">fn </span>parse_role(s: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;AriaRole, ErrorData&gt; {
+<a href=#251 id=251 data-nosnippet>251</a>    <span class="kw">match </span>s {
+<a href=#252 id=252 data-nosnippet>252</a>        <span class="string">"button" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Button),
+<a href=#253 id=253 data-nosnippet>253</a>        <span class="string">"link" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Link),
+<a href=#254 id=254 data-nosnippet>254</a>        <span class="string">"textbox" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Textbox),
+<a href=#255 id=255 data-nosnippet>255</a>        <span class="string">"combobox" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Combobox),
+<a href=#256 id=256 data-nosnippet>256</a>        <span class="string">"checkbox" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Checkbox),
+<a href=#257 id=257 data-nosnippet>257</a>        <span class="string">"radio" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Radio),
+<a href=#258 id=258 data-nosnippet>258</a>        <span class="string">"tab" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Tab),
+<a href=#259 id=259 data-nosnippet>259</a>        <span class="string">"menu" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Menu),
+<a href=#260 id=260 data-nosnippet>260</a>        <span class="string">"menuitem" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Menuitem),
+<a href=#261 id=261 data-nosnippet>261</a>        <span class="string">"dialog" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Dialog),
+<a href=#262 id=262 data-nosnippet>262</a>        <span class="string">"heading" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Heading),
+<a href=#263 id=263 data-nosnippet>263</a>        <span class="string">"banner" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Banner),
+<a href=#264 id=264 data-nosnippet>264</a>        <span class="string">"navigation" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Navigation),
+<a href=#265 id=265 data-nosnippet>265</a>        <span class="string">"main" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Main),
+<a href=#266 id=266 data-nosnippet>266</a>        <span class="string">"article" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Article),
+<a href=#267 id=267 data-nosnippet>267</a>        <span class="string">"list" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::List),
+<a href=#268 id=268 data-nosnippet>268</a>        <span class="string">"listitem" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Listitem),
+<a href=#269 id=269 data-nosnippet>269</a>        <span class="string">"row" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Row),
+<a href=#270 id=270 data-nosnippet>270</a>        <span class="string">"cell" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Cell),
+<a href=#271 id=271 data-nosnippet>271</a>        <span class="string">"columnheader" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Columnheader),
+<a href=#272 id=272 data-nosnippet>272</a>        <span class="string">"rowheader" </span>=&gt; <span class="prelude-val">Ok</span>(AriaRole::Rowheader),
+<a href=#273 id=273 data-nosnippet>273</a>        other =&gt; <span class="prelude-val">Err</span>(ErrorData::invalid_params(
+<a href=#274 id=274 data-nosnippet>274</a>            <span class="macro">format!</span>(
+<a href=#275 id=275 data-nosnippet>275</a>                <span class="string">"Unknown ARIA role `{other}`. Accepted: button, link, textbox, combobox, checkbox, radio, tab, menu, menuitem, dialog, heading, banner, navigation, main, article, list, listitem, row, cell, columnheader, rowheader."
+<a href=#276 id=276 data-nosnippet>276</a>            </span>),
+<a href=#277 id=277 data-nosnippet>277</a>            <span class="prelude-val">None</span>,
+<a href=#278 id=278 data-nosnippet>278</a>        )),
+<a href=#279 id=279 data-nosnippet>279</a>    }
+<a href=#280 id=280 data-nosnippet>280</a>}
+<a href=#281 id=281 data-nosnippet>281</a>
+<a href=#282 id=282 data-nosnippet>282</a><span class="comment">// ---------- ElementDescriptor / BoundingBox -------------------------------
+<a href=#283 id=283 data-nosnippet>283</a>
+<a href=#284 id=284 data-nosnippet>284</a></span><span class="doccomment">/// Geometry wire shape mirroring [`zendriver::BoundingBox`].
+<a href=#285 id=285 data-nosnippet>285</a>///
+<a href=#286 id=286 data-nosnippet>286</a>/// Wrapped (rather than re-exporting the lib type) so it can derive
+<a href=#287 id=287 data-nosnippet>287</a>/// `Serialize` + `JsonSchema` without forcing those derives on the lib's
+<a href=#288 id=288 data-nosnippet>288</a>/// type.
+<a href=#289 id=289 data-nosnippet>289</a></span><span class="attr">#[derive(Debug, Clone, Copy, Serialize, JsonSchema, PartialEq)]
+<a href=#290 id=290 data-nosnippet>290</a></span><span class="kw">pub struct </span>BoundingBox {
+<a href=#291 id=291 data-nosnippet>291</a>    <span class="kw">pub </span>x: f64,
+<a href=#292 id=292 data-nosnippet>292</a>    <span class="kw">pub </span>y: f64,
+<a href=#293 id=293 data-nosnippet>293</a>    <span class="kw">pub </span>width: f64,
+<a href=#294 id=294 data-nosnippet>294</a>    <span class="kw">pub </span>height: f64,
+<a href=#295 id=295 data-nosnippet>295</a>}
+<a href=#296 id=296 data-nosnippet>296</a>
+<a href=#297 id=297 data-nosnippet>297</a><span class="kw">impl </span>From&lt;zendriver::BoundingBox&gt; <span class="kw">for </span>BoundingBox {
+<a href=#298 id=298 data-nosnippet>298</a>    <span class="kw">fn </span>from(b: zendriver::BoundingBox) -&gt; <span class="self">Self </span>{
+<a href=#299 id=299 data-nosnippet>299</a>        <span class="self">Self </span>{
+<a href=#300 id=300 data-nosnippet>300</a>            x: b.x,
+<a href=#301 id=301 data-nosnippet>301</a>            y: b.y,
+<a href=#302 id=302 data-nosnippet>302</a>            width: b.width,
+<a href=#303 id=303 data-nosnippet>303</a>            height: b.height,
+<a href=#304 id=304 data-nosnippet>304</a>        }
+<a href=#305 id=305 data-nosnippet>305</a>    }
+<a href=#306 id=306 data-nosnippet>306</a>}
+<a href=#307 id=307 data-nosnippet>307</a>
+<a href=#308 id=308 data-nosnippet>308</a><span class="doccomment">/// Element projection returned by `browser_find` (single) and
+<a href=#309 id=309 data-nosnippet>309</a>/// `browser_find_all` (list).
+<a href=#310 id=310 data-nosnippet>310</a>///
+<a href=#311 id=311 data-nosnippet>311</a>/// `tag` is best-effort: the lib has no `Element::tag_name()` so we ask
+<a href=#312 id=312 data-nosnippet>312</a>/// the page via `el.tagName.toLowerCase()`. If the eval call fails (e.g.
+<a href=#313 id=313 data-nosnippet>313</a>/// the element became stale between the find and the describe), we leave
+<a href=#314 id=314 data-nosnippet>314</a>/// `tag` as `None` rather than failing the entire describe — the rest of
+<a href=#315 id=315 data-nosnippet>315</a>/// the projection (attrs, text, geometry) is still useful.
+<a href=#316 id=316 data-nosnippet>316</a></span><span class="attr">#[derive(Debug, Clone, Serialize, JsonSchema)]
+<a href=#317 id=317 data-nosnippet>317</a></span><span class="kw">pub struct </span>ElementDescriptor {
+<a href=#318 id=318 data-nosnippet>318</a>    <span class="doccomment">/// Lowercase tag name, or `None` when the eval probe failed.
+<a href=#319 id=319 data-nosnippet>319</a>    </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
+<a href=#320 id=320 data-nosnippet>320</a>    </span><span class="kw">pub </span>tag: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#321 id=321 data-nosnippet>321</a>    <span class="doccomment">/// First 200 chars of `innerText` (post `chars().take(200)` so we
+<a href=#322 id=322 data-nosnippet>322</a>    /// never split a multibyte codepoint).
+<a href=#323 id=323 data-nosnippet>323</a>    </span><span class="kw">pub </span>text_snippet: String,
+<a href=#324 id=324 data-nosnippet>324</a>    <span class="doccomment">/// All attributes on the element, in stable key order.
+<a href=#325 id=325 data-nosnippet>325</a>    </span><span class="kw">pub </span>attrs: BTreeMap&lt;String, String&gt;,
+<a href=#326 id=326 data-nosnippet>326</a>    <span class="doccomment">/// Viewport-relative bounding box, or `None` when the element has no
+<a href=#327 id=327 data-nosnippet>327</a>    /// box (display: none, detached, etc.).
+<a href=#328 id=328 data-nosnippet>328</a>    </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
+<a href=#329 id=329 data-nosnippet>329</a>    </span><span class="kw">pub </span>bounding_box: <span class="prelude-ty">Option</span>&lt;BoundingBox&gt;,
+<a href=#330 id=330 data-nosnippet>330</a>    <span class="doccomment">/// `true` when the lib's visibility predicate accepts the element.
+<a href=#331 id=331 data-nosnippet>331</a>    </span><span class="kw">pub </span>visible: bool,
+<a href=#332 id=332 data-nosnippet>332</a>    <span class="doccomment">/// `true` when the element is not disabled (form-aware).
+<a href=#333 id=333 data-nosnippet>333</a>    </span><span class="kw">pub </span>enabled: bool,
+<a href=#334 id=334 data-nosnippet>334</a>}
+<a href=#335 id=335 data-nosnippet>335</a>
+<a href=#336 id=336 data-nosnippet>336</a><span class="doccomment">/// Build a descriptor from a live `Element`.
+<a href=#337 id=337 data-nosnippet>337</a>///
+<a href=#338 id=338 data-nosnippet>338</a>/// Attribute / visibility / enabled probes propagate their errors (those
+<a href=#339 id=339 data-nosnippet>339</a>/// failures usually mean the element went stale and the caller should
+<a href=#340 id=340 data-nosnippet>340</a>/// re-find). The tag probe is intentionally swallowed to `None` — see
+<a href=#341 id=341 data-nosnippet>341</a>/// the [`ElementDescriptor::tag`] doc for the rationale.
+<a href=#342 id=342 data-nosnippet>342</a></span><span class="kw">pub async fn </span>describe(el: <span class="kw-2">&amp;</span>Element) -&gt; <span class="prelude-ty">Result</span>&lt;ElementDescriptor, ErrorData&gt; {
+<a href=#343 id=343 data-nosnippet>343</a>    <span class="comment">// Best-effort tag probe — falls back to None on any failure.
+<a href=#344 id=344 data-nosnippet>344</a>    </span><span class="kw">let </span>tag: <span class="prelude-ty">Option</span>&lt;String&gt; = el.evaluate::&lt;String&gt;(<span class="string">"el.tagName.toLowerCase()"</span>).<span class="kw">await</span>.ok();
+<a href=#345 id=345 data-nosnippet>345</a>
+<a href=#346 id=346 data-nosnippet>346</a>    <span class="comment">// Text snippet: cap at 200 chars (not bytes) so we never split a
+<a href=#347 id=347 data-nosnippet>347</a>    // multibyte codepoint, which would yield invalid UTF-8 on output.
+<a href=#348 id=348 data-nosnippet>348</a>    </span><span class="kw">let </span>text_snippet: String = el
+<a href=#349 id=349 data-nosnippet>349</a>        .inner_text()
+<a href=#350 id=350 data-nosnippet>350</a>        .<span class="kw">await
+<a href=#351 id=351 data-nosnippet>351</a>        </span>.unwrap_or_default()
+<a href=#352 id=352 data-nosnippet>352</a>        .chars()
+<a href=#353 id=353 data-nosnippet>353</a>        .take(<span class="number">200</span>)
+<a href=#354 id=354 data-nosnippet>354</a>        .collect();
+<a href=#355 id=355 data-nosnippet>355</a>
+<a href=#356 id=356 data-nosnippet>356</a>    <span class="kw">let </span>attrs_map = el
+<a href=#357 id=357 data-nosnippet>357</a>        .attrs()
+<a href=#358 id=358 data-nosnippet>358</a>        .<span class="kw">await
+<a href=#359 id=359 data-nosnippet>359</a>        </span>.map_err(|e| map_error(McpServerError::from(e)))<span class="question-mark">?</span>;
+<a href=#360 id=360 data-nosnippet>360</a>    <span class="kw">let </span>attrs: BTreeMap&lt;String, String&gt; = attrs_map.into_iter().collect();
+<a href=#361 id=361 data-nosnippet>361</a>
+<a href=#362 id=362 data-nosnippet>362</a>    <span class="kw">let </span>visible = el
+<a href=#363 id=363 data-nosnippet>363</a>        .is_visible()
+<a href=#364 id=364 data-nosnippet>364</a>        .<span class="kw">await
+<a href=#365 id=365 data-nosnippet>365</a>        </span>.map_err(|e| map_error(McpServerError::from(e)))<span class="question-mark">?</span>;
+<a href=#366 id=366 data-nosnippet>366</a>    <span class="kw">let </span>enabled = el
+<a href=#367 id=367 data-nosnippet>367</a>        .is_enabled()
+<a href=#368 id=368 data-nosnippet>368</a>        .<span class="kw">await
+<a href=#369 id=369 data-nosnippet>369</a>        </span>.map_err(|e| map_error(McpServerError::from(e)))<span class="question-mark">?</span>;
+<a href=#370 id=370 data-nosnippet>370</a>    <span class="kw">let </span>bounding_box = el
+<a href=#371 id=371 data-nosnippet>371</a>        .bounding_box()
+<a href=#372 id=372 data-nosnippet>372</a>        .<span class="kw">await
+<a href=#373 id=373 data-nosnippet>373</a>        </span>.ok()
+<a href=#374 id=374 data-nosnippet>374</a>        .flatten()
+<a href=#375 id=375 data-nosnippet>375</a>        .map(BoundingBox::from);
+<a href=#376 id=376 data-nosnippet>376</a>
+<a href=#377 id=377 data-nosnippet>377</a>    <span class="prelude-val">Ok</span>(ElementDescriptor {
+<a href=#378 id=378 data-nosnippet>378</a>        tag,
+<a href=#379 id=379 data-nosnippet>379</a>        text_snippet,
+<a href=#380 id=380 data-nosnippet>380</a>        attrs,
+<a href=#381 id=381 data-nosnippet>381</a>        bounding_box,
+<a href=#382 id=382 data-nosnippet>382</a>        visible,
+<a href=#383 id=383 data-nosnippet>383</a>        enabled,
+<a href=#384 id=384 data-nosnippet>384</a>    })
+<a href=#385 id=385 data-nosnippet>385</a>}
+<a href=#386 id=386 data-nosnippet>386</a>
+<a href=#387 id=387 data-nosnippet>387</a><span class="comment">// ---------- browser_find --------------------------------------------------
+<a href=#388 id=388 data-nosnippet>388</a>
+<a href=#389 id=389 data-nosnippet>389</a></span><span class="doccomment">/// Input for `browser_find`.
+<a href=#390 id=390 data-nosnippet>390</a></span><span class="attr">#[derive(Debug, Deserialize, JsonSchema)]
+<a href=#391 id=391 data-nosnippet>391</a>#[serde(deny_unknown_fields)]
+<a href=#392 id=392 data-nosnippet>392</a></span><span class="kw">pub struct </span>FindInput {
+<a href=#393 id=393 data-nosnippet>393</a>    <span class="attr">#[serde(flatten)]
+<a href=#394 id=394 data-nosnippet>394</a>    </span><span class="kw">pub </span>selector: Selector,
+<a href=#395 id=395 data-nosnippet>395</a>}
+<a href=#396 id=396 data-nosnippet>396</a>
+<a href=#397 id=397 data-nosnippet>397</a><span class="doccomment">/// Output of `browser_find`.
+<a href=#398 id=398 data-nosnippet>398</a></span><span class="attr">#[derive(Debug, Serialize, JsonSchema)]
+<a href=#399 id=399 data-nosnippet>399</a></span><span class="kw">pub struct </span>FindOutput {
+<a href=#400 id=400 data-nosnippet>400</a>    <span class="doccomment">/// `true` iff the selector matched within the timeout.
+<a href=#401 id=401 data-nosnippet>401</a>    </span><span class="kw">pub </span>found: bool,
+<a href=#402 id=402 data-nosnippet>402</a>    <span class="doccomment">/// Element projection when `found` is `true`, otherwise `None`.
+<a href=#403 id=403 data-nosnippet>403</a>    </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
+<a href=#404 id=404 data-nosnippet>404</a>    </span><span class="kw">pub </span>element: <span class="prelude-ty">Option</span>&lt;ElementDescriptor&gt;,
+<a href=#405 id=405 data-nosnippet>405</a>}
+<a href=#406 id=406 data-nosnippet>406</a>
+<a href=#407 id=407 data-nosnippet>407</a><span class="doccomment">/// Resolve a Selector to a single element and return its descriptor.
+<a href=#408 id=408 data-nosnippet>408</a>///
+<a href=#409 id=409 data-nosnippet>409</a>/// Distinct from `browser_element_state` in that "not found" is reported
+<a href=#410 id=410 data-nosnippet>410</a>/// as `{ found: false, element: null }` rather than an error — easier for
+<a href=#411 id=411 data-nosnippet>411</a>/// agents that want to branch on existence without try/catch.
+<a href=#412 id=412 data-nosnippet>412</a></span><span class="kw">pub async fn </span>find(
+<a href=#413 id=413 data-nosnippet>413</a>    state: Arc&lt;Mutex&lt;SessionState&gt;&gt;,
+<a href=#414 id=414 data-nosnippet>414</a>    input: FindInput,
+<a href=#415 id=415 data-nosnippet>415</a>) -&gt; <span class="prelude-ty">Result</span>&lt;FindOutput, ErrorData&gt; {
+<a href=#416 id=416 data-nosnippet>416</a>    <span class="kw">let </span>s = state.lock().<span class="kw">await</span>;
+<a href=#417 id=417 data-nosnippet>417</a>    <span class="kw">let </span>tab = current_tab(<span class="kw-2">&amp;</span>s).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#418 id=418 data-nosnippet>418</a>    <span class="kw">match </span>resolve(<span class="kw-2">&amp;</span>tab, <span class="kw-2">&amp;</span>input.selector).<span class="kw">await </span>{
+<a href=#419 id=419 data-nosnippet>419</a>        <span class="prelude-val">Ok</span>(el) =&gt; {
+<a href=#420 id=420 data-nosnippet>420</a>            <span class="kw">let </span>desc = describe(<span class="kw-2">&amp;</span>el).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#421 id=421 data-nosnippet>421</a>            <span class="prelude-val">Ok</span>(FindOutput {
+<a href=#422 id=422 data-nosnippet>422</a>                found: <span class="bool-val">true</span>,
+<a href=#423 id=423 data-nosnippet>423</a>                element: <span class="prelude-val">Some</span>(desc),
+<a href=#424 id=424 data-nosnippet>424</a>            })
+<a href=#425 id=425 data-nosnippet>425</a>        }
+<a href=#426 id=426 data-nosnippet>426</a>        <span class="prelude-val">Err</span>(err) <span class="kw">if </span>is_not_found(<span class="kw-2">&amp;</span>err) =&gt; <span class="prelude-val">Ok</span>(FindOutput {
+<a href=#427 id=427 data-nosnippet>427</a>            found: <span class="bool-val">false</span>,
+<a href=#428 id=428 data-nosnippet>428</a>            element: <span class="prelude-val">None</span>,
+<a href=#429 id=429 data-nosnippet>429</a>        }),
+<a href=#430 id=430 data-nosnippet>430</a>        <span class="prelude-val">Err</span>(err) =&gt; <span class="prelude-val">Err</span>(err),
+<a href=#431 id=431 data-nosnippet>431</a>    }
+<a href=#432 id=432 data-nosnippet>432</a>}
+<a href=#433 id=433 data-nosnippet>433</a>
+<a href=#434 id=434 data-nosnippet>434</a><span class="doccomment">/// `true` when the `ErrorData` was produced by mapping an
+<a href=#435 id=435 data-nosnippet>435</a>/// [`zendriver::ZendriverError::ElementNotFound`]. We rely on the
+<a href=#436 id=436 data-nosnippet>436</a>/// `_meta.suggested_next == "browser_html"` marker that `map_error`
+<a href=#437 id=437 data-nosnippet>437</a>/// attaches to that variant — checking the message would be brittle
+<a href=#438 id=438 data-nosnippet>438</a>/// across translation tweaks.
+<a href=#439 id=439 data-nosnippet>439</a></span><span class="kw">fn </span>is_not_found(err: <span class="kw-2">&amp;</span>ErrorData) -&gt; bool {
+<a href=#440 id=440 data-nosnippet>440</a>    err.data
+<a href=#441 id=441 data-nosnippet>441</a>        .as_ref()
+<a href=#442 id=442 data-nosnippet>442</a>        .and_then(|v| v.get(<span class="string">"suggested_next"</span>))
+<a href=#443 id=443 data-nosnippet>443</a>        .and_then(|v| v.as_str())
+<a href=#444 id=444 data-nosnippet>444</a>        == <span class="prelude-val">Some</span>(<span class="string">"browser_html"</span>)
+<a href=#445 id=445 data-nosnippet>445</a>        &amp;&amp; err.message.contains(<span class="string">"No element matched"</span>)
+<a href=#446 id=446 data-nosnippet>446</a>}
 <a href=#447 id=447 data-nosnippet>447</a>
-<a href=#448 id=448 data-nosnippet>448</a><span class="doccomment">/// Output of `browser_find_all`.
-<a href=#449 id=449 data-nosnippet>449</a></span><span class="attr">#[derive(Debug, Serialize, JsonSchema)]
-<a href=#450 id=450 data-nosnippet>450</a></span><span class="kw">pub struct </span>FindAllOutput {
-<a href=#451 id=451 data-nosnippet>451</a>    <span class="doccomment">/// All matched elements (capped at `limit`).
-<a href=#452 id=452 data-nosnippet>452</a>    </span><span class="kw">pub </span>elements: Vec&lt;ElementDescriptor&gt;,
-<a href=#453 id=453 data-nosnippet>453</a>}
-<a href=#454 id=454 data-nosnippet>454</a>
-<a href=#455 id=455 data-nosnippet>455</a><span class="doccomment">/// Resolve a Selector to ALL matches (up to `limit`).
-<a href=#456 id=456 data-nosnippet>456</a>///
-<a href=#457 id=457 data-nosnippet>457</a>/// "No matches" returns `elements: []` rather than an error — keeps the
-<a href=#458 id=458 data-nosnippet>458</a>/// caller's branching uniform.
-<a href=#459 id=459 data-nosnippet>459</a></span><span class="kw">pub async fn </span>find_all(
-<a href=#460 id=460 data-nosnippet>460</a>    state: Arc&lt;Mutex&lt;SessionState&gt;&gt;,
-<a href=#461 id=461 data-nosnippet>461</a>    input: FindAllInput,
-<a href=#462 id=462 data-nosnippet>462</a>) -&gt; <span class="prelude-ty">Result</span>&lt;FindAllOutput, ErrorData&gt; {
-<a href=#463 id=463 data-nosnippet>463</a>    <span class="kw">let </span>s = state.lock().<span class="kw">await</span>;
-<a href=#464 id=464 data-nosnippet>464</a>    <span class="kw">let </span>tab = current_tab(<span class="kw-2">&amp;</span>s).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#465 id=465 data-nosnippet>465</a>    <span class="kw">let </span>els = resolve_all(<span class="kw-2">&amp;</span>tab, <span class="kw-2">&amp;</span>input.selector, input.limit).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#466 id=466 data-nosnippet>466</a>    <span class="kw">let </span><span class="kw-2">mut </span>out = Vec::with_capacity(els.len());
-<a href=#467 id=467 data-nosnippet>467</a>    <span class="kw">for </span>el <span class="kw">in </span><span class="kw-2">&amp;</span>els {
-<a href=#468 id=468 data-nosnippet>468</a>        out.push(describe(el).<span class="kw">await</span><span class="question-mark">?</span>);
-<a href=#469 id=469 data-nosnippet>469</a>    }
-<a href=#470 id=470 data-nosnippet>470</a>    <span class="prelude-val">Ok</span>(FindAllOutput { elements: out })
-<a href=#471 id=471 data-nosnippet>471</a>}
-<a href=#472 id=472 data-nosnippet>472</a>
-<a href=#473 id=473 data-nosnippet>473</a><span class="attr">#[cfg(test)]
-<a href=#474 id=474 data-nosnippet>474</a></span><span class="kw">mod </span>tests {
-<a href=#475 id=475 data-nosnippet>475</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
-<a href=#476 id=476 data-nosnippet>476</a>
-<a href=#477 id=477 data-nosnippet>477</a>    <span class="kw">fn </span>fresh() -&gt; Arc&lt;Mutex&lt;SessionState&gt;&gt; {
-<a href=#478 id=478 data-nosnippet>478</a>        Arc::new(Mutex::new(SessionState::new()))
-<a href=#479 id=479 data-nosnippet>479</a>    }
-<a href=#480 id=480 data-nosnippet>480</a>
-<a href=#481 id=481 data-nosnippet>481</a>    <span class="kw">fn </span>css_sel(s: <span class="kw-2">&amp;</span>str) -&gt; Selector {
-<a href=#482 id=482 data-nosnippet>482</a>        Selector {
-<a href=#483 id=483 data-nosnippet>483</a>            css: <span class="prelude-val">Some</span>(s.into()),
-<a href=#484 id=484 data-nosnippet>484</a>            xpath: <span class="prelude-val">None</span>,
-<a href=#485 id=485 data-nosnippet>485</a>            text: <span class="prelude-val">None</span>,
-<a href=#486 id=486 data-nosnippet>486</a>            text_exact: <span class="prelude-val">None</span>,
-<a href=#487 id=487 data-nosnippet>487</a>            text_regex: <span class="prelude-val">None</span>,
-<a href=#488 id=488 data-nosnippet>488</a>            role: <span class="prelude-val">None</span>,
-<a href=#489 id=489 data-nosnippet>489</a>            role_name: <span class="prelude-val">None</span>,
-<a href=#490 id=490 data-nosnippet>490</a>            tag: <span class="prelude-val">None</span>,
-<a href=#491 id=491 data-nosnippet>491</a>            attrs: <span class="macro">vec!</span>[],
-<a href=#492 id=492 data-nosnippet>492</a>            nth: <span class="prelude-val">None</span>,
-<a href=#493 id=493 data-nosnippet>493</a>            visible_only: <span class="bool-val">true</span>,
-<a href=#494 id=494 data-nosnippet>494</a>            timeout_ms: <span class="number">5000</span>,
-<a href=#495 id=495 data-nosnippet>495</a>            frame_id: <span class="prelude-val">None</span>,
-<a href=#496 id=496 data-nosnippet>496</a>        }
-<a href=#497 id=497 data-nosnippet>497</a>    }
-<a href=#498 id=498 data-nosnippet>498</a>
-<a href=#499 id=499 data-nosnippet>499</a>    <span class="attr">#[tokio::test]
-<a href=#500 id=500 data-nosnippet>500</a>    </span><span class="kw">async fn </span>find_with_no_browser_suggests_browser_open() {
-<a href=#501 id=501 data-nosnippet>501</a>        <span class="kw">let </span>err = find(
-<a href=#502 id=502 data-nosnippet>502</a>            fresh(),
-<a href=#503 id=503 data-nosnippet>503</a>            FindInput {
-<a href=#504 id=504 data-nosnippet>504</a>                selector: css_sel(<span class="string">"h1"</span>),
-<a href=#505 id=505 data-nosnippet>505</a>            },
-<a href=#506 id=506 data-nosnippet>506</a>        )
-<a href=#507 id=507 data-nosnippet>507</a>        .<span class="kw">await
-<a href=#508 id=508 data-nosnippet>508</a>        </span>.expect_err(<span class="string">"must error without an open browser"</span>);
-<a href=#509 id=509 data-nosnippet>509</a>        <span class="macro">assert!</span>(err.message.contains(<span class="string">"browser_open"</span>), <span class="string">"msg: {}"</span>, err.message);
-<a href=#510 id=510 data-nosnippet>510</a>        <span class="kw">let </span>data = err.data.as_ref().expect(<span class="string">"data populated"</span>);
-<a href=#511 id=511 data-nosnippet>511</a>        <span class="macro">assert_eq!</span>(data[<span class="string">"suggested_next"</span>], <span class="string">"browser_open"</span>);
-<a href=#512 id=512 data-nosnippet>512</a>    }
-<a href=#513 id=513 data-nosnippet>513</a>
-<a href=#514 id=514 data-nosnippet>514</a>    <span class="attr">#[tokio::test]
-<a href=#515 id=515 data-nosnippet>515</a>    </span><span class="kw">async fn </span>find_all_with_no_browser_suggests_browser_open() {
-<a href=#516 id=516 data-nosnippet>516</a>        <span class="kw">let </span>err = find_all(
-<a href=#517 id=517 data-nosnippet>517</a>            fresh(),
-<a href=#518 id=518 data-nosnippet>518</a>            FindAllInput {
-<a href=#519 id=519 data-nosnippet>519</a>                selector: css_sel(<span class="string">"a"</span>),
-<a href=#520 id=520 data-nosnippet>520</a>                limit: <span class="number">10</span>,
-<a href=#521 id=521 data-nosnippet>521</a>            },
-<a href=#522 id=522 data-nosnippet>522</a>        )
-<a href=#523 id=523 data-nosnippet>523</a>        .<span class="kw">await
-<a href=#524 id=524 data-nosnippet>524</a>        </span>.expect_err(<span class="string">"must error without an open browser"</span>);
-<a href=#525 id=525 data-nosnippet>525</a>        <span class="macro">assert!</span>(err.message.contains(<span class="string">"browser_open"</span>));
-<a href=#526 id=526 data-nosnippet>526</a>        <span class="kw">let </span>data = err.data.as_ref().expect(<span class="string">"data populated"</span>);
-<a href=#527 id=527 data-nosnippet>527</a>        <span class="macro">assert_eq!</span>(data[<span class="string">"suggested_next"</span>], <span class="string">"browser_open"</span>);
-<a href=#528 id=528 data-nosnippet>528</a>    }
-<a href=#529 id=529 data-nosnippet>529</a>
-<a href=#530 id=530 data-nosnippet>530</a>    <span class="attr">#[test]
-<a href=#531 id=531 data-nosnippet>531</a>    </span><span class="kw">fn </span>compile_regex_rejects_malformed_pattern() {
-<a href=#532 id=532 data-nosnippet>532</a>        <span class="comment">// `[unclosed` is a parse error in `regex`. The bridge surfaces it
-<a href=#533 id=533 data-nosnippet>533</a>        // as `invalid_params` so an agent can fix the pattern without
-<a href=#534 id=534 data-nosnippet>534</a>        // touching the live browser.
-<a href=#535 id=535 data-nosnippet>535</a>        </span><span class="kw">let </span>err = compile_regex(<span class="string">"[unclosed"</span>).expect_err(<span class="string">"malformed regex must error"</span>);
-<a href=#536 id=536 data-nosnippet>536</a>        <span class="macro">assert!</span>(
-<a href=#537 id=537 data-nosnippet>537</a>            err.message.contains(<span class="string">"Invalid `text_regex`"</span>),
-<a href=#538 id=538 data-nosnippet>538</a>            <span class="string">"msg: {}"</span>,
-<a href=#539 id=539 data-nosnippet>539</a>            err.message
-<a href=#540 id=540 data-nosnippet>540</a>        );
-<a href=#541 id=541 data-nosnippet>541</a>    }
-<a href=#542 id=542 data-nosnippet>542</a>
-<a href=#543 id=543 data-nosnippet>543</a>    <span class="attr">#[test]
-<a href=#544 id=544 data-nosnippet>544</a>    </span><span class="kw">fn </span>compile_regex_accepts_valid_pattern() {
-<a href=#545 id=545 data-nosnippet>545</a>        <span class="kw">let </span>re = compile_regex(<span class="string">r"^hello\s+world$"</span>).expect(<span class="string">"valid regex"</span>);
-<a href=#546 id=546 data-nosnippet>546</a>        <span class="macro">assert!</span>(re.is_match(<span class="string">"hello   world"</span>));
-<a href=#547 id=547 data-nosnippet>547</a>    }
-<a href=#548 id=548 data-nosnippet>548</a>
-<a href=#549 id=549 data-nosnippet>549</a>    <span class="attr">#[test]
-<a href=#550 id=550 data-nosnippet>550</a>    </span><span class="kw">fn </span>parse_role_rejects_unknown_role_with_enum_list() {
-<a href=#551 id=551 data-nosnippet>551</a>        <span class="kw">let </span>err = parse_role(<span class="string">"buttn"</span>).expect_err(<span class="string">"typo must error"</span>);
-<a href=#552 id=552 data-nosnippet>552</a>        <span class="macro">assert!</span>(
-<a href=#553 id=553 data-nosnippet>553</a>            err.message.contains(<span class="string">"Unknown ARIA role `buttn`"</span>),
-<a href=#554 id=554 data-nosnippet>554</a>            <span class="string">"msg: {}"</span>,
-<a href=#555 id=555 data-nosnippet>555</a>            err.message
-<a href=#556 id=556 data-nosnippet>556</a>        );
-<a href=#557 id=557 data-nosnippet>557</a>        <span class="comment">// The error must list valid alternatives so an agent can recover
-<a href=#558 id=558 data-nosnippet>558</a>        // without external docs.
-<a href=#559 id=559 data-nosnippet>559</a>        </span><span class="macro">assert!</span>(err.message.contains(<span class="string">"button"</span>));
-<a href=#560 id=560 data-nosnippet>560</a>        <span class="macro">assert!</span>(err.message.contains(<span class="string">"textbox"</span>));
-<a href=#561 id=561 data-nosnippet>561</a>    }
-<a href=#562 id=562 data-nosnippet>562</a>
-<a href=#563 id=563 data-nosnippet>563</a>    <span class="attr">#[test]
-<a href=#564 id=564 data-nosnippet>564</a>    </span><span class="kw">fn </span>parse_role_covers_every_lib_variant() {
-<a href=#565 id=565 data-nosnippet>565</a>        <span class="comment">// Every variant from `AriaRole` (except `Other`) should be
-<a href=#566 id=566 data-nosnippet>566</a>        // routable. Other is intentionally not exposed over the wire.
-<a href=#567 id=567 data-nosnippet>567</a>        </span><span class="kw">let </span>cases = [
-<a href=#568 id=568 data-nosnippet>568</a>            (<span class="string">"button"</span>, AriaRole::Button),
-<a href=#569 id=569 data-nosnippet>569</a>            (<span class="string">"link"</span>, AriaRole::Link),
-<a href=#570 id=570 data-nosnippet>570</a>            (<span class="string">"textbox"</span>, AriaRole::Textbox),
-<a href=#571 id=571 data-nosnippet>571</a>            (<span class="string">"combobox"</span>, AriaRole::Combobox),
-<a href=#572 id=572 data-nosnippet>572</a>            (<span class="string">"checkbox"</span>, AriaRole::Checkbox),
-<a href=#573 id=573 data-nosnippet>573</a>            (<span class="string">"radio"</span>, AriaRole::Radio),
-<a href=#574 id=574 data-nosnippet>574</a>            (<span class="string">"tab"</span>, AriaRole::Tab),
-<a href=#575 id=575 data-nosnippet>575</a>            (<span class="string">"menu"</span>, AriaRole::Menu),
-<a href=#576 id=576 data-nosnippet>576</a>            (<span class="string">"menuitem"</span>, AriaRole::Menuitem),
-<a href=#577 id=577 data-nosnippet>577</a>            (<span class="string">"dialog"</span>, AriaRole::Dialog),
-<a href=#578 id=578 data-nosnippet>578</a>            (<span class="string">"heading"</span>, AriaRole::Heading),
-<a href=#579 id=579 data-nosnippet>579</a>            (<span class="string">"banner"</span>, AriaRole::Banner),
-<a href=#580 id=580 data-nosnippet>580</a>            (<span class="string">"navigation"</span>, AriaRole::Navigation),
-<a href=#581 id=581 data-nosnippet>581</a>            (<span class="string">"main"</span>, AriaRole::Main),
-<a href=#582 id=582 data-nosnippet>582</a>            (<span class="string">"article"</span>, AriaRole::Article),
-<a href=#583 id=583 data-nosnippet>583</a>            (<span class="string">"list"</span>, AriaRole::List),
-<a href=#584 id=584 data-nosnippet>584</a>            (<span class="string">"listitem"</span>, AriaRole::Listitem),
-<a href=#585 id=585 data-nosnippet>585</a>            (<span class="string">"row"</span>, AriaRole::Row),
-<a href=#586 id=586 data-nosnippet>586</a>            (<span class="string">"cell"</span>, AriaRole::Cell),
-<a href=#587 id=587 data-nosnippet>587</a>            (<span class="string">"columnheader"</span>, AriaRole::Columnheader),
-<a href=#588 id=588 data-nosnippet>588</a>            (<span class="string">"rowheader"</span>, AriaRole::Rowheader),
-<a href=#589 id=589 data-nosnippet>589</a>        ];
-<a href=#590 id=590 data-nosnippet>590</a>        <span class="kw">for </span>(s, expect) <span class="kw">in </span>cases {
-<a href=#591 id=591 data-nosnippet>591</a>            <span class="macro">assert_eq!</span>(parse_role(s).expect(<span class="string">"ok"</span>), expect, <span class="string">"input: {s}"</span>);
-<a href=#592 id=592 data-nosnippet>592</a>        }
-<a href=#593 id=593 data-nosnippet>593</a>    }
-<a href=#594 id=594 data-nosnippet>594</a>}
+<a href=#448 id=448 data-nosnippet>448</a><span class="comment">// ---------- browser_find_all ----------------------------------------------
+<a href=#449 id=449 data-nosnippet>449</a>
+<a href=#450 id=450 data-nosnippet>450</a></span><span class="doccomment">/// Input for `browser_find_all`.
+<a href=#451 id=451 data-nosnippet>451</a></span><span class="attr">#[derive(Debug, Deserialize, JsonSchema)]
+<a href=#452 id=452 data-nosnippet>452</a>#[serde(deny_unknown_fields)]
+<a href=#453 id=453 data-nosnippet>453</a></span><span class="kw">pub struct </span>FindAllInput {
+<a href=#454 id=454 data-nosnippet>454</a>    <span class="attr">#[serde(flatten)]
+<a href=#455 id=455 data-nosnippet>455</a>    </span><span class="kw">pub </span>selector: Selector,
+<a href=#456 id=456 data-nosnippet>456</a>    <span class="doccomment">/// Maximum number of matches to return. Default 50.
+<a href=#457 id=457 data-nosnippet>457</a>    </span><span class="attr">#[serde(default = <span class="string">"default_limit"</span>)]
+<a href=#458 id=458 data-nosnippet>458</a>    </span><span class="kw">pub </span>limit: usize,
+<a href=#459 id=459 data-nosnippet>459</a>}
+<a href=#460 id=460 data-nosnippet>460</a>
+<a href=#461 id=461 data-nosnippet>461</a><span class="kw">const fn </span>default_limit() -&gt; usize {
+<a href=#462 id=462 data-nosnippet>462</a>    <span class="number">50
+<a href=#463 id=463 data-nosnippet>463</a></span>}
+<a href=#464 id=464 data-nosnippet>464</a>
+<a href=#465 id=465 data-nosnippet>465</a><span class="doccomment">/// Output of `browser_find_all`.
+<a href=#466 id=466 data-nosnippet>466</a></span><span class="attr">#[derive(Debug, Serialize, JsonSchema)]
+<a href=#467 id=467 data-nosnippet>467</a></span><span class="kw">pub struct </span>FindAllOutput {
+<a href=#468 id=468 data-nosnippet>468</a>    <span class="doccomment">/// All matched elements (capped at `limit`).
+<a href=#469 id=469 data-nosnippet>469</a>    </span><span class="kw">pub </span>elements: Vec&lt;ElementDescriptor&gt;,
+<a href=#470 id=470 data-nosnippet>470</a>}
+<a href=#471 id=471 data-nosnippet>471</a>
+<a href=#472 id=472 data-nosnippet>472</a><span class="doccomment">/// Resolve a Selector to ALL matches (up to `limit`).
+<a href=#473 id=473 data-nosnippet>473</a>///
+<a href=#474 id=474 data-nosnippet>474</a>/// "No matches" returns `elements: []` rather than an error — keeps the
+<a href=#475 id=475 data-nosnippet>475</a>/// caller's branching uniform.
+<a href=#476 id=476 data-nosnippet>476</a></span><span class="kw">pub async fn </span>find_all(
+<a href=#477 id=477 data-nosnippet>477</a>    state: Arc&lt;Mutex&lt;SessionState&gt;&gt;,
+<a href=#478 id=478 data-nosnippet>478</a>    input: FindAllInput,
+<a href=#479 id=479 data-nosnippet>479</a>) -&gt; <span class="prelude-ty">Result</span>&lt;FindAllOutput, ErrorData&gt; {
+<a href=#480 id=480 data-nosnippet>480</a>    <span class="kw">let </span>s = state.lock().<span class="kw">await</span>;
+<a href=#481 id=481 data-nosnippet>481</a>    <span class="kw">let </span>tab = current_tab(<span class="kw-2">&amp;</span>s).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#482 id=482 data-nosnippet>482</a>    <span class="kw">let </span>els = resolve_all(<span class="kw-2">&amp;</span>tab, <span class="kw-2">&amp;</span>input.selector, input.limit).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#483 id=483 data-nosnippet>483</a>    <span class="kw">let </span><span class="kw-2">mut </span>out = Vec::with_capacity(els.len());
+<a href=#484 id=484 data-nosnippet>484</a>    <span class="kw">for </span>el <span class="kw">in </span><span class="kw-2">&amp;</span>els {
+<a href=#485 id=485 data-nosnippet>485</a>        out.push(describe(el).<span class="kw">await</span><span class="question-mark">?</span>);
+<a href=#486 id=486 data-nosnippet>486</a>    }
+<a href=#487 id=487 data-nosnippet>487</a>    <span class="prelude-val">Ok</span>(FindAllOutput { elements: out })
+<a href=#488 id=488 data-nosnippet>488</a>}
+<a href=#489 id=489 data-nosnippet>489</a>
+<a href=#490 id=490 data-nosnippet>490</a><span class="attr">#[cfg(test)]
+<a href=#491 id=491 data-nosnippet>491</a></span><span class="kw">mod </span>tests {
+<a href=#492 id=492 data-nosnippet>492</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#493 id=493 data-nosnippet>493</a>
+<a href=#494 id=494 data-nosnippet>494</a>    <span class="kw">fn </span>fresh() -&gt; Arc&lt;Mutex&lt;SessionState&gt;&gt; {
+<a href=#495 id=495 data-nosnippet>495</a>        Arc::new(Mutex::new(SessionState::new()))
+<a href=#496 id=496 data-nosnippet>496</a>    }
+<a href=#497 id=497 data-nosnippet>497</a>
+<a href=#498 id=498 data-nosnippet>498</a>    <span class="kw">fn </span>css_sel(s: <span class="kw-2">&amp;</span>str) -&gt; Selector {
+<a href=#499 id=499 data-nosnippet>499</a>        Selector {
+<a href=#500 id=500 data-nosnippet>500</a>            css: <span class="prelude-val">Some</span>(s.into()),
+<a href=#501 id=501 data-nosnippet>501</a>            xpath: <span class="prelude-val">None</span>,
+<a href=#502 id=502 data-nosnippet>502</a>            text: <span class="prelude-val">None</span>,
+<a href=#503 id=503 data-nosnippet>503</a>            text_exact: <span class="prelude-val">None</span>,
+<a href=#504 id=504 data-nosnippet>504</a>            text_regex: <span class="prelude-val">None</span>,
+<a href=#505 id=505 data-nosnippet>505</a>            role: <span class="prelude-val">None</span>,
+<a href=#506 id=506 data-nosnippet>506</a>            role_name: <span class="prelude-val">None</span>,
+<a href=#507 id=507 data-nosnippet>507</a>            tag: <span class="prelude-val">None</span>,
+<a href=#508 id=508 data-nosnippet>508</a>            attrs: <span class="macro">vec!</span>[],
+<a href=#509 id=509 data-nosnippet>509</a>            text_case_insensitive: <span class="bool-val">false</span>,
+<a href=#510 id=510 data-nosnippet>510</a>            nth: <span class="prelude-val">None</span>,
+<a href=#511 id=511 data-nosnippet>511</a>            visible_only: <span class="bool-val">true</span>,
+<a href=#512 id=512 data-nosnippet>512</a>            timeout_ms: <span class="number">5000</span>,
+<a href=#513 id=513 data-nosnippet>513</a>            frame_id: <span class="prelude-val">None</span>,
+<a href=#514 id=514 data-nosnippet>514</a>        }
+<a href=#515 id=515 data-nosnippet>515</a>    }
+<a href=#516 id=516 data-nosnippet>516</a>
+<a href=#517 id=517 data-nosnippet>517</a>    <span class="attr">#[tokio::test]
+<a href=#518 id=518 data-nosnippet>518</a>    </span><span class="kw">async fn </span>find_with_no_browser_suggests_browser_open() {
+<a href=#519 id=519 data-nosnippet>519</a>        <span class="kw">let </span>err = find(
+<a href=#520 id=520 data-nosnippet>520</a>            fresh(),
+<a href=#521 id=521 data-nosnippet>521</a>            FindInput {
+<a href=#522 id=522 data-nosnippet>522</a>                selector: css_sel(<span class="string">"h1"</span>),
+<a href=#523 id=523 data-nosnippet>523</a>            },
+<a href=#524 id=524 data-nosnippet>524</a>        )
+<a href=#525 id=525 data-nosnippet>525</a>        .<span class="kw">await
+<a href=#526 id=526 data-nosnippet>526</a>        </span>.expect_err(<span class="string">"must error without an open browser"</span>);
+<a href=#527 id=527 data-nosnippet>527</a>        <span class="macro">assert!</span>(err.message.contains(<span class="string">"browser_open"</span>), <span class="string">"msg: {}"</span>, err.message);
+<a href=#528 id=528 data-nosnippet>528</a>        <span class="kw">let </span>data = err.data.as_ref().expect(<span class="string">"data populated"</span>);
+<a href=#529 id=529 data-nosnippet>529</a>        <span class="macro">assert_eq!</span>(data[<span class="string">"suggested_next"</span>], <span class="string">"browser_open"</span>);
+<a href=#530 id=530 data-nosnippet>530</a>    }
+<a href=#531 id=531 data-nosnippet>531</a>
+<a href=#532 id=532 data-nosnippet>532</a>    <span class="attr">#[tokio::test]
+<a href=#533 id=533 data-nosnippet>533</a>    </span><span class="kw">async fn </span>find_all_with_no_browser_suggests_browser_open() {
+<a href=#534 id=534 data-nosnippet>534</a>        <span class="kw">let </span>err = find_all(
+<a href=#535 id=535 data-nosnippet>535</a>            fresh(),
+<a href=#536 id=536 data-nosnippet>536</a>            FindAllInput {
+<a href=#537 id=537 data-nosnippet>537</a>                selector: css_sel(<span class="string">"a"</span>),
+<a href=#538 id=538 data-nosnippet>538</a>                limit: <span class="number">10</span>,
+<a href=#539 id=539 data-nosnippet>539</a>            },
+<a href=#540 id=540 data-nosnippet>540</a>        )
+<a href=#541 id=541 data-nosnippet>541</a>        .<span class="kw">await
+<a href=#542 id=542 data-nosnippet>542</a>        </span>.expect_err(<span class="string">"must error without an open browser"</span>);
+<a href=#543 id=543 data-nosnippet>543</a>        <span class="macro">assert!</span>(err.message.contains(<span class="string">"browser_open"</span>));
+<a href=#544 id=544 data-nosnippet>544</a>        <span class="kw">let </span>data = err.data.as_ref().expect(<span class="string">"data populated"</span>);
+<a href=#545 id=545 data-nosnippet>545</a>        <span class="macro">assert_eq!</span>(data[<span class="string">"suggested_next"</span>], <span class="string">"browser_open"</span>);
+<a href=#546 id=546 data-nosnippet>546</a>    }
+<a href=#547 id=547 data-nosnippet>547</a>
+<a href=#548 id=548 data-nosnippet>548</a>    <span class="attr">#[test]
+<a href=#549 id=549 data-nosnippet>549</a>    </span><span class="kw">fn </span>compile_regex_rejects_malformed_pattern() {
+<a href=#550 id=550 data-nosnippet>550</a>        <span class="comment">// `[unclosed` is a parse error in `regex`. The bridge surfaces it
+<a href=#551 id=551 data-nosnippet>551</a>        // as `invalid_params` so an agent can fix the pattern without
+<a href=#552 id=552 data-nosnippet>552</a>        // touching the live browser.
+<a href=#553 id=553 data-nosnippet>553</a>        </span><span class="kw">let </span>err = compile_regex(<span class="string">"[unclosed"</span>).expect_err(<span class="string">"malformed regex must error"</span>);
+<a href=#554 id=554 data-nosnippet>554</a>        <span class="macro">assert!</span>(
+<a href=#555 id=555 data-nosnippet>555</a>            err.message.contains(<span class="string">"Invalid `text_regex`"</span>),
+<a href=#556 id=556 data-nosnippet>556</a>            <span class="string">"msg: {}"</span>,
+<a href=#557 id=557 data-nosnippet>557</a>            err.message
+<a href=#558 id=558 data-nosnippet>558</a>        );
+<a href=#559 id=559 data-nosnippet>559</a>    }
+<a href=#560 id=560 data-nosnippet>560</a>
+<a href=#561 id=561 data-nosnippet>561</a>    <span class="attr">#[test]
+<a href=#562 id=562 data-nosnippet>562</a>    </span><span class="kw">fn </span>compile_regex_accepts_valid_pattern() {
+<a href=#563 id=563 data-nosnippet>563</a>        <span class="kw">let </span>re = compile_regex(<span class="string">r"^hello\s+world$"</span>).expect(<span class="string">"valid regex"</span>);
+<a href=#564 id=564 data-nosnippet>564</a>        <span class="macro">assert!</span>(re.is_match(<span class="string">"hello   world"</span>));
+<a href=#565 id=565 data-nosnippet>565</a>    }
+<a href=#566 id=566 data-nosnippet>566</a>
+<a href=#567 id=567 data-nosnippet>567</a>    <span class="attr">#[test]
+<a href=#568 id=568 data-nosnippet>568</a>    </span><span class="kw">fn </span>parse_role_rejects_unknown_role_with_enum_list() {
+<a href=#569 id=569 data-nosnippet>569</a>        <span class="kw">let </span>err = parse_role(<span class="string">"buttn"</span>).expect_err(<span class="string">"typo must error"</span>);
+<a href=#570 id=570 data-nosnippet>570</a>        <span class="macro">assert!</span>(
+<a href=#571 id=571 data-nosnippet>571</a>            err.message.contains(<span class="string">"Unknown ARIA role `buttn`"</span>),
+<a href=#572 id=572 data-nosnippet>572</a>            <span class="string">"msg: {}"</span>,
+<a href=#573 id=573 data-nosnippet>573</a>            err.message
+<a href=#574 id=574 data-nosnippet>574</a>        );
+<a href=#575 id=575 data-nosnippet>575</a>        <span class="comment">// The error must list valid alternatives so an agent can recover
+<a href=#576 id=576 data-nosnippet>576</a>        // without external docs.
+<a href=#577 id=577 data-nosnippet>577</a>        </span><span class="macro">assert!</span>(err.message.contains(<span class="string">"button"</span>));
+<a href=#578 id=578 data-nosnippet>578</a>        <span class="macro">assert!</span>(err.message.contains(<span class="string">"textbox"</span>));
+<a href=#579 id=579 data-nosnippet>579</a>    }
+<a href=#580 id=580 data-nosnippet>580</a>
+<a href=#581 id=581 data-nosnippet>581</a>    <span class="attr">#[test]
+<a href=#582 id=582 data-nosnippet>582</a>    </span><span class="kw">fn </span>parse_role_covers_every_lib_variant() {
+<a href=#583 id=583 data-nosnippet>583</a>        <span class="comment">// Every variant from `AriaRole` (except `Other`) should be
+<a href=#584 id=584 data-nosnippet>584</a>        // routable. Other is intentionally not exposed over the wire.
+<a href=#585 id=585 data-nosnippet>585</a>        </span><span class="kw">let </span>cases = [
+<a href=#586 id=586 data-nosnippet>586</a>            (<span class="string">"button"</span>, AriaRole::Button),
+<a href=#587 id=587 data-nosnippet>587</a>            (<span class="string">"link"</span>, AriaRole::Link),
+<a href=#588 id=588 data-nosnippet>588</a>            (<span class="string">"textbox"</span>, AriaRole::Textbox),
+<a href=#589 id=589 data-nosnippet>589</a>            (<span class="string">"combobox"</span>, AriaRole::Combobox),
+<a href=#590 id=590 data-nosnippet>590</a>            (<span class="string">"checkbox"</span>, AriaRole::Checkbox),
+<a href=#591 id=591 data-nosnippet>591</a>            (<span class="string">"radio"</span>, AriaRole::Radio),
+<a href=#592 id=592 data-nosnippet>592</a>            (<span class="string">"tab"</span>, AriaRole::Tab),
+<a href=#593 id=593 data-nosnippet>593</a>            (<span class="string">"menu"</span>, AriaRole::Menu),
+<a href=#594 id=594 data-nosnippet>594</a>            (<span class="string">"menuitem"</span>, AriaRole::Menuitem),
+<a href=#595 id=595 data-nosnippet>595</a>            (<span class="string">"dialog"</span>, AriaRole::Dialog),
+<a href=#596 id=596 data-nosnippet>596</a>            (<span class="string">"heading"</span>, AriaRole::Heading),
+<a href=#597 id=597 data-nosnippet>597</a>            (<span class="string">"banner"</span>, AriaRole::Banner),
+<a href=#598 id=598 data-nosnippet>598</a>            (<span class="string">"navigation"</span>, AriaRole::Navigation),
+<a href=#599 id=599 data-nosnippet>599</a>            (<span class="string">"main"</span>, AriaRole::Main),
+<a href=#600 id=600 data-nosnippet>600</a>            (<span class="string">"article"</span>, AriaRole::Article),
+<a href=#601 id=601 data-nosnippet>601</a>            (<span class="string">"list"</span>, AriaRole::List),
+<a href=#602 id=602 data-nosnippet>602</a>            (<span class="string">"listitem"</span>, AriaRole::Listitem),
+<a href=#603 id=603 data-nosnippet>603</a>            (<span class="string">"row"</span>, AriaRole::Row),
+<a href=#604 id=604 data-nosnippet>604</a>            (<span class="string">"cell"</span>, AriaRole::Cell),
+<a href=#605 id=605 data-nosnippet>605</a>            (<span class="string">"columnheader"</span>, AriaRole::Columnheader),
+<a href=#606 id=606 data-nosnippet>606</a>            (<span class="string">"rowheader"</span>, AriaRole::Rowheader),
+<a href=#607 id=607 data-nosnippet>607</a>        ];
+<a href=#608 id=608 data-nosnippet>608</a>        <span class="kw">for </span>(s, expect) <span class="kw">in </span>cases {
+<a href=#609 id=609 data-nosnippet>609</a>            <span class="macro">assert_eq!</span>(parse_role(s).expect(<span class="string">"ok"</span>), expect, <span class="string">"input: {s}"</span>);
+<a href=#610 id=610 data-nosnippet>610</a>        }
+<a href=#611 id=611 data-nosnippet>611</a>    }
+<a href=#612 id=612 data-nosnippet>612</a>}
 </code></pre></div></section></main></body></html>

@@ -267,6 +267,10 @@ visible text").</li>
 — bs4-like combinable <em>predicate</em> finders (<code>tag</code>, <code>attr</code>, <code>attr_contains</code>,
 <code>attr_starts_with</code>, <code>attr_ends_with</code>, <code>has_attr</code>, <code>attr_regex</code>,
 <code>containing_text</code>, <code>text_equals</code>, <code>text_matches</code>), all AND-ed together.
+Every value-bearing matcher has a case-insensitive <code>_i</code> sibling
+(<code>attr_i</code>, <code>attr_contains_i</code>, <code>attr_starts_with_i</code>, <code>attr_ends_with_i</code>,
+<code>containing_text_i</code>, <code>text_equals_i</code>) — e.g.
+<code>.attr_i("class", "primary")</code> matches <code>class="Primary"</code> too.
 Predicate methods can't be mixed with the single-selector methods above on
 one query (doing so errors with <code>ConflictingSelectors</code>).</li>
 <li><code>.nth(2)</code> — pick the 2nd match.</li>
