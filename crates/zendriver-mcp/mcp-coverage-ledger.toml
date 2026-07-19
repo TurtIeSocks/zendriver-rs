@@ -110,6 +110,10 @@ api = "zendriver::query::FindBuilder::tag"
 covered = "browser_find (Selector.tag)"
 
 [[entry]]
+api = "zendriver::query::FindAllBuilder"
+covered = "browser_find_all"
+
+[[entry]]
 api = "zendriver::query::FindAllBuilder::attr"
 covered = "browser_find_all (Selector.attrs with op=exact)"
 
@@ -132,6 +136,55 @@ covered = "browser_find_all (Selector.attrs with op=regex)"
 [[entry]]
 api = "zendriver::query::FindAllBuilder::has_attr"
 covered = "browser_find_all (Selector.attrs with op=present)"
+
+# ── Phase 3 item 1: case-insensitive predicate matchers ─────────────────────
+[[entry]]
+api = "zendriver::query::FindBuilder::attr_i"
+covered = "browser_find (Selector.attrs with op=exact, case_insensitive=true)"
+
+[[entry]]
+api = "zendriver::query::FindBuilder::attr_contains_i"
+covered = "browser_find (Selector.attrs with op=contains, case_insensitive=true)"
+
+[[entry]]
+api = "zendriver::query::FindBuilder::attr_starts_with_i"
+covered = "browser_find (Selector.attrs with op=starts_with, case_insensitive=true)"
+
+[[entry]]
+api = "zendriver::query::FindBuilder::attr_ends_with_i"
+covered = "browser_find (Selector.attrs with op=ends_with, case_insensitive=true)"
+
+[[entry]]
+api = "zendriver::query::FindBuilder::containing_text_i"
+covered = "browser_find (Selector.text with text_case_insensitive=true)"
+
+[[entry]]
+api = "zendriver::query::FindBuilder::text_equals_i"
+covered = "browser_find (Selector.text_exact with text_case_insensitive=true)"
+
+[[entry]]
+api = "zendriver::query::FindAllBuilder::attr_i"
+covered = "browser_find_all (Selector.attrs with op=exact, case_insensitive=true)"
+
+[[entry]]
+api = "zendriver::query::FindAllBuilder::attr_contains_i"
+covered = "browser_find_all (Selector.attrs with op=contains, case_insensitive=true)"
+
+[[entry]]
+api = "zendriver::query::FindAllBuilder::attr_starts_with_i"
+covered = "browser_find_all (Selector.attrs with op=starts_with, case_insensitive=true)"
+
+[[entry]]
+api = "zendriver::query::FindAllBuilder::attr_ends_with_i"
+covered = "browser_find_all (Selector.attrs with op=ends_with, case_insensitive=true)"
+
+[[entry]]
+api = "zendriver::query::FindAllBuilder::containing_text_i"
+covered = "browser_find_all (Selector.text with text_case_insensitive=true)"
+
+[[entry]]
+api = "zendriver::query::FindAllBuilder::text_equals_i"
+covered = "browser_find_all (Selector.text_exact with text_case_insensitive=true)"
 
 [[entry]]
 api = "zendriver::query::FindAllBuilder::tag"

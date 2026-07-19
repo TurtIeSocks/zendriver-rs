@@ -96,8 +96,16 @@ feature):
 | Fingerprint (gated)    | `browser_fingerprint_generate`                                                                                             |     1 |
 
 All find / action tools share a `Selector` arg — one-of `css | xpath |
-text | text_exact | text_regex | role`, with modifiers `nth /
-visible_only / timeout_ms / frame_id`. State-changing tools accept
+text | text_exact | text_regex | role`, or bs4-like predicate mode (`tag`
++ `attrs: [{ name, op, value, case_insensitive }]`, with `op` one of
+`eq | contains | starts_with | ends_with | has | regex`), plus modifiers
+`nth / visible_only / timeout_ms / frame_id`. In predicate mode, `text` /
+`text_exact` double as `containing_text` / `text_equals` post-filters;
+`text_case_insensitive: bool` makes either comparison case-insensitive.
+`AttrPredicate.case_insensitive` does the same for `eq | contains |
+starts_with | ends_with` (rejected for `has`/`regex`, which have no value
+to fold case on / are already case-insensitive via an inline `(?i)`
+pattern flag). State-changing tools accept
 `return_snapshot: bool` for one-call action + observe. `browser_pdf` /
 `_save_mhtml` / `_download` return a binary-output shape (`{ byte_len,
 saved_path? , base64? }`): bytes go to `save_path` on the MCP host when

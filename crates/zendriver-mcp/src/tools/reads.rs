@@ -336,6 +336,7 @@ mod tests {
             role_name: None,
             tag: None,
             attrs: vec![],
+            text_case_insensitive: false,
             nth: None,
             visible_only: true,
             timeout_ms: 5000,

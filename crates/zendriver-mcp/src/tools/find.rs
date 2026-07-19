@@ -124,8 +124,10 @@ pub async fn resolve_all(
 ///   — exactly one is applied.
 /// - **predicate** (`tag` and/or `attrs`, plus optional `text*` post-filters,
 ///   all AND-ed) — applies `.tag()`, the `.attr*()` / `.has_attr()` /
-///   `.attr_regex()` family, and `.containing_text()` / `.text_equals()` /
-///   `.text_matches()`.
+///   `.attr_regex()` family (or their `_i` case-insensitive siblings when
+///   `AttrPredicate.case_insensitive` is set), and `.containing_text()` /
+///   `.text_equals()` / `.text_matches()` (or `.containing_text_i()` /
+///   `.text_equals_i()` when `Selector.text_case_insensitive` is set).
 macro_rules! apply_selector_to {
     ($builder:expr, $sel:expr) => {{
         let mut builder = $builder;
@@ -140,20 +142,35 @@ macro_rules! apply_selector_to {
             for ap in &sel.attrs {
                 let name = ap.name.as_str();
                 let value = ap.value.as_deref().unwrap_or(""); // Has has no value
-                builder = match ap.op {
-                    AttrOp::Eq => builder.attr(name, value),
-                    AttrOp::Contains => builder.attr_contains(name, value),
-                    AttrOp::StartsWith => builder.attr_starts_with(name, value),
-                    AttrOp::EndsWith => builder.attr_ends_with(name, value),
-                    AttrOp::Has => builder.has_attr(name),
-                    AttrOp::Regex => builder.attr_regex(name, value),
+                // `Selector::validate()` already rejects
+                // `case_insensitive: true` paired with `Has`/`Regex` (no
+                // effect either way), so those two arms ignore the flag.
+                builder = match (&ap.op, ap.case_insensitive) {
+                    (AttrOp::Eq, false) => builder.attr(name, value),
+                    (AttrOp::Eq, true) => builder.attr_i(name, value),
+                    (AttrOp::Contains, false) => builder.attr_contains(name, value),
+                    (AttrOp::Contains, true) => builder.attr_contains_i(name, value),
+                    (AttrOp::StartsWith, false) => builder.attr_starts_with(name, value),
+                    (AttrOp::StartsWith, true) => builder.attr_starts_with_i(name, value),
+                    (AttrOp::EndsWith, false) => builder.attr_ends_with(name, value),
+                    (AttrOp::EndsWith, true) => builder.attr_ends_with_i(name, value),
+                    (AttrOp::Has, _) => builder.has_attr(name),
+                    (AttrOp::Regex, _) => builder.attr_regex(name, value),
                 };
             }
             if let Some(t) = sel.text.as_deref() {
-                builder = builder.containing_text(t);
+                builder = if sel.text_case_insensitive {
+                    builder.containing_text_i(t)
+                } else {
+                    builder.containing_text(t)
+                };
             }
             if let Some(t) = sel.text_exact.as_deref() {
-                builder = builder.text_equals(t);
+                builder = if sel.text_case_insensitive {
+                    builder.text_equals_i(t)
+                } else {
+                    builder.text_equals(t)
+                };
             }
             if let Some(pat) = sel.text_regex.as_deref() {
                 builder = builder.text_matches(pat);
@@ -489,6 +506,7 @@ mod tests {
             role_name: None,
             tag: None,
             attrs: vec![],
+            text_case_insensitive: false,
             nth: None,
             visible_only: true,
             timeout_ms: 5000,
