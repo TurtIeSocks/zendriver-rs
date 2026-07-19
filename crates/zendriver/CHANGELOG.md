@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-07-19
+
+### Fixed
+
+- Content-key the farble PRNG; fix canvas fingerprint tests
+
+
 ## [0.3.4] - 2026-07-19
 
 ### Added
