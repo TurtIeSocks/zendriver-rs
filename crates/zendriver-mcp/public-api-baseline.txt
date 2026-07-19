@@ -3453,11 +3453,16 @@ pub struct zendriver::query::FindAllBuilder<'scope>
 impl<'scope> zendriver::query::FindAllBuilder<'scope>
 pub fn zendriver::query::FindAllBuilder<'scope>::attr(self, &str, &str) -> Self
 pub fn zendriver::query::FindAllBuilder<'scope>::attr_contains(self, &str, &str) -> Self
+pub fn zendriver::query::FindAllBuilder<'scope>::attr_contains_i(self, &str, &str) -> Self
 pub fn zendriver::query::FindAllBuilder<'scope>::attr_ends_with(self, &str, &str) -> Self
+pub fn zendriver::query::FindAllBuilder<'scope>::attr_ends_with_i(self, &str, &str) -> Self
+pub fn zendriver::query::FindAllBuilder<'scope>::attr_i(self, &str, &str) -> Self
 pub fn zendriver::query::FindAllBuilder<'scope>::attr_regex(self, &str, &str) -> Self
 pub fn zendriver::query::FindAllBuilder<'scope>::attr_starts_with(self, &str, &str) -> Self
+pub fn zendriver::query::FindAllBuilder<'scope>::attr_starts_with_i(self, &str, &str) -> Self
 pub fn zendriver::query::FindAllBuilder<'scope>::best_match(self) -> Self
 pub fn zendriver::query::FindAllBuilder<'scope>::containing_text(self, &str) -> Self
+pub fn zendriver::query::FindAllBuilder<'scope>::containing_text_i(self, &str) -> Self
 pub fn zendriver::query::FindAllBuilder<'scope>::css(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::query::FindAllBuilder<'scope>::has_attr(self, &str) -> Self
 pub fn zendriver::query::FindAllBuilder<'scope>::in_frame<'a>(self, &'a zendriver::frame::Frame) -> zendriver::query::FindAllBuilder<'a> where 'scope: 'a
@@ -3469,6 +3474,7 @@ pub fn zendriver::query::FindAllBuilder<'scope>::role_named(self, zendriver::que
 pub fn zendriver::query::FindAllBuilder<'scope>::tag(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::query::FindAllBuilder<'scope>::text(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::query::FindAllBuilder<'scope>::text_equals(self, &str) -> Self
+pub fn zendriver::query::FindAllBuilder<'scope>::text_equals_i(self, &str) -> Self
 pub fn zendriver::query::FindAllBuilder<'scope>::text_exact(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::query::FindAllBuilder<'scope>::text_matches(self, &str) -> Self
 pub fn zendriver::query::FindAllBuilder<'scope>::text_regex(self, regex::regex::string::Regex) -> Self
@@ -3514,11 +3520,16 @@ pub struct zendriver::query::FindBuilder<'scope>
 impl<'scope> zendriver::query::FindBuilder<'scope>
 pub fn zendriver::query::FindBuilder<'scope>::attr(self, &str, &str) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::attr_contains(self, &str, &str) -> Self
+pub fn zendriver::query::FindBuilder<'scope>::attr_contains_i(self, &str, &str) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::attr_ends_with(self, &str, &str) -> Self
+pub fn zendriver::query::FindBuilder<'scope>::attr_ends_with_i(self, &str, &str) -> Self
+pub fn zendriver::query::FindBuilder<'scope>::attr_i(self, &str, &str) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::attr_regex(self, &str, &str) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::attr_starts_with(self, &str, &str) -> Self
+pub fn zendriver::query::FindBuilder<'scope>::attr_starts_with_i(self, &str, &str) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::best_match(self) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::containing_text(self, &str) -> Self
+pub fn zendriver::query::FindBuilder<'scope>::containing_text_i(self, &str) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::css(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::has_attr(self, &str) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::in_frame<'a>(self, &'a zendriver::frame::Frame) -> zendriver::query::FindBuilder<'a> where 'scope: 'a
@@ -3531,6 +3542,7 @@ pub fn zendriver::query::FindBuilder<'scope>::role_named(self, zendriver::query:
 pub fn zendriver::query::FindBuilder<'scope>::tag(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::text(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::text_equals(self, &str) -> Self
+pub fn zendriver::query::FindBuilder<'scope>::text_equals_i(self, &str) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::text_exact(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::text_matches(self, &str) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::text_regex(self, regex::regex::string::Regex) -> Self
@@ -6693,11 +6705,16 @@ pub struct zendriver::FindBuilder<'scope>
 impl<'scope> zendriver::query::FindBuilder<'scope>
 pub fn zendriver::query::FindBuilder<'scope>::attr(self, &str, &str) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::attr_contains(self, &str, &str) -> Self
+pub fn zendriver::query::FindBuilder<'scope>::attr_contains_i(self, &str, &str) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::attr_ends_with(self, &str, &str) -> Self
+pub fn zendriver::query::FindBuilder<'scope>::attr_ends_with_i(self, &str, &str) -> Self
+pub fn zendriver::query::FindBuilder<'scope>::attr_i(self, &str, &str) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::attr_regex(self, &str, &str) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::attr_starts_with(self, &str, &str) -> Self
+pub fn zendriver::query::FindBuilder<'scope>::attr_starts_with_i(self, &str, &str) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::best_match(self) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::containing_text(self, &str) -> Self
+pub fn zendriver::query::FindBuilder<'scope>::containing_text_i(self, &str) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::css(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::has_attr(self, &str) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::in_frame<'a>(self, &'a zendriver::frame::Frame) -> zendriver::query::FindBuilder<'a> where 'scope: 'a
@@ -6710,6 +6727,7 @@ pub fn zendriver::query::FindBuilder<'scope>::role_named(self, zendriver::query:
 pub fn zendriver::query::FindBuilder<'scope>::tag(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::text(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::text_equals(self, &str) -> Self
+pub fn zendriver::query::FindBuilder<'scope>::text_equals_i(self, &str) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::text_exact(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::text_matches(self, &str) -> Self
 pub fn zendriver::query::FindBuilder<'scope>::text_regex(self, regex::regex::string::Regex) -> Self

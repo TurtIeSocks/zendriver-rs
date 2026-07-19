@@ -50,6 +50,10 @@ properties:
   text:
     description: "Text to type, character-by-character with realistic timing."
     type: string
+  text_case_insensitive:
+    description: "Compare the predicate-mode text post-filter case-insensitively\n(`text` → `containing_text_i`, `text_exact` → `text_equals_i`).\nPredicate mode only; ignored in single-selector mode, where `text`\nis already a case-insensitive substring match and `text_exact` has\nno case-insensitive single-selector form."
+    type: boolean
+    default: false
   text_exact:
     type:
       - string
@@ -99,6 +103,10 @@ $defs:
     description: "One attribute predicate in a predicate-mode [`Selector`].\n\nCombine multiple predicates via `attrs: [...]`; they are AND-ed.\n`value` is required for every `op` except [`AttrOp::Has`]."
     type: object
     properties:
+      case_insensitive:
+        description: "Compare case-insensitively (CSS `[name=value i]`). Valid only for\n`eq`/`contains`/`starts_with`/`ends_with` — `has` has no value to\ncompare and `regex` is already case-insensitive via an inline\n`(?i)` pattern flag, so setting this with either is a validation\nerror."
+        type: boolean
+        default: false
       name:
         description: "Attribute name (e.g. `\"data-role\"`, `\"class\"`, `\"href\"`)."
         type: string

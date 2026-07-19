@@ -41,6 +41,13 @@ pub struct AttrPredicate {
     /// Comparison value. Required for all operators except `has`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
+    /// Compare case-insensitively (CSS `[name=value i]`). Valid only for
+    /// `eq`/`contains`/`starts_with`/`ends_with` — `has` has no value to
+    /// compare and `regex` is already case-insensitive via an inline
+    /// `(?i)` pattern flag, so setting this with either is a validation
+    /// error.
+    #[serde(default)]
+    pub case_insensitive: bool,
 }
 
 /// Selector arg struct on every find / action tool.
@@ -81,6 +88,13 @@ pub struct Selector {
     /// Attribute predicates (AND-ed). Predicate mode only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attrs: Vec<AttrPredicate>,
+    /// Compare the predicate-mode text post-filter case-insensitively
+    /// (`text` → `containing_text_i`, `text_exact` → `text_equals_i`).
+    /// Predicate mode only; ignored in single-selector mode, where `text`
+    /// is already a case-insensitive substring match and `text_exact` has
+    /// no case-insensitive single-selector form.
+    #[serde(default)]
+    pub text_case_insensitive: bool,
     // --- modifiers ---
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nth: Option<usize>,
@@ -120,6 +134,14 @@ pub enum SelectorError {
     /// without one.
     #[error("attribute predicate `{name}` with op `{op:?}` requires a `value` field")]
     AttrValueRequired { name: String, op: AttrOp },
+    /// An [`AttrPredicate`] set `case_insensitive` on an operator where it
+    /// has no effect.
+    #[error(
+        "attribute predicate `{name}` with op `{op:?}` does not support `case_insensitive` \
+         (`has` has no value to compare; `regex` is already case-insensitive via an inline \
+         `(?i)` pattern flag)"
+    )]
+    CaseInsensitiveNotApplicable { name: String, op: AttrOp },
 }
 
 impl Selector {
@@ -170,6 +192,12 @@ impl Selector {
                         op: ap.op.clone(),
                     });
                 }
+                if ap.case_insensitive && matches!(ap.op, AttrOp::Has | AttrOp::Regex) {
+                    return Err(SelectorError::CaseInsensitiveNotApplicable {
+                        name: ap.name.clone(),
+                        op: ap.op.clone(),
+                    });
+                }
             }
         } else {
             // Single-selector mode: exactly one of css/xpath/text*/role required.
@@ -207,6 +235,7 @@ mod tests {
             role_name: None,
             tag: None,
             attrs: vec![],
+            text_case_insensitive: false,
             nth: None,
             visible_only: true,
             timeout_ms: 5000,
@@ -283,6 +312,7 @@ mod tests {
             name: "data-id".into(),
             op: AttrOp::Eq,
             value: None,
+            case_insensitive: false,
         }];
         assert!(matches!(
             s.validate(),
@@ -297,7 +327,61 @@ mod tests {
             name: "data-ready".into(),
             op: AttrOp::Has,
             value: None,
+            case_insensitive: false,
         }];
+        assert!(s.validate().is_ok());
+    }
+
+    // --- case-insensitive predicate matchers (Phase 3, item 1) ------------
+
+    #[test]
+    fn validate_accepts_case_insensitive_eq() {
+        let mut s = base();
+        s.attrs = vec![AttrPredicate {
+            name: "class".into(),
+            op: AttrOp::Eq,
+            value: Some("Primary".into()),
+            case_insensitive: true,
+        }];
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_case_insensitive_has() {
+        let mut s = base();
+        s.attrs = vec![AttrPredicate {
+            name: "data-ready".into(),
+            op: AttrOp::Has,
+            value: None,
+            case_insensitive: true,
+        }];
+        assert!(matches!(
+            s.validate(),
+            Err(SelectorError::CaseInsensitiveNotApplicable { .. })
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_case_insensitive_regex() {
+        let mut s = base();
+        s.attrs = vec![AttrPredicate {
+            name: "href".into(),
+            op: AttrOp::Regex,
+            value: Some(r"^\d+$".into()),
+            case_insensitive: true,
+        }];
+        assert!(matches!(
+            s.validate(),
+            Err(SelectorError::CaseInsensitiveNotApplicable { .. })
+        ));
+    }
+
+    #[test]
+    fn validate_accepts_text_case_insensitive_in_predicate_mode() {
+        let mut s = base();
+        s.tag = Some("span".into());
+        s.text = Some("hello".into());
+        s.text_case_insensitive = true;
         assert!(s.validate().is_ok());
     }
 }
