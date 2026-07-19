@@ -292,39 +292,17 @@ jobs:
   #    `expect_dialog_resolves_on_alert` (`integration_phase5.rs:215,221`)
   #    and `zendriver-mcp`'s `end_to_end_dialog_accept`. Tracked in backlog
   #    §3; re-include once the dialog-routing override ships.
-  #  - `random_canvas_differs_across_reads`
-  #    (`fingerprint_integration.rs:87`): investigated 2026-07-19. Root cause
-  #    is NOT the two hypotheses this test's own comments assume (transparent-
-  #    canvas fixture artifact / per-read reseed). Empirically (real Chrome):
-  #    (1) none of the three canvas tests set `.stealth(StealthProfile::
-  #    spoofed())`, so under the default `ProfileKind::Native` ("...No JS
-  #    bootstrap") the canvas farble patch is never injected at all —
-  #    `.surface(Surface::Canvas, Strategy::Random)` configures a strategy
-  #    nothing consumes; (2) the tests read via `Tab::evaluate()`, which runs
-  #    in zendriver's isolated world (`Page.createIsolatedWorld`,
-  #    `"zendriver-eval"`) — the bootstrap patches `CanvasRenderingContext2D`/
-  #    `HTMLCanvasElement` prototypes in the MAIN world only, and Chromium
-  #    gives isolated worlds their own copy of DOM interface prototypes, so a
-  #    main-world patch is invisible there; must read via `evaluate_main()`.
-  #    Fixing both moves the needle but does NOT make the test reliably
-  #    green: a genuine RACE CONDITION surfaced underneath — the first 1-3
-  #    `evaluate_main()` calls issued right after `Tab::wait_for_load()` on a
-  #    freshly-navigated page consistently observe the UNPATCHED native
-  #    canvas API, because the stealth bootstrap script
-  #    (`Page.addScriptToEvaluateOnNewDocument`) has not finished installing
-  #    its monkey-patches by the time `wait_for_load()` resolves (reproduced
-  #    across independent runs: pristine/pristine/farbled and
-  #    pristine/farbled/farbled patterns for three sequential calls). On top
-  #    of that, once the patch IS confirmed active, `canvas.js`'s farble()
-  #    draws from ONE continuously-advancing PRNG shared by the whole page
-  #    (not content-hash-keyed), so two reads of IDENTICAL content get
-  #    DIFFERENT noise even under `Strategy::Seeded` — apparently
-  #    contradicting `seeded_canvas_is_stable_across_reads`'s own doc comment
-  #    ("the farble is deterministic per-seed, so the same pixel data
-  #    produces the same noise each time"). Whether the intended design is
-  #    content-keyed stable noise (an implementation bug) or advance-every-
-  #    call (a stale test assumption) is an open design question, not a quick
-  #    fix. Excluded pending that investigation — tracked in backlog §3.
+  #  - `random_canvas_differs_across_reads` was investigated 2026-07-19 and
+  #    excluded pending that investigation (see backlog §3 at the time). Fixed
+  #    2026-07-19 (four stacked defects: missing `.stealth(StealthProfile::
+  #    spoofed())`, isolated- vs main-world reads, an install-race closed at
+  #    the test level via poll-until-active, and a page-wide-advancing farble
+  #    PRNG made content-keyed — see backlog §-closed "Random canvas strategy"
+  #    for the full writeup). The test is renamed
+  #    `random_canvas_stable_within_page` (chosen semantics: `Strategy::Random`
+  #    is stable across repeat reads within one page load, since the PRNG seed
+  #    — random per page load — is now keyed together with the read content)
+  #    and no longer excluded here.
   nightly-ignored-tests:
     if: github.event_name == 'schedule' && github.event.schedule == '0 9 * * *'
     runs-on: ubuntu-latest
@@ -349,5 +327,5 @@ jobs:
             sudo apt-get install -y chromium-browser
             chromium-browser --version
           fi
-      - run: cargo nextest run --workspace --features integration-tests --run-ignored ignored-only --locked --profile ci-integration -E 'not (binary(stealth_phase2) or binary(cloudflare_phase5) or binary(imperva_v0) or binary(integration_cloudflare) or binary(integration_imperva) or test(end_to_end_install_chrome_to_tempdir) or test(end_to_end_cookies_storage_lifecycle) or test(expect_dialog_resolves_on_alert) or test(end_to_end_dialog_accept) or test(random_canvas_differs_across_reads))'
+      - run: cargo nextest run --workspace --features integration-tests --run-ignored ignored-only --locked --profile ci-integration -E 'not (binary(stealth_phase2) or binary(cloudflare_phase5) or binary(imperva_v0) or binary(integration_cloudflare) or binary(integration_imperva) or test(end_to_end_install_chrome_to_tempdir) or test(end_to_end_cookies_storage_lifecycle) or test(expect_dialog_resolves_on_alert) or test(end_to_end_dialog_accept))'
 
