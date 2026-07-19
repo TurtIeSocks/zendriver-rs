@@ -5,6 +5,17 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-07-19
+
+### Added
+
+- Add opt-in WebgpuSpec adapter override + fabrication
+
+### Fixed
+
+- Make WebGPU fabricate handle entirely-absent navigator.gpu
+
+
 ## [0.3.5] - 2026-07-19
 
 ### Fixed
