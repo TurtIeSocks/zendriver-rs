@@ -16,6 +16,17 @@ pub enum Surface {
 }
 
 /// How a resolved persona is applied to a surface in the page.
+///
+/// `Seeded` and `Random` (the two noise-surface strategies) both key their
+/// farble PRNG by `(seed, content)`, reset fresh on every read — so BOTH are
+/// stable across repeat reads of identical content within a page. They only
+/// differ in where the seed comes from:
+/// - `Seeded` — the persona's fixed seed ([`crate::Seed`]); reproducible
+///   across separate runs/page-loads with the same persona.
+/// - `Random` — a fresh `Math.random()` draw made once per page load; stable
+///   for repeat reads *within* that page load, but differs across separate
+///   page loads (a new browser launch, or a fresh navigation that re-runs the
+///   bootstrap, draws a new random seed).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Strategy {
     Native,

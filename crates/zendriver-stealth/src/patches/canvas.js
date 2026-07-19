@@ -1,8 +1,13 @@
 (function (seed) {
-  const rng = __zdRng(seed);
   function farble(data) {
+    // Reset the PRNG per call, keyed by (seed, content) — NOT one stream
+    // shared/advanced across the whole page. `getImageData`/`toDataURL`
+    // both farble a snapshot of the identical native pixel data on repeat
+    // reads (see call sites below), so keying by content makes the noise
+    // stable across reads: same seed + same content => same noise.
+    const rng = __zdKeyedRng(seed, data);
     for (let i = 0; i < data.length; i += 4) {
-      // +/-1 LSB perturbation on RGB, deterministic per seed.
+      // +/-1 LSB perturbation on RGB, deterministic per (seed, content).
       data[i]     = Math.max(0, Math.min(255, data[i]     + (rng() < 0.5 ? -1 : 1)));
       data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + (rng() < 0.5 ? -1 : 1)));
       data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + (rng() < 0.5 ? -1 : 1)));

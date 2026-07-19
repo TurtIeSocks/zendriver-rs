@@ -33,10 +33,15 @@ You can mix any persona source with any per-surface strategy independently.
 | Strategy | Effect |
 |----------|--------|
 | `Native` | No patch — raw browser output. |
-| `Seeded` | Deterministic per-seed noise; same seed → same output every run. |
-| `Random` | Fresh random noise on every call; maximally unpredictable. |
+| `Seeded` | Deterministic per-`(seed, content)` noise: the persona's fixed seed → reproducible across separate runs, and stable across repeat reads of identical content within a page. |
+| `Random` | Same content-keyed noise as `Seeded`, but the seed itself is a fresh `Math.random()` draw made once per page load — so repeat reads within one page load are stable, while separate page loads (a new navigation or browser launch) get independent noise. |
 | `Block` | Empty / zero output (appropriate for policy surfaces). |
 | `Value` | Substitute a specific value from the `Persona` spec. |
+
+Both noise strategies key their PRNG by the surface's own content (pixel
+bytes, audio samples, rect geometry) on every read, not one stream that
+advances across the whole page — so neither strategy "reseeds on every call"
+in a way that makes repeat reads of the same content diverge.
 
 Noise surfaces (Canvas, Audio, ClientRects) accept `Native`, `Seeded`,
 `Random`, `Block`. Value surfaces (Webgl, Fonts, Hardware) accept `Native`,
@@ -179,7 +184,7 @@ use zendriver::{Browser, Persona, Seed, Strategy, Surface};
 let browser = Browser::builder()
     .persona(Persona::builder().seed(Seed::from_u64(42)).build())
     .surface(Surface::Webrtc, Strategy::Native)  // allow real IP
-    .surface(Surface::Canvas, Strategy::Random)  // max entropy
+    .surface(Surface::Canvas, Strategy::Random)  // fresh per-page-load seed
     .launch().await?;
 ```
 
