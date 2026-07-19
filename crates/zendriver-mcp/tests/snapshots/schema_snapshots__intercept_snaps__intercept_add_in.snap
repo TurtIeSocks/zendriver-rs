@@ -75,7 +75,7 @@ $defs:
           - kind
           - status
           - body
-      - description: "Continue the request with extra / replaced headers. Other fields\n(URL, method, post-data) are left at Chrome's originals."
+      - description: "Continue the request with extra / replaced headers and/or a replaced\nURL / method / body. Any field left `None` keeps Chrome's original."
         type: object
         properties:
           headers:
@@ -87,6 +87,24 @@ $defs:
           kind:
             type: string
             const: modify_request
+          method:
+            description: "Replace the HTTP method (e.g. `\"POST\"`). Omit to keep the\noriginal."
+            type:
+              - string
+              - "null"
+            default: ~
+          post_data:
+            description: "Replace the request body, as UTF-8 text. Omit to keep the\noriginal. The core [`RequestOverrides::post_data`] field is\n`Vec<u8>`; this is encoded via `String::into_bytes`, so it can't\ncarry a non-UTF-8 body — use the manual stream API for that."
+            type:
+              - string
+              - "null"
+            default: ~
+          url:
+            description: Replace the request URL. Omit to keep the original.
+            type:
+              - string
+              - "null"
+            default: ~
         additionalProperties: false
         required:
           - kind
