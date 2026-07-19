@@ -236,6 +236,57 @@ async fn text_regex_resolves_to_innermost_leaf_not_ancestor() {
     browser.close().await.unwrap();
 }
 
+/// Case-insensitive predicate matchers (Phase 3, item 1): `.attr_i()` matches
+/// an attribute value regardless of case (CSS `[name="value" i]`), and
+/// `.containing_text_i()` matches element text regardless of case (JS
+/// post-filter lowercasing both sides). Fixture: `<div class="Primary">` +
+/// `<span>HELLO</span>`.
+#[tokio::test]
+#[serial]
+#[ignore]
+async fn predicate_finds_with_case_insensitive_attr_and_text() {
+    let mock = fixture_with_html(
+        r#"<!doctype html><html><body>
+          <div class="Primary">box</div>
+          <span>HELLO</span>
+        </body></html>"#,
+    )
+    .await;
+    let browser = Browser::builder().headless(true).launch().await.unwrap();
+    let tab = browser.main_tab();
+    tab.goto(&mock.uri()).await.unwrap();
+    tab.wait_for_load().await.unwrap();
+
+    let div = tab
+        .find()
+        .tag("div")
+        .attr_i("class", "primary")
+        .one()
+        .await
+        .expect("attr_i(\"class\", \"primary\") must match class=\"Primary\" case-insensitively");
+    assert_eq!(div.inner_text().await.unwrap(), "box");
+
+    // `.tag("span")` narrows the CSS candidate set so the JS text
+    // post-filter doesn't also match ancestors (`<html>`/`<body>`) whose
+    // `innerText` includes the span's text — the same document-order
+    // ambiguity `text_regex_resolves_to_innermost_leaf_not_ancestor` above
+    // guards against.
+    let span = tab
+        .find()
+        .tag("span")
+        .containing_text_i("hello")
+        .one()
+        .await
+        .expect("containing_text_i(\"hello\") must match text \"HELLO\" case-insensitively");
+    let tag = span
+        .evaluate::<String>("el.tagName.toLowerCase()")
+        .await
+        .unwrap();
+    assert_eq!(tag, "span");
+
+    browser.close().await.unwrap();
+}
+
 /// Mixing `.css()` and a predicate method on the same query must return
 /// `Err(ZendriverError::ConflictingSelectors)`.
 #[tokio::test]

@@ -28,21 +28,28 @@
 //!
 //! # Predicate mode (bs4-like combinable matchers)
 //!
-//! Ten predicate methods let you match elements without writing a CSS
-//! selector by hand. All active predicates are AND-ed together:
+//! Sixteen predicate methods let you match elements without writing a CSS
+//! selector by hand — including a case-insensitive `_i` sibling for every
+//! value-bearing matcher. All active predicates are AND-ed together:
 //!
 //! | Method | Matches |
 //! |---|---|
 //! | `.tag(name)` | element tag name |
 //! | `.attr(name, value)` | exact attribute value — `[name="value"]` |
+//! | `.attr_i(name, value)` | same, case-insensitive — `[name="value" i]` |
 //! | `.attr_contains(name, sub)` | attribute contains substring — `[name*="sub"]` |
+//! | `.attr_contains_i(name, sub)` | same, case-insensitive — `[name*="sub" i]` |
 //! | `.attr_starts_with(name, pre)` | attribute value prefix — `[name^="pre"]` |
+//! | `.attr_starts_with_i(name, pre)` | same, case-insensitive — `[name^="pre" i]` |
 //! | `.attr_ends_with(name, suf)` | attribute value suffix — `[name$="suf"]` |
+//! | `.attr_ends_with_i(name, suf)` | same, case-insensitive — `[name$="suf" i]` |
 //! | `.has_attr(name)` | attribute is present — `[name]` |
-//! | `.attr_regex(name, pat)` | attribute value matches JS regex (post-filter) |
+//! | `.attr_regex(name, pat)` | attribute value matches JS regex (post-filter; use a `(?i)` pattern flag for case-insensitivity) |
 //! | `.containing_text(sub)` | element text contains substring (post-filter) |
+//! | `.containing_text_i(sub)` | same, case-insensitive (post-filter) |
 //! | `.text_equals(exact)` | trimmed element text equals string (post-filter) |
-//! | `.text_matches(pat)` | element text matches JS regex (post-filter) |
+//! | `.text_equals_i(exact)` | same, case-insensitive (post-filter) |
+//! | `.text_matches(pat)` | element text matches JS regex (post-filter; use a `(?i)` pattern flag for case-insensitivity) |
 //!
 //! Structural predicates (`.tag`, `.attr*`, `.has_attr`) compile to a single
 //! CSS selector that the browser evaluates natively. Regex and text
@@ -190,7 +197,15 @@ macro_rules! predicate_methods {
         pub fn attr(mut self, name: &str, value: &str) -> Self {
             self.predicates
                 .attrs
-                .push(AttrPred::Exact(name.into(), value.into()));
+                .push(AttrPred::Exact(name.into(), value.into(), false));
+            self
+        }
+        /// Case-insensitive [`Self::attr`] — `[name="value" i]`.
+        #[must_use]
+        pub fn attr_i(mut self, name: &str, value: &str) -> Self {
+            self.predicates
+                .attrs
+                .push(AttrPred::Exact(name.into(), value.into(), true));
             self
         }
         /// Match a substring of an attribute value `[name*="sub"]`.
@@ -198,7 +213,15 @@ macro_rules! predicate_methods {
         pub fn attr_contains(mut self, name: &str, sub: &str) -> Self {
             self.predicates
                 .attrs
-                .push(AttrPred::Contains(name.into(), sub.into()));
+                .push(AttrPred::Contains(name.into(), sub.into(), false));
+            self
+        }
+        /// Case-insensitive [`Self::attr_contains`] — `[name*="sub" i]`.
+        #[must_use]
+        pub fn attr_contains_i(mut self, name: &str, sub: &str) -> Self {
+            self.predicates
+                .attrs
+                .push(AttrPred::Contains(name.into(), sub.into(), true));
             self
         }
         /// Match an attribute value prefix `[name^="pre"]`.
@@ -206,7 +229,15 @@ macro_rules! predicate_methods {
         pub fn attr_starts_with(mut self, name: &str, pre: &str) -> Self {
             self.predicates
                 .attrs
-                .push(AttrPred::StartsWith(name.into(), pre.into()));
+                .push(AttrPred::StartsWith(name.into(), pre.into(), false));
+            self
+        }
+        /// Case-insensitive [`Self::attr_starts_with`] — `[name^="pre" i]`.
+        #[must_use]
+        pub fn attr_starts_with_i(mut self, name: &str, pre: &str) -> Self {
+            self.predicates
+                .attrs
+                .push(AttrPred::StartsWith(name.into(), pre.into(), true));
             self
         }
         /// Match an attribute value suffix `[name$="suf"]`.
@@ -214,7 +245,15 @@ macro_rules! predicate_methods {
         pub fn attr_ends_with(mut self, name: &str, suf: &str) -> Self {
             self.predicates
                 .attrs
-                .push(AttrPred::EndsWith(name.into(), suf.into()));
+                .push(AttrPred::EndsWith(name.into(), suf.into(), false));
+            self
+        }
+        /// Case-insensitive [`Self::attr_ends_with`] — `[name$="suf" i]`.
+        #[must_use]
+        pub fn attr_ends_with_i(mut self, name: &str, suf: &str) -> Self {
+            self.predicates
+                .attrs
+                .push(AttrPred::EndsWith(name.into(), suf.into(), true));
             self
         }
         /// Require the attribute be present `[name]`.
@@ -223,7 +262,8 @@ macro_rules! predicate_methods {
             self.predicates.attrs.push(AttrPred::Has(name.into()));
             self
         }
-        /// Match an attribute value against a JS regex (post-filter).
+        /// Match an attribute value against a JS regex (post-filter). Use a
+        /// `(?i)` pattern flag for case-insensitivity.
         #[must_use]
         pub fn attr_regex(mut self, name: &str, pattern: &str) -> Self {
             self.predicates
@@ -234,16 +274,37 @@ macro_rules! predicate_methods {
         /// Match elements whose text contains `sub` (post-filter).
         #[must_use]
         pub fn containing_text(mut self, sub: &str) -> Self {
-            self.predicates.texts.push(TextPred::Contains(sub.into()));
+            self.predicates
+                .texts
+                .push(TextPred::Contains(sub.into(), false));
+            self
+        }
+        /// Case-insensitive [`Self::containing_text`] (post-filter).
+        #[must_use]
+        pub fn containing_text_i(mut self, sub: &str) -> Self {
+            self.predicates
+                .texts
+                .push(TextPred::Contains(sub.into(), true));
             self
         }
         /// Match elements whose trimmed text equals `exact` (post-filter).
         #[must_use]
         pub fn text_equals(mut self, exact: &str) -> Self {
-            self.predicates.texts.push(TextPred::Equals(exact.into()));
+            self.predicates
+                .texts
+                .push(TextPred::Equals(exact.into(), false));
+            self
+        }
+        /// Case-insensitive [`Self::text_equals`] (post-filter).
+        #[must_use]
+        pub fn text_equals_i(mut self, exact: &str) -> Self {
+            self.predicates
+                .texts
+                .push(TextPred::Equals(exact.into(), true));
             self
         }
         /// Match elements whose text matches a JS regex `pattern` (post-filter).
+        /// Use a `(?i)` pattern flag for case-insensitivity.
         #[must_use]
         pub fn text_matches(mut self, pattern: &str) -> Self {
             self.predicates
@@ -2421,8 +2482,37 @@ mod tests {
             assert_eq!(b.predicates.tag.as_deref(), Some("div"));
             assert_eq!(b.predicates.attrs.len(), 4);
             assert_eq!(b.predicates.texts.len(), 3);
-            assert!(matches!(b.predicates.attrs[0], AttrPred::Exact(_, _)));
+            assert!(matches!(b.predicates.attrs[0], AttrPred::Exact(_, _, _)));
             assert!(matches!(b.predicates.texts[2], TextPred::Matches(_)));
+        }
+
+        #[test]
+        fn case_insensitive_predicate_methods_accumulate() {
+            let b = bare()
+                .tag("div")
+                .attr_i("data-x", "y")
+                .attr_contains_i("class", "z")
+                .attr_starts_with_i("id", "item-")
+                .attr_ends_with_i("data-x", "-end")
+                .containing_text_i("Buy")
+                .text_equals_i("OK");
+            assert_eq!(b.predicates.attrs.len(), 4);
+            assert_eq!(b.predicates.texts.len(), 2);
+            assert!(matches!(b.predicates.attrs[0], AttrPred::Exact(_, _, true)));
+            assert!(matches!(
+                b.predicates.attrs[1],
+                AttrPred::Contains(_, _, true)
+            ));
+            assert!(matches!(
+                b.predicates.attrs[2],
+                AttrPred::StartsWith(_, _, true)
+            ));
+            assert!(matches!(
+                b.predicates.attrs[3],
+                AttrPred::EndsWith(_, _, true)
+            ));
+            assert!(matches!(b.predicates.texts[0], TextPred::Contains(_, true)));
+            assert!(matches!(b.predicates.texts[1], TextPred::Equals(_, true)));
         }
 
         fn bare_all() -> FindAllBuilder<'static> {
@@ -2502,7 +2592,7 @@ mod tests {
             // Adding a text predicate adds the JS post-filter to the label.
             let pred = PredicateSet {
                 tag: Some("button".into()),
-                texts: vec![TextPred::Contains("Buy".into())],
+                texts: vec![TextPred::Contains("Buy".into(), false)],
                 ..Default::default()
             };
             let d = describe_predicates(&pred);

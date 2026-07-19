@@ -101,6 +101,10 @@ chain encodes both the selector and any modifiers:
   — bs4-like combinable *predicate* finders (`tag`, `attr`, `attr_contains`,
   `attr_starts_with`, `attr_ends_with`, `has_attr`, `attr_regex`,
   `containing_text`, `text_equals`, `text_matches`), all AND-ed together.
+  Every value-bearing matcher has a case-insensitive `_i` sibling
+  (`attr_i`, `attr_contains_i`, `attr_starts_with_i`, `attr_ends_with_i`,
+  `containing_text_i`, `text_equals_i`) — e.g.
+  `.attr_i("class", "primary")` matches `class="Primary"` too.
   Predicate methods can't be mixed with the single-selector methods above on
   one query (doing so errors with `ConflictingSelectors`).
 - `.nth(2)` — pick the 2nd match.
