@@ -2,6 +2,15 @@
 //! WebSocket frames, and EventSource messages. Passive (Network domain) —
 //! read-only; use the `interception` feature (Fetch domain) to modify requests.
 //!
+//! HTTP response bodies are whole-body-buffered by default (fetched on demand
+//! via [`NetworkExchange::body`]). [`MonitorBuilder::stream_bodies`] opts a
+//! monitor into incremental delivery instead: [`NetworkEvent::HttpData`]
+//! chunk events, emitted as the response streams in, via the passive CDP
+//! `Network.streamResourceContent` mechanism — no `Fetch` interception, no
+//! response pausing. See [`MonitorBuilder::stream_bodies`] for the full
+//! contract, including its graceful degrade on Chrome versions that don't
+//! support it.
+//!
 //! The correlator subscribes to the connection's loss-accounted event stream
 //! ([`zendriver_transport::Connection::subscribe_raw_accounted`]), so a
 //! delivery gap (a lagging subscriber, a transport reconnect or disconnect),
@@ -14,8 +23,10 @@
 
 mod events;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 
 use base64::Engine as _;
@@ -29,8 +40,8 @@ use zendriver_transport::{AccountedRawEvent, SessionHandle};
 
 use crate::url_matcher::UrlMatcher;
 use events::{
-    EventSourceMessage, LoadingFailed, RequestIdOnly, RequestWillBeSent, ResponseReceived,
-    WebSocketCreated, WebSocketFrameEvent,
+    DataReceived, EventSourceMessage, LoadingFailed, RequestIdOnly, RequestWillBeSent,
+    ResponseReceived, WebSocketCreated, WebSocketFrameEvent,
 };
 
 /// Bounded capacity of the `NetworkMonitor` event channel. Slow consumers
@@ -50,6 +61,26 @@ const MAX_TRACKED: usize = 10_000;
 pub enum NetworkEvent {
     /// A completed HTTP request/response pair (or a failed request).
     Http(NetworkExchange),
+    /// One incrementally-delivered chunk of an HTTP response body, emitted
+    /// only when the monitor was started with
+    /// [`MonitorBuilder::stream_bodies`]. Sibling to [`Self::WebSocketFrame`]
+    /// / [`Self::EventSourceMessage`] — like those, it's delivered as it
+    /// arrives rather than accumulated by the correlator.
+    ///
+    /// `request_id` matches [`NetworkExchange::request_id`] on the eventual
+    /// [`Self::Http`] event for the same request, so a consumer can
+    /// correlate the streamed chunks with the completed exchange's request
+    /// URL / status once it arrives. Chunks may arrive before, interleaved
+    /// with, or after other events for unrelated requests — but always
+    /// before the matching `Http` event, since that only fires on
+    /// `loadingFinished` / `loadingFailed`.
+    HttpData {
+        /// The CDP `requestId` this chunk belongs to.
+        request_id: String,
+        /// The chunk's raw bytes, in arrival order relative to other chunks
+        /// for the same `request_id`.
+        chunk: Vec<u8>,
+    },
     /// A new WebSocket connection was opened.
     WebSocketOpen {
         /// The CDP request ID for this WebSocket connection.
@@ -237,6 +268,18 @@ impl std::fmt::Debug for NetworkExchange {
 }
 
 impl NetworkExchange {
+    /// Returns the CDP `requestId` this exchange was correlated by.
+    ///
+    /// Matches the `request_id` on [`NetworkEvent::HttpData`] events for the
+    /// same request when the monitor was started with
+    /// [`MonitorBuilder::stream_bodies`] — chunk events arrive (and must be
+    /// correlated) before this exchange completes, since `HttpData` carries
+    /// no URL of its own.
+    #[must_use]
+    pub fn request_id(&self) -> &str {
+        &self.request_id
+    }
+
     /// Returns the HTTP status code of the response, if one was received.
     #[must_use]
     pub fn status(&self) -> Option<u16> {
@@ -324,6 +367,7 @@ impl NetworkExchange {
 pub struct MonitorBuilder {
     session: SessionHandle,
     url_pattern: Option<UrlMatcher>,
+    stream_bodies: bool,
 }
 
 impl MonitorBuilder {
@@ -333,6 +377,7 @@ impl MonitorBuilder {
         Self {
             session,
             url_pattern: None,
+            stream_bodies: false,
         }
     }
 
@@ -360,6 +405,53 @@ impl MonitorBuilder {
         self
     }
 
+    /// Opt in to incremental HTTP response body delivery. Default `false`.
+    ///
+    /// When `true`, the correlator enables CDP `Network.streamResourceContent`
+    /// for each request that reaches `requestWillBeSent` and passes the
+    /// [`Self::url_pattern`] filter (there is no separate filter for
+    /// streaming — narrow `url_pattern` to narrow what streams). Enabling
+    /// this early — before the request is even sent, rather than waiting for
+    /// `responseReceived` — wins the race against a fast (especially
+    /// loopback) response's `loadingFinished`, past which Chrome rejects the
+    /// enable call; `bufferedData` on the enable reply covers whatever bytes
+    /// arrived in the meantime either way, so nothing is lost by enabling
+    /// early. Each received chunk is emitted as a [`NetworkEvent::HttpData`]
+    /// on the monitor's stream, interleaved with the other event kinds; any
+    /// bytes buffered before the enable call lands are emitted as the first
+    /// chunk. This is passive — no `Fetch` domain interception, no response
+    /// pausing — unlike `Fetch.takeResponseBodyAsStream`, which was rejected
+    /// for exactly that reason (see the module docs).
+    ///
+    /// `Network.streamResourceContent` requires roughly Chrome 124+. On an
+    /// older Chrome the enable call errors; the correlator logs one
+    /// `tracing::warn!` and skips streaming for that request — the monitor
+    /// never fails, and [`NetworkExchange::body`] keeps working as the
+    /// whole-body fallback. Leave this `false` (the default) if every
+    /// response body is small enough that whole-body buffering is fine —
+    /// streaming every response is wasted CDP round-trips otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use futures::StreamExt;
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let mut monitor = tab.monitor().stream_bodies(true).start().await?;
+    /// while let Some(event) = monitor.next().await {
+    ///     if let zendriver::NetworkEvent::HttpData { request_id, chunk } = event {
+    ///         println!("{request_id}: {} bytes", chunk.len());
+    ///     }
+    /// }
+    /// # Ok(()) }
+    /// ```
+    #[must_use]
+    pub fn stream_bodies(mut self, enabled: bool) -> Self {
+        self.stream_bodies = enabled;
+        self
+    }
+
     /// Spawn the correlator task and return a live [`NetworkMonitor`].
     ///
     /// The task subscribes to the session's loss-accounted CDP event stream
@@ -382,6 +474,7 @@ impl MonitorBuilder {
         let task = tokio::spawn(run_monitor(
             self.session,
             self.url_pattern,
+            self.stream_bodies,
             tx,
             cancel.clone(),
         ));
@@ -450,10 +543,15 @@ type PartialExchange = (MonitoredRequest, Option<MonitoredResponse>);
 async fn run_monitor(
     session: SessionHandle,
     filter: Option<UrlMatcher>,
+    stream_bodies: bool,
     tx: mpsc::Sender<NetworkEvent>,
     cancel: CancellationToken,
 ) {
     let session_id = session.session_id().to_string();
+    // Shared across every spawned `streamResourceContent` enable task so an
+    // unsupported-Chrome error is logged once for the whole monitor, not once
+    // per streamed request (every subsequent call would fail identically).
+    let warned_stream_unsupported = Arc::new(AtomicBool::new(false));
     // Subscribe to the accounted event stream BEFORE issuing `Network.enable`:
     // the accounted bus is a `broadcast` receiver that only sees frames sent
     // after it registers, so any event Chrome fires between `enable`'s reply
@@ -475,6 +573,14 @@ async fn run_monitor(
     // normal completion; compacted when it drifts past the live cap so it
     // can't grow without bound on a long-lived page.
     let mut order: VecDeque<String> = VecDeque::new();
+    // requestIds that already had `Network.streamResourceContent` enabled
+    // (only populated when `stream_bodies` is set). Guards against
+    // re-enabling on a stray duplicate `requestWillBeSent` (e.g. a redirect
+    // hop reusing the same requestId), and is pruned on `loadingFinished` /
+    // `loadingFailed` alongside `urls` / `partial` so it can't grow without
+    // bound either — no accumulated bytes live here, just the fact that
+    // streaming was already turned on for this id.
+    let mut streaming: HashSet<String> = HashSet::new();
 
     // Fire-and-forget `Network.enable` so the monitor works on its own even if
     // nothing else enabled the domain. We don't await the reply: the mock test
@@ -520,6 +626,43 @@ async fn run_monitor(
                                         }
                                     }
                                 }
+                                // Enable streaming as early as possible — right
+                                // when the request is first observed, before
+                                // it's even sent on the wire — rather than
+                                // waiting for `responseReceived`. Empirically
+                                // (real-Chrome testing against a local mock
+                                // server), `responseReceived` leaves too
+                                // little headroom: `Network.streamResourceContent`
+                                // is a CDP round-trip via a spawned task, and
+                                // Chrome rejects it with `-32602 Request with
+                                // the provided ID has already finished
+                                // loading` for a fast (especially loopback)
+                                // response that reaches `loadingFinished`
+                                // before that call lands. Enabling this early
+                                // costs nothing extra: `bufferedData` on the
+                                // enable reply still covers whatever bytes
+                                // arrived in the meantime, so no data is lost
+                                // either way — only the odds of winning the
+                                // race improve.
+                                if stream_bodies
+                                    && !warned_stream_unsupported.load(Ordering::Relaxed)
+                                    && !streaming.contains(&p.request_id)
+                                    && filter_allows(filter.as_ref(), Some(p.request.url.as_str()))
+                                {
+                                    // Once one `streamResourceContent` call has
+                                    // failed (old Chrome / unsupported), skip
+                                    // future enable attempts — the whole-body
+                                    // `body()` path is the fallback, and there's
+                                    // no point re-spending a doomed CDP round-trip
+                                    // per request. Matches the warn message.
+                                    streaming.insert(p.request_id.clone());
+                                    spawn_stream_resource_content(
+                                        &session,
+                                        &tx,
+                                        &warned_stream_unsupported,
+                                        p.request_id.clone(),
+                                    );
+                                }
                                 let req = MonitoredRequest {
                                     url: p.request.url,
                                     method: p.request.method,
@@ -544,6 +687,36 @@ async fn run_monitor(
                                     });
                                 }
                             }
+                            "Network.dataReceived" if stream_bodies => {
+                                let Ok(p) = serde_json::from_value::<DataReceived>(ev.params) else {
+                                    if emit_decode_failed(&tx).await {
+                                        return;
+                                    }
+                                    continue;
+                                };
+                                // `data` is populated only when streaming was
+                                // enabled for this requestId — absent for the
+                                // vast majority of `dataReceived` events
+                                // (Chrome fires it as progress info for every
+                                // in-flight request regardless).
+                                let Some(data) = p.data else { continue };
+                                match BASE64.decode(&data) {
+                                    Ok(chunk) => {
+                                        if tx
+                                            .send(NetworkEvent::HttpData { request_id: p.request_id, chunk })
+                                            .await
+                                            .is_err()
+                                        {
+                                            return;
+                                        }
+                                    }
+                                    Err(_) => {
+                                        if emit_decode_failed(&tx).await {
+                                            return;
+                                        }
+                                    }
+                                }
+                            }
                             "Network.loadingFinished" => {
                                 let Ok(p) = serde_json::from_value::<RequestIdOnly>(ev.params) else {
                                     if emit_decode_failed(&tx).await {
@@ -566,6 +739,7 @@ async fn run_monitor(
                                     }
                                 }
                                 urls.remove(&p.request_id);
+                                streaming.remove(&p.request_id);
                             }
                             "Network.loadingFailed" => {
                                 let Ok(p) = serde_json::from_value::<LoadingFailed>(ev.params) else {
@@ -589,6 +763,7 @@ async fn run_monitor(
                                     }
                                 }
                                 urls.remove(&p.request_id);
+                                streaming.remove(&p.request_id);
                             }
                             "Network.webSocketCreated" => {
                                 let Ok(p) = serde_json::from_value::<WebSocketCreated>(ev.params) else {
@@ -697,6 +872,7 @@ async fn run_monitor(
                         // loss.
                         partial.clear();
                         urls.clear();
+                        streaming.clear();
                         if emit_boundary(&tx, NetworkDeliveryBoundary::Lagged { missed, generation }).await {
                             return;
                         }
@@ -709,6 +885,7 @@ async fn run_monitor(
                     AccountedRawEvent::Reconnected { previous, generation } => {
                         partial.clear();
                         urls.clear();
+                        streaming.clear();
                         if emit_boundary(&tx, NetworkDeliveryBoundary::Reconnected { previous, generation }).await {
                             return;
                         }
@@ -716,6 +893,7 @@ async fn run_monitor(
                     AccountedRawEvent::Disconnected { generation } => {
                         partial.clear();
                         urls.clear();
+                        streaming.clear();
                         // Fail closed: report the boundary, then end the
                         // task regardless of whether the send succeeded —
                         // the transport is gone either way, so there is
@@ -735,6 +913,7 @@ async fn run_monitor(
                     _ => {
                         partial.clear();
                         urls.clear();
+                        streaming.clear();
                         if emit_boundary(&tx, NetworkDeliveryBoundary::Unknown).await {
                             return;
                         }
@@ -759,6 +938,63 @@ async fn emit_boundary(tx: &mpsc::Sender<NetworkEvent>, boundary: NetworkDeliver
 /// payload in scope by the time this is called — nothing to leak.
 async fn emit_decode_failed(tx: &mpsc::Sender<NetworkEvent>) -> bool {
     emit_boundary(tx, NetworkDeliveryBoundary::DecodeFailed).await
+}
+
+/// Enable `Network.streamResourceContent` for `request_id` in a spawned
+/// task, mirroring the correlator's existing fire-and-forget
+/// `Network.enable` call: the CDP round-trip must not block the main
+/// dispatch loop from processing the next event in wire order.
+///
+/// On success, any `bufferedData` (bytes Chrome already had before the
+/// enable call landed) is emitted as the first [`NetworkEvent::HttpData`]
+/// chunk for this request — so nothing received in that pre-enable window is
+/// lost. On failure (old Chrome / unsupported), logs one `tracing::warn!`
+/// via `warned` (shared across every call this monitor makes, so the warning
+/// fires once per monitor rather than once per request) and otherwise does
+/// nothing — the monitor keeps running and [`NetworkExchange::body`] remains
+/// the working fallback for this request.
+fn spawn_stream_resource_content(
+    session: &SessionHandle,
+    tx: &mpsc::Sender<NetworkEvent>,
+    warned: &Arc<AtomicBool>,
+    request_id: String,
+) {
+    let session = session.clone();
+    let tx = tx.clone();
+    let warned = Arc::clone(warned);
+    tokio::spawn(async move {
+        match session
+            .call(
+                "Network.streamResourceContent",
+                serde_json::json!({ "requestId": request_id }),
+            )
+            .await
+        {
+            Ok(res) => {
+                let buffered = res
+                    .get("bufferedData")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                if buffered.is_empty() {
+                    return;
+                }
+                if let Ok(chunk) = BASE64.decode(buffered) {
+                    if !chunk.is_empty() {
+                        let _ = tx.send(NetworkEvent::HttpData { request_id, chunk }).await;
+                    }
+                }
+            }
+            Err(e) => {
+                if !warned.swap(true, Ordering::Relaxed) {
+                    warn!(
+                        error = %e,
+                        "network monitor: Network.streamResourceContent failed (needs Chrome ~124+); \
+                         stream_bodies falling back to whole-body capture for this and future requests"
+                    );
+                }
+            }
+        }
+    });
 }
 
 /// Apply the optional URL filter. With no filter every event passes. With a
@@ -1072,6 +1308,300 @@ mod tests {
             }
             other => panic!("expected EventSourceMessage, got {other:?}"),
         }
+
+        monitor.stop();
+        conn.shutdown();
+    }
+
+    // ---------- stream_bodies (Network.streamResourceContent) --------------
+
+    /// Like [`spawn_monitor`], but with [`MonitorBuilder::stream_bodies`] set.
+    async fn spawn_monitor_streaming(
+        filter: Option<UrlMatcher>,
+    ) -> (
+        NetworkMonitor,
+        MockConnection,
+        zendriver_transport::Connection,
+    ) {
+        let (mut mock, conn) = MockConnection::pair();
+        let session = SessionHandle::new(conn.clone(), SID);
+        let mut builder = MonitorBuilder::new(session).stream_bodies(true);
+        if let Some(f) = filter {
+            builder = builder.url_pattern(f);
+        }
+        let monitor = builder.start().await.unwrap();
+        let id = mock.expect_cmd("Network.enable").await;
+        mock.reply(id, json!({})).await;
+        (monitor, mock, conn)
+    }
+
+    /// End-to-end happy path: `requestWillBeSent` triggers
+    /// `Network.streamResourceContent`, its `bufferedData` is emitted as the
+    /// first `HttpData` chunk, a subsequent `Network.dataReceived` with
+    /// `data` set emits a second chunk, and the exchange still completes
+    /// normally on `loadingFinished` — with [`NetworkExchange::request_id`]
+    /// matching the chunks' `request_id`.
+    #[tokio::test]
+    async fn stream_bodies_prepends_buffered_data_then_streams_data_received() {
+        let (mut monitor, mut mock, conn) = spawn_monitor_streaming(None).await;
+
+        mock.emit_event_for_session(
+            "Network.requestWillBeSent",
+            json!({
+                "requestId": "s1",
+                "request": { "url": "https://example.com/big", "method": "GET" }
+            }),
+            SID,
+        )
+        .await;
+        mock.emit_event_for_session(
+            "Network.responseReceived",
+            json!({ "requestId": "s1", "response": { "status": 200 } }),
+            SID,
+        )
+        .await;
+
+        let id = mock.expect_cmd("Network.streamResourceContent").await;
+        assert_eq!(mock.last_sent()["params"]["requestId"], "s1");
+        mock.reply(id, json!({ "bufferedData": BASE64.encode("hello-") }))
+            .await;
+
+        match next_event(&mut monitor).await {
+            NetworkEvent::HttpData { request_id, chunk } => {
+                assert_eq!(request_id, "s1");
+                assert_eq!(chunk, b"hello-");
+            }
+            other => panic!("expected HttpData (bufferedData), got {other:?}"),
+        }
+
+        mock.emit_event_for_session(
+            "Network.dataReceived",
+            json!({
+                "requestId": "s1",
+                "timestamp": 1.0,
+                "dataLength": 5,
+                "encodedDataLength": 5,
+                "data": BASE64.encode("world")
+            }),
+            SID,
+        )
+        .await;
+
+        match next_event(&mut monitor).await {
+            NetworkEvent::HttpData { request_id, chunk } => {
+                assert_eq!(request_id, "s1");
+                assert_eq!(chunk, b"world");
+            }
+            other => panic!("expected HttpData (dataReceived), got {other:?}"),
+        }
+
+        mock.emit_event_for_session("Network.loadingFinished", json!({ "requestId": "s1" }), SID)
+            .await;
+        match next_event(&mut monitor).await {
+            NetworkEvent::Http(exchange) => {
+                assert_eq!(exchange.request_id(), "s1");
+                assert_eq!(exchange.request.url, "https://example.com/big");
+            }
+            other => panic!("expected NetworkEvent::Http, got {other:?}"),
+        }
+
+        monitor.stop();
+        conn.shutdown();
+    }
+
+    /// Empty `bufferedData` must not emit a spurious leading chunk — only the
+    /// real `dataReceived` bytes show up.
+    #[tokio::test]
+    async fn stream_bodies_empty_buffered_data_emits_no_leading_chunk() {
+        let (mut monitor, mut mock, conn) = spawn_monitor_streaming(None).await;
+
+        mock.emit_event_for_session(
+            "Network.requestWillBeSent",
+            json!({
+                "requestId": "s2",
+                "request": { "url": "https://example.com/empty-buffer", "method": "GET" }
+            }),
+            SID,
+        )
+        .await;
+        mock.emit_event_for_session(
+            "Network.responseReceived",
+            json!({ "requestId": "s2", "response": { "status": 200 } }),
+            SID,
+        )
+        .await;
+        let id = mock.expect_cmd("Network.streamResourceContent").await;
+        mock.reply(id, json!({ "bufferedData": "" })).await;
+
+        mock.emit_event_for_session(
+            "Network.dataReceived",
+            json!({
+                "requestId": "s2",
+                "timestamp": 1.0,
+                "dataLength": 6,
+                "encodedDataLength": 6,
+                "data": BASE64.encode("chunk1")
+            }),
+            SID,
+        )
+        .await;
+
+        match next_event(&mut monitor).await {
+            NetworkEvent::HttpData { request_id, chunk } => {
+                assert_eq!(request_id, "s2");
+                assert_eq!(chunk, b"chunk1", "the only chunk — no empty leading one");
+            }
+            other => panic!("expected HttpData, got {other:?}"),
+        }
+
+        monitor.stop();
+        conn.shutdown();
+    }
+
+    /// A `Network.streamResourceContent` error (old / unsupported Chrome)
+    /// must not emit any `HttpData` and must not break the monitor — the
+    /// exchange still completes via the whole-body path.
+    #[tokio::test]
+    async fn stream_resource_content_error_degrades_without_breaking_monitor() {
+        let (mut monitor, mut mock, conn) = spawn_monitor_streaming(None).await;
+
+        mock.emit_event_for_session(
+            "Network.requestWillBeSent",
+            json!({
+                "requestId": "s3",
+                "request": { "url": "https://example.com/old-chrome", "method": "GET" }
+            }),
+            SID,
+        )
+        .await;
+        mock.emit_event_for_session(
+            "Network.responseReceived",
+            json!({ "requestId": "s3", "response": { "status": 200 } }),
+            SID,
+        )
+        .await;
+        let id = mock.expect_cmd("Network.streamResourceContent").await;
+        mock.reply_err(id, -32601, "'Network.streamResourceContent' wasn't found")
+            .await;
+
+        // No HttpData ever arrives for the failed enable.
+        assert_no_event(&mut monitor).await;
+
+        // The monitor is still alive: loadingFinished completes normally.
+        mock.emit_event_for_session("Network.loadingFinished", json!({ "requestId": "s3" }), SID)
+            .await;
+        match next_event(&mut monitor).await {
+            NetworkEvent::Http(exchange) => {
+                assert_eq!(exchange.request.url, "https://example.com/old-chrome");
+            }
+            other => panic!("expected NetworkEvent::Http, got {other:?}"),
+        }
+
+        monitor.stop();
+        conn.shutdown();
+    }
+
+    /// `stream_bodies: false` (the default) must never call
+    /// `Network.streamResourceContent` and must never emit `HttpData`, even
+    /// if a `dataReceived` event happens to carry `data` (e.g. some other
+    /// domain consumer enabled streaming out of band).
+    #[tokio::test]
+    async fn stream_bodies_false_never_enables_or_emits_http_data() {
+        let (mut monitor, mut mock, conn) = spawn_monitor(None).await;
+
+        mock.emit_event_for_session(
+            "Network.requestWillBeSent",
+            json!({
+                "requestId": "s4",
+                "request": { "url": "https://example.com/opt-out", "method": "GET" }
+            }),
+            SID,
+        )
+        .await;
+        mock.emit_event_for_session(
+            "Network.responseReceived",
+            json!({ "requestId": "s4", "response": { "status": 200 } }),
+            SID,
+        )
+        .await;
+        assert!(
+            mock.try_recv_cmd().is_none(),
+            "stream_bodies: false must never issue Network.streamResourceContent"
+        );
+
+        mock.emit_event_for_session(
+            "Network.dataReceived",
+            json!({
+                "requestId": "s4",
+                "timestamp": 1.0,
+                "dataLength": 4,
+                "encodedDataLength": 4,
+                "data": BASE64.encode("data")
+            }),
+            SID,
+        )
+        .await;
+        assert_no_event(&mut monitor).await;
+
+        mock.emit_event_for_session("Network.loadingFinished", json!({ "requestId": "s4" }), SID)
+            .await;
+        match next_event(&mut monitor).await {
+            NetworkEvent::Http(exchange) => {
+                assert_eq!(exchange.request.url, "https://example.com/opt-out");
+            }
+            other => panic!("expected NetworkEvent::Http, got {other:?}"),
+        }
+
+        monitor.stop();
+        conn.shutdown();
+    }
+
+    /// A duplicate `requestWillBeSent` for the same `requestId` (e.g. a
+    /// redirect hop reusing the same id) must not re-issue
+    /// `Network.streamResourceContent`: the `streaming` dedup set guards it.
+    #[tokio::test]
+    async fn stream_bodies_dedups_repeated_request_will_be_sent_for_same_request() {
+        let (mut monitor, mut mock, conn) = spawn_monitor_streaming(None).await;
+
+        mock.emit_event_for_session(
+            "Network.requestWillBeSent",
+            json!({
+                "requestId": "s5",
+                "request": { "url": "https://example.com/dup", "method": "GET" }
+            }),
+            SID,
+        )
+        .await;
+        let id = mock.expect_cmd("Network.streamResourceContent").await;
+        mock.reply(id, json!({ "bufferedData": "" })).await;
+
+        // A second requestWillBeSent for the SAME requestId (e.g. a
+        // redirect hop).
+        mock.emit_event_for_session(
+            "Network.requestWillBeSent",
+            json!({
+                "requestId": "s5",
+                "request": { "url": "https://example.com/dup-redirected", "method": "GET" }
+            }),
+            SID,
+        )
+        .await;
+        mock.emit_event_for_session(
+            "Network.responseReceived",
+            json!({ "requestId": "s5", "response": { "status": 200 } }),
+            SID,
+        )
+        .await;
+
+        // loadingFinished should still be the very next thing the mock
+        // observes sent — no second streamResourceContent call in between.
+        mock.emit_event_for_session("Network.loadingFinished", json!({ "requestId": "s5" }), SID)
+            .await;
+        let _ = next_event(&mut monitor).await; // drain the Http exchange
+        assert!(
+            mock.try_recv_cmd().is_none(),
+            "a duplicate requestWillBeSent must not re-issue Network.streamResourceContent"
+        );
 
         monitor.stop();
         conn.shutdown();

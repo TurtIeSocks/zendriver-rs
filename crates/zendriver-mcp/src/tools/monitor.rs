@@ -81,6 +81,19 @@ pub struct StartInput {
     /// `browser_monitor_read` output manageable.
     #[serde(default)]
     pub capture_body_max_bytes: usize,
+    /// Opt in to incremental HTTP response body delivery: as each response
+    /// streams in, `browser_monitor_read` emits `http_data` chunk events
+    /// (`request_id` + base64 `chunk_base64`) ahead of the completed `http`
+    /// event for the same request. Uses passive CDP
+    /// `Network.streamResourceContent` — no request interception, no
+    /// response pausing. Filtered by `url_pattern` like every other event
+    /// (no separate filter). Falls back gracefully to the whole-body
+    /// `capture_bodies` / on-demand path on Chrome versions that don't
+    /// support it (roughly pre-124) — the monitor never errors out over
+    /// this. Off by default: streaming every response is wasted CDP
+    /// round-trips when bodies are small.
+    #[serde(default)]
+    pub stream_bodies: bool,
 }
 
 /// Output of `browser_monitor_start`.
@@ -105,7 +118,7 @@ pub async fn start(
         current_tab(&s).await?
     };
 
-    let mut mb = tab.monitor();
+    let mut mb = tab.monitor().stream_bodies(input.stream_bodies);
     if let Some(p) = &input.url_pattern {
         mb = mb.url_pattern(p.clone());
     }
@@ -182,6 +195,7 @@ async fn convert(ev: NetworkEvent, capture: bool, max_bytes: usize) -> MonitorEv
                 body_capture_error,
             } = captured.unwrap_or_default();
             MonitorEvent::Http {
+                request_id: ex.request_id().to_string(),
                 url: ex.request.url.clone(),
                 method: ex.request.method.clone(),
                 status: ex.status(),
@@ -193,6 +207,10 @@ async fn convert(ev: NetworkEvent, capture: bool, max_bytes: usize) -> MonitorEv
                 body_capture_error,
             }
         }
+        NetworkEvent::HttpData { request_id, chunk } => MonitorEvent::HttpData {
+            request_id,
+            chunk_base64: BASE64.encode(&chunk),
+        },
         NetworkEvent::WebSocketOpen { request_id, url } => {
             MonitorEvent::WebSocketOpen { request_id, url }
         }
@@ -443,6 +461,7 @@ mod tests {
     /// A cheap synthetic event for buffer tests.
     fn ev(n: usize) -> MonitorEvent {
         MonitorEvent::Http {
+            request_id: format!("r{n}"),
             url: format!("https://example.com/{n}"),
             method: "GET".into(),
             status: Some(200),
@@ -694,5 +713,44 @@ mod tests {
         };
         assert_eq!(missed, Some(7));
         assert_eq!(generation, Some(4));
+    }
+
+    // ---------- HttpData chunk wire mapping ---------------------------------
+
+    #[tokio::test]
+    async fn convert_maps_http_data_chunk_to_base64() {
+        let wire = convert(
+            NetworkEvent::HttpData {
+                request_id: "r1".into(),
+                chunk: b"hello".to_vec(),
+            },
+            false,
+            0,
+        )
+        .await;
+        let MonitorEvent::HttpData {
+            request_id,
+            chunk_base64,
+        } = wire
+        else {
+            panic!("expected MonitorEvent::HttpData, got {wire:?}");
+        };
+        assert_eq!(request_id, "r1");
+        assert_eq!(chunk_base64, BASE64.encode(b"hello"));
+    }
+
+    // ---------- StartInput.stream_bodies wire deserialization ---------------
+
+    #[test]
+    fn start_input_stream_bodies_defaults_to_false() {
+        let input: StartInput = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(!input.stream_bodies);
+    }
+
+    #[test]
+    fn start_input_stream_bodies_true_deserializes() {
+        let input: StartInput =
+            serde_json::from_value(serde_json::json!({ "stream_bodies": true })).unwrap();
+        assert!(input.stream_bodies);
     }
 }

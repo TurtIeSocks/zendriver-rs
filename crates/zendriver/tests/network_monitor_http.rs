@@ -14,7 +14,8 @@
 #![cfg(feature = "integration-tests")]
 #![allow(clippy::panic, clippy::unwrap_used)]
 
-use std::time::Duration;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use serial_test::serial;
@@ -113,6 +114,172 @@ async fn monitor_captures_fetch() {
     // Fetch the body lazily via getResponseBody.
     let body = exchange.text().await.unwrap();
     assert_eq!(body, "hello-monitor", "body mismatch");
+
+    monitor.stop();
+    browser.close().await.unwrap();
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// monitor_stream_bodies_reassembles_large_response
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Serve `body` on a fresh loopback TCP listener as a raw HTTP/1.1 response,
+/// written in `chunk_size`-byte writes with a `delay` pause between each —
+/// deliberately slow (unlike a normal wiremock response, whose full buffer
+/// Chrome can receive+finish downloading faster than an async CDP round-trip
+/// can enable streaming for it, as verified empirically against this test's
+/// original wiremock-backed version). The pacing gives
+/// `Network.streamResourceContent`'s enable call time to land before
+/// `loadingFinished`, and guarantees more than one `Network.dataReceived`
+/// event since each write is flushed and paused before the next.
+///
+/// Returns the `http://host:port` origin to fetch from. Handles exactly one
+/// connection then exits — enough for this test's single fetch.
+async fn serve_slow_body(body: Vec<u8>, chunk_size: usize, delay: Duration) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let Ok((stream, _)) = listener.accept().await else {
+            return;
+        };
+        let (mut rd, mut wr) = stream.into_split();
+        // Drain (and discard) the request in the background — without this,
+        // a full TCP receive buffer on our side could make Chrome's write of
+        // its request head block, which would deadlock against us blocking
+        // on our own writes below.
+        tokio::spawn(async move {
+            let mut buf = [0u8; 4096];
+            while matches!(rd.read(&mut buf).await, Ok(n) if n > 0) {}
+        });
+        let header = format!(
+            "HTTP/1.1 200 OK\r\n\
+             Content-Type: application/octet-stream\r\n\
+             Content-Length: {}\r\n\
+             Access-Control-Allow-Origin: *\r\n\
+             Connection: close\r\n\r\n",
+            body.len()
+        );
+        if wr.write_all(header.as_bytes()).await.is_err() {
+            return;
+        }
+        for piece in body.chunks(chunk_size) {
+            if wr.write_all(piece).await.is_err() {
+                return;
+            }
+            let _ = wr.flush().await;
+            tokio::time::sleep(delay).await;
+        }
+        let _ = wr.shutdown().await;
+    });
+    format!("http://{addr}")
+}
+
+/// A monitor started with `stream_bodies(true)` emits `NetworkEvent::HttpData`
+/// chunks for a largeish, slowly-delivered response, and concatenating them
+/// in arrival order reproduces the exact body Chrome delivered (verified
+/// against `NetworkExchange::body()` / `Network.getResponseBody` as ground
+/// truth).
+#[tokio::test]
+#[serial]
+#[ignore]
+async fn monitor_stream_bodies_reassembles_large_response() {
+    let page_mock = fixture_with_html(
+        r#"<!doctype html><html><body>
+          <script>window.pageReady = true;</script>
+        </body></html>"#,
+    )
+    .await;
+
+    // 256 KiB of deterministic, non-degenerate content (an incrementing byte
+    // pattern) — distinctive enough that any reordering/truncation bug in
+    // reassembly would show up as a mismatch rather than accidentally
+    // comparing equal. Delivered in 16 KiB writes, 20ms apart (~320ms total)
+    // so Chrome sees it arrive as multiple `Network.dataReceived` events
+    // rather than one instantaneous local-loopback blob.
+    let body: Vec<u8> = (0..256 * 1024).map(|i| (i % 256) as u8).collect();
+    let data_origin = serve_slow_body(body.clone(), 16 * 1024, Duration::from_millis(20)).await;
+    let data_url = format!("{data_origin}/big");
+
+    let browser = Browser::builder().headless(true).launch().await.unwrap();
+    let tab = browser.main_tab();
+
+    // Start streaming BEFORE navigation so it catches the page's fetch.
+    let mut monitor = tab.monitor().stream_bodies(true).start().await.unwrap();
+
+    tab.goto(&page_mock.uri()).await.unwrap();
+    tab.wait_for_load().await.unwrap();
+
+    // Kick off the fetch from the page's own JS context (cross-origin to the
+    // slow-body server; it sends `Access-Control-Allow-Origin: *`).
+    let fetch_js = format!(
+        r#"(async () => {{
+          const r = await fetch({url});
+          const b = await r.arrayBuffer();
+          return b.byteLength;
+        }})()"#,
+        url = serde_json::json!(data_url)
+    );
+    tab.evaluate_main::<serde_json::Value>(&format!(
+        "({fetch_js}).then(n => {{ window.fetchLen = n; window.fetchDone = true; }})"
+    ))
+    .await
+    .unwrap();
+
+    // Chunks arrive (and must be buffered) by request_id BEFORE the owning
+    // `Http` exchange completes — only once we see the exchange do we know
+    // which request_id's chunks to reassemble and compare.
+    let mut chunks_by_id: HashMap<String, Vec<u8>> = HashMap::new();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let exchange = loop {
+        if Instant::now() >= deadline {
+            panic!("monitor did not emit a NetworkEvent::Http for /big within 20s");
+        }
+        match tokio::time::timeout(Duration::from_secs(5), monitor.next()).await {
+            Ok(Some(NetworkEvent::HttpData { request_id, chunk })) => {
+                chunks_by_id.entry(request_id).or_default().extend(chunk);
+            }
+            Ok(Some(NetworkEvent::Http(ex))) if ex.request.url == data_url => break ex,
+            Ok(Some(_)) => continue, // unrelated event (e.g. the page navigation itself)
+            Ok(None) => panic!("monitor stream ended before /big exchange"),
+            Err(_) => panic!("timed out waiting for /big exchange"),
+        }
+    };
+
+    assert_eq!(exchange.status(), Some(200), "expected status 200");
+
+    let streamed = chunks_by_id
+        .remove(exchange.request_id())
+        .unwrap_or_default();
+    assert!(
+        !streamed.is_empty(),
+        "expected at least one HttpData chunk for {data_url} (request_id {})",
+        exchange.request_id()
+    );
+
+    // Ground truth: the whole-body path must still agree byte-for-byte.
+    let full_body = exchange.body().await.unwrap();
+    assert_eq!(
+        full_body.len(),
+        body.len(),
+        "getResponseBody length mismatch"
+    );
+    assert_eq!(
+        streamed, full_body,
+        "concatenated HttpData chunks must reassemble to the exact response body"
+    );
+    assert_eq!(
+        streamed, body,
+        "reassembled body must match what the slow-body server sent"
+    );
+
+    // Sanity-check the page's own fetch() also saw the full length.
+    let fetch_len: i64 = tab
+        .evaluate_main("window.fetchDone ? window.fetchLen : -1")
+        .await
+        .unwrap();
+    assert_eq!(fetch_len as usize, body.len());
 
     monitor.stop();
     browser.close().await.unwrap();
