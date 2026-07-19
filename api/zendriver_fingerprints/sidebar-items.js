@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["generative","pool"]};
+window.SIDEBAR_ITEMS = {"mod":["generative","pool"],"struct":["CachePolicy"]};

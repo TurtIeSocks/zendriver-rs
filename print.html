@@ -890,12 +890,47 @@ zendriver-fingerprints = { version = "0.1", features = ["pool"] }
 </span>use zendriver_fingerprints::pool::PoolSet;
 use zendriver_stealth::Seed;
 
-// Build from a local JSON array (or load with load_or_download(url)).
+// Build from a local JSON array (or load with load_or_download(url, policy)).
 let pool = PoolSet::from_json(include_str!("pool.json"))?;
 let persona = pool.sample(Seed::from_u64(42));
 
 // Pass to Browser::builder() in the zendriver crate.
 <span class="boring">}</span></code></pre></pre>
+<h3 id="cache-freshness-cachepolicy"><a class="header" href="#cache-freshness-cachepolicy">Cache freshness (<code>CachePolicy</code>)</a></h3>
+<p><code>pool::load_or_download</code> and <code>generative::Generator::load_or_download</code> both
+download-on-first-use into a local cache file
+(<code>dirs::cache_dir()/zendriver/fingerprints/...</code>). Freshness is controlled by a
+<code>CachePolicy</code>, checked <strong>on access</strong> (at load time) — there is no background
+scheduler:</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver_fingerprints::CachePolicy;
+use zendriver_fingerprints::pool::load_or_download;
+use std::time::Duration;
+
+<span class="boring">async fn example() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+</span>// Default: permanent cache — a cache hit is used forever (unchanged from
+// before this knob existed).
+let pool = load_or_download("https://example.com/pool.json", CachePolicy::default()).await?;
+
+// Re-download once the cached file is older than a day.
+let pool = load_or_download(
+    "https://example.com/pool.json",
+    CachePolicy::with_ttl(Duration::from_secs(86_400)),
+)
+.await?;
+
+// Always re-download, ignoring any cache hit.
+let pool = load_or_download("https://example.com/pool.json", CachePolicy::force_refresh()).await?;
+<span class="boring">let _ = pool;
+</span><span class="boring">Ok(())
+</span><span class="boring">}
+</span><span class="boring">}</span></code></pre></pre>
+<p><code>CachePolicy::default()</code> is byte-for-byte identical to the pre-<code>CachePolicy</code>
+behavior: permanent cache, and — since <code>ttl: None</code> short-circuits before any
+mtime read — zero added filesystem calls. Clock skew (a cache file with a
+future-dated mtime) fails <strong>closed</strong>: it's treated as stale and re-downloaded,
+never as fresh and never a panic.</p>
 <h2 id="per-surface-strategy-overrides"><a class="header" href="#per-surface-strategy-overrides">Per-surface strategy overrides</a></h2>
 <p>Override any surface's render strategy on top of the persona:</p>
 <pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
