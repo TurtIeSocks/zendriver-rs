@@ -232,7 +232,7 @@ field in the overlay wins; <code>None</code> inherits from the base.</p>
 host-probed or pool-sampled base persona.</p>
 <h5 id="examples-21"><a class="doc-anchor" href="#examples-21">§</a>Examples</h5>
 <div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>builder = zendriver::Browser::builder()
-    .persona_overlay(<span class="string">r#"{"timezone":"UTC"}"#</span>.parse().unwrap());</code></pre></div></div></details><details class="toggle method-toggle" open><summary><section id="method.geo_locale" class="method"><a class="src rightside" href="../../src/zendriver/browser.rs.html#1190-1207">Source</a><h4 class="code-header">pub fn <a href="#method.geo_locale" class="fn">geo_locale</a>(self, country: impl <a class="trait" href="https://doc.rust-lang.org/1.97.1/core/convert/trait.TryInto.html" title="trait core::convert::TryInto">TryInto</a>&lt;Country&gt;) -&gt; Self</h4></section></summary><div class="docblock"><p>Set a coherent <code>locale</code> + <code>languages</code> derived from a country code
+    .persona_overlay(<span class="string">r#"{"timezone":"UTC"}"#</span>.parse().unwrap());</code></pre></div></div></details><details class="toggle method-toggle" open><summary><section id="method.geo_locale" class="method"><a class="src rightside" href="../../src/zendriver/browser.rs.html#1190-1207">Source</a><h4 class="code-header">pub fn <a href="#method.geo_locale" class="fn">geo_locale</a>(self, country: impl <a class="trait" href="https://doc.rust-lang.org/1.97.1/core/convert/trait.TryInto.html" title="trait core::convert::TryInto">TryInto</a>&lt;<a class="struct" href="../../zendriver_stealth/geo/struct.Country.html" title="struct zendriver_stealth::geo::Country">Country</a>&gt;) -&gt; Self</h4></section></summary><div class="docblock"><p>Set a coherent <code>locale</code> + <code>languages</code> derived from a country code
 (ISO 3166-1 alpha-2, e.g. <code>"US"</code>, <code>"de"</code>). Layered as a persona overlay,
 so it composes with <code>.persona(..)</code> and is overridden by an explicit
 <code>.persona_overlay(..)</code> locale. An invalid/unknown country is ignored
@@ -247,7 +247,7 @@ authenticates the same way the browser itself will. Unlike
 timezone is the EXACT IANA zone ip-api reports for the exit IP, not
 the country-representative zone — multi-timezone countries (US, RU,
 CA, AU, BR, …) get the visitor’s real local zone.</p>
-</div></details><details class="toggle method-toggle" open><summary><section id="method.geo_resolver" class="method"><a class="src rightside" href="../../src/zendriver/browser.rs.html#1234-1240">Source</a><h4 class="code-header">pub fn <a href="#method.geo_resolver" class="fn">geo_resolver</a>(self, resolver: impl GeoResolver + 'static) -&gt; Self</h4></section></summary><div class="docblock"><p>Supply a custom [<code>zendriver_stealth::geo::GeoResolver</code>] (your own
+</div></details><details class="toggle method-toggle" open><summary><section id="method.geo_resolver" class="method"><a class="src rightside" href="../../src/zendriver/browser.rs.html#1234-1240">Source</a><h4 class="code-header">pub fn <a href="#method.geo_resolver" class="fn">geo_resolver</a>(self, resolver: impl <a class="trait" href="../../zendriver_stealth/geo/trait.GeoResolver.html" title="trait zendriver_stealth::geo::GeoResolver">GeoResolver</a> + 'static) -&gt; Self</h4></section></summary><div class="docblock"><p>Supply a custom <a href="../../zendriver_stealth/geo/trait.GeoResolver.html" title="trait zendriver_stealth::geo::GeoResolver"><code>zendriver_stealth::geo::GeoResolver</code></a> (your own
 service / offline DB) in place of the bundled <code>ip-api.com</code> probe.</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.surface" class="method"><a class="src rightside" href="../../src/zendriver/browser.rs.html#1306-1309">Source</a><h4 class="code-header">pub fn <a href="#method.surface" class="fn">surface</a>(self, surface: <a class="enum" href="../enum.Surface.html" title="enum zendriver::Surface">Surface</a>, strategy: <a class="enum" href="../enum.Strategy.html" title="enum zendriver::Strategy">Strategy</a>) -&gt; Self</h4></section></summary><div class="docblock"><p>Override a single fingerprint <a href="../enum.Surface.html" title="enum zendriver::Surface"><code>Surface</code></a>’s render <a href="../enum.Strategy.html" title="enum zendriver::Strategy"><code>Strategy</code></a>.</p>
 <p>Applied last, on top of the resolved persona + overlay. Repeatable —
@@ -296,7 +296,7 @@ observer above it (including this one) has finished running.</p>
 <ol>
 <li>Resolves a <a href="../stealth/struct.Fingerprint.html" title="struct zendriver::stealth::Fingerprint"><code>zendriver_stealth::Fingerprint</code></a> from the resolved
 Chrome executable.</li>
-<li>Prepends the profile’s [<code>StealthObserver</code>] to the observer chain.</li>
+<li>Prepends the profile’s <a href="../../zendriver_stealth/observer/struct.StealthObserver.html" title="struct zendriver_stealth::observer::StealthObserver"><code>StealthObserver</code></a> to the observer chain.</li>
 <li>Appends the profile’s stealth flags to the launch argv.</li>
 <li>Sends <code>Target.setAutoAttach { waitForDebuggerOnStart: true }</code> at
 browser scope so the actor can route pauses through observers
