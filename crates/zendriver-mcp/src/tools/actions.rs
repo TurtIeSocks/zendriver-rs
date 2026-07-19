@@ -593,6 +593,14 @@ pub struct UploadInput {
 /// on the host running the MCP server (not the client's machine) — CDP
 /// reads the files server-side and wires them straight into the input's
 /// `FileList`.
+///
+/// Scope is a direct `<input type="file">` only — `selector` must resolve
+/// to the input itself. For a button/label that opens the picker
+/// indirectly (a JS handler that clicks a hidden input, or any custom
+/// upload widget), use `browser_expect_register` with
+/// `kind: file_chooser` + `file_chooser_paths` instead: it intercepts
+/// `Page.fileChooserOpened` so it works regardless of what triggered the
+/// picker.
 pub async fn upload(
     state: Arc<Mutex<SessionState>>,
     input: UploadInput,

@@ -693,3 +693,52 @@ covered = "browser_open.chrome_version"
 [[entry]]
 api = "zendriver::IpApiResolver::with_proxy"
 covered = "browser_open.geo_auto / browser_open.geo_endpoint (mirrors input.proxy into the custom-endpoint resolver)"
+
+# ── Phase 3 remainder: Tab::expect_file_chooser (button-triggered pickers) ──
+# New `expect_*` helper answering `Page.fileChooserOpened` (feature
+# `expect`) — lets a button/label-triggered file picker (a hidden
+# `<input type="file">` clicked from a JS handler) be answered the same way
+# `Element::upload_files` answers a direct file input. `cargo-public-api`
+# double-lists every item once under its defining module path
+# (`zendriver::expect::file_chooser::*`) and once under the crate-root
+# re-export (`zendriver::FileChooserMode`/`FileChooserExpectation`/
+# `MatchedFileChooser`) — same shape as the pre-existing (unledgered,
+# baseline-grandfathered) `DialogExpectation`/`MatchedDialog` duplication —
+# so both prefixes are ledgered below. `ZendriverError::FileChooser` is
+# likewise double-listed (`zendriver::error::ZendriverError::FileChooser` /
+# `zendriver::ZendriverError::FileChooser`).
+#
+# MCP coverage: `browser_expect_register` gained `kind: file_chooser` +
+# `file_chooser_paths` (required, non-empty) — same register/await/cancel
+# lifecycle as the existing dialog/download kinds, flattened to
+# `{ kind: "file_chooser", mode: "select_single"|"select_multiple" }` by a
+# new `file_chooser_to_json` mapper. No new tool (extends the existing
+# `browser_expect_register` input), so the published MCP tool count is
+# unchanged.
+[[entry]]
+api = "zendriver::expect::file_chooser"
+covered = "browser_expect_register (kind: file_chooser)"
+
+[[entry]]
+api = "zendriver::FileChooserMode"
+covered = "browser_expect_register (kind: file_chooser) -> matched event's mode field"
+
+[[entry]]
+api = "zendriver::FileChooserExpectation"
+covered = "browser_expect_register (kind: file_chooser) / browser_expect_await"
+
+[[entry]]
+api = "zendriver::MatchedFileChooser"
+covered = "browser_expect_register (kind: file_chooser) -> matched event's mode field"
+
+[[entry]]
+api = "zendriver::error::ZendriverError::FileChooser"
+covered = "browser_expect_await surfaces it as the expectation's failed(...) error string"
+
+[[entry]]
+api = "zendriver::ZendriverError::FileChooser"
+covered = "browser_expect_await surfaces it as the expectation's failed(...) error string"
+
+[[entry]]
+api = "zendriver::tab::Tab::expect_file_chooser"
+covered = "browser_expect_register (kind: file_chooser)"

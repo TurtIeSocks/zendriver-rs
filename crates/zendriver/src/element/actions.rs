@@ -582,10 +582,15 @@ impl Element {
     /// into the input's `FileList`, and the page sees a normal `change`
     /// event from the input.
     ///
-    /// Scope is direct `<input type="file">` only; routing through a hidden
-    /// input clicked by a label / button wrapper is the page's
-    /// responsibility. Paths are passed as their lossy `to_string_lossy()`
-    /// representation, matching CDP's UTF-8 string contract.
+    /// Scope is direct `<input type="file">` only — the element this is
+    /// called on must be the input itself. For a button/label that opens
+    /// the picker indirectly (e.g. a JS handler that calls
+    /// `hiddenInput.click()`, or any custom upload widget), use
+    /// [`Tab::expect_file_chooser`](crate::Tab::expect_file_chooser)
+    /// (feature `expect`) instead — it intercepts `Page.fileChooserOpened`
+    /// so it works regardless of what triggered the picker. Paths are
+    /// passed as their lossy `to_string_lossy()` representation, matching
+    /// CDP's UTF-8 string contract.
     ///
     /// # Examples
     ///

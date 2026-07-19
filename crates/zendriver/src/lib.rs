@@ -62,7 +62,7 @@
 //!
 //! | Flag | Crate | Purpose |
 //! |------|-------|---------|
-//! | `expect` | in-tree | `expect_request` / `expect_response` / `expect_dialog` / `expect_download` |
+//! | `expect` | in-tree | `expect_request` / `expect_response` / `expect_dialog` / `expect_download` / `expect_file_chooser` |
 //! | `monitor` | in-tree | `tab.monitor()` persistent `Stream<NetworkEvent>` (HTTP / WebSocket / EventSource) |
 //! | `interception` | `zendriver-interception` | `Fetch.*`-backed request rewriting / abort |
 //! | `cloudflare` | `zendriver-cloudflare` | Cloudflare Turnstile bypass |
@@ -220,6 +220,10 @@ pub use expect::download::{
     DownloadExpectation, DownloadProgressState, DownloadState, MatchedDownload,
 };
 
+/// `expect_file_chooser` API re-exports.
+#[cfg(feature = "expect")]
+pub use expect::file_chooser::{FileChooserExpectation, FileChooserMode, MatchedFileChooser};
+
 /// Chrome-for-Testing fetcher re-exports.
 ///
 /// Gated by the `fetcher` cargo feature. The driver lives in the
@@ -338,6 +342,9 @@ mod auto_trait_assertions {
         assert_send_sync::<DownloadExpectation>();
         assert_send_sync::<DownloadState>();
         assert_send_sync::<DownloadProgressState>();
+        assert_send_sync::<MatchedFileChooser>();
+        assert_send_sync::<FileChooserExpectation>();
+        assert_send_sync::<FileChooserMode>();
     }
 
     #[cfg(feature = "monitor")]

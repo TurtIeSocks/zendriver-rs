@@ -21,6 +21,12 @@ properties:
     description: "Response only: fetch the response body and include it (base64) in the\nmatched event as `body_base64` + `body_len`. One extra CDP round-trip."
     type: boolean
     default: false
+  file_chooser_paths:
+    description: "File-chooser only: absolute paths (on the MCP host) to feed into the\nchooser the instant it opens, via `DOM.setFileInputFiles`. Required\nfor `kind: file_chooser` — an empty list clears the input instead of\nattaching anything, which is rarely what's wanted, so an empty/absent\nlist surfaces an `invalid_request` rather than silently no-op'ing."
+    type: array
+    default: []
+    items:
+      type: string
   kind:
     description: Which event family to watch.
     $ref: "#/$defs/ExpectKind"
@@ -68,6 +74,9 @@ $defs:
       - description: "`Page.downloadWillBegin` — start of a file download."
         type: string
         const: download
+      - description: "`Page.fileChooserOpened` — a button/label-triggered (or direct)\nfile picker, answered with `file_chooser_paths`."
+        type: string
+        const: file_chooser
   ExpectMatcher:
     description: "URL match predicate for request/response expectations. Dialog and\nDownload kinds ignore matcher fields entirely (the lib has no URL filter\nfor them in v0).\n\nExactly zero or one of `url_substr` / `url_regex` may be set. Setting\nneither matches every URL (substring matcher with the empty string)."
     type: object

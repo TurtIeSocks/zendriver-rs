@@ -14,7 +14,7 @@ Enable it in `Cargo.toml`:
 zendriver = { version = "0.1", features = ["expect"] }
 ```
 
-Four entry points on [`Tab`]:
+Five entry points on [`Tab`]:
 
 | Method | CDP event | Returns |
 |--------|-----------|---------|
@@ -22,12 +22,14 @@ Four entry points on [`Tab`]:
 | [`expect_response`] | `Network.responseReceived` | [`ResponseExpectation`] → [`MatchedResponse`] |
 | [`expect_dialog`] | `Page.javascriptDialogOpened` | [`DialogExpectation`] → [`MatchedDialog`] |
 | [`expect_download`] | `Page.downloadWillBegin` + progress | [`DownloadExpectation`] → [`MatchedDownload`] |
+| [`expect_file_chooser`] | `Page.fileChooserOpened` | [`FileChooserExpectation`] → [`MatchedFileChooser`] |
 
 [`Tab`]: https://docs.rs/zendriver/latest/zendriver/struct.Tab.html
 [`expect_request`]: https://docs.rs/zendriver/latest/zendriver/struct.Tab.html#method.expect_request
 [`expect_response`]: https://docs.rs/zendriver/latest/zendriver/struct.Tab.html#method.expect_response
 [`expect_dialog`]: https://docs.rs/zendriver/latest/zendriver/struct.Tab.html#method.expect_dialog
 [`expect_download`]: https://docs.rs/zendriver/latest/zendriver/struct.Tab.html#method.expect_download
+[`expect_file_chooser`]: https://docs.rs/zendriver/latest/zendriver/struct.Tab.html#method.expect_file_chooser
 [`RequestExpectation`]: https://docs.rs/zendriver/latest/zendriver/struct.RequestExpectation.html
 [`MatchedRequest`]: https://docs.rs/zendriver/latest/zendriver/struct.MatchedRequest.html
 [`ResponseExpectation`]: https://docs.rs/zendriver/latest/zendriver/struct.ResponseExpectation.html
@@ -36,6 +38,8 @@ Four entry points on [`Tab`]:
 [`MatchedDialog`]: https://docs.rs/zendriver/latest/zendriver/struct.MatchedDialog.html
 [`DownloadExpectation`]: https://docs.rs/zendriver/latest/zendriver/struct.DownloadExpectation.html
 [`MatchedDownload`]: https://docs.rs/zendriver/latest/zendriver/struct.MatchedDownload.html
+[`FileChooserExpectation`]: https://docs.rs/zendriver/latest/zendriver/struct.FileChooserExpectation.html
+[`MatchedFileChooser`]: https://docs.rs/zendriver/latest/zendriver/struct.MatchedFileChooser.html
 
 ## The race-free pattern
 
@@ -77,9 +81,9 @@ let exp1 = tab.expect_response("/api/users");  // substring
 let exp2 = tab.expect_response(Regex::new(r"^https://.*\.example\.com/v\d+/").unwrap());
 ```
 
-`expect_dialog` and `expect_download` take no matcher — they fire on the
-first event of their kind. If you need to filter further, inspect the
-matched event in your code after `.await?`.
+`expect_dialog`, `expect_download`, and `expect_file_chooser` take no
+matcher — they fire on the first event of their kind. If you need to
+filter further, inspect the matched event in your code after `.await?`.
 
 [`regex::Regex`]: https://docs.rs/regex/latest/regex/struct.Regex.html
 
@@ -151,9 +155,46 @@ per-tab tempdir (named by Chrome's CDP `guid`) and is `None` until the
 transfer completes. The tempdir lives as long as the `Tab` does, so call
 `save_to` to copy the file somewhere stable before the tab drops.
 
+## File pickers
+
+[`Element::upload_files`](https://docs.rs/zendriver/latest/zendriver/struct.Element.html#method.upload_files)
+dispatches `DOM.setFileInputFiles` straight at a direct
+`<input type="file">`'s backend node — but it can't reach a button or
+label that opens the picker *indirectly* (a JS handler that calls
+`hiddenInput.click()`, or any custom upload widget). `expect_file_chooser`
+covers that case: it intercepts `Page.fileChooserOpened` via
+`Page.setInterceptFileChooserDialog`, so it answers the picker regardless
+of what triggered it — a hidden input, a visible one, or a custom widget
+that ultimately opens a native `<input type="file">` chooser.
+
+```rust,ignore
+let fc = tab.expect_file_chooser(&["/tmp/photo.jpg"]).await?;
+
+let button = tab.find().css("#upload-btn").one().await?;
+button.click().await?; // opens the picker via a hidden input
+
+let matched = fc.await?;
+println!("chooser mode: {:?}", matched.mode); // SelectSingle / SelectMultiple
+```
+
+Unlike the other four, `expect_file_chooser` is `async`: it must await
+`Page.setInterceptFileChooserDialog { enabled: true }` reaching Chrome
+before returning, or the trigger click could race Chrome into showing the
+real OS dialog instead of firing the intercept event — the same reason
+`expect_download` is `async` for its own `Browser.setDownloadBehavior`
+setup call. It's also the only *active* expectation: matching doesn't
+just hand back data, it dispatches `DOM.setFileInputFiles` with the paths
+you passed to `expect_file_chooser(...)` and disables the intercept
+before resolving — there's nothing left to drive on the returned
+`MatchedFileChooser`.
+
+If the expectation is dropped before a chooser opens (timeout, early
+return, panic unwind), the intercept is disabled best-effort so a later
+real file dialog isn't silently swallowed.
+
 ## Timeout semantics
 
-All four expectations default to 30 s. Override per-call:
+All five expectations default to 30 s. Override per-call:
 
 ```rust,ignore
 use std::time::Duration;
@@ -190,6 +231,9 @@ as "re-establish and re-wait", not as "it didn't happen".
   whenever the page may pop a dialog or your script will hang.
 - **`expect_download`** — capture file downloads end-to-end; replaces
   the headless-Chrome "downloads vanish silently" footgun.
+- **`expect_file_chooser`** — feed files into a button/label-triggered
+  picker; reach for `Element::upload_files` instead when the target is a
+  direct `<input type="file">` (no CDP intercept round-trip needed).
 
 For continuous capture (every request matching a pattern, not just the
 first), drop into [`Interception`](./interception.md)'s `subscribe()`
