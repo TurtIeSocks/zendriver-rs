@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-07-19
+
+### Added
+
+- Add Tab::tap/Element::tap for touch dispatch (Input.dispatchTouchEvent)
+
+
 ## [0.2.8] - 2026-07-18
 
 ### Added

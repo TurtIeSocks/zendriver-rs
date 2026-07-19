@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.13.0] - 2026-07-19
+
+### Added
+
+- Add Tab::tap/Element::tap for touch dispatch (Input.dispatchTouchEvent)
+
+
 ## [0.12.0] - 2026-07-19
 
 ### Added
