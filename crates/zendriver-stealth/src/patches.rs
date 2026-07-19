@@ -11,7 +11,7 @@
 use serde_json::json;
 
 use crate::persona::surface::{Strategy, Surface};
-use crate::persona::{FontSpec, HardwareSpec, SurfaceCfg, WebglSpec, WebrtcSpec};
+use crate::persona::{FontSpec, HardwareSpec, SurfaceCfg, WebglSpec, WebgpuSpec, WebrtcSpec};
 use crate::{Fingerprint, Persona, Seed, UserAgentMetadata};
 
 // --- Native-function masking prelude (runs first, wraps everything) ------
@@ -250,9 +250,11 @@ fn push_webgl(out: &mut String, spec: Option<&WebglSpec>) {
     );
 }
 
-/// Append the WebGPU coherence patch. The adapter info is derived from the
-/// persona's WebGL renderer (or the hardcoded Intel default the webgl block
-/// falls back to), so navigator.gpu agrees with WebGL. Omitted under `Native`.
+/// Append the WebGPU coherence patch. Adapter info defaults to values derived
+/// from the persona's WebGL renderer (or the hardcoded Intel default the
+/// webgl block falls back to), so navigator.gpu agrees with WebGL — unless
+/// the caller's [`WebgpuSpec`] explicitly overrides `vendor`/`architecture`.
+/// Omitted under `Native`.
 ///
 /// `spoof_webgl` reflects whether the WebGL value patch ran. When it is
 /// `false` (the native-WebGL opt-in — [`bootstrap_script_native_webgl`]) the
@@ -260,51 +262,105 @@ fn push_webgl(out: &mut String, spec: Option<&WebglSpec>) {
 /// adapter — derived from the WebGL renderer we did NOT apply, or the
 /// hardcoded default below — would disagree with the real GPU. That cross-API
 /// mismatch is the exact coherence tell the opt-in exists to avoid, so the
-/// value spoof is skipped too and the real `navigator.gpu` adapter passes
-/// through. An explicit `Block` (hide `navigator.gpu`) is renderer-neutral
-/// and stays honored regardless.
+/// value spoof (and any fabrication) is skipped too and the real
+/// `navigator.gpu` adapter passes through. An explicit `Block` (hide
+/// `navigator.gpu`) is renderer-neutral and stays honored regardless.
 fn push_webgpu(
     out: &mut String,
-    cfg: Option<&SurfaceCfg>,
+    spec: Option<&WebgpuSpec>,
     webgl: Option<&WebglSpec>,
     spoof_webgl: bool,
 ) {
     use crate::persona::webgpu_adapter::adapter_for_renderer;
-    let strat = Surface::Webgpu.resolve_strategy(cfg.and_then(|c| c.strategy));
+    let strat = Surface::Webgpu.resolve_strategy(spec.and_then(|s| s.strategy));
     if strat == Strategy::Native {
         return;
     }
-    // Native-WebGL renderer coherence: skip the value adapter spoof when the
-    // real WebGL renderer is left unpatched (see the doc comment above). A
-    // `Block` is renderer-neutral, so it is still emitted.
+    // Native-WebGL renderer coherence: skip the value adapter spoof (and any
+    // fabrication) when the real WebGL renderer is left unpatched (see the
+    // doc comment above). A `Block` is renderer-neutral, so it is still
+    // emitted.
     if !spoof_webgl && strat != Strategy::Block {
         return;
     }
+
+    if strat == Strategy::Block {
+        out.push('\n');
+        out.push_str(
+            &WEBGPU
+                .replace("WEBGPU_VENDOR", "null")
+                .replace("WEBGPU_ARCHITECTURE", "null")
+                .replace("WEBGPU_DEVICE", "null")
+                .replace("WEBGPU_DESCRIPTION", "null")
+                .replace("WEBGPU_LIMITS", "null")
+                .replace("WEBGPU_FEATURES", "null")
+                .replace("WEBGPU_MODE", "\"block\"")
+                .replace("WEBGPU_FABRICATE", "false"),
+        );
+        return;
+    }
+
     const DEFAULT_RENDERER: &str =
         "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)";
     let renderer = webgl
         .and_then(|w| w.unmasked_renderer.as_deref())
         .unwrap_or(DEFAULT_RENDERER);
-    let adapter = adapter_for_renderer(renderer);
-    let (vendor, arch, mode) = if strat == Strategy::Block {
-        (
-            "null".to_string(),
-            "null".to_string(),
-            "\"block\"".to_string(),
-        )
-    } else {
-        (
-            serde_json::to_string(&adapter.vendor).unwrap_or_else(|_| "null".into()),
-            serde_json::to_string(&adapter.architecture).unwrap_or_else(|_| "null".into()),
-            "\"value\"".to_string(),
-        )
-    };
+    let derived = adapter_for_renderer(renderer);
+
+    let vendor = spec
+        .and_then(|s| s.vendor.clone())
+        .unwrap_or(derived.vendor);
+    let architecture = spec
+        .and_then(|s| s.architecture.clone())
+        .unwrap_or(derived.architecture);
+    let device = spec.and_then(|s| s.device.clone()).unwrap_or_default();
+    let description = spec.and_then(|s| s.description.clone()).unwrap_or_default();
+    let limits = spec.and_then(|s| s.limits.as_ref());
+    let features = spec.and_then(|s| s.features.as_ref());
+    // Fabrication is only wired up when the caller opted in AND supplied
+    // enough to fabricate coherently (vendor + limits) — a bare
+    // `fabricate_when_absent: true` with nothing else is refused (no-op):
+    // this project never auto-invents fingerprint values (see `WebgpuSpec`
+    // rustdoc).
+    let fabricate = spec.is_some_and(|s| {
+        s.fabricate_when_absent == Some(true) && s.vendor.is_some() && s.limits.is_some()
+    });
+
     out.push('\n');
     out.push_str(
         &WEBGPU
-            .replace("WEBGPU_VENDOR", &vendor)
-            .replace("WEBGPU_ARCHITECTURE", &arch)
-            .replace("WEBGPU_MODE", &mode),
+            .replace(
+                "WEBGPU_VENDOR",
+                &serde_json::to_string(&vendor).unwrap_or_else(|_| "null".into()),
+            )
+            .replace(
+                "WEBGPU_ARCHITECTURE",
+                &serde_json::to_string(&architecture).unwrap_or_else(|_| "null".into()),
+            )
+            .replace(
+                "WEBGPU_DEVICE",
+                &serde_json::to_string(&device).unwrap_or_else(|_| "\"\"".into()),
+            )
+            .replace(
+                "WEBGPU_DESCRIPTION",
+                &serde_json::to_string(&description).unwrap_or_else(|_| "\"\"".into()),
+            )
+            .replace(
+                "WEBGPU_LIMITS",
+                &limits.map_or_else(
+                    || "null".to_string(),
+                    |l| serde_json::to_string(l).unwrap_or_else(|_| "null".into()),
+                ),
+            )
+            .replace(
+                "WEBGPU_FEATURES",
+                &features.map_or_else(
+                    || "null".to_string(),
+                    |f| serde_json::to_string(f).unwrap_or_else(|_| "null".into()),
+                ),
+            )
+            .replace("WEBGPU_MODE", "\"value\"")
+            .replace("WEBGPU_FABRICATE", if fabricate { "true" } else { "false" }),
     );
 }
 
@@ -707,8 +763,9 @@ mod tests {
         // API rather than reporting a mismatched adapter — so an explicit Block
         // stays honored under native-webgl.
         let p = Persona {
-            webgpu: Some(SurfaceCfg {
+            webgpu: Some(WebgpuSpec {
                 strategy: Some(Strategy::Block),
+                ..Default::default()
             }),
             ..Persona::default()
         };
@@ -869,10 +926,173 @@ mod tests {
     }
 
     #[test]
+    fn webgpu_none_everywhere_is_byte_for_byte_regression_guard() {
+        // A `WebgpuSpec::default()` (all-None) must produce the exact same
+        // bootstrap output as no spec at all (`persona.webgpu = None`) — the
+        // regression guard the promotion from `SurfaceCfg` must preserve.
+        // Pin the seed explicitly — `Persona::default()` draws a fresh random
+        // seed per call, which would make two independent bootstraps differ
+        // in their (unrelated) canvas/audio/clientRects noise regardless of
+        // the webgpu change under test.
+        let base_persona = Persona {
+            seed: Some(Seed::from_u64(42)),
+            ..Persona::default()
+        };
+        let baseline = bootstrap_script(&base_persona, &mock_identity());
+        let p = Persona {
+            webgpu: Some(WebgpuSpec::default()),
+            ..base_persona
+        };
+        let with_default_spec = bootstrap_script(&p, &mock_identity());
+        assert_eq!(
+            baseline, with_default_spec,
+            "WebgpuSpec::default() must be byte-for-byte identical to no spec"
+        );
+    }
+
+    #[test]
+    fn webgpu_caller_vendor_overrides_derived_value() {
+        // Explicit `vendor`/`architecture` win over the WebGL-derived default,
+        // even though a WebGL renderer that would derive something else is
+        // also present.
+        let p = Persona {
+            webgl: Some(WebglSpec {
+                strategy: Some(Strategy::Value),
+                unmasked_renderer: Some("NVIDIA GeForce RTX 4090".into()),
+                ..Default::default()
+            }),
+            webgpu: Some(WebgpuSpec {
+                vendor: Some("caller-vendor".into()),
+                architecture: Some("caller-arch".into()),
+                device: Some("caller-device".into()),
+                description: Some("caller-description".into()),
+                ..Default::default()
+            }),
+            ..Persona::default()
+        };
+        let s = bootstrap_script(&p, &mock_identity());
+        assert!(
+            s.contains("\"caller-vendor\""),
+            "explicit vendor overrides derived nvidia"
+        );
+        assert!(s.contains("\"caller-arch\""), "explicit architecture wins");
+        assert!(s.contains("\"caller-device\""), "explicit device emitted");
+        assert!(
+            s.contains("\"caller-description\""),
+            "explicit description emitted"
+        );
+        assert!(
+            !s.contains("\"nvidia\""),
+            "derived vendor must not leak through when overridden"
+        );
+    }
+
+    #[test]
+    fn webgpu_limits_and_features_decorate_when_supplied() {
+        let mut limits = std::collections::BTreeMap::new();
+        limits.insert("maxTextureDimension2D".to_string(), 16384u64);
+        let p = Persona {
+            webgpu: Some(WebgpuSpec {
+                limits: Some(limits),
+                features: Some(vec!["texture-compression-bc".into()]),
+                ..Default::default()
+            }),
+            ..Persona::default()
+        };
+        let s = bootstrap_script(&p, &mock_identity());
+        // The `__zdGetter(GPUAdapter.prototype, 'limits'/'features' ...)`
+        // JS SOURCE lines are static template text emitted whenever the
+        // webgpu patch runs at all (the `if (limits) {...}` gating is a
+        // RUNTIME check inside that source, not a Rust-side omission) — so
+        // asserting their presence wouldn't distinguish "supplied" from
+        // "absent". What Rust actually varies is the substituted argument
+        // values passed into the IIFE; assert those instead.
+        assert!(
+            s.contains(
+                r#"{"maxTextureDimension2D":16384}, ["texture-compression-bc"], "value", false);"#
+            ),
+            "limits + features substituted into the invocation args: {s}"
+        );
+    }
+
+    #[test]
+    fn webgpu_limits_and_features_absent_pass_null() {
+        let s = bootstrap_script(&Persona::default(), &mock_identity());
+        assert!(
+            s.contains(r#", null, null, "value", false);"#),
+            "limits/features args are JS null when unset: {s}"
+        );
+    }
+
+    #[test]
+    fn webgpu_fabricate_requires_vendor_and_limits_else_noop() {
+        // `fabricate_when_absent: true` alone (no vendor, no limits) is
+        // refused — no auto-invented fingerprint values. The JS fabrication
+        // branch is static source text either way (guarded by a runtime `if
+        // (!fabricate) return;`), so what must be checked is the substituted
+        // trailing `fabricate` argument itself, not source-line presence.
+        let p = Persona {
+            webgpu: Some(WebgpuSpec {
+                fabricate_when_absent: Some(true),
+                ..Default::default()
+            }),
+            ..Persona::default()
+        };
+        let s = bootstrap_script(&p, &mock_identity());
+        assert!(
+            s.contains("\"value\", false);"),
+            "fabricate arg must be false (no-op) without vendor+limits: {s}"
+        );
+        assert!(!s.contains("\"value\", true);"));
+
+        // vendor alone (no limits) is still refused.
+        let p2 = Persona {
+            webgpu: Some(WebgpuSpec {
+                vendor: Some("nvidia".into()),
+                fabricate_when_absent: Some(true),
+                ..Default::default()
+            }),
+            ..Persona::default()
+        };
+        let s2 = bootstrap_script(&p2, &mock_identity());
+        assert!(
+            s2.contains("\"value\", false);"),
+            "fabricate arg must be false (no-op) with vendor but no limits: {s2}"
+        );
+        assert!(!s2.contains("\"value\", true);"));
+    }
+
+    #[test]
+    fn webgpu_fabricate_wires_requestadapter_when_vendor_and_limits_set() {
+        let mut limits = std::collections::BTreeMap::new();
+        limits.insert("maxBufferSize".to_string(), 1_073_741_824u64);
+        let p = Persona {
+            webgpu: Some(WebgpuSpec {
+                vendor: Some("apple".into()),
+                architecture: Some("metal-3".into()),
+                limits: Some(limits),
+                fabricate_when_absent: Some(true),
+                ..Default::default()
+            }),
+            ..Persona::default()
+        };
+        let s = bootstrap_script(&p, &mock_identity());
+        assert!(
+            s.contains(r#"{"maxBufferSize":1073741824}, null, "value", true);"#),
+            "fabricate arg substituted true when vendor+limits both set: {s}"
+        );
+        assert!(
+            s.contains("NotSupportedError"),
+            "synthetic adapter's requestDevice rejects (v1 limitation)"
+        );
+    }
+
+    #[test]
     fn webgpu_block_deletes_navigator_gpu() {
         let p = Persona {
-            webgpu: Some(SurfaceCfg {
+            webgpu: Some(WebgpuSpec {
                 strategy: Some(Strategy::Block),
+                ..Default::default()
             }),
             ..Persona::default()
         };
@@ -887,8 +1107,9 @@ mod tests {
     #[test]
     fn webgpu_native_passes_null_vendor() {
         let p = Persona {
-            webgpu: Some(SurfaceCfg {
+            webgpu: Some(WebgpuSpec {
                 strategy: Some(Strategy::Native),
+                ..Default::default()
             }),
             ..Persona::default()
         };
@@ -953,8 +1174,9 @@ mod tests {
             canvas: Some(SurfaceCfg {
                 strategy: Some(Strategy::Seeded),
             }),
-            webgpu: Some(SurfaceCfg {
+            webgpu: Some(WebgpuSpec {
                 strategy: Some(Strategy::Value),
+                ..Default::default()
             }),
             seed: Some(Seed::from_u64(1)),
             ..Persona::default()
@@ -1009,8 +1231,18 @@ mod tests {
                 media_devices: Some(2),
                 speech_voices: Some(vec!["A".into()]),
             }),
-            webgpu: Some(SurfaceCfg {
+            webgpu: Some(WebgpuSpec {
                 strategy: Some(Strategy::Value),
+                vendor: Some("nvidia".into()),
+                architecture: Some("ada".into()),
+                device: Some("RTX 4090".into()),
+                description: Some("test adapter".into()),
+                limits: Some(std::collections::BTreeMap::from([(
+                    "maxTextureDimension2D".to_string(),
+                    16384u64,
+                )])),
+                features: Some(vec!["texture-compression-bc".into()]),
+                fabricate_when_absent: Some(true),
             }),
             seed: Some(Seed::from_u64(9)),
             ..Persona::default()
@@ -1028,7 +1260,12 @@ mod tests {
             "HW_VOICES",
             "WEBGPU_VENDOR",
             "WEBGPU_ARCHITECTURE",
+            "WEBGPU_DEVICE",
+            "WEBGPU_DESCRIPTION",
+            "WEBGPU_LIMITS",
+            "WEBGPU_FEATURES",
             "WEBGPU_MODE",
+            "WEBGPU_FABRICATE",
         ] {
             assert!(
                 !script.contains(tok),

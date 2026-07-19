@@ -133,8 +133,10 @@ pub use window::{WindowBounds, WindowState};
 // Fingerprint-spoofing surface: the `Persona` config + per-surface render
 // strategy knobs, re-exported from `zendriver-stealth` so callers can wire
 // `Browser::builder().persona(...)` / `.surface(...)` without depending on the
-// stealth crate directly.
-pub use zendriver_stealth::{Persona, PersonaBuilder, Seed, Strategy, Surface};
+// stealth crate directly. `WebgpuSpec` is included explicitly (unlike the
+// other per-surface value specs, still lib-internal-only) because it's a new
+// opt-in knob whose whole point is caller discoverability — see its rustdoc.
+pub use zendriver_stealth::{Persona, PersonaBuilder, Seed, Strategy, Surface, WebgpuSpec};
 
 // Re-export selected transport types for advanced users.
 pub use zendriver_transport::{
@@ -257,7 +259,7 @@ pub use geo_resolver::IpApiResolver;
 pub mod stealth {
     pub use zendriver_stealth::{
         Fingerprint, InputProfile, Persona, PersonaBuilder, Platform, Seed, StealthProfile,
-        Strategy, Surface, UserAgentMetadata,
+        Strategy, Surface, UserAgentMetadata, WebgpuSpec,
     };
 }
 

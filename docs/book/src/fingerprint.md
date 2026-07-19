@@ -16,7 +16,7 @@ Fingerprint control lives on two independent axes:
 
 You can mix any persona source with any per-surface strategy independently.
 
-## The 7 surfaces
+## The 8 surfaces
 
 | Surface | Kind | Default strategy | What it affects |
 |---------|------|-----------------|-----------------|
@@ -24,6 +24,7 @@ You can mix any persona source with any per-surface strategy independently.
 | `Audio` | Noise | `Seeded` | `AnalyserNode` frequency / time-domain data |
 | `ClientRects` | Noise | `Seeded` | `getBoundingClientRect` sub-pixel dimensions |
 | `Webgl` | Value | `Value` | `UNMASKED_VENDOR_WEBGL`, `UNMASKED_RENDERER_WEBGL` |
+| `Webgpu` | Value | `Value` | `GPUAdapterInfo` (vendor/architecture/device/description) + optional `.limits`/`.features` |
 | `Fonts` | Value | `Value` | `measureText` width noise + `FontFaceSet.check` allow-list |
 | `Hardware` | Value | `Value` | Battery level, media-device count, speech voices |
 | `Webrtc` | Policy | `Block` | ICE candidate leak suppression / fake IP |
@@ -44,10 +45,10 @@ advances across the whole page — so neither strategy "reseeds on every call"
 in a way that makes repeat reads of the same content diverge.
 
 Noise surfaces (Canvas, Audio, ClientRects) accept `Native`, `Seeded`,
-`Random`, `Block`. Value surfaces (Webgl, Fonts, Hardware) accept `Native`,
-`Value`, `Block`. The policy surface (Webrtc) accepts `Native`, `Block`,
-`Value` (fake IP). Requesting a meaningless combination logs a warning and
-falls back to the surface's kind default.
+`Random`, `Block`. Value surfaces (Webgl, Webgpu, Fonts, Hardware) accept
+`Native`, `Value`, `Block`. The policy surface (Webrtc) accepts `Native`,
+`Block`, `Value` (fake IP). Requesting a meaningless combination logs a
+warning and falls back to the surface's kind default.
 
 ## Persona sources
 
@@ -187,6 +188,70 @@ let browser = Browser::builder()
     .surface(Surface::Canvas, Strategy::Random)  // fresh per-page-load seed
     .launch().await?;
 ```
+
+## WebGPU (opt-in adapter override / fabrication)
+
+By default (`Persona.webgpu = None`, or `Some(WebgpuSpec::default())`), the
+`Webgpu` surface only DECORATES a real `navigator.gpu` adapter's `.info` with
+a vendor/architecture DERIVED from the `Webgl` surface's renderer (never
+fabricated) — the same behavior it always had. `WebgpuSpec` (mirroring
+`WebglSpec`'s strategy+values shape) adds two OPT-IN capabilities on top:
+
+1. **Caller-supplied adapter identity.** Set `vendor` / `architecture` /
+   `device` / `description` / `limits` / `features` explicitly instead of
+   letting `vendor`/`architecture` derive from the WebGL renderer.
+2. **Synthetic adapter fabrication** (`fabricate_when_absent: true`) — when
+   the host has no real WebGPU adapter, `navigator.gpu.requestAdapter()`
+   resolves a synthetic one built from your supplied values instead of
+   `null`. Requires BOTH `vendor` AND `limits` to be set explicitly — a bare
+   `fabricate_when_absent: true` with nothing else is refused (no-op): this
+   project never auto-invents fingerprint values.
+
+```rust,no_run
+use zendriver::{Browser, Persona, WebgpuSpec};
+
+let persona = Persona {
+    webgpu: Some(WebgpuSpec {
+        vendor: Some("apple".into()),
+        architecture: Some("metal-3".into()),
+        ..Default::default()
+    }),
+    ..Persona::default()
+};
+
+let browser = Browser::builder().persona(persona).launch().await?;
+```
+
+Or via JSON (works with `fabricate_when_absent` + `limits`/`features` too):
+
+```rust,no_run
+use zendriver::Persona;
+
+let persona: Persona = Persona::try_from_json(r#"{
+  "webgpu": {
+    "vendor": "apple",
+    "architecture": "metal-3",
+    "limits": { "maxTextureDimension2D": 16384 },
+    "features": ["texture-compression-bc"],
+    "fabricate_when_absent": true
+  }
+}"#).unwrap();
+```
+
+**You own value accuracy.** Every `WebgpuSpec` field is caller-supplied —
+nothing is probed or invented from a real GPU. A `vendor`/`limits`/`features`
+combination that doesn't correspond to any real device is **more detectable
+than leaving the field `None`**: fingerprinting scripts cross-check
+`GPUAdapterInfo` against `GPUSupportedLimits`/`GPUSupportedFeatures` and
+against the WebGL renderer string, so an incoherent combination reads as a
+bot faster than honest absence does. Only set these to values verified
+against a real device.
+
+**v1 limitation:** a fabricated synthetic adapter's `requestDevice()` always
+REJECTS — there is no way to fabricate a working `GPUDevice` without a real
+GPU behind it. Fabrication only makes `requestAdapter()` resolve a coherent
+adapter for detection scripts that stop there; it does not unlock actual
+WebGPU rendering on a GPU-less host.
 
 ## Country → locale + timezone overlay (`geo_locale`)
 
