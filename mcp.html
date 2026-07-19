@@ -183,7 +183,7 @@
                     <main>
                         <h1 id="mcp-server-zendriver-mcp"><a class="header" href="#mcp-server-zendriver-mcp">MCP server (<code>zendriver-mcp</code>)</a></h1>
 <p><code>zendriver-mcp</code> is a <a href="https://modelcontextprotocol.io/">Model Context Protocol</a>
-server that exposes zendriver-rs through 70 MCP tools (71 with the
+server that exposes zendriver-rs through 71 MCP tools (72 with the
 optional <code>fingerprints</code> feature), so any
 MCP-compatible client (Claude Desktop, Claude Code, custom agents) can
 drive a real, stealth-by-default Chrome browser.</p>
@@ -231,7 +231,7 @@ OPTIONS:
     -V, --version
 </code></pre>
 <h2 id="tool-surface"><a class="header" href="#tool-surface">Tool surface</a></h2>
-<p>70 tools across these categories (71 with the optional <code>fingerprints</code>
+<p>71 tools across these categories (72 with the optional <code>fingerprints</code>
 feature):</p>
 <div class="table-wrapper"><table><thead><tr><th>Category</th><th>Tools</th><th style="text-align: right">Count</th></tr></thead><tbody>
 <tr><td>Lifecycle</td><td><code>browser_open / _close / _status</code></td><td style="text-align: right">3</td></tr>
@@ -239,7 +239,7 @@ feature):</p>
 <tr><td>Scroll / Window</td><td><code>browser_scroll / _get_window / _set_window</code></td><td style="text-align: right">3</td></tr>
 <tr><td>Tabs</td><td><code>browser_tab_list / _new / _switch / _close / _activate</code></td><td style="text-align: right">5</td></tr>
 <tr><td>Find</td><td><code>browser_find / _find_all</code></td><td style="text-align: right">2</td></tr>
-<tr><td>Actions</td><td><code>browser_click / _hover / _type / _press / _key_sequence / _mouse / _set_value / _clear / _focus / _scroll_into_view / _upload</code></td><td style="text-align: right">11</td></tr>
+<tr><td>Actions</td><td><code>browser_click / _hover / _tap / _type / _press / _key_sequence / _mouse / _set_value / _clear / _focus / _scroll_into_view / _upload</code></td><td style="text-align: right">12</td></tr>
 <tr><td>Reads</td><td><code>browser_element_state / _get_links / _search_resources</code></td><td style="text-align: right">3</td></tr>
 <tr><td>Snapshots / Export</td><td><code>browser_html / _screenshot / _pdf / _save_mhtml</code></td><td style="text-align: right">4</td></tr>
 <tr><td>Eval</td><td><code>browser_evaluate / _evaluate_main</code></td><td style="text-align: right">2</td></tr>

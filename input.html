@@ -313,6 +313,41 @@ canvas.click_with(ClickOptions {
 <tr><td><code>position</code></td><td><code>Option&lt;(f64, f64)&gt;</code></td><td><code>None</code> (bbox center)</td><td>Click offset relative to bbox top-left.</td></tr>
 </tbody></table>
 </div>
+<h2 id="touch--tap"><a class="header" href="#touch--tap">Touch / tap</a></h2>
+<p><a href="https://docs.rs/zendriver/latest/zendriver/struct.Element.html#method.tap"><code>Element::tap()</code></a> taps an element's bbox center via a real touch dispatch
+(<code>Input.dispatchTouchEvent</code> <code>touchStart</code> → <code>touchEnd</code>), not a mouse click.
+It mirrors <code>click()</code>'s scroll-into-view + actionability-gate + bbox-center
+path, but ends in a touch event pair instead of <code>mousePressed</code>/<code>mouseReleased</code>
+— for pages that branch their handling on touch vs mouse input (an
+<code>ontouchstart</code> listener, or <code>pointerType</code> checks).</p>
+<p><a href="https://docs.rs/zendriver/latest/zendriver/struct.Tab.html#method.tap"><code>Tab::tap(x, y)</code></a> is the coordinate-level equivalent, for canvas / custom
+widgets with no element to target — mirrors <a href="https://docs.rs/zendriver/latest/zendriver/struct.Tab.html#method.mouse_click"><code>Tab::mouse_click()</code></a>.</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span><span class="boring">let browser = zendriver::Browser::builder().launch().await?;
+</span><span class="boring">let tab = browser.main_tab();
+</span>let btn = tab.find().css("button").one().await?;
+btn.tap().await?;
+
+// Or at a raw coordinate:
+tab.tap(120.0, 240.0).await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p><code>touchEnd</code> carries an empty <code>touchPoints</code> array — that's the CDP contract
+for a lifted finger, not a bug.</p>
+<p><strong>Capability-emulation caveat:</strong> <code>tap()</code> does <em>not</em> call
+<code>Emulation.setTouchEmulationEnabled</code>, so it doesn't flip touch-<em>capability</em>
+signals a page might probe — <code>'ontouchstart' in window</code>,
+<code>navigator.maxTouchPoints</code>, <code>matchMedia('(pointer: coarse)')</code>. The bare
+<code>dispatchTouchEvent</code> still fires the page's real <code>touchstart</code>/<code>touchend</code>
+handlers (and, on a clickable element, the browser's own synthesized
+<code>click</code>), which is what a tap needs; a page that <em>gates</em> its behavior on
+those capability signals before wiring up touch listeners won't see them
+flip. Full capability emulation belongs with mobile device emulation
+(viewport + UA + touch capability together) — a later, larger feature, not
+part of this tap primitive.</p>
+<p>Scope is touch only: no pressure, pen/stylus, or tilt input yet.</p>
 <h2 id="keyboard-key-keymodifiers-specialkey"><a class="header" href="#keyboard-key-keymodifiers-specialkey">Keyboard: <code>Key</code>, <code>KeyModifiers</code>, <code>SpecialKey</code></a></h2>
 <p>For single-key dispatches (Enter, Tab, arrow keys, Ctrl+A, etc.):</p>
 <pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]

@@ -1817,6 +1817,41 @@ canvas.click_with(ClickOptions {
 <tr><td><code>position</code></td><td><code>Option&lt;(f64, f64)&gt;</code></td><td><code>None</code> (bbox center)</td><td>Click offset relative to bbox top-left.</td></tr>
 </tbody></table>
 </div>
+<h2 id="touch--tap"><a class="header" href="#touch--tap">Touch / tap</a></h2>
+<p><a href="https://docs.rs/zendriver/latest/zendriver/struct.Element.html#method.tap"><code>Element::tap()</code></a> taps an element's bbox center via a real touch dispatch
+(<code>Input.dispatchTouchEvent</code> <code>touchStart</code> → <code>touchEnd</code>), not a mouse click.
+It mirrors <code>click()</code>'s scroll-into-view + actionability-gate + bbox-center
+path, but ends in a touch event pair instead of <code>mousePressed</code>/<code>mouseReleased</code>
+— for pages that branch their handling on touch vs mouse input (an
+<code>ontouchstart</code> listener, or <code>pointerType</code> checks).</p>
+<p><a href="https://docs.rs/zendriver/latest/zendriver/struct.Tab.html#method.tap"><code>Tab::tap(x, y)</code></a> is the coordinate-level equivalent, for canvas / custom
+widgets with no element to target — mirrors <a href="https://docs.rs/zendriver/latest/zendriver/struct.Tab.html#method.mouse_click"><code>Tab::mouse_click()</code></a>.</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span><span class="boring">async fn ex() -&gt; zendriver::Result&lt;()&gt; {
+</span><span class="boring">let browser = zendriver::Browser::builder().launch().await?;
+</span><span class="boring">let tab = browser.main_tab();
+</span>let btn = tab.find().css("button").one().await?;
+btn.tap().await?;
+
+// Or at a raw coordinate:
+tab.tap(120.0, 240.0).await?;
+<span class="boring">Ok(()) }
+</span><span class="boring">}</span></code></pre></pre>
+<p><code>touchEnd</code> carries an empty <code>touchPoints</code> array — that's the CDP contract
+for a lifted finger, not a bug.</p>
+<p><strong>Capability-emulation caveat:</strong> <code>tap()</code> does <em>not</em> call
+<code>Emulation.setTouchEmulationEnabled</code>, so it doesn't flip touch-<em>capability</em>
+signals a page might probe — <code>'ontouchstart' in window</code>,
+<code>navigator.maxTouchPoints</code>, <code>matchMedia('(pointer: coarse)')</code>. The bare
+<code>dispatchTouchEvent</code> still fires the page's real <code>touchstart</code>/<code>touchend</code>
+handlers (and, on a clickable element, the browser's own synthesized
+<code>click</code>), which is what a tap needs; a page that <em>gates</em> its behavior on
+those capability signals before wiring up touch listeners won't see them
+flip. Full capability emulation belongs with mobile device emulation
+(viewport + UA + touch capability together) — a later, larger feature, not
+part of this tap primitive.</p>
+<p>Scope is touch only: no pressure, pen/stylus, or tilt input yet.</p>
 <h2 id="keyboard-key-keymodifiers-specialkey"><a class="header" href="#keyboard-key-keymodifiers-specialkey">Keyboard: <code>Key</code>, <code>KeyModifiers</code>, <code>SpecialKey</code></a></h2>
 <p>For single-key dispatches (Enter, Tab, arrow keys, Ctrl+A, etc.):</p>
 <pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
@@ -3451,7 +3486,7 @@ browser-automation library is a poor fit. If you need pure-HTTP DataDome bypass
 for high-throughput scraping, build that as a separate crate.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="mcp-server-zendriver-mcp"><a class="header" href="#mcp-server-zendriver-mcp">MCP server (<code>zendriver-mcp</code>)</a></h1>
 <p><code>zendriver-mcp</code> is a <a href="https://modelcontextprotocol.io/">Model Context Protocol</a>
-server that exposes zendriver-rs through 70 MCP tools (71 with the
+server that exposes zendriver-rs through 71 MCP tools (72 with the
 optional <code>fingerprints</code> feature), so any
 MCP-compatible client (Claude Desktop, Claude Code, custom agents) can
 drive a real, stealth-by-default Chrome browser.</p>
@@ -3499,7 +3534,7 @@ OPTIONS:
     -V, --version
 </code></pre>
 <h2 id="tool-surface"><a class="header" href="#tool-surface">Tool surface</a></h2>
-<p>70 tools across these categories (71 with the optional <code>fingerprints</code>
+<p>71 tools across these categories (72 with the optional <code>fingerprints</code>
 feature):</p>
 <div class="table-wrapper"><table><thead><tr><th>Category</th><th>Tools</th><th style="text-align: right">Count</th></tr></thead><tbody>
 <tr><td>Lifecycle</td><td><code>browser_open / _close / _status</code></td><td style="text-align: right">3</td></tr>
@@ -3507,7 +3542,7 @@ feature):</p>
 <tr><td>Scroll / Window</td><td><code>browser_scroll / _get_window / _set_window</code></td><td style="text-align: right">3</td></tr>
 <tr><td>Tabs</td><td><code>browser_tab_list / _new / _switch / _close / _activate</code></td><td style="text-align: right">5</td></tr>
 <tr><td>Find</td><td><code>browser_find / _find_all</code></td><td style="text-align: right">2</td></tr>
-<tr><td>Actions</td><td><code>browser_click / _hover / _type / _press / _key_sequence / _mouse / _set_value / _clear / _focus / _scroll_into_view / _upload</code></td><td style="text-align: right">11</td></tr>
+<tr><td>Actions</td><td><code>browser_click / _hover / _tap / _type / _press / _key_sequence / _mouse / _set_value / _clear / _focus / _scroll_into_view / _upload</code></td><td style="text-align: right">12</td></tr>
 <tr><td>Reads</td><td><code>browser_element_state / _get_links / _search_resources</code></td><td style="text-align: right">3</td></tr>
 <tr><td>Snapshots / Export</td><td><code>browser_html / _screenshot / _pdf / _save_mhtml</code></td><td style="text-align: right">4</td></tr>
 <tr><td>Eval</td><td><code>browser_evaluate / _evaluate_main</code></td><td style="text-align: right">2</td></tr>
