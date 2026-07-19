@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-07-19
+
+### Added
+
+- Add case-insensitive predicate matchers (attr_i/attr_contains_i/attr_starts_with_i/attr_ends_with_i/containing_text_i/text_equals_i)
+
+
 ## [0.3.1] - 2026-07-19
 
 ### Added
