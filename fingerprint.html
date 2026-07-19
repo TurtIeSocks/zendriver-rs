@@ -194,12 +194,13 @@ touching any CDP internals directly.</p>
 </tbody></table>
 </div>
 <p>You can mix any persona source with any per-surface strategy independently.</p>
-<h2 id="the-7-surfaces"><a class="header" href="#the-7-surfaces">The 7 surfaces</a></h2>
+<h2 id="the-8-surfaces"><a class="header" href="#the-8-surfaces">The 8 surfaces</a></h2>
 <div class="table-wrapper"><table><thead><tr><th>Surface</th><th>Kind</th><th>Default strategy</th><th>What it affects</th></tr></thead><tbody>
 <tr><td><code>Canvas</code></td><td>Noise</td><td><code>Seeded</code></td><td><code>getImageData</code>, <code>toDataURL</code> pixel data</td></tr>
 <tr><td><code>Audio</code></td><td>Noise</td><td><code>Seeded</code></td><td><code>AnalyserNode</code> frequency / time-domain data</td></tr>
 <tr><td><code>ClientRects</code></td><td>Noise</td><td><code>Seeded</code></td><td><code>getBoundingClientRect</code> sub-pixel dimensions</td></tr>
 <tr><td><code>Webgl</code></td><td>Value</td><td><code>Value</code></td><td><code>UNMASKED_VENDOR_WEBGL</code>, <code>UNMASKED_RENDERER_WEBGL</code></td></tr>
+<tr><td><code>Webgpu</code></td><td>Value</td><td><code>Value</code></td><td><code>GPUAdapterInfo</code> (vendor/architecture/device/description) + optional <code>.limits</code>/<code>.features</code></td></tr>
 <tr><td><code>Fonts</code></td><td>Value</td><td><code>Value</code></td><td><code>measureText</code> width noise + <code>FontFaceSet.check</code> allow-list</td></tr>
 <tr><td><code>Hardware</code></td><td>Value</td><td><code>Value</code></td><td>Battery level, media-device count, speech voices</td></tr>
 <tr><td><code>Webrtc</code></td><td>Policy</td><td><code>Block</code></td><td>ICE candidate leak suppression / fake IP</td></tr>
@@ -219,10 +220,10 @@ bytes, audio samples, rect geometry) on every read, not one stream that
 advances across the whole page — so neither strategy "reseeds on every call"
 in a way that makes repeat reads of the same content diverge.</p>
 <p>Noise surfaces (Canvas, Audio, ClientRects) accept <code>Native</code>, <code>Seeded</code>,
-<code>Random</code>, <code>Block</code>. Value surfaces (Webgl, Fonts, Hardware) accept <code>Native</code>,
-<code>Value</code>, <code>Block</code>. The policy surface (Webrtc) accepts <code>Native</code>, <code>Block</code>,
-<code>Value</code> (fake IP). Requesting a meaningless combination logs a warning and
-falls back to the surface's kind default.</p>
+<code>Random</code>, <code>Block</code>. Value surfaces (Webgl, Webgpu, Fonts, Hardware) accept
+<code>Native</code>, <code>Value</code>, <code>Block</code>. The policy surface (Webrtc) accepts <code>Native</code>,
+<code>Block</code>, <code>Value</code> (fake IP). Requesting a meaningless combination logs a
+warning and falls back to the surface's kind default.</p>
 <h2 id="persona-sources"><a class="header" href="#persona-sources">Persona sources</a></h2>
 <h3 id="personasystem--host-probed-cached"><a class="header" href="#personasystem--host-probed-cached"><code>Persona::system()</code> — host-probed, cached</a></h3>
 <p>Reads the real machine's platform, CPU count, and memory via <code>sysinfo</code>. The
@@ -344,6 +345,83 @@ let browser = Browser::builder()
     .surface(Surface::Canvas, Strategy::Random)  // fresh per-page-load seed
     .launch().await?;
 <span class="boring">}</span></code></pre></pre>
+<h2 id="webgpu-opt-in-adapter-override--fabrication"><a class="header" href="#webgpu-opt-in-adapter-override--fabrication">WebGPU (opt-in adapter override / fabrication)</a></h2>
+<p>By default (<code>Persona.webgpu = None</code>, or <code>Some(WebgpuSpec::default())</code>), the
+<code>Webgpu</code> surface only DECORATES a real <code>navigator.gpu</code> adapter's <code>.info</code> with
+a vendor/architecture DERIVED from the <code>Webgl</code> surface's renderer (never
+fabricated) — the same behavior it always had. <code>WebgpuSpec</code> (mirroring
+<code>WebglSpec</code>'s strategy+values shape) adds two OPT-IN capabilities on top:</p>
+<ol>
+<li>
+<p><strong>Caller-supplied adapter identity.</strong> Set <code>vendor</code> / <code>architecture</code> /
+<code>device</code> / <code>description</code> / <code>limits</code> / <code>features</code> explicitly instead of
+letting <code>vendor</code>/<code>architecture</code> derive from the WebGL renderer.</p>
+</li>
+<li>
+<p><strong>Synthetic adapter fabrication</strong> (<code>fabricate_when_absent: true</code>) — when
+the host has no real WebGPU adapter, resolve a synthetic one built from
+your supplied values. This covers <strong>both</strong> GPU-less shapes:</p>
+<ul>
+<li><code>navigator.gpu</code> <strong>entirely absent</strong> (<code>'gpu' in navigator === false</code> —
+the common case, since zendriver's default headless launch adds
+<code>--disable-gpu</code>): a synthetic <code>navigator.gpu</code> is <em>created</em> on
+<code>Navigator.prototype</code>, flipping <code>'gpu' in navigator</code> to <strong>true</strong>. That's
+coherent for a modern-Chrome persona — real modern Chrome always exposes
+<code>navigator.gpu</code> even GPU-less (there <code>requestAdapter()</code> just returns
+<code>null</code>).</li>
+<li><code>navigator.gpu</code> present but <code>requestAdapter()</code> returns <code>null</code>: the real
+<code>requestAdapter</code> is wrapped so a <code>null</code> result falls back to the
+synthetic adapter (a real adapter passes through untouched).</li>
+</ul>
+<p>Requires BOTH <code>vendor</code> AND <code>limits</code> to be set explicitly — a bare
+<code>fabricate_when_absent: true</code> with nothing else is refused (no-op): this
+project never auto-invents fingerprint values.</p>
+</li>
+</ol>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::{Browser, Persona, WebgpuSpec};
+
+let persona = Persona {
+    webgpu: Some(WebgpuSpec {
+        vendor: Some("apple".into()),
+        architecture: Some("metal-3".into()),
+        ..Default::default()
+    }),
+    ..Persona::default()
+};
+
+let browser = Browser::builder().persona(persona).launch().await?;
+<span class="boring">}</span></code></pre></pre>
+<p>Or via JSON (works with <code>fabricate_when_absent</code> + <code>limits</code>/<code>features</code> too):</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::Persona;
+
+let persona: Persona = Persona::try_from_json(r#"{
+  "webgpu": {
+    "vendor": "apple",
+    "architecture": "metal-3",
+    "limits": { "maxTextureDimension2D": 16384 },
+    "features": ["texture-compression-bc"],
+    "fabricate_when_absent": true
+  }
+}"#).unwrap();
+<span class="boring">}</span></code></pre></pre>
+<p><strong>You own value accuracy.</strong> Every <code>WebgpuSpec</code> field is caller-supplied —
+nothing is probed or invented from a real GPU. A <code>vendor</code>/<code>limits</code>/<code>features</code>
+combination that doesn't correspond to any real device is <strong>more detectable
+than leaving the field <code>None</code></strong>: fingerprinting scripts cross-check
+<code>GPUAdapterInfo</code> against <code>GPUSupportedLimits</code>/<code>GPUSupportedFeatures</code> and
+against the WebGL renderer string, so an incoherent combination reads as a
+bot faster than honest absence does. Only set these to values verified
+against a real device.</p>
+<p><strong>v1 limitations:</strong> a fabricated synthetic adapter's <code>requestDevice()</code> always
+REJECTS — there is no way to fabricate a working <code>GPUDevice</code> without a real
+GPU behind it. Fabrication only makes <code>requestAdapter()</code> resolve a coherent
+adapter for detection scripts that stop there; it does not unlock actual
+WebGPU rendering on a GPU-less host. The synthetic adapter and (when created)
+the synthetic <code>navigator.gpu</code> are plain objects, so <code>adapter instanceof GPUAdapter</code> and <code>navigator.gpu instanceof GPU</code> are <code>false</code>.</p>
 <h2 id="country--locale--timezone-overlay-geo_locale"><a class="header" href="#country--locale--timezone-overlay-geo_locale">Country → locale + timezone overlay (<code>geo_locale</code>)</a></h2>
 <p>The optional <code>geo</code> feature adds <a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.geo_locale"><code>BrowserBuilder::geo_locale</code></a>, which maps an
 ISO 3166-1 alpha-2 country code (e.g. <code>"US"</code>, <code>"de"</code>) to a coherent <code>locale</code> +

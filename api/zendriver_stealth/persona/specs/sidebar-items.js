@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["FontSpec","HardwareSpec","ScreenSpec","SurfaceCfg","UaMetadata","UaSpec","WebglSpec","WebrtcSpec"]};
+window.SIDEBAR_ITEMS = {"struct":["FontSpec","HardwareSpec","ScreenSpec","SurfaceCfg","UaMetadata","UaSpec","WebglSpec","WebgpuSpec","WebrtcSpec"]};

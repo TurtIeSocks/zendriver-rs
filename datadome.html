@@ -324,14 +324,22 @@ dataset. Before the <code>Surface::Webgpu</code> patch (issue #20), Chrome runni
 <code>zendriver</code> leaked the platform's real GPU adapter info even when the WebGL
 renderer was spoofed — the inconsistency read as a bot signal.</p>
 <p><code>Surface::Webgpu</code> (shipped with <code>zendriver-stealth</code>) derives a coherent
-<code>GPUAdapterInfo</code> from the spoofed WebGL renderer string and overrides
-<code>navigator.gpu.requestAdapter()</code> so both surfaces report the same hardware.
-This patch is included in <code>BrowserBuilder::stealth(StealthProfile::spoofed())</code>
+<code>GPUAdapterInfo</code> from the spoofed WebGL renderer string and decorates the real
+adapter's reported <code>.info</code> so both surfaces report the same hardware. This
+patch is included in <code>BrowserBuilder::stealth(StealthProfile::spoofed())</code>
 with no extra configuration required.</p>
 <p><strong>Containers / CI:</strong> WebGPU requires a real GPU. In GPU-less containers,
 <code>requestAdapter()</code> returns <code>null</code> both before and after the patch — which is
-itself coherent (no GPU present). The patch does not fabricate adapters in
-GPU-less environments.</p>
+itself coherent (no GPU present) and passes DataDome's own consistency check
+(both <code>null</code>). The patch does not fabricate adapters in GPU-less environments
+<strong>by default</strong>. If a GPU-less environment specifically needs
+<code>requestAdapter()</code> to resolve a non-null adapter (e.g. to match a device
+profile DataDome expects), opt into <code>WebgpuSpec::fabricate_when_absent</code> with
+explicit <code>vendor</code> + <code>limits</code> — see the
+<a href="fingerprint.html#webgpu-opt-in-adapter-override--fabrication">WebGPU section</a>
+of the fingerprint chapter. It's an explicit, caller-supplied override, not
+automatic: wrong values are more detectable than the honest <code>null</code> this
+container caveat already describes.</p>
 <h2 id="active-sensor-reverse-engineering--out-of-scope"><a class="header" href="#active-sensor-reverse-engineering--out-of-scope">Active sensor reverse-engineering — out of scope</a></h2>
 <p>Computing DataDome's invisible device-check score in pure Rust (outside of a
 real browser) is not in scope for this crate. DataDome updates its obfuscated
