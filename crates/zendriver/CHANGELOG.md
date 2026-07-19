@@ -5,6 +5,14 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-19
+
+### Added
+
+- Add Browser::version() (CDP Browser.getVersion); wire MCP chrome_version
+- Mirror the browser proxy into a custom geo_endpoint resolver
+
+
 ## [0.3.0] - 2026-07-18
 
 ### Added
