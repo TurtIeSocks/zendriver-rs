@@ -18,3 +18,6 @@ oneOf:
   - description: "`Page.downloadWillBegin` — start of a file download."
     type: string
     const: download
+  - description: "`Page.fileChooserOpened` — a button/label-triggered (or direct)\nfile picker, answered with `file_chooser_paths`."
+    type: string
+    const: file_chooser

@@ -221,6 +221,17 @@ pub enum ZendriverError {
     /// Browser-context HTTP request error.
     #[error("browser request: {0}")]
     Request(String),
+
+    /// A `Tab::expect_file_chooser` expectation (feature `expect`) matched
+    /// `Page.fileChooserOpened`, but Chrome reported no `backendNodeId` —
+    /// only choosers opened via an `<input type="file">` element carry one,
+    /// so there was nothing to dispatch `DOM.setFileInputFiles` against
+    /// (e.g. a picker driven by the File System Access API instead of a
+    /// file input). Not itself `#[cfg]`-gated, like `EventStreamIncomplete`
+    /// above — only ever constructed by `expect`-gated code, but the
+    /// variant costs nothing to keep unconditionally compiled.
+    #[error("file chooser: {0}")]
+    FileChooser(String),
 }
 
 impl From<zendriver_transport::TransportError> for ZendriverError {

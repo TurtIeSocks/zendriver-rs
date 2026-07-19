@@ -2829,6 +2829,61 @@ impl Tab {
         .await?;
         Ok(crate::expect::download::register(self.session(), coord))
     }
+
+    /// Register a one-shot expectation for the first `Page.fileChooserOpened`
+    /// on this tab, and answer it with `paths` — bypassing the OS file
+    /// dialog the same way [`Element::upload_files`](crate::Element::upload_files)
+    /// does, but for **button/label-triggered** pickers (a hidden
+    /// `<input type="file">` clicked from a JS handler, or any custom
+    /// widget that ultimately opens one) that `upload_files` can't reach
+    /// because it only knows how to target a direct `<input type="file">`'s
+    /// backend node.
+    ///
+    /// `paths` is captured up front (converted via `to_string_lossy()`,
+    /// matching CDP's UTF-8 string contract) and applied automatically the
+    /// instant the chooser opens.
+    ///
+    /// `async` because `Page.setInterceptFileChooserDialog { enabled: true
+    /// }` must reach Chrome before the caller's next line — usually the
+    /// click that opens the picker — or that click could race Chrome into
+    /// showing the real OS dialog instead of firing the intercept event.
+    /// Same reasoning as [`Tab::expect_download`]'s own setup call.
+    ///
+    /// The returned
+    /// [`FileChooserExpectation`](crate::expect::file_chooser::FileChooserExpectation)
+    /// is awaitable directly (`expectation.await`) or via the
+    /// Playwright-style `expectation.matched().await`; configure the
+    /// timeout via
+    /// [`timeout`](crate::expect::file_chooser::FileChooserExpectation::timeout)
+    /// before awaiting. If the expectation is dropped before a chooser
+    /// opens (timeout, early return, panic unwind), the intercept is
+    /// disabled best-effort so a later real dialog isn't silently
+    /// swallowed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// let fc = tab.expect_file_chooser(&["/tmp/photo.jpg"]).await?;
+    /// let button = tab.find().css("#upload-btn").one().await?;
+    /// button.click().await?; // opens the picker via a hidden input
+    /// fc.await?; // intercepts fileChooserOpened + sets the files
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// Gated by the `expect` cargo feature.
+    pub async fn expect_file_chooser<P: AsRef<std::path::Path>>(
+        &self,
+        paths: &[P],
+    ) -> Result<crate::expect::file_chooser::FileChooserExpectation> {
+        let files: Vec<String> = paths
+            .iter()
+            .map(|p| p.as_ref().to_string_lossy().into_owned())
+            .collect();
+        crate::expect::file_chooser::register(self.session(), files).await
+    }
 }
 
 #[cfg(feature = "cloudflare")]

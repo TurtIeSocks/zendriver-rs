@@ -13,6 +13,7 @@
 #![cfg(feature = "integration-tests")]
 #![allow(clippy::panic, clippy::unwrap_used)]
 
+use std::io::Write;
 use std::time::Duration;
 
 use serial_test::serial;
@@ -292,6 +293,133 @@ async fn cloudflare_is_challenge_present_returns_false_on_normal_page() {
         !present,
         "vanilla page must not be reported as carrying a Cloudflare challenge"
     );
+
+    browser.close().await.unwrap();
+}
+
+// Bucketed into the nightly-only `#[ignore]` lane (per the recently-added
+// `nightly-ignored-tests` job) rather than the per-PR gate: this exercises a
+// brand-new CDP flow (`Page.setInterceptFileChooserDialog`) rather than a
+// known Chrome limitation like `expect_dialog_resolves_on_alert` above.
+// Verified locally against real headless Chrome before landing.
+#[tokio::test]
+#[serial]
+#[ignore = "new Page.setInterceptFileChooserDialog flow; nightly-only per project convention"]
+async fn expect_file_chooser_intercepts_button_triggered_hidden_input() {
+    // The button's onclick indirects through a hidden <input type=file> —
+    // the case `Element::upload_files` can't reach (it only knows how to
+    // target a direct file input's backend node) but `expect_file_chooser`
+    // can, since it intercepts `Page.fileChooserOpened` regardless of what
+    // triggered it.
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(
+                r#"<!doctype html><html><body>
+              <input type="file" id="hidden-input" style="display:none" />
+              <button id="picker-btn"
+                onclick="document.getElementById('hidden-input').click()">
+                Pick file
+              </button>
+            </body></html>"#
+                    .as_bytes()
+                    .to_vec(),
+                "text/html",
+            ),
+        )
+        .mount(&mock)
+        .await;
+
+    let browser = Browser::builder().headless(true).launch().await.unwrap();
+    let tab = browser.main_tab();
+    tab.goto(&mock.uri()).await.unwrap();
+    tab.wait_for_load().await.unwrap();
+
+    let mut tmp = tempfile::NamedTempFile::new().unwrap();
+    writeln!(tmp, "hello from a button-triggered picker").unwrap();
+    let path = tmp.path().to_path_buf();
+
+    // Register BEFORE the click — the intercept must be enabled on Chrome's
+    // side before the click can race it.
+    let fc = tab
+        .expect_file_chooser(&[&path])
+        .await
+        .unwrap()
+        .timeout(Duration::from_secs(5));
+
+    let button = tab.find().css("#picker-btn").one().await.unwrap();
+    button.click().await.unwrap();
+
+    let matched = fc.await.expect("expect_file_chooser should resolve");
+    assert_eq!(matched.mode, zendriver::FileChooserMode::SelectSingle);
+
+    let file_count: i64 = tab
+        .evaluate_main("document.getElementById('hidden-input').files.length")
+        .await
+        .unwrap();
+    assert_eq!(file_count, 1);
+
+    let file_name: String = tab
+        .evaluate_main("document.getElementById('hidden-input').files[0].name")
+        .await
+        .unwrap();
+    let expected_name = path.file_name().unwrap().to_string_lossy().into_owned();
+    assert_eq!(file_name, expected_name);
+
+    browser.close().await.unwrap();
+}
+
+// Same nightly-only rationale as the button test above.
+#[tokio::test]
+#[serial]
+#[ignore = "new Page.setInterceptFileChooserDialog flow; nightly-only per project convention"]
+async fn expect_file_chooser_also_answers_a_directly_clicked_input() {
+    // Confirms the same intercept path works when the file input is clicked
+    // directly (not just via a button/label indirection) — the same CDP
+    // event fires either way.
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(
+                r#"<!doctype html><html><body>
+              <input type="file" id="f" />
+            </body></html>"#
+                    .as_bytes()
+                    .to_vec(),
+                "text/html",
+            ),
+        )
+        .mount(&mock)
+        .await;
+
+    let browser = Browser::builder().headless(true).launch().await.unwrap();
+    let tab = browser.main_tab();
+    tab.goto(&mock.uri()).await.unwrap();
+    tab.wait_for_load().await.unwrap();
+
+    let mut tmp = tempfile::NamedTempFile::new().unwrap();
+    writeln!(tmp, "hello from a directly-clicked input").unwrap();
+    let path = tmp.path().to_path_buf();
+
+    let fc = tab
+        .expect_file_chooser(&[&path])
+        .await
+        .unwrap()
+        .timeout(Duration::from_secs(5));
+
+    let input = tab.find().css("#f").one().await.unwrap();
+    input.click().await.unwrap();
+
+    fc.await.expect("expect_file_chooser should resolve");
+
+    let file_name: String = tab
+        .evaluate_main("document.getElementById('f').files[0].name")
+        .await
+        .unwrap();
+    let expected_name = path.file_name().unwrap().to_string_lossy().into_owned();
+    assert_eq!(file_name, expected_name);
 
     browser.close().await.unwrap();
 }

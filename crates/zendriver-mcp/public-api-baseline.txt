@@ -1018,6 +1018,7 @@ pub zendriver::error::ZendriverError::ElementNotFound::selector: alloc::string::
 pub zendriver::error::ZendriverError::ElementStale
 pub zendriver::error::ZendriverError::EventStreamIncomplete
 pub zendriver::error::ZendriverError::Fetcher(alloc::boxed::Box<zendriver_fetcher::error::FetcherError>)
+pub zendriver::error::ZendriverError::FileChooser(alloc::string::String)
 pub zendriver::error::ZendriverError::FrameNotFound(alloc::string::String)
 pub zendriver::error::ZendriverError::HistoryNavigation(alloc::string::String)
 pub zendriver::error::ZendriverError::Imperva(alloc::boxed::Box<zendriver_imperva::error::ImpervaError>)
@@ -1470,6 +1471,168 @@ impl<T> typenum::type_operators::Same for zendriver::expect::download::MatchedDo
 pub type zendriver::expect::download::MatchedDownload::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for zendriver::expect::download::MatchedDownload where V: ppv_lite86::types::MultiLane<T>
 pub fn zendriver::expect::download::MatchedDownload::vzip(self) -> V
+pub mod zendriver::expect::file_chooser
+pub enum zendriver::expect::file_chooser::FileChooserMode
+pub zendriver::expect::file_chooser::FileChooserMode::SelectMultiple
+pub zendriver::expect::file_chooser::FileChooserMode::SelectSingle
+impl core::clone::Clone for zendriver::expect::file_chooser::FileChooserMode
+pub fn zendriver::expect::file_chooser::FileChooserMode::clone(&self) -> zendriver::expect::file_chooser::FileChooserMode
+impl core::cmp::Eq for zendriver::expect::file_chooser::FileChooserMode
+impl core::cmp::PartialEq for zendriver::expect::file_chooser::FileChooserMode
+pub fn zendriver::expect::file_chooser::FileChooserMode::eq(&self, &zendriver::expect::file_chooser::FileChooserMode) -> bool
+impl core::fmt::Debug for zendriver::expect::file_chooser::FileChooserMode
+pub fn zendriver::expect::file_chooser::FileChooserMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for zendriver::expect::file_chooser::FileChooserMode
+impl core::marker::StructuralPartialEq for zendriver::expect::file_chooser::FileChooserMode
+impl core::marker::Freeze for zendriver::expect::file_chooser::FileChooserMode
+impl core::marker::Send for zendriver::expect::file_chooser::FileChooserMode
+impl core::marker::Sync for zendriver::expect::file_chooser::FileChooserMode
+impl core::marker::Unpin for zendriver::expect::file_chooser::FileChooserMode
+impl core::marker::UnsafeUnpin for zendriver::expect::file_chooser::FileChooserMode
+impl core::panic::unwind_safe::RefUnwindSafe for zendriver::expect::file_chooser::FileChooserMode
+impl core::panic::unwind_safe::UnwindSafe for zendriver::expect::file_chooser::FileChooserMode
+impl<Q, K> equivalent::Equivalent<K> for zendriver::expect::file_chooser::FileChooserMode where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::FileChooserMode::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for zendriver::expect::file_chooser::FileChooserMode where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::FileChooserMode::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for zendriver::expect::file_chooser::FileChooserMode where U: core::convert::From<T>
+pub fn zendriver::expect::file_chooser::FileChooserMode::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for zendriver::expect::file_chooser::FileChooserMode where U: core::convert::Into<T>
+pub type zendriver::expect::file_chooser::FileChooserMode::Error = core::convert::Infallible
+pub fn zendriver::expect::file_chooser::FileChooserMode::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for zendriver::expect::file_chooser::FileChooserMode where U: core::convert::TryFrom<T>
+pub type zendriver::expect::file_chooser::FileChooserMode::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn zendriver::expect::file_chooser::FileChooserMode::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for zendriver::expect::file_chooser::FileChooserMode where T: core::clone::Clone
+pub type zendriver::expect::file_chooser::FileChooserMode::Owned = T
+pub fn zendriver::expect::file_chooser::FileChooserMode::clone_into(&self, &mut T)
+pub fn zendriver::expect::file_chooser::FileChooserMode::to_owned(&self) -> T
+impl<T> core::any::Any for zendriver::expect::file_chooser::FileChooserMode where T: 'static + ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::FileChooserMode::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for zendriver::expect::file_chooser::FileChooserMode where T: ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::FileChooserMode::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for zendriver::expect::file_chooser::FileChooserMode where T: ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::FileChooserMode::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for zendriver::expect::file_chooser::FileChooserMode where T: core::clone::Clone
+pub unsafe fn zendriver::expect::file_chooser::FileChooserMode::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for zendriver::expect::file_chooser::FileChooserMode
+pub fn zendriver::expect::file_chooser::FileChooserMode::from(T) -> T
+impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::file_chooser::FileChooserMode where T: ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::FileChooserMode::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::file_chooser::FileChooserMode::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for zendriver::expect::file_chooser::FileChooserMode
+impl<T> tracing::instrument::WithSubscriber for zendriver::expect::file_chooser::FileChooserMode
+impl<T> typenum::type_operators::Same for zendriver::expect::file_chooser::FileChooserMode
+pub type zendriver::expect::file_chooser::FileChooserMode::Output = T
+impl<V, T> ppv_lite86::types::VZip<V> for zendriver::expect::file_chooser::FileChooserMode where V: ppv_lite86::types::MultiLane<T>
+pub fn zendriver::expect::file_chooser::FileChooserMode::vzip(self) -> V
+pub struct zendriver::expect::file_chooser::FileChooserExpectation
+impl zendriver::expect::file_chooser::FileChooserExpectation
+pub async fn zendriver::expect::file_chooser::FileChooserExpectation::matched(self) -> zendriver::error::Result<zendriver::expect::file_chooser::MatchedFileChooser>
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::timeout(self, core::time::Duration) -> Self
+impl core::fmt::Debug for zendriver::expect::file_chooser::FileChooserExpectation
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::future::future::Future for zendriver::expect::file_chooser::FileChooserExpectation
+pub type zendriver::expect::file_chooser::FileChooserExpectation::Output = core::result::Result<zendriver::expect::file_chooser::MatchedFileChooser, zendriver::error::ZendriverError>
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::poll(core::pin::Pin<&mut Self>, &mut core::task::wake::Context<'_>) -> core::task::poll::Poll<Self::Output>
+impl core::ops::drop::Drop for zendriver::expect::file_chooser::FileChooserExpectation
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::drop(&mut self)
+impl core::marker::Freeze for zendriver::expect::file_chooser::FileChooserExpectation
+impl core::marker::Send for zendriver::expect::file_chooser::FileChooserExpectation
+impl core::marker::Sync for zendriver::expect::file_chooser::FileChooserExpectation
+impl core::marker::Unpin for zendriver::expect::file_chooser::FileChooserExpectation
+impl core::marker::UnsafeUnpin for zendriver::expect::file_chooser::FileChooserExpectation
+impl !core::panic::unwind_safe::RefUnwindSafe for zendriver::expect::file_chooser::FileChooserExpectation
+impl !core::panic::unwind_safe::UnwindSafe for zendriver::expect::file_chooser::FileChooserExpectation
+impl<F, T, E> futures_core::future::TryFuture for zendriver::expect::file_chooser::FileChooserExpectation where F: core::future::future::Future<Output = core::result::Result<T, E>> + ?core::marker::Sized
+pub type zendriver::expect::file_chooser::FileChooserExpectation::Error = E
+pub type zendriver::expect::file_chooser::FileChooserExpectation::Ok = T
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::try_poll(core::pin::Pin<&mut F>, &mut core::task::wake::Context<'_>) -> core::task::poll::Poll<<F as core::future::future::Future>::Output>
+impl<F> core::future::into_future::IntoFuture for zendriver::expect::file_chooser::FileChooserExpectation where F: core::future::future::Future
+pub type zendriver::expect::file_chooser::FileChooserExpectation::IntoFuture = F
+pub type zendriver::expect::file_chooser::FileChooserExpectation::Output = <F as core::future::future::Future>::Output
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::into_future(self) -> <F as core::future::into_future::IntoFuture>::IntoFuture
+impl<Fut> futures_util::future::try_future::TryFutureExt for zendriver::expect::file_chooser::FileChooserExpectation where Fut: futures_core::future::TryFuture + ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for zendriver::expect::file_chooser::FileChooserExpectation where U: core::convert::From<T>
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for zendriver::expect::file_chooser::FileChooserExpectation where U: core::convert::Into<T>
+pub type zendriver::expect::file_chooser::FileChooserExpectation::Error = core::convert::Infallible
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for zendriver::expect::file_chooser::FileChooserExpectation where U: core::convert::TryFrom<T>
+pub type zendriver::expect::file_chooser::FileChooserExpectation::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for zendriver::expect::file_chooser::FileChooserExpectation where T: 'static + ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for zendriver::expect::file_chooser::FileChooserExpectation where T: ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for zendriver::expect::file_chooser::FileChooserExpectation where T: ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for zendriver::expect::file_chooser::FileChooserExpectation
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::from(T) -> T
+impl<T> futures_util::future::future::FutureExt for zendriver::expect::file_chooser::FileChooserExpectation where T: core::future::future::Future + ?core::marker::Sized
+impl<T> tokio_util::future::FutureExt for zendriver::expect::file_chooser::FileChooserExpectation where T: core::future::future::Future + ?core::marker::Sized
+impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::file_chooser::FileChooserExpectation where T: ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for zendriver::expect::file_chooser::FileChooserExpectation
+impl<T> tracing::instrument::WithSubscriber for zendriver::expect::file_chooser::FileChooserExpectation
+impl<T> typenum::type_operators::Same for zendriver::expect::file_chooser::FileChooserExpectation
+pub type zendriver::expect::file_chooser::FileChooserExpectation::Output = T
+impl<V, T> ppv_lite86::types::VZip<V> for zendriver::expect::file_chooser::FileChooserExpectation where V: ppv_lite86::types::MultiLane<T>
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::vzip(self) -> V
+pub struct zendriver::expect::file_chooser::MatchedFileChooser
+pub zendriver::expect::file_chooser::MatchedFileChooser::mode: zendriver::expect::file_chooser::FileChooserMode
+impl core::clone::Clone for zendriver::expect::file_chooser::MatchedFileChooser
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::clone(&self) -> zendriver::expect::file_chooser::MatchedFileChooser
+impl core::cmp::Eq for zendriver::expect::file_chooser::MatchedFileChooser
+impl core::cmp::PartialEq for zendriver::expect::file_chooser::MatchedFileChooser
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::eq(&self, &zendriver::expect::file_chooser::MatchedFileChooser) -> bool
+impl core::fmt::Debug for zendriver::expect::file_chooser::MatchedFileChooser
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for zendriver::expect::file_chooser::MatchedFileChooser
+impl core::marker::StructuralPartialEq for zendriver::expect::file_chooser::MatchedFileChooser
+impl core::marker::Freeze for zendriver::expect::file_chooser::MatchedFileChooser
+impl core::marker::Send for zendriver::expect::file_chooser::MatchedFileChooser
+impl core::marker::Sync for zendriver::expect::file_chooser::MatchedFileChooser
+impl core::marker::Unpin for zendriver::expect::file_chooser::MatchedFileChooser
+impl core::marker::UnsafeUnpin for zendriver::expect::file_chooser::MatchedFileChooser
+impl core::panic::unwind_safe::RefUnwindSafe for zendriver::expect::file_chooser::MatchedFileChooser
+impl core::panic::unwind_safe::UnwindSafe for zendriver::expect::file_chooser::MatchedFileChooser
+impl<Q, K> equivalent::Equivalent<K> for zendriver::expect::file_chooser::MatchedFileChooser where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for zendriver::expect::file_chooser::MatchedFileChooser where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for zendriver::expect::file_chooser::MatchedFileChooser where U: core::convert::From<T>
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for zendriver::expect::file_chooser::MatchedFileChooser where U: core::convert::Into<T>
+pub type zendriver::expect::file_chooser::MatchedFileChooser::Error = core::convert::Infallible
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for zendriver::expect::file_chooser::MatchedFileChooser where U: core::convert::TryFrom<T>
+pub type zendriver::expect::file_chooser::MatchedFileChooser::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for zendriver::expect::file_chooser::MatchedFileChooser where T: core::clone::Clone
+pub type zendriver::expect::file_chooser::MatchedFileChooser::Owned = T
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::clone_into(&self, &mut T)
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::to_owned(&self) -> T
+impl<T> core::any::Any for zendriver::expect::file_chooser::MatchedFileChooser where T: 'static + ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for zendriver::expect::file_chooser::MatchedFileChooser where T: ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for zendriver::expect::file_chooser::MatchedFileChooser where T: ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for zendriver::expect::file_chooser::MatchedFileChooser where T: core::clone::Clone
+pub unsafe fn zendriver::expect::file_chooser::MatchedFileChooser::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for zendriver::expect::file_chooser::MatchedFileChooser
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::from(T) -> T
+impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::file_chooser::MatchedFileChooser where T: ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for zendriver::expect::file_chooser::MatchedFileChooser
+impl<T> tracing::instrument::WithSubscriber for zendriver::expect::file_chooser::MatchedFileChooser
+impl<T> typenum::type_operators::Same for zendriver::expect::file_chooser::MatchedFileChooser
+pub type zendriver::expect::file_chooser::MatchedFileChooser::Output = T
+impl<V, T> ppv_lite86::types::VZip<V> for zendriver::expect::file_chooser::MatchedFileChooser where V: ppv_lite86::types::MultiLane<T>
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::vzip(self) -> V
 pub mod zendriver::expect::request
 pub struct zendriver::expect::request::MatchedRequest
 pub zendriver::expect::request::MatchedRequest::headers: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
@@ -4269,6 +4432,7 @@ pub async fn zendriver::tab::Tab::set_download_path(&self, impl core::convert::I
 impl zendriver::tab::Tab
 pub fn zendriver::tab::Tab::expect_dialog(&self) -> zendriver::expect::dialog::DialogExpectation
 pub async fn zendriver::tab::Tab::expect_download(&self) -> zendriver::error::Result<zendriver::expect::download::DownloadExpectation>
+pub async fn zendriver::tab::Tab::expect_file_chooser<P: core::convert::AsRef<std::path::Path>>(&self, &[P]) -> zendriver::error::Result<zendriver::expect::file_chooser::FileChooserExpectation>
 pub fn zendriver::tab::Tab::expect_request(&self, impl core::convert::Into<zendriver::UrlMatcher>) -> zendriver::expect::request::RequestExpectation
 pub fn zendriver::tab::Tab::expect_response(&self, impl core::convert::Into<zendriver::UrlMatcher>) -> zendriver::expect::response::ResponseExpectation
 impl zendriver::tab::Tab
@@ -4973,6 +5137,60 @@ impl<T> typenum::type_operators::Same for zendriver::expect::download::DownloadP
 pub type zendriver::expect::download::DownloadProgressState::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for zendriver::expect::download::DownloadProgressState where V: ppv_lite86::types::MultiLane<T>
 pub fn zendriver::expect::download::DownloadProgressState::vzip(self) -> V
+pub enum zendriver::FileChooserMode
+pub zendriver::FileChooserMode::SelectMultiple
+pub zendriver::FileChooserMode::SelectSingle
+impl core::clone::Clone for zendriver::expect::file_chooser::FileChooserMode
+pub fn zendriver::expect::file_chooser::FileChooserMode::clone(&self) -> zendriver::expect::file_chooser::FileChooserMode
+impl core::cmp::Eq for zendriver::expect::file_chooser::FileChooserMode
+impl core::cmp::PartialEq for zendriver::expect::file_chooser::FileChooserMode
+pub fn zendriver::expect::file_chooser::FileChooserMode::eq(&self, &zendriver::expect::file_chooser::FileChooserMode) -> bool
+impl core::fmt::Debug for zendriver::expect::file_chooser::FileChooserMode
+pub fn zendriver::expect::file_chooser::FileChooserMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for zendriver::expect::file_chooser::FileChooserMode
+impl core::marker::StructuralPartialEq for zendriver::expect::file_chooser::FileChooserMode
+impl core::marker::Freeze for zendriver::expect::file_chooser::FileChooserMode
+impl core::marker::Send for zendriver::expect::file_chooser::FileChooserMode
+impl core::marker::Sync for zendriver::expect::file_chooser::FileChooserMode
+impl core::marker::Unpin for zendriver::expect::file_chooser::FileChooserMode
+impl core::marker::UnsafeUnpin for zendriver::expect::file_chooser::FileChooserMode
+impl core::panic::unwind_safe::RefUnwindSafe for zendriver::expect::file_chooser::FileChooserMode
+impl core::panic::unwind_safe::UnwindSafe for zendriver::expect::file_chooser::FileChooserMode
+impl<Q, K> equivalent::Equivalent<K> for zendriver::expect::file_chooser::FileChooserMode where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::FileChooserMode::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for zendriver::expect::file_chooser::FileChooserMode where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::FileChooserMode::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for zendriver::expect::file_chooser::FileChooserMode where U: core::convert::From<T>
+pub fn zendriver::expect::file_chooser::FileChooserMode::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for zendriver::expect::file_chooser::FileChooserMode where U: core::convert::Into<T>
+pub type zendriver::expect::file_chooser::FileChooserMode::Error = core::convert::Infallible
+pub fn zendriver::expect::file_chooser::FileChooserMode::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for zendriver::expect::file_chooser::FileChooserMode where U: core::convert::TryFrom<T>
+pub type zendriver::expect::file_chooser::FileChooserMode::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn zendriver::expect::file_chooser::FileChooserMode::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for zendriver::expect::file_chooser::FileChooserMode where T: core::clone::Clone
+pub type zendriver::expect::file_chooser::FileChooserMode::Owned = T
+pub fn zendriver::expect::file_chooser::FileChooserMode::clone_into(&self, &mut T)
+pub fn zendriver::expect::file_chooser::FileChooserMode::to_owned(&self) -> T
+impl<T> core::any::Any for zendriver::expect::file_chooser::FileChooserMode where T: 'static + ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::FileChooserMode::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for zendriver::expect::file_chooser::FileChooserMode where T: ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::FileChooserMode::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for zendriver::expect::file_chooser::FileChooserMode where T: ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::FileChooserMode::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for zendriver::expect::file_chooser::FileChooserMode where T: core::clone::Clone
+pub unsafe fn zendriver::expect::file_chooser::FileChooserMode::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for zendriver::expect::file_chooser::FileChooserMode
+pub fn zendriver::expect::file_chooser::FileChooserMode::from(T) -> T
+impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::file_chooser::FileChooserMode where T: ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::FileChooserMode::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::file_chooser::FileChooserMode::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for zendriver::expect::file_chooser::FileChooserMode
+impl<T> tracing::instrument::WithSubscriber for zendriver::expect::file_chooser::FileChooserMode
+impl<T> typenum::type_operators::Same for zendriver::expect::file_chooser::FileChooserMode
+pub type zendriver::expect::file_chooser::FileChooserMode::Output = T
+impl<V, T> ppv_lite86::types::VZip<V> for zendriver::expect::file_chooser::FileChooserMode where V: ppv_lite86::types::MultiLane<T>
+pub fn zendriver::expect::file_chooser::FileChooserMode::vzip(self) -> V
 pub enum zendriver::Format
 pub zendriver::Format::Jpeg
 pub zendriver::Format::Png
@@ -5803,6 +6021,7 @@ pub zendriver::ZendriverError::ElementNotFound::selector: alloc::string::String
 pub zendriver::ZendriverError::ElementStale
 pub zendriver::ZendriverError::EventStreamIncomplete
 pub zendriver::ZendriverError::Fetcher(alloc::boxed::Box<zendriver_fetcher::error::FetcherError>)
+pub zendriver::ZendriverError::FileChooser(alloc::string::String)
 pub zendriver::ZendriverError::FrameNotFound(alloc::string::String)
 pub zendriver::ZendriverError::HistoryNavigation(alloc::string::String)
 pub zendriver::ZendriverError::Imperva(alloc::boxed::Box<zendriver_imperva::error::ImpervaError>)
@@ -6701,6 +6920,60 @@ impl<T> typenum::type_operators::Same for zendriver::element::Element
 pub type zendriver::element::Element::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for zendriver::element::Element where V: ppv_lite86::types::MultiLane<T>
 pub fn zendriver::element::Element::vzip(self) -> V
+pub struct zendriver::FileChooserExpectation
+impl zendriver::expect::file_chooser::FileChooserExpectation
+pub async fn zendriver::expect::file_chooser::FileChooserExpectation::matched(self) -> zendriver::error::Result<zendriver::expect::file_chooser::MatchedFileChooser>
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::timeout(self, core::time::Duration) -> Self
+impl core::fmt::Debug for zendriver::expect::file_chooser::FileChooserExpectation
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::future::future::Future for zendriver::expect::file_chooser::FileChooserExpectation
+pub type zendriver::expect::file_chooser::FileChooserExpectation::Output = core::result::Result<zendriver::expect::file_chooser::MatchedFileChooser, zendriver::error::ZendriverError>
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::poll(core::pin::Pin<&mut Self>, &mut core::task::wake::Context<'_>) -> core::task::poll::Poll<Self::Output>
+impl core::ops::drop::Drop for zendriver::expect::file_chooser::FileChooserExpectation
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::drop(&mut self)
+impl core::marker::Freeze for zendriver::expect::file_chooser::FileChooserExpectation
+impl core::marker::Send for zendriver::expect::file_chooser::FileChooserExpectation
+impl core::marker::Sync for zendriver::expect::file_chooser::FileChooserExpectation
+impl core::marker::Unpin for zendriver::expect::file_chooser::FileChooserExpectation
+impl core::marker::UnsafeUnpin for zendriver::expect::file_chooser::FileChooserExpectation
+impl !core::panic::unwind_safe::RefUnwindSafe for zendriver::expect::file_chooser::FileChooserExpectation
+impl !core::panic::unwind_safe::UnwindSafe for zendriver::expect::file_chooser::FileChooserExpectation
+impl<F, T, E> futures_core::future::TryFuture for zendriver::expect::file_chooser::FileChooserExpectation where F: core::future::future::Future<Output = core::result::Result<T, E>> + ?core::marker::Sized
+pub type zendriver::expect::file_chooser::FileChooserExpectation::Error = E
+pub type zendriver::expect::file_chooser::FileChooserExpectation::Ok = T
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::try_poll(core::pin::Pin<&mut F>, &mut core::task::wake::Context<'_>) -> core::task::poll::Poll<<F as core::future::future::Future>::Output>
+impl<F> core::future::into_future::IntoFuture for zendriver::expect::file_chooser::FileChooserExpectation where F: core::future::future::Future
+pub type zendriver::expect::file_chooser::FileChooserExpectation::IntoFuture = F
+pub type zendriver::expect::file_chooser::FileChooserExpectation::Output = <F as core::future::future::Future>::Output
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::into_future(self) -> <F as core::future::into_future::IntoFuture>::IntoFuture
+impl<Fut> futures_util::future::try_future::TryFutureExt for zendriver::expect::file_chooser::FileChooserExpectation where Fut: futures_core::future::TryFuture + ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for zendriver::expect::file_chooser::FileChooserExpectation where U: core::convert::From<T>
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for zendriver::expect::file_chooser::FileChooserExpectation where U: core::convert::Into<T>
+pub type zendriver::expect::file_chooser::FileChooserExpectation::Error = core::convert::Infallible
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for zendriver::expect::file_chooser::FileChooserExpectation where U: core::convert::TryFrom<T>
+pub type zendriver::expect::file_chooser::FileChooserExpectation::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for zendriver::expect::file_chooser::FileChooserExpectation where T: 'static + ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for zendriver::expect::file_chooser::FileChooserExpectation where T: ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for zendriver::expect::file_chooser::FileChooserExpectation where T: ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for zendriver::expect::file_chooser::FileChooserExpectation
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::from(T) -> T
+impl<T> futures_util::future::future::FutureExt for zendriver::expect::file_chooser::FileChooserExpectation where T: core::future::future::Future + ?core::marker::Sized
+impl<T> tokio_util::future::FutureExt for zendriver::expect::file_chooser::FileChooserExpectation where T: core::future::future::Future + ?core::marker::Sized
+impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::file_chooser::FileChooserExpectation where T: ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for zendriver::expect::file_chooser::FileChooserExpectation
+impl<T> tracing::instrument::WithSubscriber for zendriver::expect::file_chooser::FileChooserExpectation
+impl<T> typenum::type_operators::Same for zendriver::expect::file_chooser::FileChooserExpectation
+pub type zendriver::expect::file_chooser::FileChooserExpectation::Output = T
+impl<V, T> ppv_lite86::types::VZip<V> for zendriver::expect::file_chooser::FileChooserExpectation where V: ppv_lite86::types::MultiLane<T>
+pub fn zendriver::expect::file_chooser::FileChooserExpectation::vzip(self) -> V
 pub struct zendriver::FindBuilder<'scope>
 impl<'scope> zendriver::query::FindBuilder<'scope>
 pub fn zendriver::query::FindBuilder<'scope>::attr(self, &str, &str) -> Self
@@ -7262,6 +7535,59 @@ impl<T> typenum::type_operators::Same for zendriver::expect::download::MatchedDo
 pub type zendriver::expect::download::MatchedDownload::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for zendriver::expect::download::MatchedDownload where V: ppv_lite86::types::MultiLane<T>
 pub fn zendriver::expect::download::MatchedDownload::vzip(self) -> V
+pub struct zendriver::MatchedFileChooser
+pub zendriver::MatchedFileChooser::mode: zendriver::expect::file_chooser::FileChooserMode
+impl core::clone::Clone for zendriver::expect::file_chooser::MatchedFileChooser
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::clone(&self) -> zendriver::expect::file_chooser::MatchedFileChooser
+impl core::cmp::Eq for zendriver::expect::file_chooser::MatchedFileChooser
+impl core::cmp::PartialEq for zendriver::expect::file_chooser::MatchedFileChooser
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::eq(&self, &zendriver::expect::file_chooser::MatchedFileChooser) -> bool
+impl core::fmt::Debug for zendriver::expect::file_chooser::MatchedFileChooser
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for zendriver::expect::file_chooser::MatchedFileChooser
+impl core::marker::StructuralPartialEq for zendriver::expect::file_chooser::MatchedFileChooser
+impl core::marker::Freeze for zendriver::expect::file_chooser::MatchedFileChooser
+impl core::marker::Send for zendriver::expect::file_chooser::MatchedFileChooser
+impl core::marker::Sync for zendriver::expect::file_chooser::MatchedFileChooser
+impl core::marker::Unpin for zendriver::expect::file_chooser::MatchedFileChooser
+impl core::marker::UnsafeUnpin for zendriver::expect::file_chooser::MatchedFileChooser
+impl core::panic::unwind_safe::RefUnwindSafe for zendriver::expect::file_chooser::MatchedFileChooser
+impl core::panic::unwind_safe::UnwindSafe for zendriver::expect::file_chooser::MatchedFileChooser
+impl<Q, K> equivalent::Equivalent<K> for zendriver::expect::file_chooser::MatchedFileChooser where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for zendriver::expect::file_chooser::MatchedFileChooser where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for zendriver::expect::file_chooser::MatchedFileChooser where U: core::convert::From<T>
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for zendriver::expect::file_chooser::MatchedFileChooser where U: core::convert::Into<T>
+pub type zendriver::expect::file_chooser::MatchedFileChooser::Error = core::convert::Infallible
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for zendriver::expect::file_chooser::MatchedFileChooser where U: core::convert::TryFrom<T>
+pub type zendriver::expect::file_chooser::MatchedFileChooser::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for zendriver::expect::file_chooser::MatchedFileChooser where T: core::clone::Clone
+pub type zendriver::expect::file_chooser::MatchedFileChooser::Owned = T
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::clone_into(&self, &mut T)
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::to_owned(&self) -> T
+impl<T> core::any::Any for zendriver::expect::file_chooser::MatchedFileChooser where T: 'static + ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for zendriver::expect::file_chooser::MatchedFileChooser where T: ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for zendriver::expect::file_chooser::MatchedFileChooser where T: ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for zendriver::expect::file_chooser::MatchedFileChooser where T: core::clone::Clone
+pub unsafe fn zendriver::expect::file_chooser::MatchedFileChooser::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for zendriver::expect::file_chooser::MatchedFileChooser
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::from(T) -> T
+impl<T> tower_http::follow_redirect::policy::PolicyExt for zendriver::expect::file_chooser::MatchedFileChooser where T: ?core::marker::Sized
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::and<P, B, E>(self, P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::or<P, B, E>(self, P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: core::marker::Sized + tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for zendriver::expect::file_chooser::MatchedFileChooser
+impl<T> tracing::instrument::WithSubscriber for zendriver::expect::file_chooser::MatchedFileChooser
+impl<T> typenum::type_operators::Same for zendriver::expect::file_chooser::MatchedFileChooser
+pub type zendriver::expect::file_chooser::MatchedFileChooser::Output = T
+impl<V, T> ppv_lite86::types::VZip<V> for zendriver::expect::file_chooser::MatchedFileChooser where V: ppv_lite86::types::MultiLane<T>
+pub fn zendriver::expect::file_chooser::MatchedFileChooser::vzip(self) -> V
 pub struct zendriver::MatchedRequest
 pub zendriver::MatchedRequest::headers: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
 pub zendriver::MatchedRequest::method: alloc::string::String
@@ -8131,6 +8457,7 @@ pub async fn zendriver::tab::Tab::set_download_path(&self, impl core::convert::I
 impl zendriver::tab::Tab
 pub fn zendriver::tab::Tab::expect_dialog(&self) -> zendriver::expect::dialog::DialogExpectation
 pub async fn zendriver::tab::Tab::expect_download(&self) -> zendriver::error::Result<zendriver::expect::download::DownloadExpectation>
+pub async fn zendriver::tab::Tab::expect_file_chooser<P: core::convert::AsRef<std::path::Path>>(&self, &[P]) -> zendriver::error::Result<zendriver::expect::file_chooser::FileChooserExpectation>
 pub fn zendriver::tab::Tab::expect_request(&self, impl core::convert::Into<zendriver::UrlMatcher>) -> zendriver::expect::request::RequestExpectation
 pub fn zendriver::tab::Tab::expect_response(&self, impl core::convert::Into<zendriver::UrlMatcher>) -> zendriver::expect::response::ResponseExpectation
 impl zendriver::tab::Tab

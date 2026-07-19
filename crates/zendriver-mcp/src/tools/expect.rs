@@ -22,13 +22,13 @@
 //! ## Wire-shape mappers + drive
 //!
 //! Each kind has a small async free fn that flattens its lib-side struct
-//! (`MatchedRequest` / `MatchedResponse` / `MatchedDialog` / `MatchedDownload`)
-//! into a `serde_json::Value` and, when asked, *drives* the matched object
-//! before it is dropped. The drive parameters live on
-//! `browser_expect_register` (not `_await`) because the spawned task owns the
-//! matched handle and several drive methods consume it (`accept` / `dismiss` /
-//! `save_to`); the decision must therefore be made at register time, before
-//! the triggering action runs:
+//! (`MatchedRequest` / `MatchedResponse` / `MatchedDialog` / `MatchedDownload`
+//! / `MatchedFileChooser`) into a `serde_json::Value` and, when asked,
+//! *drives* the matched object before it is dropped. The drive parameters
+//! live on `browser_expect_register` (not `_await`) because the spawned
+//! task owns the matched handle and several drive methods consume it
+//! (`accept` / `dismiss` / `save_to`); the decision must therefore be made
+//! at register time, before the triggering action runs:
 //!
 //! - **Dialog** — `dialog_action: accept|dismiss` (+ `dialog_prompt_text`)
 //!   drives the dialog so the page's blocking `alert/confirm/prompt` returns.
@@ -36,6 +36,10 @@
 //!   `body_base64` + `body_len`.
 //! - **Download** — `save_to: <path>` waits for completion and copies the file
 //!   to the MCP host, reporting `saved_path`.
+//! - **FileChooser** — `file_chooser_paths: [<path>, ...]` (required, must be
+//!   non-empty) is applied automatically the instant the chooser opens, via
+//!   `DOM.setFileInputFiles`; there is nothing left to drive by the time the
+//!   matched event is reported.
 
 #![cfg(feature = "expect")]
 
@@ -51,8 +55,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, oneshot};
 use zendriver::{
-    DialogType, MatchedDialog, MatchedDownload, MatchedRequest, MatchedResponse, UrlMatcher,
-    ZendriverError,
+    DialogType, FileChooserMode, MatchedDialog, MatchedDownload, MatchedFileChooser,
+    MatchedRequest, MatchedResponse, UrlMatcher, ZendriverError,
 };
 
 use crate::errors::{McpServerError, map_error};
@@ -73,6 +77,9 @@ pub enum ExpectKind {
     Dialog,
     /// `Page.downloadWillBegin` — start of a file download.
     Download,
+    /// `Page.fileChooserOpened` — a button/label-triggered (or direct)
+    /// file picker, answered with `file_chooser_paths`.
+    FileChooser,
 }
 
 impl ExpectKind {
@@ -84,6 +91,7 @@ impl ExpectKind {
             Self::Response => "response",
             Self::Dialog => "dialog",
             Self::Download => "download",
+            Self::FileChooser => "file_chooser",
         }
     }
 }
@@ -184,6 +192,13 @@ pub struct RegisterInput {
     /// host; the matched event reports it as `saved_path`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub save_to: Option<String>,
+    /// File-chooser only: absolute paths (on the MCP host) to feed into the
+    /// chooser the instant it opens, via `DOM.setFileInputFiles`. Required
+    /// for `kind: file_chooser` — an empty list clears the input instead of
+    /// attaching anything, which is rarely what's wanted, so an empty/absent
+    /// list surfaces an `invalid_request` rather than silently no-op'ing.
+    #[serde(default)]
+    pub file_chooser_paths: Vec<String>,
 }
 
 fn default_pre_timeout() -> u64 {
@@ -218,6 +233,13 @@ pub async fn register(
     let dialog_prompt = input.dialog_prompt_text;
     let fetch_body = input.fetch_body;
     let save_to = input.save_to;
+    let file_chooser_paths = input.file_chooser_paths;
+    if matches!(kind, ExpectKind::FileChooser) && file_chooser_paths.is_empty() {
+        return Err(ErrorData::invalid_request(
+            "kind: file_chooser requires a non-empty file_chooser_paths",
+            None,
+        ));
+    }
 
     let tab = {
         let s = state.lock().await;
@@ -279,6 +301,25 @@ pub async fn register(
                     Ok(m) => download_to_json(m, save_to).await,
                     Err(e) => Err(err_to_str(e)),
                 };
+                let _ = tx.send(msg);
+            })
+        }
+        ExpectKind::FileChooser => {
+            // expect_file_chooser is async (it must await
+            // Page.setInterceptFileChooserDialog{enabled:true} reaching
+            // Chrome before returning). Surface its setup error inline —
+            // same reasoning as the Download arm above.
+            let exp = tab
+                .expect_file_chooser(&file_chooser_paths)
+                .await
+                .map_err(|e| map_error(McpServerError::from(e)))?
+                .timeout(pre_await);
+            tokio::spawn(async move {
+                let msg = exp
+                    .matched()
+                    .await
+                    .map(file_chooser_to_json)
+                    .map_err(err_to_str);
                 let _ = tx.send(msg);
             })
         }
@@ -557,6 +598,24 @@ async fn download_to_json(m: MatchedDownload, save_to: Option<String>) -> Result
     }))
 }
 
+/// Render a [`FileChooserMode`] as a stable lowercase wire string.
+fn file_chooser_mode_str(m: FileChooserMode) -> &'static str {
+    match m {
+        FileChooserMode::SelectSingle => "select_single",
+        FileChooserMode::SelectMultiple => "select_multiple",
+    }
+}
+
+/// Flatten a [`MatchedFileChooser`] to a wire JSON object. By the time this
+/// is called the lib has already dispatched `DOM.setFileInputFiles` with
+/// `file_chooser_paths` and disabled the intercept — nothing left to drive.
+fn file_chooser_to_json(m: MatchedFileChooser) -> Value {
+    json!({
+        "kind": "file_chooser",
+        "mode": file_chooser_mode_str(m.mode),
+    })
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
@@ -653,10 +712,35 @@ mod tests {
                 dialog_prompt_text: None,
                 fetch_body: false,
                 save_to: None,
+                file_chooser_paths: Vec::new(),
             },
         )
         .await
         .expect_err("expected BrowserNotOpen");
         assert!(err.message.contains("Browser not open"));
+    }
+
+    /// `kind: file_chooser` with no `file_chooser_paths` must reject before
+    /// even checking for a browser — an empty list would silently clear the
+    /// input rather than attach anything, which is never what's wanted.
+    #[tokio::test]
+    async fn register_file_chooser_without_paths_errors() {
+        let state = Arc::new(Mutex::new(SessionState::new()));
+        let err = register(
+            state,
+            RegisterInput {
+                kind: ExpectKind::FileChooser,
+                matcher: None,
+                pre_await_timeout_ms: 1_000,
+                dialog_action: None,
+                dialog_prompt_text: None,
+                fetch_body: false,
+                save_to: None,
+                file_chooser_paths: Vec::new(),
+            },
+        )
+        .await
+        .expect_err("expected invalid_request");
+        assert!(err.message.contains("file_chooser_paths"));
     }
 }

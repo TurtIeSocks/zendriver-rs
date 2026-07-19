@@ -1,5 +1,5 @@
 //! Event expectation helpers (`expect_request` / `expect_response` /
-//! `expect_dialog` / `expect_download`).
+//! `expect_dialog` / `expect_download` / `expect_file_chooser`).
 //!
 //! Each helper registers a one-shot subscription on a Tab's CDP event stream
 //! and resolves with the first matching event. [`UrlMatcher`] is the shared
@@ -20,6 +20,7 @@
 
 pub mod dialog;
 pub mod download;
+pub mod file_chooser;
 pub mod request;
 pub mod response;
 
