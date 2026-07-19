@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-07-19
+
+### Added
+
+- Add Tab::expect_file_chooser for button-triggered file pickers
+
+
 ## [0.3.2] - 2026-07-19
 
 ### Added
