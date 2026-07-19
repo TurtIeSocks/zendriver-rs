@@ -62,7 +62,7 @@ Separate binary crate (not a feature on `zendriver`):
 
 | Crate           | Use case                                                                                                                         | Install                                                                                     |
 | --------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `zendriver-mcp` | Drive a stealth Chrome from any LLM agent — [Model Context Protocol](https://modelcontextprotocol.io/) server, 70 tools, stdio + streamable HTTP | `cargo install zendriver-mcp` ([docs](https://turtiesocks.github.io/zendriver-rs/mcp.html)) |
+| `zendriver-mcp` | Drive a stealth Chrome from any LLM agent — [Model Context Protocol](https://modelcontextprotocol.io/) server, 71 tools, stdio + streamable HTTP | `cargo install zendriver-mcp` ([docs](https://turtiesocks.github.io/zendriver-rs/mcp.html)) |
 
 ## Install
 
@@ -94,7 +94,7 @@ Adds request interception, `expect()` matchers, Cloudflare Turnstile bypass, Imp
 
 ## Drive a stealth browser from your AI agent
 
-`zendriver-mcp` is a **first-class [Model Context Protocol](https://modelcontextprotocol.io/) server** that hands the entire zendriver-rs surface to any LLM client — Claude Desktop, Claude Code, Cursor, or your own agent loop. **70 tools**, two transports (stdio + streamable HTTP), and the same stealth-by-default fingerprinting baked into the lib. Unlike generic browser MCP servers, this one bypasses Cloudflare Turnstile, ships an isolated-world JS eval that survives anti-bot detection, and lets agents persist auth state across sessions.
+`zendriver-mcp` is a **first-class [Model Context Protocol](https://modelcontextprotocol.io/) server** that hands the entire zendriver-rs surface to any LLM client — Claude Desktop, Claude Code, Cursor, or your own agent loop. **71 tools**, two transports (stdio + streamable HTTP), and the same stealth-by-default fingerprinting baked into the lib. Unlike generic browser MCP servers, this one bypasses Cloudflare Turnstile, ships an isolated-world JS eval that survives anti-bot detection, and lets agents persist auth state across sessions.
 
 ```bash
 cargo install zendriver-mcp
@@ -160,7 +160,7 @@ Six development phases shipped into the v0.1.0 release. The [mdBook](https://tur
 | Multi-tab                | yes (first-class)       | yes               | yes             | yes             | yes             |
 | Interception             | yes (`Fetch.*` wrapper) | yes (raw)         | no (proxy-only) | partial         | no (proxy-only) |
 | Cloudflare bypass        | yes (`zendriver-cloudflare`) | no           | no              | no              | no              |
-| MCP server for AI agents | yes (`zendriver-mcp`, 70 tools) | no        | no              | no              | no              |
+| MCP server for AI agents | yes (`zendriver-mcp`, 71 tools) | no        | no              | no              | no              |
 | License                  | MIT OR Apache-2.0       | MIT OR Apache-2.0 | Apache-2.0      | MIT             | MIT             |
 | Async runtime            | tokio                   | tokio / async-std | tokio           | sync            | tokio           |
 

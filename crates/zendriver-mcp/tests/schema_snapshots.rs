@@ -131,6 +131,7 @@ schema_snap!(actions_ack_out, tools::actions::AckOutput);
 schema_snap!(actions_mouse_button_arg, tools::actions::MouseButtonArg);
 schema_snap!(actions_click_in, tools::actions::ClickInput);
 schema_snap!(actions_hover_in, tools::actions::HoverInput);
+schema_snap!(actions_tap_in, tools::actions::TapInput);
 schema_snap!(actions_type_in, tools::actions::TypeInput);
 schema_snap!(actions_press_in, tools::actions::PressInput);
 schema_snap!(actions_set_value_in, tools::actions::SetValueInput);

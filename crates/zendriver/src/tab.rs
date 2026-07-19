@@ -2093,6 +2093,38 @@ impl Tab {
         .await
     }
 
+    /// Tap at `(x, y)` in viewport coordinates.
+    ///
+    /// Dispatches a bare `Input.dispatchTouchEvent` `touchStart` (one touch
+    /// point at `(x, y)`) followed by `touchEnd` (empty `touchPoints` — the
+    /// CDP contract for a lifted finger). Tab-level analogue of
+    /// [`crate::Element::tap`] for a raw coordinate — same relationship
+    /// [`Tab::mouse_click`] has to [`crate::Element::click`].
+    ///
+    /// No `Emulation.setTouchEmulationEnabled` call precedes the dispatch:
+    /// the bare `dispatchTouchEvent` already fires `touchstart`/`touchend`
+    /// page-side handlers (and, on a clickable element, the browser's own
+    /// synthesized `click`), which is what a tap needs. Touch-*capability*
+    /// emulation — `'ontouchstart' in window`, `navigator.maxTouchPoints`,
+    /// `matchMedia('(pointer: coarse)')` — is a separate concern that
+    /// belongs with mobile device emulation; not doing it here is
+    /// intentional, not a bug.
+    ///
+    /// Scope is touch only: no pressure / pen / stylus / tilt input.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// # let tab = browser.main_tab();
+    /// tab.tap(120.0, 240.0).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn tap(&self, x: f64, y: f64) -> Result<()> {
+        crate::input::touch::tap_at(self, x, y).await
+    }
+
     /// Flash a transient red dot at `(x, y)` for ~1 second — a visual debug
     /// aid.
     ///
@@ -4719,6 +4751,38 @@ mod tests {
 
         fut.await.unwrap().unwrap();
         assert!(saw_moved, "expected at least one mouseMoved dispatch");
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn tap_dispatches_touchstart_with_point_then_touchend_empty() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.tap(10.0, 20.0).await }
+        });
+
+        // touchStart carries the single touch point at (10, 20).
+        let id = mock.expect_cmd("Input.dispatchTouchEvent").await;
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["type"], "touchStart");
+        let points = sent["params"]["touchPoints"].as_array().unwrap();
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0]["x"], 10.0);
+        assert_eq!(points[0]["y"], 20.0);
+        mock.reply(id, json!({})).await;
+
+        // touchEnd carries an empty touchPoints array — finger lifted.
+        let id = mock.expect_cmd("Input.dispatchTouchEvent").await;
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["type"], "touchEnd");
+        assert_eq!(sent["params"]["touchPoints"].as_array().unwrap().len(), 0);
+        mock.reply(id, json!({})).await;
+
+        fut.await.unwrap().unwrap();
         conn.shutdown();
     }
 

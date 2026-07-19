@@ -1,9 +1,9 @@
 //! Coordinate-mouse tool — `browser_mouse`.
 //!
 //! Wraps [`zendriver::Tab`]'s raw pointer API (`mouse_move`,
-//! `mouse_click_with`, `mouse_drag`) for canvas / drag-and-drop / map / game
-//! interactions that aren't reachable through element-targeted action tools.
-//! Coordinates are CSS pixels relative to the viewport.
+//! `mouse_click_with`, `mouse_drag`, `tap`) for canvas / drag-and-drop / map /
+//! game interactions that aren't reachable through element-targeted action
+//! tools. Coordinates are CSS pixels relative to the viewport.
 
 use std::sync::Arc;
 
@@ -28,6 +28,10 @@ pub enum MouseAction {
     Click,
     /// Press at `(x, y)`, drag to `(to_x, to_y)` over `steps`, release.
     Drag,
+    /// Tap at `(x, y)`: a bare `touchStart`/`touchEnd` pair, no mouse
+    /// events. Touch only — see [`zendriver::Tab::tap`]'s rustdoc for the
+    /// touch-capability-emulation caveat.
+    Tap,
 }
 
 /// Input for `browser_mouse`.
@@ -107,6 +111,10 @@ pub async fn mouse(
                 .await
                 .map_err(|e| map_error(McpServerError::from(e)))?;
         }
+        MouseAction::Tap => tab
+            .tap(input.x, input.y)
+            .await
+            .map_err(|e| map_error(McpServerError::from(e)))?,
     }
     let snapshot = if input.return_snapshot {
         Some(page_snapshot(&tab).await?)
