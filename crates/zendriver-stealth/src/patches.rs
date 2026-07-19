@@ -1085,6 +1085,23 @@ mod tests {
             s.contains("NotSupportedError"),
             "synthetic adapter's requestDevice rejects (v1 limitation)"
         );
+        // The fabricate patch must carry BOTH runtime branches: (a) wrap
+        // GPU.prototype.requestAdapter when navigator.gpu exists, and (b)
+        // DEFINE a synthetic navigator.gpu on Navigator.prototype when it's
+        // entirely absent (the `--disable-gpu` GPU-less case this feature
+        // exists for). Guards against either branch being dropped.
+        assert!(
+            s.contains("GPU.prototype, 'requestAdapter'"),
+            "case (a): wraps requestAdapter when navigator.gpu is present: {s}"
+        );
+        assert!(
+            s.contains("Navigator.prototype, 'gpu'"),
+            "case (b): defines synthetic navigator.gpu when entirely absent: {s}"
+        );
+        assert!(
+            s.contains("getPreferredCanvasFormat"),
+            "synthetic navigator.gpu exposes getPreferredCanvasFormat for coherence: {s}"
+        );
     }
 
     #[test]

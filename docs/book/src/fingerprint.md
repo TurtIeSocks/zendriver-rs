@@ -201,9 +201,20 @@ fabricated) — the same behavior it always had. `WebgpuSpec` (mirroring
    `device` / `description` / `limits` / `features` explicitly instead of
    letting `vendor`/`architecture` derive from the WebGL renderer.
 2. **Synthetic adapter fabrication** (`fabricate_when_absent: true`) — when
-   the host has no real WebGPU adapter, `navigator.gpu.requestAdapter()`
-   resolves a synthetic one built from your supplied values instead of
-   `null`. Requires BOTH `vendor` AND `limits` to be set explicitly — a bare
+   the host has no real WebGPU adapter, resolve a synthetic one built from
+   your supplied values. This covers **both** GPU-less shapes:
+   - `navigator.gpu` **entirely absent** (`'gpu' in navigator === false` —
+     the common case, since zendriver's default headless launch adds
+     `--disable-gpu`): a synthetic `navigator.gpu` is *created* on
+     `Navigator.prototype`, flipping `'gpu' in navigator` to **true**. That's
+     coherent for a modern-Chrome persona — real modern Chrome always exposes
+     `navigator.gpu` even GPU-less (there `requestAdapter()` just returns
+     `null`).
+   - `navigator.gpu` present but `requestAdapter()` returns `null`: the real
+     `requestAdapter` is wrapped so a `null` result falls back to the
+     synthetic adapter (a real adapter passes through untouched).
+
+   Requires BOTH `vendor` AND `limits` to be set explicitly — a bare
    `fabricate_when_absent: true` with nothing else is refused (no-op): this
    project never auto-invents fingerprint values.
 
@@ -247,11 +258,13 @@ against the WebGL renderer string, so an incoherent combination reads as a
 bot faster than honest absence does. Only set these to values verified
 against a real device.
 
-**v1 limitation:** a fabricated synthetic adapter's `requestDevice()` always
+**v1 limitations:** a fabricated synthetic adapter's `requestDevice()` always
 REJECTS — there is no way to fabricate a working `GPUDevice` without a real
 GPU behind it. Fabrication only makes `requestAdapter()` resolve a coherent
 adapter for detection scripts that stop there; it does not unlock actual
-WebGPU rendering on a GPU-less host.
+WebGPU rendering on a GPU-less host. The synthetic adapter and (when created)
+the synthetic `navigator.gpu` are plain objects, so `adapter instanceof
+GPUAdapter` and `navigator.gpu instanceof GPU` are `false`.
 
 ## Country → locale + timezone overlay (`geo_locale`)
 

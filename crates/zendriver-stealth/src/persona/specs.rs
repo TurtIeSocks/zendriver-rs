@@ -156,11 +156,29 @@ pub struct WebglSpec {
 /// you've verified against a real device (e.g. probed live from
 /// `navigator.gpu` on that device) — never invent plausible-looking numbers.
 ///
+/// # What fabrication does
+///
+/// [`fabricate_when_absent`](Self::fabricate_when_absent) covers **both**
+/// GPU-less shapes:
+/// - **`navigator.gpu` entirely absent** (`'gpu' in navigator === false` —
+///   the common case, e.g. Chrome launched with `--disable-gpu`, which is
+///   zendriver's default under headless): a synthetic `navigator.gpu` is
+///   defined on `Navigator.prototype` whose `requestAdapter()` resolves the
+///   synthetic adapter. This flips `'gpu' in navigator` to **true**, which is
+///   coherent for a modern-Chrome persona — real modern Chrome always exposes
+///   `navigator.gpu` even with no usable GPU (there `requestAdapter()` merely
+///   resolves `null`). Restoring that presence is your explicit opt-in.
+/// - **`navigator.gpu` present but `requestAdapter()` resolves `null`**: the
+///   real `requestAdapter` is wrapped so a `null`/rejected result falls back
+///   to the synthetic adapter (a real adapter passes through untouched).
+///
 /// # v1 limitations
 ///
 /// - The decorated / fabricated `.info`, `.limits`, `.features` are **plain
 ///   objects**, not real `GPUAdapterInfo` / `GPUSupportedLimits` /
 ///   `GPUSupportedFeatures` instances — an `instanceof` check would tell.
+///   Likewise a synthesized `navigator.gpu` is a plain object, so
+///   `navigator.gpu instanceof GPU` is `false`.
 /// - [`fabricate_when_absent`](Self::fabricate_when_absent)'s synthetic
 ///   adapter's `requestDevice()` **always rejects**. Faking a working
 ///   `GPUDevice` needs a real GPU behind it, which this patch cannot
@@ -221,13 +239,17 @@ pub struct WebgpuSpec {
     /// `"texture-compression-bc"`). `None` → the adapter's own features are
     /// left untouched.
     pub features: Option<Vec<String>>,
-    /// Explicit opt-in: synthesize a `navigator.gpu.requestAdapter()` result
-    /// on a host with no real adapter, instead of letting it resolve `null`.
-    /// Requires [`vendor`](Self::vendor) AND [`limits`](Self::limits) to
-    /// BOTH be explicitly set — a bare `true` with nothing else is refused
-    /// (silently, no-op) because there is nothing coherent to fabricate; this
-    /// project never auto-invents fingerprint values. See the v1 limitations
-    /// above for what fabrication does NOT cover (no working `GPUDevice`).
+    /// Explicit opt-in: synthesize a `navigator.gpu` adapter on a host with no
+    /// real one, instead of leaving `requestAdapter()` at `null` (or
+    /// `navigator.gpu` entirely absent). Covers both GPU-less shapes — a
+    /// missing `navigator.gpu` is defined fresh (flipping `'gpu' in navigator`
+    /// to true), and a present-but-null `requestAdapter` is wrapped; see the
+    /// "What fabrication does" section above. Requires [`vendor`](Self::vendor)
+    /// AND [`limits`](Self::limits) to BOTH be explicitly set — a bare `true`
+    /// with nothing else is refused (silently, no-op) because there is nothing
+    /// coherent to fabricate; this project never auto-invents fingerprint
+    /// values. See the v1 limitations above for what fabrication does NOT
+    /// cover (no working `GPUDevice`; plain-object `instanceof`).
     pub fabricate_when_absent: Option<bool>,
 }
 
