@@ -26,8 +26,10 @@
 //! `modify_request` accepts a headers map of replacements; CDP's
 //! `continueRequest.headers` is a *full replacement*, so the closure
 //! returns a [`RequestOverrides`] that preserves the original headers and
-//! overlays the caller-supplied entries. Other override fields (URL,
-//! method, post-data) are reserved for a follow-up.
+//! overlays the caller-supplied entries. It also accepts optional `url` /
+//! `method` / `post_data` overrides, passed straight through to
+//! [`RequestOverrides`] (the core actor already dispatches all four
+//! fields — this is DTO-only wiring).
 //!
 //! [`InterceptHandle`]: zendriver::InterceptHandle
 //! [`RequestOverrides`]: zendriver::RequestOverrides
@@ -83,8 +85,8 @@ pub enum InterceptAction {
         #[serde(default)]
         headers: BTreeMap<String, String>,
     },
-    /// Continue the request with extra / replaced headers. Other fields
-    /// (URL, method, post-data) are left at Chrome's originals.
+    /// Continue the request with extra / replaced headers and/or a replaced
+    /// URL / method / body. Any field left `None` keeps Chrome's original.
     ModifyRequest {
         /// Headers to merge over the request's originals. CDP's
         /// `continueRequest.headers` is a full replacement, so the closure
@@ -92,6 +94,19 @@ pub enum InterceptAction {
         /// overlays these entries (case-insensitive on names).
         #[serde(default)]
         headers: BTreeMap<String, String>,
+        /// Replace the request URL. Omit to keep the original.
+        #[serde(default)]
+        url: Option<String>,
+        /// Replace the HTTP method (e.g. `"POST"`). Omit to keep the
+        /// original.
+        #[serde(default)]
+        method: Option<String>,
+        /// Replace the request body, as UTF-8 text. Omit to keep the
+        /// original. The core [`RequestOverrides::post_data`] field is
+        /// `Vec<u8>`; this is encoded via `String::into_bytes`, so it can't
+        /// carry a non-UTF-8 body — use the manual stream API for that.
+        #[serde(default)]
+        post_data: Option<String>,
     },
     /// Continue the *response* with an overridden status and/or headers
     /// (pauses at the response stage). Other fields are left at Chrome's
@@ -187,15 +202,25 @@ pub async fn add_rule(
                 .start();
             (h, "respond")
         }
-        InterceptAction::ModifyRequest { headers } => {
-            // Snapshot the overlay into an `Arc` so the per-request closure
-            // can be `Fn + Send + Sync + 'static` (the builder requires it
-            // — see InterceptBuilder::modify_request).
-            let overlay = Arc::new(headers);
+        InterceptAction::ModifyRequest {
+            headers,
+            url,
+            method,
+            post_data,
+        } => {
+            // Snapshot the overlay + scalar overrides into an `Arc` so the
+            // per-request closure can be `Fn + Send + Sync + 'static` (the
+            // builder requires it — see InterceptBuilder::modify_request).
+            let overlay = Arc::new(ModifyRequestOverlay {
+                headers,
+                url,
+                method,
+                post_data,
+            });
             let h = tab
                 .intercept()
                 .modify_request(input.pattern.clone(), move |req| {
-                    merge_headers(&req.headers, &overlay)
+                    overlay.build(&req.headers)
                 })
                 .map_err(zendriver_err)?
                 .start();
@@ -238,20 +263,32 @@ pub async fn add_rule(
     Ok(AddRuleOutput { rule_id: id })
 }
 
-/// Build the [`RequestOverrides`] payload for a `modify_request` rule.
-///
-/// CDP's `Fetch.continueRequest.headers` is a *full replacement* — there is
-/// no merge mode — so we rebuild the header list from the request as Chrome
-/// reported it and overlay the caller's entries by case-insensitive name
-/// match. Case-insensitive: HTTP header names are case-insensitive per RFC
-/// 7230, and Chrome's emission casing isn't stable across versions.
-fn merge_headers(
-    original: &[(String, String)],
-    overlay: &BTreeMap<String, String>,
-) -> RequestOverrides {
-    RequestOverrides {
-        headers: Some(merge_header_list(original, overlay)),
-        ..RequestOverrides::default()
+/// Snapshot of a `modify_request` rule's overrides, captured once at
+/// `add_rule` time and shared (via `Arc`) across every matching request.
+struct ModifyRequestOverlay {
+    headers: BTreeMap<String, String>,
+    url: Option<String>,
+    method: Option<String>,
+    post_data: Option<String>,
+}
+
+impl ModifyRequestOverlay {
+    /// Build the [`RequestOverrides`] payload for a `modify_request` rule.
+    ///
+    /// CDP's `Fetch.continueRequest.headers` is a *full replacement* — there
+    /// is no merge mode — so we rebuild the header list from the request as
+    /// Chrome reported it and overlay the caller's entries by
+    /// case-insensitive name match. Case-insensitive: HTTP header names are
+    /// case-insensitive per RFC 7230, and Chrome's emission casing isn't
+    /// stable across versions. `url` / `method` / `post_data` are passed
+    /// straight through — `None` leaves Chrome's original untouched.
+    fn build(&self, original_headers: &[(String, String)]) -> RequestOverrides {
+        RequestOverrides {
+            url: self.url.clone(),
+            method: self.method.clone(),
+            headers: Some(merge_header_list(original_headers, &self.headers)),
+            post_data: self.post_data.clone().map(String::into_bytes),
+        }
     }
 }
 
@@ -457,7 +494,16 @@ mod tests {
         overlay.insert("user-agent".to_string(), "new".to_string());
         overlay.insert("X-Marker".to_string(), "yes".to_string());
 
-        let ov = merge_headers(&original, &overlay);
+        let snapshot = ModifyRequestOverlay {
+            headers: overlay,
+            url: None,
+            method: None,
+            post_data: None,
+        };
+        let ov = snapshot.build(&original);
+        assert!(ov.url.is_none());
+        assert!(ov.method.is_none());
+        assert!(ov.post_data.is_none());
         let headers = ov.headers.expect("headers populated");
 
         // Original "User-Agent" gone (case-insens), replaced by overlay's
@@ -480,5 +526,57 @@ mod tests {
             .map(|(_, v)| v.as_str())
             .expect("user-agent present");
         assert_eq!(ua, "new");
+    }
+
+    /// A `modify_request` rule with `url` / `method` / `post_data` set must
+    /// produce a [`RequestOverrides`] carrying all three verbatim (`post_data`
+    /// UTF-8-encoded into bytes), alongside the usual header merge — the DTO
+    /// fields this test exercises used to be dropped on the floor ("reserved
+    /// for a follow-up").
+    #[test]
+    fn modify_request_overlay_threads_url_method_post_data_into_overrides() {
+        let original = vec![("Host".to_string(), "example.com".to_string())];
+        let mut headers = BTreeMap::new();
+        headers.insert("x-injected".to_string(), "1".to_string());
+
+        let snapshot = ModifyRequestOverlay {
+            headers,
+            url: Some("https://example.com/replaced".to_string()),
+            method: Some("POST".to_string()),
+            post_data: Some(r#"{"a":1}"#.to_string()),
+        };
+        let ov = snapshot.build(&original);
+
+        assert_eq!(ov.url.as_deref(), Some("https://example.com/replaced"));
+        assert_eq!(ov.method.as_deref(), Some("POST"));
+        assert_eq!(ov.post_data.as_deref(), Some(br#"{"a":1}"#.as_slice()));
+        let headers = ov.headers.expect("headers populated");
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k.eq_ignore_ascii_case("x-injected") && v == "1")
+        );
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k.eq_ignore_ascii_case("host") && v == "example.com")
+        );
+    }
+
+    /// When `url` / `method` / `post_data` are all `None` (the pre-existing
+    /// headers-only shape), the resulting `RequestOverrides` must leave them
+    /// `None` too — no accidental empty-string overrides.
+    #[test]
+    fn modify_request_overlay_omits_absent_scalar_overrides() {
+        let snapshot = ModifyRequestOverlay {
+            headers: BTreeMap::new(),
+            url: None,
+            method: None,
+            post_data: None,
+        };
+        let ov = snapshot.build(&[]);
+        assert!(ov.url.is_none());
+        assert!(ov.method.is_none());
+        assert!(ov.post_data.is_none());
     }
 }

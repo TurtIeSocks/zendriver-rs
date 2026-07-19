@@ -36,9 +36,24 @@ $defs:
       name:
         description: Cookie name.
         type: string
+      partition_key:
+        description: "CHIPS partition key — the top-level site the partitioned cookie is\nscoped to, plus whether it was set from a cross-site context.\nMirrors CDP's `Network.CookiePartitionKey` (M119+)."
+        anyOf:
+          - $ref: "#/$defs/CookiePartitionKeyDto"
+          - type: "null"
       path:
         description: "URL path the cookie applies to (typically `\"/\"`)."
         type: string
+      priority:
+        description: "Eviction-priority hint (`Network.CookiePriority`). `None` lets\nChrome apply its default (`Medium`)."
+        anyOf:
+          - $ref: "#/$defs/CookiePriorityDto"
+          - type: "null"
+      same_party:
+        description: "First-Party Sets membership flag (`sameParty`). Rarely set by hand;\npopulated by CDP on reads when known."
+        type:
+          - boolean
+          - "null"
       same_site:
         description: "SameSite policy, if specified."
         anyOf:
@@ -48,6 +63,17 @@ $defs:
         description: "`true` if the cookie is only sent over HTTPS."
         type: boolean
         default: false
+      source_port:
+        description: "Source port of the origin that set the cookie. `-1` in CDP means\n\"unspecified\"; modeled as a plain `Option<i32>` here."
+        type:
+          - integer
+          - "null"
+        format: int32
+      source_scheme:
+        description: "Scheme of the origin that set the cookie\n(`Network.CookieSourceScheme`). Drives schemeful same-site."
+        anyOf:
+          - $ref: "#/$defs/CookieSourceSchemeDto"
+          - type: "null"
       url:
         description: "Origin URL for set-side convenience. CDP infers `domain` + `path` +\n`secure` when present. Always `None` on cookies returned by reads."
         type:
@@ -61,6 +87,43 @@ $defs:
       - value
       - domain
       - path
+  CookiePartitionKeyDto:
+    description: "CHIPS partition-key mirror of [`zendriver::CookiePartitionKey`]."
+    type: object
+    properties:
+      has_cross_site_ancestor:
+        description: "`true` if the cookie was set from a cross-site context."
+        type: boolean
+        default: false
+      top_level_site:
+        description: "The top-level site (e.g. `\"https://example.com\"`)."
+        type: string
+    required:
+      - top_level_site
+  CookiePriorityDto:
+    description: "Eviction-priority mirror of [`zendriver::CookiePriority`].\n\nSerializes as `\"Low\"` / `\"Medium\"` / `\"High\"`, matching the lib's enum\n(and CDP's `Network.CookiePriority`) exactly."
+    oneOf:
+      - description: Lowest retention priority — evicted first under storage pressure.
+        type: string
+        const: Low
+      - description: Default priority when the attribute is unspecified.
+        type: string
+        const: Medium
+      - description: Highest retention priority — evicted last.
+        type: string
+        const: High
+  CookieSourceSchemeDto:
+    description: "Source-scheme mirror of [`zendriver::CookieSourceScheme`].\n\nSerializes as `\"Unset\"` / `\"NonSecure\"` / `\"Secure\"`, matching the lib's\nenum (and CDP's `Network.CookieSourceScheme`) exactly."
+    oneOf:
+      - description: Scheme unknown / not recorded.
+        type: string
+        const: Unset
+      - description: "Cookie was set over a non-secure (`http`) origin."
+        type: string
+        const: NonSecure
+      - description: "Cookie was set over a secure (`https`) origin."
+        type: string
+        const: Secure
   SameSiteDto:
     description: "SameSite policy mirror of [`zendriver::SameSite`].\n\nSerializes with the same `\"Strict\" / \"Lax\" / \"None\"` capitalization as\nthe lib's enum (which matches the RFC and CDP), so on-the-wire payloads\nstay identical to what `zendriver::Cookie`'s own serde emits."
     oneOf:

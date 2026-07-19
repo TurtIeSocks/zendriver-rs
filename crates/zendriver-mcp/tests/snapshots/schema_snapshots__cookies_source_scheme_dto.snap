@@ -1,0 +1,17 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::cookies::CookieSourceSchemeDto)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: CookieSourceSchemeDto
+description: "Source-scheme mirror of [`zendriver::CookieSourceScheme`].\n\nSerializes as `\"Unset\"` / `\"NonSecure\"` / `\"Secure\"`, matching the lib's\nenum (and CDP's `Network.CookieSourceScheme`) exactly."
+oneOf:
+  - description: Scheme unknown / not recorded.
+    type: string
+    const: Unset
+  - description: "Cookie was set over a non-secure (`http`) origin."
+    type: string
+    const: NonSecure
+  - description: "Cookie was set over a secure (`https`) origin."
+    type: string
+    const: Secure

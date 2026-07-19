@@ -4206,6 +4206,43 @@ impl Browser {
             .await?;
         Ok(())
     }
+
+    /// The browser's product string, e.g. `"Chrome/148.0.7778.181"` (or
+    /// `"HeadlessChrome/..."` under `--headless=new`).
+    ///
+    /// Wraps the CDP [`Browser.getVersion`][1] command, sent at browser scope
+    /// (no `sessionId`) — returns the `product` field from the response.
+    ///
+    /// [1]: https://chromedevtools.github.io/devtools-protocol/tot/Browser/#method-getVersion
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZendriverError::Navigation`] if the CDP response is missing
+    /// the `product` field; bubbles up any transport-level error from the
+    /// underlying `call_raw`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// # let browser = zendriver::Browser::builder().launch().await?;
+    /// let version = browser.version().await?;
+    /// println!("{version}"); // e.g. "Chrome/148.0.7778.181"
+    /// # Ok(()) }
+    /// ```
+    pub async fn version(&self) -> Result<String, ZendriverError> {
+        let res = self
+            .inner
+            .conn
+            .call_raw("Browser.getVersion", json!({}), None)
+            .await?;
+        res.get("product")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                ZendriverError::Navigation("Browser.getVersion returned no product".into())
+            })
+    }
 }
 
 /// Hard-shutdown fallback. `Drop` cannot be async, so it cannot perform the
@@ -7332,5 +7369,68 @@ mod tests {
             .unwrap()
             .expect("bundled matcher");
         assert!(bundled.is_blocked("doubleclick.net"));
+    }
+
+    // ----- Browser::version (CDP Browser.getVersion) -----------------------
+
+    /// [`Browser::version`] sends `Browser.getVersion` at browser scope (no
+    /// `sessionId`) and returns the response's `product` field verbatim.
+    #[tokio::test]
+    async fn version_returns_product_string_from_browser_get_version() {
+        use zendriver_transport::testing::MockConnection;
+
+        let (mut mock, conn) = MockConnection::pair();
+        let browser = test_only_browser_from_conn(conn.clone());
+
+        let fut = tokio::spawn({
+            let b = browser.clone();
+            async move { b.version().await }
+        });
+
+        let id = mock.expect_cmd("Browser.getVersion").await;
+        assert!(mock.last_sent().get("sessionId").is_none());
+        mock.reply(
+            id,
+            json!({
+                "protocolVersion": "1.3",
+                "product": "Chrome/148.0.7778.181",
+                "revision": "@abc123",
+                "userAgent": "Mozilla/5.0 ...",
+                "jsVersion": "13.0"
+            }),
+        )
+        .await;
+
+        let version = fut.await.unwrap().unwrap();
+        assert_eq!(version, "Chrome/148.0.7778.181");
+
+        conn.shutdown();
+    }
+
+    /// A `Browser.getVersion` response missing `product` must surface
+    /// [`ZendriverError::Navigation`], not panic or silently return an empty
+    /// string.
+    #[tokio::test]
+    async fn version_missing_product_field_is_a_navigation_error() {
+        use zendriver_transport::testing::MockConnection;
+
+        let (mut mock, conn) = MockConnection::pair();
+        let browser = test_only_browser_from_conn(conn.clone());
+
+        let fut = tokio::spawn({
+            let b = browser.clone();
+            async move { b.version().await }
+        });
+
+        let id = mock.expect_cmd("Browser.getVersion").await;
+        mock.reply(id, json!({ "protocolVersion": "1.3" })).await;
+
+        let err = fut.await.unwrap().unwrap_err();
+        assert!(
+            matches!(err, ZendriverError::Navigation(_)),
+            "expected Navigation error, got: {err:?}"
+        );
+
+        conn.shutdown();
     }
 }

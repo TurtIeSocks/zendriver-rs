@@ -630,3 +630,13 @@ excluded = "read accessor for the composed input-timing profile; internal to lau
 [[entry]]
 api = "zendriver_mcp::state::StealthOverrides::native_isolation"
 covered = "browser_stealth_set.overrides.native_isolation -> StealthProfile::native_isolation (applied to browser_open via session state)"
+
+# ── Phase 1 remainder: Browser::version (CDP Browser.getVersion) ───────────
+[[entry]]
+api = "zendriver::browser::Browser::version"
+covered = "browser_open.chrome_version"
+
+# ── Phase 1 remainder: IpApiResolver::with_proxy made public ───────────────
+[[entry]]
+api = "zendriver::IpApiResolver::with_proxy"
+covered = "browser_open.geo_auto / browser_open.geo_endpoint (mirrors input.proxy into the custom-endpoint resolver)"

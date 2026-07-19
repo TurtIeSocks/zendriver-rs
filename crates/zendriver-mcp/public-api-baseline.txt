@@ -217,6 +217,7 @@ pub async fn zendriver::browser::Browser::reset_permissions(&self) -> core::resu
 pub async fn zendriver::browser::Browser::set_download_path(&self, impl core::convert::Into<std::path::PathBuf>) -> core::result::Result<(), zendriver::error::ZendriverError>
 pub async fn zendriver::browser::Browser::tab_count(&self) -> usize
 pub async fn zendriver::browser::Browser::tabs(&self) -> alloc::vec::Vec<zendriver::tab::Tab>
+pub async fn zendriver::browser::Browser::version(&self) -> core::result::Result<alloc::string::String, zendriver::error::ZendriverError>
 impl core::clone::Clone for zendriver::browser::Browser
 pub fn zendriver::browser::Browser::clone(&self) -> zendriver::browser::Browser
 impl core::fmt::Debug for zendriver::browser::Browser
@@ -6001,6 +6002,7 @@ pub async fn zendriver::browser::Browser::reset_permissions(&self) -> core::resu
 pub async fn zendriver::browser::Browser::set_download_path(&self, impl core::convert::Into<std::path::PathBuf>) -> core::result::Result<(), zendriver::error::ZendriverError>
 pub async fn zendriver::browser::Browser::tab_count(&self) -> usize
 pub async fn zendriver::browser::Browser::tabs(&self) -> alloc::vec::Vec<zendriver::tab::Tab>
+pub async fn zendriver::browser::Browser::version(&self) -> core::result::Result<alloc::string::String, zendriver::error::ZendriverError>
 impl core::clone::Clone for zendriver::browser::Browser
 pub fn zendriver::browser::Browser::clone(&self) -> zendriver::browser::Browser
 impl core::fmt::Debug for zendriver::browser::Browser
@@ -6920,6 +6922,7 @@ impl zendriver::IpApiResolver
 pub fn zendriver::IpApiResolver::endpoint(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn zendriver::IpApiResolver::new() -> Self
 pub fn zendriver::IpApiResolver::timeout(self, core::time::Duration) -> Self
+pub fn zendriver::IpApiResolver::with_proxy(self, core::option::Option<alloc::string::String>, core::option::Option<(alloc::string::String, alloc::string::String)>) -> Self
 impl core::default::Default for zendriver::IpApiResolver
 pub fn zendriver::IpApiResolver::default() -> Self
 impl zendriver_stealth::geo::GeoResolver for zendriver::IpApiResolver

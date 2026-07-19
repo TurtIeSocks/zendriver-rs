@@ -8,7 +8,7 @@ description: "Output of `browser_open`."
 type: object
 properties:
   chrome_version:
-    description: "Detected Chrome version string. Empty in v0 (the zendriver lib does\nnot expose a version accessor); reserved for a follow-up dispatch."
+    description: "Detected Chrome product string (e.g. `\"Chrome/148.0.7778.181\"`), from\nCDP `Browser.getVersion` via [`zendriver::Browser::version`].\nBest-effort: empty if the query fails (a debug log is emitted, but\n`browser_open` itself never fails because of it)."
     type: string
   headless:
     description: Effective headless flag for the launched browser.
