@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.11.0] - 2026-07-19
+
+### Added
+
+- Expose case-insensitive predicate matching on browser_find/browser_find_all
+
+
 ## [0.10.0] - 2026-07-19
 
 ### Added
