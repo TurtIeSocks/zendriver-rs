@@ -46,6 +46,7 @@ pub use zendriver::Strategy
 pub use zendriver::Surface
 pub use zendriver::TransportError
 pub use zendriver::VersionSpec
+pub use zendriver::WebgpuSpec
 pub use zendriver::datadome_detect_surface
 pub use zendriver::detect_surface
 pub mod zendriver::browser
@@ -4058,6 +4059,7 @@ pub use zendriver::stealth::StealthProfile
 pub use zendriver::stealth::Strategy
 pub use zendriver::stealth::Surface
 pub use zendriver::stealth::UserAgentMetadata
+pub use zendriver::stealth::WebgpuSpec
 pub mod zendriver::storage
 pub struct zendriver::storage::Storage
 impl zendriver::storage::Storage

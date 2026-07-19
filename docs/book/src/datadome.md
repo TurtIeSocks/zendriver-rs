@@ -166,15 +166,23 @@ dataset. Before the `Surface::Webgpu` patch (issue #20), Chrome running under
 renderer was spoofed — the inconsistency read as a bot signal.
 
 `Surface::Webgpu` (shipped with `zendriver-stealth`) derives a coherent
-`GPUAdapterInfo` from the spoofed WebGL renderer string and overrides
-`navigator.gpu.requestAdapter()` so both surfaces report the same hardware.
-This patch is included in `BrowserBuilder::stealth(StealthProfile::spoofed())`
+`GPUAdapterInfo` from the spoofed WebGL renderer string and decorates the real
+adapter's reported `.info` so both surfaces report the same hardware. This
+patch is included in `BrowserBuilder::stealth(StealthProfile::spoofed())`
 with no extra configuration required.
 
 **Containers / CI:** WebGPU requires a real GPU. In GPU-less containers,
 `requestAdapter()` returns `null` both before and after the patch — which is
-itself coherent (no GPU present). The patch does not fabricate adapters in
-GPU-less environments.
+itself coherent (no GPU present) and passes DataDome's own consistency check
+(both `null`). The patch does not fabricate adapters in GPU-less environments
+**by default**. If a GPU-less environment specifically needs
+`requestAdapter()` to resolve a non-null adapter (e.g. to match a device
+profile DataDome expects), opt into `WebgpuSpec::fabricate_when_absent` with
+explicit `vendor` + `limits` — see the
+[WebGPU section](fingerprint.md#webgpu-opt-in-adapter-override--fabrication)
+of the fingerprint chapter. It's an explicit, caller-supplied override, not
+automatic: wrong values are more detectable than the honest `null` this
+container caveat already describes.
 
 ## Active sensor reverse-engineering — out of scope
 

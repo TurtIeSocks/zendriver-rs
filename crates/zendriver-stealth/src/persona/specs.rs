@@ -1,5 +1,7 @@
 //! Per-surface value specs carried by a Persona. All fields optional → overlay.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::surface::Strategy;
@@ -129,6 +131,126 @@ pub struct WebglSpec {
     pub strategy: Option<Strategy>,
     pub unmasked_vendor: Option<String>,
     pub unmasked_renderer: Option<String>,
+}
+
+/// WebGPU adapter value substitution + opt-in synthetic-adapter fabrication.
+///
+/// `None`-everywhere ([`WebgpuSpec::default`]) is the regression guard: it
+/// behaves **byte-for-byte** like the pre-`WebgpuSpec` `SurfaceCfg` did — a
+/// real `navigator.gpu` adapter's `.info` is decorated with a vendor /
+/// architecture DERIVED from the [`WebglSpec`] renderer (never fabricated),
+/// `device` / `description` are emitted empty (Chrome masks them), `.limits`
+/// / `.features` are left untouched, and a GPU-less host is left alone —
+/// `navigator.gpu.requestAdapter()` still resolves `null`, same as native
+/// Chrome.
+///
+/// # You own value accuracy
+///
+/// Every field below is **caller-supplied** — nothing here is probed or
+/// invented from a real GPU. A `vendor` / `limits` / `features` combination
+/// that does not correspond to any real device is **more detectable than
+/// leaving the field `None`**: fingerprinting scripts cross-check
+/// `GPUAdapterInfo` against `GPUSupportedLimits` / `GPUSupportedFeatures` and
+/// against the WebGL renderer string, so an incoherent combination reads as a
+/// bot faster than honest absence does. Only set these fields to values
+/// you've verified against a real device (e.g. probed live from
+/// `navigator.gpu` on that device) — never invent plausible-looking numbers.
+///
+/// # What fabrication does
+///
+/// [`fabricate_when_absent`](Self::fabricate_when_absent) covers **both**
+/// GPU-less shapes:
+/// - **`navigator.gpu` entirely absent** (`'gpu' in navigator === false` —
+///   the common case, e.g. Chrome launched with `--disable-gpu`, which is
+///   zendriver's default under headless): a synthetic `navigator.gpu` is
+///   defined on `Navigator.prototype` whose `requestAdapter()` resolves the
+///   synthetic adapter. This flips `'gpu' in navigator` to **true**, which is
+///   coherent for a modern-Chrome persona — real modern Chrome always exposes
+///   `navigator.gpu` even with no usable GPU (there `requestAdapter()` merely
+///   resolves `null`). Restoring that presence is your explicit opt-in.
+/// - **`navigator.gpu` present but `requestAdapter()` resolves `null`**: the
+///   real `requestAdapter` is wrapped so a `null`/rejected result falls back
+///   to the synthetic adapter (a real adapter passes through untouched).
+///
+/// # v1 limitations
+///
+/// - The decorated / fabricated `.info`, `.limits`, `.features` are **plain
+///   objects**, not real `GPUAdapterInfo` / `GPUSupportedLimits` /
+///   `GPUSupportedFeatures` instances — an `instanceof` check would tell.
+///   Likewise a synthesized `navigator.gpu` is a plain object, so
+///   `navigator.gpu instanceof GPU` is `false`.
+/// - [`fabricate_when_absent`](Self::fabricate_when_absent)'s synthetic
+///   adapter's `requestDevice()` **always rejects**. Faking a working
+///   `GPUDevice` needs a real GPU behind it, which this patch cannot
+///   provide — it only makes `navigator.gpu.requestAdapter()` resolve a
+///   coherent adapter for detection scripts that stop at the adapter, it
+///   does not unlock actual WebGPU rendering on a GPU-less host.
+///
+/// ```no_run
+/// use std::collections::BTreeMap;
+/// use zendriver_stealth::{Persona, WebgpuSpec};
+///
+/// // Decorate a REAL adapter with values probed from an actual device.
+/// let persona = Persona {
+///     webgpu: Some(WebgpuSpec {
+///         vendor: Some("apple".into()),
+///         architecture: Some("metal-3".into()),
+///         ..Default::default()
+///     }),
+///     ..Persona::default()
+/// };
+///
+/// // Opt-in fabrication on a GPU-less host: requires an explicit vendor AND
+/// // limits (see `fabricate_when_absent` below) — anything less is refused.
+/// let mut limits = BTreeMap::new();
+/// limits.insert("maxTextureDimension2D".to_string(), 16384);
+/// let fabricated = WebgpuSpec {
+///     vendor: Some("apple".into()),
+///     architecture: Some("metal-3".into()),
+///     limits: Some(limits),
+///     features: Some(vec!["texture-compression-bc".into()]),
+///     fabricate_when_absent: Some(true),
+///     ..Default::default()
+/// };
+/// let _ = fabricated;
+/// ```
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct WebgpuSpec {
+    /// Render strategy for this surface. `None` → kind default (`Value`).
+    pub strategy: Option<Strategy>,
+    /// `GPUAdapterInfo.vendor`. `None` → derived from the [`WebglSpec`]
+    /// renderer (today's behavior, via the internal `adapter_for_renderer`
+    /// dataset mapping).
+    pub vendor: Option<String>,
+    /// `GPUAdapterInfo.architecture`. `None` → derived from the WebGL
+    /// renderer, same as [`vendor`](Self::vendor).
+    pub architecture: Option<String>,
+    /// `GPUAdapterInfo.device`. `None` → `""` (real Chrome masks this field).
+    pub device: Option<String>,
+    /// `GPUAdapterInfo.description`. `None` → `""` (real Chrome masks this
+    /// field too).
+    pub description: Option<String>,
+    /// Caller-supplied `GPUSupportedLimits` caps (e.g.
+    /// `"maxTextureDimension2D"`). Applied to a real (or fabricated) adapter's
+    /// `.limits` getter. `None` → the adapter's own limits are left
+    /// untouched.
+    pub limits: Option<BTreeMap<String, u64>>,
+    /// Caller-supplied `GPUSupportedFeatures` strings (e.g.
+    /// `"texture-compression-bc"`). `None` → the adapter's own features are
+    /// left untouched.
+    pub features: Option<Vec<String>>,
+    /// Explicit opt-in: synthesize a `navigator.gpu` adapter on a host with no
+    /// real one, instead of leaving `requestAdapter()` at `null` (or
+    /// `navigator.gpu` entirely absent). Covers both GPU-less shapes — a
+    /// missing `navigator.gpu` is defined fresh (flipping `'gpu' in navigator`
+    /// to true), and a present-but-null `requestAdapter` is wrapped; see the
+    /// "What fabrication does" section above. Requires [`vendor`](Self::vendor)
+    /// AND [`limits`](Self::limits) to BOTH be explicitly set — a bare `true`
+    /// with nothing else is refused (silently, no-op) because there is nothing
+    /// coherent to fabricate; this project never auto-invents fingerprint
+    /// values. See the v1 limitations above for what fabrication does NOT
+    /// cover (no working `GPUDevice`; plain-object `instanceof`).
+    pub fabricate_when_absent: Option<bool>,
 }
 
 /// Font set + measureText noise.
@@ -298,5 +420,37 @@ mod tests {
     fn empty_spec_omits_nothing_required() {
         let f = FontSpec::default();
         assert!(f.available.is_none());
+    }
+
+    #[test]
+    fn webgpu_spec_default_is_all_none() {
+        let w = WebgpuSpec::default();
+        assert!(w.strategy.is_none());
+        assert!(w.vendor.is_none());
+        assert!(w.architecture.is_none());
+        assert!(w.device.is_none());
+        assert!(w.description.is_none());
+        assert!(w.limits.is_none());
+        assert!(w.features.is_none());
+        assert!(w.fabricate_when_absent.is_none());
+    }
+
+    #[test]
+    fn webgpu_spec_round_trips_json() {
+        let mut limits = std::collections::BTreeMap::new();
+        limits.insert("maxTextureDimension2D".to_string(), 16384u64);
+        let w = WebgpuSpec {
+            strategy: Some(Strategy::Value),
+            vendor: Some("apple".into()),
+            architecture: Some("metal-3".into()),
+            device: Some("Apple M4 Pro".into()),
+            description: Some("Metal 3".into()),
+            limits: Some(limits),
+            features: Some(vec!["texture-compression-bc".into()]),
+            fabricate_when_absent: Some(true),
+        };
+        let s = serde_json::to_string(&w).unwrap();
+        let back: WebgpuSpec = serde_json::from_str(&s).unwrap();
+        assert_eq!(w, back);
     }
 }

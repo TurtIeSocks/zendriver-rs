@@ -7,7 +7,8 @@ pub(crate) mod webgpu_adapter;
 
 pub use seed::Seed;
 pub use specs::{
-    FontSpec, HardwareSpec, ScreenSpec, SurfaceCfg, UaMetadata, UaSpec, WebglSpec, WebrtcSpec,
+    FontSpec, HardwareSpec, ScreenSpec, SurfaceCfg, UaMetadata, UaSpec, WebglSpec, WebgpuSpec,
+    WebrtcSpec,
 };
 
 use std::sync::OnceLock;
@@ -55,7 +56,12 @@ pub struct Persona {
     /// `None` → the observer's fixed 1920x1080 default (today's behavior).
     pub screen: Option<ScreenSpec>,
     pub webgl: Option<WebglSpec>,
-    pub webgpu: Option<SurfaceCfg>,
+    /// WebGPU adapter override — decorate a real adapter's `.info` (deriving
+    /// vendor/architecture from [`webgl`](Self::webgl) when unset, the
+    /// default), and optionally fabricate a synthetic adapter on a GPU-less
+    /// host. **Opt-in only** — see [`WebgpuSpec`] for the full accuracy
+    /// warning and v1 limitations before setting `limits`/`features`.
+    pub webgpu: Option<WebgpuSpec>,
     pub canvas: Option<SurfaceCfg>,
     pub audio: Option<SurfaceCfg>,
     pub fonts: Option<FontSpec>,

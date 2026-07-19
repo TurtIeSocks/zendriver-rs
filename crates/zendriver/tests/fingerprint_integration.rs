@@ -18,8 +18,9 @@
 use std::time::Duration;
 
 use serial_test::serial;
+use std::collections::BTreeMap;
 use zendriver::stealth::StealthProfile;
-use zendriver::{Browser, Persona, Seed, Strategy, Surface, Tab};
+use zendriver::{Browser, Persona, Seed, Strategy, Surface, Tab, WebgpuSpec};
 
 /// Canvas JS that creates a 50×20 canvas, draws text, and returns `toDataURL`.
 const CANVAS_READ_JS: &str = r#"(() => {
@@ -182,6 +183,107 @@ async fn random_canvas_stable_within_page() {
         "Random canvas strategy must be stable WITHIN a page (same per-page-random seed + \
          content-keyed PRNG); it only differs across separate page loads"
     );
+
+    browser.close().await.unwrap();
+}
+
+/// Opt-in WebGPU FABRICATION on a GPU-less host — the case `fabricate_when_absent`
+/// exists for. zendriver's default headless launch adds `--disable-gpu`
+/// (`crates/zendriver/src/browser.rs`), so on many hosts (including CI and this
+/// dev host) `'gpu' in navigator === false` — `navigator.gpu` is entirely
+/// absent. With a `WebgpuSpec` carrying vendor + limits + `fabricate_when_absent`,
+/// `webgpu.js` DEFINES a synthetic `navigator.gpu` on `Navigator.prototype`
+/// (case (b) in that patch), flipping `'gpu' in navigator` to true — coherent
+/// for a modern-Chrome persona, which always exposes `navigator.gpu` even
+/// GPU-less. Requires `.stealth(StealthProfile::spoofed())` (the default
+/// profile injects no JS bootstrap, so the patch would never run).
+///
+/// If this host DOES expose a real `navigator.gpu` adapter, case (a) passes
+/// the real adapter through instead (its vendor won't be our synthetic one),
+/// and the synthetic-specific assertions are skipped as a no-op — the presence
+/// assertion still holds either way.
+#[tokio::test]
+#[serial]
+#[ignore] // run with: cargo test ... -- --ignored
+async fn fabricate_when_absent_synthesizes_navigator_gpu() {
+    let mut limits = BTreeMap::new();
+    limits.insert("maxTextureDimension2D".to_string(), 16384u64);
+    let persona = Persona {
+        webgpu: Some(WebgpuSpec {
+            vendor: Some("nvidia".into()),
+            architecture: Some("ada".into()),
+            limits: Some(limits),
+            features: Some(vec!["texture-compression-bc".into()]),
+            fabricate_when_absent: Some(true),
+            ..Default::default()
+        }),
+        ..Persona::default()
+    };
+
+    let browser = Browser::builder()
+        .stealth(StealthProfile::spoofed())
+        .persona(persona)
+        .headless(true)
+        .launch()
+        .await
+        .unwrap();
+    let tab = browser.main_tab();
+    tab.goto("about:blank").await.unwrap();
+    tab.wait_for_load().await.ok();
+    // The stealth bootstrap (`Page.addScriptToEvaluateOnNewDocument`) can
+    // still be installing its patches at the instant `wait_for_load()`
+    // resolves — the same documented install-race the canvas tests poll
+    // around (see `poll_until_farbled` above). Poll (bounded) until the
+    // synthetic `navigator.gpu` is live instead of assuming a fixed delay.
+    let read = r#"(async () => {
+            const present = ('gpu' in navigator);
+            if (!present) return { present };
+            const a = await navigator.gpu.requestAdapter();
+            let deviceRejected = false;
+            try { await a.requestDevice(); } catch (e) { deviceRejected = true; }
+            return {
+              present,
+              vendor: a && a.info ? a.info.vendor : null,
+              maxTex: a && a.limits ? a.limits.maxTextureDimension2D : null,
+              hasFeature: a && a.features ? a.features.has('texture-compression-bc') : false,
+              deviceRejected,
+              preferredFormat: typeof navigator.gpu.getPreferredCanvasFormat === 'function'
+                ? navigator.gpu.getPreferredCanvasFormat() : null,
+            };
+        })()"#;
+    let mut v = serde_json::Value::Null;
+    for attempt in 0..MAX_POLL_TRIES {
+        v = tab.evaluate_main(read).await.unwrap();
+        if v["present"] == true {
+            break;
+        }
+        if attempt + 1 < MAX_POLL_TRIES {
+            tokio::time::sleep(POLL_DELAY).await;
+        }
+    }
+
+    // Core coherence win: fabrication makes `'gpu' in navigator` true even
+    // when Chrome launched with no usable GPU.
+    assert_eq!(
+        v["present"], true,
+        "fabricate_when_absent must make 'gpu' in navigator true: {v}"
+    );
+
+    // On a GPU-less host the synthetic adapter is what `requestAdapter()`
+    // resolves. On a host that already had a real adapter, case (a) passes the
+    // real one through (different vendor) — skip the synthetic-shape asserts.
+    if v["vendor"] == "nvidia" {
+        assert_eq!(v["maxTex"], 16384, "supplied limit surfaced: {v}");
+        assert_eq!(v["hasFeature"], true, "supplied feature surfaced: {v}");
+        assert_eq!(
+            v["deviceRejected"], true,
+            "synthetic adapter's requestDevice() must reject (v1 limitation): {v}"
+        );
+        assert_eq!(
+            v["preferredFormat"], "bgra8unorm",
+            "synthetic navigator.gpu exposes getPreferredCanvasFormat: {v}"
+        );
+    }
 
     browser.close().await.unwrap();
 }

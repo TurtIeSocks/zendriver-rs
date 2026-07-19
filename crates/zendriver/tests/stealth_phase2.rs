@@ -6,9 +6,11 @@
 #![cfg(feature = "stealth-tests")]
 
 use serial_test::serial;
+use std::collections::BTreeMap;
 use std::time::Duration;
 use zendriver::Browser;
 use zendriver::stealth::StealthProfile;
+use zendriver::{Persona, WebgpuSpec};
 
 #[tokio::test]
 #[serial]
@@ -228,6 +230,98 @@ async fn webgpu_adapter_coheres_with_webgl_renderer() {
             "webgpu vendor {vendor} must cohere with webgl renderer {renderer}"
         );
     }
+
+    browser.close().await.expect("close");
+}
+
+/// Real-Chrome decorate-path check for the opt-in `WebgpuSpec` (caller-
+/// supplied adapter override — promoted from the strategy-only `SurfaceCfg`).
+/// On a host that exposes a real `navigator.gpu` adapter, this validates the
+/// DECORATE path end-to-end.
+///
+/// **Known environment limitation (verified 2026-07-19):** zendriver's
+/// current launch flags (`--disable-gpu` under headless —
+/// `crates/zendriver/src/browser.rs:1447` — plus the Spoofed profile's
+/// SwiftShader WebGL flags, which are WebGL-specific, not WebGPU) leave
+/// `'gpu' in navigator` **false** on this darwin CI/dev host in BOTH headless
+/// and headful mode, so `webgpu.js`'s very first line (`if (!('gpu' in
+/// navigator)) return;`) short-circuits before the decorate OR fabricate
+/// branch ever runs. This is a pre-existing gap in Chrome's WebGPU
+/// availability under zendriver's launch flags (see also the untouched
+/// sibling test above, `webgpu_adapter_coheres_with_webgl_renderer`, which
+/// hits the identical no-op for the same reason) — not something this
+/// change introduced or can fix from `WebgpuSpec` alone. The DECORATE and
+/// FABRICATE argument-substitution logic is instead covered exhaustively by
+/// `zendriver-stealth`'s unit tests (`push_webgpu` in `patches.rs`), which
+/// assert on the exact JS invocation arguments emitted for each case. This
+/// test still runs for real on any host where `navigator.gpu` IS available.
+#[tokio::test]
+#[serial]
+async fn webgpu_spec_decorates_real_adapter_with_caller_values() {
+    let mut limits = BTreeMap::new();
+    limits.insert("maxTextureDimension2D".to_string(), 16384u64);
+    let persona = Persona {
+        webgpu: Some(WebgpuSpec {
+            vendor: Some("caller-vendor".into()),
+            architecture: Some("caller-arch".into()),
+            device: Some("caller-device".into()),
+            description: Some("caller-description".into()),
+            limits: Some(limits),
+            features: Some(vec!["texture-compression-bc".into()]),
+            ..Default::default()
+        }),
+        ..Persona::default()
+    };
+
+    let browser = Browser::builder()
+        .stealth(StealthProfile::spoofed())
+        .persona(persona)
+        .headless(true)
+        .launch()
+        .await
+        .expect("launch");
+    let tab = browser.main_tab();
+    tab.goto("about:blank").await.expect("goto");
+    tab.wait_for_load().await.ok();
+
+    let v: serde_json::Value = tab
+        .evaluate_main(
+            r#"(async () => {
+            const a = navigator.gpu && await navigator.gpu.requestAdapter();
+            if (!a) return null;
+            return {
+              vendor: a.info.vendor,
+              architecture: a.info.architecture,
+              device: a.info.device,
+              description: a.info.description,
+              maxTextureDimension2D: a.limits ? a.limits.maxTextureDimension2D : null,
+              hasFeature: a.features ? a.features.has('texture-compression-bc') : false,
+            };
+        })()"#,
+        )
+        .await
+        .expect("eval");
+
+    if v.is_null() {
+        // No real WebGPU adapter on this host — no-op pass (see doc comment).
+        browser.close().await.expect("close");
+        return;
+    }
+    assert_eq!(v["vendor"], "caller-vendor", "decorated vendor: {v}");
+    assert_eq!(
+        v["architecture"], "caller-arch",
+        "decorated architecture: {v}"
+    );
+    assert_eq!(v["device"], "caller-device", "decorated device: {v}");
+    assert_eq!(
+        v["description"], "caller-description",
+        "decorated description: {v}"
+    );
+    assert_eq!(
+        v["maxTextureDimension2D"], 16384,
+        "decorated limits cap: {v}"
+    );
+    assert_eq!(v["hasFeature"], true, "decorated feature set: {v}");
 
     browser.close().await.expect("close");
 }

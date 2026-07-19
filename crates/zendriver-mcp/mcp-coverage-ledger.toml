@@ -40,6 +40,22 @@ excluded = "internal fingerprint strategy type; surfaced opaquely via Persona JS
 api = "zendriver::Surface"
 excluded = "internal fingerprint surface type; surfaced opaquely via Persona JSON in browser_open.persona"
 
+# ── Phase-4 opt-in WebGPU adapter override (WebgpuSpec) ─────────────────────
+# Re-exported (unlike the other per-surface value specs — WebglSpec,
+# ScreenSpec, UaSpec — which stay lib-internal-only) because this is a new
+# opt-in knob whose whole point is caller discoverability (see its rustdoc).
+# Not a request-DTO field on `browser_fingerprint_generate` (which only
+# generates a Persona from a pool/BN source, it doesn't hand-build one field
+# by field) or on `browser_open` (persona is one opaque JSON blob) — so, same
+# as `Strategy`/`Surface` above, it's excluded rather than covered.
+[[entry]]
+api = "zendriver::WebgpuSpec"
+excluded = "caller-supplied fingerprint spec; surfaced opaquely via Persona JSON in browser_open.persona, not a granular field on browser_fingerprint_generate's request (consistent with WebglSpec/ScreenSpec, which are lib-only and carry no ledger entry at all since they're not re-exported from the zendriver crate root)"
+
+[[entry]]
+api = "zendriver::stealth::WebgpuSpec"
+excluded = "caller-supplied fingerprint spec; surfaced opaquely via Persona JSON in browser_open.persona, not a granular field on browser_fingerprint_generate's request (consistent with WebglSpec/ScreenSpec, which are lib-only and carry no ledger entry at all since they're not re-exported from the zendriver crate root)"
+
 [[entry]]
 api = "zendriver::stealth::Persona"
 covered = "browser_open.persona / browser_fingerprint_generate"
