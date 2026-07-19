@@ -539,6 +539,7 @@ mod tests {
                     kind: "request",
                     task,
                     rx,
+                    tab_id: "tab-a".into(),
                 },
             );
             assert_eq!(s.expectations.len(), 1, "precondition: expectation present");
@@ -621,6 +622,7 @@ mod tests {
                     pattern: "*/ads/*".into(),
                     action_kind: "block",
                     _handle: zendriver_interception::InterceptHandle::for_tests(),
+                    tab_id: "tab-a".into(),
                 },
             );
             s.rules.insert(
@@ -629,6 +631,7 @@ mod tests {
                     pattern: "*/api/*".into(),
                     action_kind: "respond",
                     _handle: zendriver_interception::InterceptHandle::for_tests(),
+                    tab_id: "tab-b".into(),
                 },
             );
             assert_eq!(s.rules.len(), 2, "precondition: rules present");

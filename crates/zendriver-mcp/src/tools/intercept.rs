@@ -138,6 +138,10 @@ pub async fn add_rule(
 ) -> Result<AddRuleOutput, ErrorData> {
     let mut s = state.lock().await;
     let tab = current_tab(&s).await?;
+    // Captured before the per-action match below so the registered handle
+    // can be reaped by `browser_tab_close` when this tab closes — see
+    // `state::InterceptRuleHandle::tab_id`.
+    let tab_id = tab.target_id().to_string();
 
     // Each match-arm builds + starts its own InterceptBuilder. The action
     // method (`block` / `redirect` / `respond` / `modify_request`) takes the
@@ -228,6 +232,7 @@ pub async fn add_rule(
             pattern: input.pattern,
             action_kind,
             _handle: handle,
+            tab_id,
         },
     );
     Ok(AddRuleOutput { rule_id: id })
