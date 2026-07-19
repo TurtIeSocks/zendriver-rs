@@ -71,19 +71,25 @@ async fn generate_from(
     use zendriver::Seed;
     let seed = input.seed.map_or_else(Seed::random, Seed::from_u64);
     let persona = match input.source {
-        FpSource::Generative => {
-            zendriver_fingerprints::generative::Generator::load_or_download(network_url)
-                .await
-                .map_err(|e| {
-                    ErrorData::internal_error(format!("generative network load failed: {e}"), None)
-                })?
-                .generate(seed)
-        }
+        FpSource::Generative => zendriver_fingerprints::generative::Generator::load_or_download(
+            network_url,
+            zendriver_fingerprints::CachePolicy::default(),
+        )
+        .await
+        .map_err(|e| {
+            ErrorData::internal_error(format!("generative network load failed: {e}"), None)
+        })?
+        .generate(seed),
         FpSource::Pool => {
             // NOTE: The pool release asset does not exist yet (tracked in issue
             // #25). This fails at runtime with a clear error until it is hosted.
-            let set = zendriver_fingerprints::pool::load_or_download(POOL_URL)
-                .await
+            // Stateless per-call MCP tool — no cache-TTL knob exposed here, see
+            // `mcp-coverage-ledger.toml` (`zendriver_fingerprints::CachePolicy`).
+            let set = zendriver_fingerprints::pool::load_or_download(
+                POOL_URL,
+                zendriver_fingerprints::CachePolicy::default(),
+            )
+            .await
                 .map_err(|e| {
                     ErrorData::internal_error(
                         format!(

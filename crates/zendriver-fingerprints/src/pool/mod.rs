@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use zendriver_stealth::{Persona, Seed};
 
+use crate::CachePolicy;
+
 /// A parsed pool of real-device personas.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PoolSet {
@@ -73,14 +75,37 @@ pub fn cache_path() -> PathBuf {
 ///
 /// Uses the same atomic-write pattern as `zendriver-fetcher` (write to
 /// `<path>.tmp`, then `rename` into place).
-pub async fn load_or_download(url: &str) -> Result<PoolSet, PoolError> {
+///
+/// `policy` controls cache freshness — see [`CachePolicy`]. Pass
+/// `CachePolicy::default()` for the original permanent-cache behavior (which
+/// also skips the mtime read entirely — zero behavioral difference from
+/// before this knob existed).
+///
+/// ```no_run
+/// use zendriver_fingerprints::CachePolicy;
+/// use zendriver_fingerprints::pool::load_or_download;
+///
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// // Permanent cache (default behavior).
+/// let pool = load_or_download("https://example.com/pool.json", CachePolicy::default()).await?;
+///
+/// // Re-download once the cached file is older than a day.
+/// let ttl = CachePolicy::with_ttl(std::time::Duration::from_secs(86_400));
+/// let pool = load_or_download("https://example.com/pool.json", ttl).await?;
+/// # let _ = pool;
+/// # Ok(())
+/// # }
+/// ```
+pub async fn load_or_download(url: &str, policy: CachePolicy) -> Result<PoolSet, PoolError> {
     let cache = cache_path();
 
-    // Fast path: cache hit.
-    if let Ok(bytes) = std::fs::read_to_string(&cache) {
-        if let Ok(set) = PoolSet::from_json(&bytes) {
-            tracing::debug!(path = %cache.display(), "pool cache hit");
-            return Ok(set);
+    // Fast path: cache hit (only when not force-refreshing and not stale).
+    if !policy.force_refresh && !crate::cache::path_is_stale(&cache, policy.ttl) {
+        if let Ok(bytes) = std::fs::read_to_string(&cache) {
+            if let Ok(set) = PoolSet::from_json(&bytes) {
+                tracing::debug!(path = %cache.display(), "pool cache hit");
+                return Ok(set);
+            }
         }
     }
 
