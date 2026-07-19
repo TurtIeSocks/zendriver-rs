@@ -241,26 +241,22 @@ pub struct TabCloseOutput {
 /// `Tab::close(self)` consumes the receiver, so we have to fetch the
 /// owned `Tab` out of `Browser::tabs()` before calling `.close()`.
 ///
-/// # v0 limitation: tab-scoped expectations and interception rules leak
+/// # Tab-scoped expectation / interception-rule teardown
 ///
-/// `SessionState::expectations` and `SessionState::rules` are flat
-/// `HashMap`s keyed by opaque ids — neither tracks which tab a handle
-/// was originally bound to. A `browser_tab_close` here therefore does
-/// **not** reap expectations registered via `browser_expect_register`
-/// or rules registered via `browser_intercept_add_rule` against the
-/// closing tab; they continue running (the expectation's spawned task
-/// holds its `.matched()` future open until its inner
-/// `pre_await_timeout_ms` fires, the interception actor's
-/// `Fetch.disable` only dispatches when its handle drops) until
-/// either: (a) the agent explicitly calls `browser_expect_cancel` /
-/// `browser_intercept_remove_rule`, or (b) the whole browser is torn
-/// down via `browser_close` (which DOES drain both registries —
-/// see `crate::tools::lifecycle::close`).
-///
-/// Fixing this requires extending each handle struct with a `tab_id`
-/// field plus a per-tab filter pass on close — out of scope for v0
-/// (would also need to handle the "tab id mid-rotation" case where the
-/// CDP target id changes under us). Tracked for a follow-up release.
+/// `SessionState::expectations` and `SessionState::rules` entries carry the
+/// `tab_id` of the tab they were registered against (set at
+/// `browser_expect_register` / `browser_intercept_add_rule` time). Once the
+/// closed tab's id is known, [`drain_tab_scoped`] removes every entry whose
+/// `tab_id` matches it: expectation tasks are `.abort()`ed (a bare
+/// `JoinHandle` drop only detaches, it does not cancel), and rule handles
+/// are simply dropped from the map — `InterceptRuleHandle::_handle`'s `Drop`
+/// impl cancels the actor. Without this, both kinds of handle would
+/// otherwise keep running (the expectation's spawned task holding its
+/// `.matched()` future open until `pre_await_timeout_ms` fires; the
+/// interception actor staying live) until either the agent explicitly calls
+/// `browser_expect_cancel` / `browser_intercept_remove_rule`, or the whole
+/// browser is torn down via `browser_close` (which also drains both
+/// registries — see `crate::tools::lifecycle::close`).
 pub async fn close(
     state: Arc<Mutex<SessionState>>,
     input: TabCloseInput,
@@ -291,6 +287,11 @@ pub async fn close(
         .await
         .map_err(|e| map_error(McpServerError::from(e)))?;
 
+    // Tear down tab-scoped expectations/rules for the closed tab — see the
+    // `close` doc comment above and `drain_tab_scoped`'s own doc comment.
+    #[cfg(any(feature = "expect", feature = "interception"))]
+    drain_tab_scoped(&mut s, &target_id);
+
     // Reset / promote the current tab id.
     let was_current = s.current_tab_id.as_deref() == Some(target_id.as_str());
     if was_current {
@@ -308,6 +309,45 @@ pub async fn close(
         closed_id: target_id,
         current_tab_id: s.current_tab_id.clone(),
     })
+}
+
+/// Remove every `expectations` / `rules` entry registered against
+/// `closed_id`, tearing each one down.
+///
+/// Pulled out of [`close`] (rather than inlined) so it's unit-testable
+/// without a live `Browser`/`Tab` — `close` itself can't run past its
+/// `BrowserNotOpen` guard without one.
+///
+/// The two maps need different teardown because of what `retain` drops:
+/// - `expectations`: the removed value's `task` field is a
+///   `tokio::task::JoinHandle` — dropping a `JoinHandle` merely *detaches*
+///   the task (it keeps running), it does not cancel it. So the retain
+///   closure explicitly `.abort()`s each removed entry's task before
+///   returning `false`.
+/// - `rules`: the removed value's `_handle` field is a
+///   `zendriver::InterceptHandle`, whose `Drop` impl cancels the
+///   interception actor. A plain `retain` (letting the removed values drop)
+///   is therefore enough — no explicit teardown call needed.
+///
+/// Not currently called for `SessionState::monitors`: `MonitorState` has no
+/// `tab_id` field today, so there is no cheap per-tab filter to apply here
+/// without first threading a tab id through `browser_monitor_start` /
+/// `MonitorState` — left as a follow-up (tracked in the deferred backlog,
+/// §1 MCP surface) rather than folded into this pass.
+#[cfg(any(feature = "expect", feature = "interception"))]
+fn drain_tab_scoped(s: &mut SessionState, closed_id: &str) {
+    #[cfg(feature = "expect")]
+    s.expectations.retain(|_, h| {
+        if h.tab_id == closed_id {
+            h.task.abort();
+            false
+        } else {
+            true
+        }
+    });
+
+    #[cfg(feature = "interception")]
+    s.rules.retain(|_, h| h.tab_id != closed_id);
 }
 
 // ---------- browser_tab_activate ------------------------------------------
@@ -437,5 +477,101 @@ mod tests {
         assert!(err.message.contains("browser_open"));
         let data = err.data.as_ref().expect("data populated");
         assert_eq!(data["suggested_next"], "browser_open");
+    }
+
+    /// `drain_tab_scoped` must reap only the closed tab's entries: an
+    /// expectation's spawned `task` is `.abort()`ed (dropping a `JoinHandle`
+    /// alone detaches rather than cancels), while a rule's `InterceptHandle`
+    /// tears down via `Drop` — so a plain `retain` suffices for rules. A
+    /// survivor on a different `tab_id` must remain in both maps untouched.
+    #[cfg(all(feature = "expect", feature = "interception"))]
+    #[tokio::test]
+    async fn drain_tab_scoped_reaps_closed_tab_keeps_survivor() {
+        use crate::state::{ExpectationHandle, InterceptRuleHandle};
+
+        let mut s = SessionState::new();
+
+        // Expectation on the closed tab: parks forever, so only `.abort()`
+        // (not a bare drop) can end it.
+        let (_tx_keep_alive, rx_closed) =
+            tokio::sync::oneshot::channel::<Result<serde_json::Value, String>>();
+        let task_closed = tokio::spawn(async move {
+            std::future::pending::<()>().await;
+        });
+        let closed_task_check = task_closed.abort_handle();
+        s.expectations.insert(
+            "exp-closed".into(),
+            ExpectationHandle {
+                kind: "request",
+                task: task_closed,
+                rx: rx_closed,
+                tab_id: "closed-tab-id".into(),
+            },
+        );
+
+        // Survivor expectation on a different tab.
+        let (_tx_keep_alive2, rx_survivor) =
+            tokio::sync::oneshot::channel::<Result<serde_json::Value, String>>();
+        let task_survivor = tokio::spawn(async move {
+            std::future::pending::<()>().await;
+        });
+        let survivor_task_check = task_survivor.abort_handle();
+        s.expectations.insert(
+            "exp-survivor".into(),
+            ExpectationHandle {
+                kind: "request",
+                task: task_survivor,
+                rx: rx_survivor,
+                tab_id: "other-tab-id".into(),
+            },
+        );
+
+        s.rules.insert(
+            "rule-closed".into(),
+            InterceptRuleHandle {
+                pattern: "*/ads/*".into(),
+                action_kind: "block",
+                _handle: zendriver_interception::InterceptHandle::for_tests(),
+                tab_id: "closed-tab-id".into(),
+            },
+        );
+        s.rules.insert(
+            "rule-survivor".into(),
+            InterceptRuleHandle {
+                pattern: "*/api/*".into(),
+                action_kind: "respond",
+                _handle: zendriver_interception::InterceptHandle::for_tests(),
+                tab_id: "other-tab-id".into(),
+            },
+        );
+
+        drain_tab_scoped(&mut s, "closed-tab-id");
+
+        assert!(
+            !s.expectations.contains_key("exp-closed"),
+            "closed tab's expectation must be drained"
+        );
+        assert!(
+            s.expectations.contains_key("exp-survivor"),
+            "other tab's expectation must survive"
+        );
+        assert!(
+            !s.rules.contains_key("rule-closed"),
+            "closed tab's rule must be drained"
+        );
+        assert!(
+            s.rules.contains_key("rule-survivor"),
+            "other tab's rule must survive"
+        );
+
+        tokio::task::yield_now().await;
+        assert!(
+            closed_task_check.is_finished(),
+            "closed tab's expectation task should be aborted"
+        );
+        assert!(
+            !survivor_task_check.is_finished(),
+            "surviving tab's expectation task should NOT be aborted"
+        );
     }
 }

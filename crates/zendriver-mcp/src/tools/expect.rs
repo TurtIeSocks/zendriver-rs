@@ -223,6 +223,10 @@ pub async fn register(
         let s = state.lock().await;
         current_tab(&s).await?
     };
+    // Captured before the per-kind spawn below (which may move/consume
+    // `tab`) so the registered handle can be reaped by `browser_tab_close`
+    // when this tab closes — see `state::ExpectationHandle::tab_id`.
+    let tab_id = tab.target_id().to_string();
 
     let (tx, rx) = oneshot::channel::<Result<Value, String>>();
 
@@ -289,6 +293,7 @@ pub async fn register(
                 kind: kind.label(),
                 task,
                 rx,
+                tab_id,
             },
         );
     }

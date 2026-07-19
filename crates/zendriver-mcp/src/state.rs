@@ -176,11 +176,18 @@ pub struct SessionState {
 ///
 /// `kind` is a static label ("request" / "response" / "dialog" / "download")
 /// for diagnostics — not currently surfaced, but cheap to keep alongside.
+///
+/// `tab_id` is the CDP target id of the tab the expectation was registered
+/// against (same id space as `zendriver::Tab::target_id` /
+/// `SessionState::current_tab_id`). It lets `browser_tab_close` reap this
+/// entry when its tab closes instead of leaking until `browser_expect_cancel`
+/// or `browser_close` — see `crate::tools::tabs::drain_tab_scoped`.
 #[cfg(feature = "expect")]
 pub struct ExpectationHandle {
     pub kind: &'static str,
     pub task: tokio::task::JoinHandle<()>,
     pub rx: tokio::sync::oneshot::Receiver<Result<serde_json::Value, String>>,
+    pub tab_id: String,
 }
 
 /// One MCP interception rule = one `zendriver_interception::InterceptHandle`.
@@ -190,11 +197,18 @@ pub struct ExpectationHandle {
 /// down `Fetch.enable` on that rule's session. `pattern` + `action_kind`
 /// are kept alongside so `browser_intercept_list_rules` can report back
 /// what each id corresponds to without poking at the handle's internals.
+///
+/// `tab_id` is the CDP target id of the tab the rule was registered against
+/// (same id space as `zendriver::Tab::target_id` /
+/// `SessionState::current_tab_id`), so `browser_tab_close` can drop this
+/// entry (and, via `Drop`, cancel its actor) when its tab closes — see
+/// `crate::tools::tabs::drain_tab_scoped`.
 #[cfg(feature = "interception")]
 pub struct InterceptRuleHandle {
     pub pattern: String,
     pub action_kind: &'static str,
     pub _handle: zendriver::InterceptHandle,
+    pub tab_id: String,
 }
 
 /// A serde + JSON-Schema mirror of `zendriver::NetworkEvent` for the MCP wire.
