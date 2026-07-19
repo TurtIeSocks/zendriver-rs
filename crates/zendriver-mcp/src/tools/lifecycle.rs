@@ -118,8 +118,10 @@ const fn default_true() -> bool {
 /// Output of `browser_open`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct OpenOutput {
-    /// Detected Chrome version string. Empty in v0 (the zendriver lib does
-    /// not expose a version accessor); reserved for a follow-up dispatch.
+    /// Detected Chrome product string (e.g. `"Chrome/148.0.7778.181"`), from
+    /// CDP `Browser.getVersion` via [`zendriver::Browser::version`].
+    /// Best-effort: empty if the query fails (a debug log is emitted, but
+    /// `browser_open` itself never fails because of it).
     pub chrome_version: String,
     /// Effective headless flag for the launched browser.
     pub headless: bool,
@@ -220,12 +222,22 @@ pub async fn open(
         .launch()
         .await
         .map_err(|e| map_error(McpServerError::from(e)))?;
+    // Best-effort: a failed version query must not fail `browser_open` — the
+    // browser is already up and otherwise usable, so we just log and leave
+    // the field empty.
+    let chrome_version = match browser.version().await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::debug!(error = %e, "browser_open: Browser::version() failed; leaving chrome_version empty");
+            String::new()
+        }
+    };
     let tabs = browser.tabs().await;
     s.current_tab_id = tabs.first().map(|t| t.target_id().to_string());
     s.browser = Some(browser);
     s.stealth_profile_choice = profile;
     Ok(OpenOutput {
-        chrome_version: String::new(),
+        chrome_version,
         headless: input.headless,
         profile,
         input_profile: input_profile_choice,
