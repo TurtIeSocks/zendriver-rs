@@ -1,14 +1,15 @@
-//! Selector kinds + CDP/JS resolution. T9 implements CSS + XPath; T10
-//! implements Text + TextRegex; T11 lands Role.
+//! Selector kinds + CDP/JS resolution. Covers CSS, XPath, Text,
+//! TextRegex, and Role selectors.
 //!
-//! Several items below (`Xpath`/`Text`/`TextRegex`/`Role` variants,
-//! `resolve_many`, the array-extraction helpers) compile but have no
-//! callers yet — `FindBuilder` only exposes `.css(...).one()` until
-//! T12. The `#[allow(dead_code)]` annotations are scoped to those
-//! items so a future stray dead-code regression elsewhere in the file
-//! is still caught.
+//! The live `FindBuilder` / `FindAllBuilder` entry points resolve
+//! through `SelectorKind::resolve_many_inner` (`.one()` takes the
+//! best-match head; `.many()` returns the whole vec); `Element::refresh`
+//! also drives `resolve_many`. The single-match `resolve_one` /
+//! `resolve_*_one` family is exercised only by this file's tests — its
+//! `#[allow(dead_code)]` is scoped to the wrapper so the lib-target
+//! (cfg-test-off) build still stays warning-clean.
 //!
-//! Role resolution (T11): role-only queries compile to a `[role="..."]`
+//! Role resolution: role-only queries compile to a `[role="..."]`
 //! CSS attribute selector and reuse `resolve_css_one`/`resolve_css_many`
 //! directly. Role + accessible-name queries do the same CSS pass first
 //! to get all candidates, then post-filter via
@@ -33,7 +34,6 @@ use crate::tab::Tab;
 /// hand back one (or many) of these; the caller wraps them into
 /// `Element` values.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Field reads land with the FindBuilder.one swap in T12.
 pub(crate) struct RemoteRef {
     pub(crate) remote_object_id: String,
     pub(crate) backend_node_id: i64,
@@ -43,7 +43,6 @@ pub(crate) struct RemoteRef {
 /// subtree rooted at an existing element (root = `this`), or a specific
 /// frame (root = the frame's `document`, dispatched on the frame's own
 /// CDP session — distinct from the parent tab's session for OOPIFs).
-#[allow(dead_code)] // Element-scoped queries land with FindBuilder ext in T12.
 pub(crate) enum QueryScope<'a> {
     Tab(&'a Tab),
     Element(&'a Element),
@@ -118,7 +117,6 @@ impl QueryScope<'_> {
 /// the user's intent exactly — `text_regex(re)` plumbs `re.as_str()`
 /// + empty flags, while `text_regex_with_flags` (T12) plumbs both.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Xpath/Text/TextRegex/Role wired up by T11/T12.
 pub(crate) enum SelectorKind {
     Css(String),
     Xpath(String),
@@ -132,7 +130,10 @@ impl SelectorKind {
     /// (or `None` if nothing matched). Element-scoped queries traverse
     /// only the scope element's subtree; tab-scoped queries traverse
     /// the whole document.
-    #[allow(dead_code)] // First lib caller is FindBuilder.one after T12 swap.
+    #[allow(dead_code)] // Exercised only by this file's #[cfg(test)] tests; the
+    // live `.one()` path resolves via `resolve_many_inner` (best-match ordering),
+    // not this wrapper. Kept as the single-match analogue that the resolver tests
+    // drive directly.
     pub(crate) async fn resolve_one(&self, scope: &QueryScope<'_>) -> Result<Option<RemoteRef>> {
         self.resolve_one_inner(scope, false).await
     }
@@ -161,7 +162,6 @@ impl SelectorKind {
 
     /// Resolve this selector against `scope` and return every match in
     /// document order. Empty `Vec` for no matches (not an error).
-    #[allow(dead_code)] // First caller lands in T12 (FindBuilder.many).
     pub(crate) async fn resolve_many(&self, scope: &QueryScope<'_>) -> Result<Vec<RemoteRef>> {
         self.resolve_many_inner(scope, false).await
     }
@@ -227,7 +227,9 @@ async fn eval_expr_in_scope(scope: &QueryScope<'_>, expression: String) -> Resul
 // CSS
 // ---------------------------------------------------------------------
 
-#[allow(dead_code)] // Reached via SelectorKind::resolve_one, gated until T12.
+// test-only: production `.one()` resolves via `resolve_many_inner` + take-first;
+// this single-match resolver is exercised only by this file's #[cfg(test)] tests.
+#[allow(dead_code)]
 async fn resolve_css_one(scope: &QueryScope<'_>, selector: &str) -> Result<Option<RemoteRef>> {
     let session = scope.session();
     let result = match scope {
@@ -256,7 +258,6 @@ async fn resolve_css_one(scope: &QueryScope<'_>, selector: &str) -> Result<Optio
     extract_node_ref(session, &result["result"]).await
 }
 
-#[allow(dead_code)] // Called via `SelectorKind::resolve_many`; gated until T12.
 async fn resolve_css_many(scope: &QueryScope<'_>, selector: &str) -> Result<Vec<RemoteRef>> {
     let session = scope.session();
     let result = match scope {
@@ -345,7 +346,9 @@ pub(crate) async fn resolve_predicate_many(
 // XPath
 // ---------------------------------------------------------------------
 
-#[allow(dead_code)] // Reached only via `SelectorKind::Xpath`, wired up in T12.
+// test-only: production `.one()` resolves via `resolve_many_inner` + take-first;
+// this single-match resolver is exercised only by this file's #[cfg(test)] tests.
+#[allow(dead_code)]
 async fn resolve_xpath_one(scope: &QueryScope<'_>, expr: &str) -> Result<Option<RemoteRef>> {
     let session = scope.session();
     let result = match scope {
@@ -378,7 +381,6 @@ async fn resolve_xpath_one(scope: &QueryScope<'_>, expr: &str) -> Result<Option<
     extract_node_ref(session, &result["result"]).await
 }
 
-#[allow(dead_code)] // Called via `SelectorKind::resolve_many`; gated until T12.
 async fn resolve_xpath_many(scope: &QueryScope<'_>, expr: &str) -> Result<Vec<RemoteRef>> {
     // Build an Array of nodes from an ORDERED_NODE_SNAPSHOT_TYPE result so
     // `extract_array_refs` can enumerate it via `Runtime.getProperties`.
@@ -560,7 +562,9 @@ fn build_text_exact_xpath_fn_body(needle: &str, snapshot: bool, best_match: bool
     }
 }
 
-#[allow(dead_code)] // Reached via SelectorKind::resolve_one, gated until T12.
+// test-only: production `.one()` resolves via `resolve_many_inner` + take-first;
+// this single-match resolver is exercised only by this file's #[cfg(test)] tests.
+#[allow(dead_code)]
 async fn resolve_text_one(
     scope: &QueryScope<'_>,
     needle: &str,
@@ -664,7 +668,6 @@ async fn resolve_text_one(
     }
 }
 
-#[allow(dead_code)] // Reached via SelectorKind::resolve_many, gated until T12.
 async fn resolve_text_many(
     scope: &QueryScope<'_>,
     needle: &str,
@@ -821,7 +824,9 @@ fn build_text_regex_fn_body(pattern: &str, best_match: bool) -> String {
     )
 }
 
-#[allow(dead_code)] // Reached via SelectorKind::resolve_one, gated until T12.
+// test-only: production `.one()` resolves via `resolve_many_inner` + take-first;
+// this single-match resolver is exercised only by this file's #[cfg(test)] tests.
+#[allow(dead_code)]
 async fn resolve_text_regex_one(
     scope: &QueryScope<'_>,
     pattern: &str,
@@ -861,7 +866,6 @@ async fn resolve_text_regex_one(
     extract_node_ref(session, &result["result"]).await
 }
 
-#[allow(dead_code)] // Reached via SelectorKind::resolve_many, gated until T12.
 async fn resolve_text_regex_many(
     scope: &QueryScope<'_>,
     pattern: &str,
@@ -895,7 +899,9 @@ async fn resolve_text_regex_many(
 // Role (`[role="..."]` CSS + optional accessible-name post-filter)
 // ---------------------------------------------------------------------
 
-#[allow(dead_code)] // Reached via SelectorKind::resolve_one, gated until T12.
+// test-only: production `.one()` resolves via `resolve_many_inner` + take-first;
+// this single-match resolver is exercised only by this file's #[cfg(test)] tests.
+#[allow(dead_code)]
 async fn resolve_role_one(
     scope: &QueryScope<'_>,
     role: AriaRole,
@@ -922,7 +928,6 @@ async fn resolve_role_one(
     Ok(None)
 }
 
-#[allow(dead_code)] // Reached via SelectorKind::resolve_many, gated until T12.
 async fn resolve_role_many(
     scope: &QueryScope<'_>,
     role: AriaRole,
@@ -950,7 +955,6 @@ async fn resolve_role_many(
 /// to fetch the AX node and reads `name.value`. Nodes with no AX entry,
 /// no name, or a name that isn't a string are treated as a non-match
 /// (returns `Ok(false)`).
-#[allow(dead_code)] // Called via resolve_role_*, gated until T12.
 async fn accessible_name_matches(
     session: &SessionHandle,
     node: &RemoteRef,
@@ -993,7 +997,6 @@ async fn accessible_name_matches(
 /// caller used to obtain `result` — Frame-scoped queries must keep the
 /// follow-up on the Frame's session (which for OOPIFs is a distinct
 /// child session from the parent tab's).
-#[allow(dead_code)] // Used by resolve_css_one / resolve_xpath_one; both gated until T12.
 pub(crate) async fn extract_node_ref(
     session: &SessionHandle,
     result: &Value,
@@ -1018,7 +1021,6 @@ pub(crate) async fn extract_node_ref(
 ///
 /// See [`extract_node_ref`] for the rationale on taking a
 /// `SessionHandle` rather than a `Tab` here.
-#[allow(dead_code)] // First lib caller is FindBuilder.many in T12.
 pub(crate) async fn extract_array_refs(
     session: &SessionHandle,
     result: &Value,
@@ -1094,7 +1096,6 @@ pub(crate) async fn text_len_of(scope: &QueryScope<'_>, node: &RemoteRef) -> Res
         .map_or(usize::MAX, |v| v as usize))
 }
 
-#[allow(dead_code)] // Both callers (extract_node_ref/extract_array_refs) are gated until T12.
 async fn describe_backend_id(session: &SessionHandle, object_id: &str) -> Result<i64> {
     let described = session
         .call("DOM.describeNode", json!({ "objectId": object_id }))

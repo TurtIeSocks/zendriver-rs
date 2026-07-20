@@ -42,19 +42,20 @@ pub use mouse::MouseButton;
 /// when a [`crate::Tab`] is registered, and accessed via [`crate::Tab::input`].
 #[derive(Debug)]
 pub struct InputController {
-    // Fields are exercised by tests and consumed by later P3 tasks
-    // (mouse dispatch, keyboard dispatch, actionability waits).
-    #[allow(dead_code)]
     pub(crate) state: Mutex<InputState>,
-    #[allow(dead_code)]
     pub(crate) profile: InputProfile,
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct InputState {
     pub pointer_x: f64,
     pub pointer_y: f64,
+    // Tracked per `MouseButtonSet`'s doc comment (drag/release sequences
+    // across multiple element actions), but nothing yet mutates it after
+    // init: `mouse::click_at` presses and releases within one call rather
+    // than exposing separate mouse-down/mouse-up dispatch. Kept for that
+    // forward-looking drag/hold API.
+    #[allow(dead_code)]
     pub buttons_held: MouseButtonSet,
     pub modifiers_held: KeyModifiers,
     pub rng: rand::rngs::SmallRng,

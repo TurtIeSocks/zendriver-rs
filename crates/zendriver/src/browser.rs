@@ -1591,22 +1591,6 @@ pub(crate) struct BrowserInner {
     /// session and must leave the process alone — `close()` only shuts down
     /// the transport, and no `Child` is held so `kill_on_drop` never fires).
     pub(crate) owns_process: bool,
-    /// Cached [`InputProfile`], resolved via
-    /// [`BrowserBuilder::resolved_input_profile`]. When the caller does not
-    /// call [`BrowserBuilder::input_profile`], this follows the timing implied
-    /// by the active `StealthProfile` (`Spoofed` → humanized `spoofed()`,
-    /// `Native`/`Off` → `native()`); an explicit `input_profile(..)` decouples
-    /// input timing from the stealth selection. `Browser::new_tab` and
-    /// the [`TabRegistrar`] observer read this to build a fresh per-Tab
-    /// [`InputController`] for each new tab without re-resolving the
-    /// profile.
-    ///
-    /// Currently consumed only by the [`TabRegistrar`] (via the clone
-    /// stashed inside the registrar at construction time); a direct
-    /// `Browser::new_tab` path will read this field once T3 lands, so
-    /// `dead_code` is suppressed in the interim.
-    #[allow(dead_code)]
-    pub(crate) stealth_input_profile: zendriver_stealth::InputProfile,
     /// Browser-wide tab registry keyed by `sessionId`. Populated by the
     /// [`TabRegistrar`] observer on `Target.attachedToTarget` (and the
     /// initial main tab, inserted manually after construction); pruned on
@@ -1640,6 +1624,7 @@ pub(crate) struct BrowserInner {
     /// cdpdriver/zendriver#208.
     #[cfg(feature = "interception")]
     #[allow(dead_code)]
+    // RAII guard: only ever `.set()`, never read back — see doc comment above.
     pub(crate) proxy_auth_handle: std::sync::OnceLock<zendriver_interception::InterceptHandle>,
     /// Per-`browserContextId` proxy credentials, registered by
     /// [`crate::BrowserContextBuilder::build`] and read by the `TabRegistrar`
@@ -1767,7 +1752,6 @@ pub(crate) fn test_only_inner_from_conn(conn: Connection) -> Arc<BrowserInner> {
             _user_data: None,
             _extension_dirs: Vec::new(),
             owns_process: false,
-            stealth_input_profile: input_profile,
             tabs: tokio::sync::RwLock::new(map),
             debug_host_port: None,
             ws_url: None,
@@ -2562,7 +2546,6 @@ pub(crate) async fn finish_connect(
             _user_data: owned_tmp,
             _extension_dirs: extension_dirs,
             owns_process,
-            stealth_input_profile: input_profile,
             tabs: tokio::sync::RwLock::new(HashMap::new()),
             debug_host_port,
             ws_url,
@@ -5379,7 +5362,6 @@ mod tests {
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
-                stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
                 ws_url: None,
@@ -5481,7 +5463,6 @@ mod tests {
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
-                stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
                 ws_url: None,
@@ -5597,7 +5578,6 @@ mod tests {
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
-                stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
                 ws_url: None,
@@ -5685,7 +5665,6 @@ mod tests {
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
-                stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
                 ws_url: None,
@@ -5797,7 +5776,6 @@ mod tests {
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
-                stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
                 ws_url: None,
@@ -5902,7 +5880,6 @@ mod tests {
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
-                stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
                 ws_url: None,
@@ -5974,7 +5951,6 @@ mod tests {
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
-                stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
                 ws_url: None,
@@ -6048,7 +6024,6 @@ mod tests {
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
-                stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
                 ws_url: None,
@@ -6112,7 +6087,6 @@ mod tests {
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
-                stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
                 ws_url: None,
@@ -6253,7 +6227,6 @@ mod tests {
                 _user_data: None,
                 _extension_dirs: Vec::new(),
                 owns_process: false,
-                stealth_input_profile: input_profile.clone(),
                 tabs: tokio::sync::RwLock::new(map),
                 debug_host_port: None,
                 ws_url: None,
