@@ -57,7 +57,6 @@ impl MouseButton {
 /// Move the cursor from its current position to `(target_x, target_y)` along
 /// a Bezier path with realistic per-segment delay. Updates InputController
 /// state to the target position on success.
-#[allow(dead_code)]
 pub(crate) async fn move_realistic(
     input: &InputController,
     tab: &Tab,
@@ -104,7 +103,6 @@ pub(crate) async fn move_realistic(
 }
 
 /// Direct move without interpolation. Single dispatchMouseEvent.
-#[allow(dead_code)]
 pub(crate) async fn move_raw(
     input: &InputController,
     tab: &Tab,
@@ -130,7 +128,6 @@ pub(crate) async fn move_raw(
 
 /// Dispatch a click at `(target_x, target_y)` with `button` and `click_count`.
 /// If `realistic`, prefixes with Bezier move; otherwise direct teleport.
-#[allow(dead_code)]
 pub(crate) async fn click_at(
     input: &InputController,
     tab: &Tab,

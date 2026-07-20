@@ -364,7 +364,13 @@ const SPECIAL_CHAR_SHIFT_MAP: [(char, char); 11] = [
 pub(crate) enum KeyPress {
     /// One `char`-type event (text insertion). Used for emoji / non-ASCII /
     /// multi-codepoint clusters that have no physical-key origin.
-    // Constructed by the A2b public-API layer (`type_keys` / grapheme path).
+    // No current call site constructs this outside `key_events`'s own unit
+    // test (`key_events_char_kind_forces_char_event_even_for_ascii`):
+    // `cluster_events` — the path `type_text`/`type_keys` actually use for
+    // char-event fallback — builds its `char`-type payload directly instead
+    // of routing through `key_events`. Kept because it's part of the real,
+    // documented `key_events` kind contract (forcing a char event even for a
+    // character with a physical-key descriptor) and is exercised by tests.
     #[allow(dead_code)]
     Char,
     /// A full keyDown→keyUp pair (wrapped in modifier keyDown/keyUp events
@@ -1150,24 +1156,6 @@ pub(crate) async fn dispatch_key_events(tab: &Tab, events: &[KeyEventPayload]) -
     Ok(())
 }
 
-/// Dispatch raw text as a single `char`-type event.
-///
-/// Used for multi-codepoint grapheme clusters (emoji with ZWJ/skin-tone
-/// modifiers, combining sequences) that have no single physical-key origin.
-// Consumed by the A2b public-API layer (`type_text` grapheme path).
-#[allow(dead_code)]
-pub(crate) async fn dispatch_char_text(tab: &Tab, text: &str) -> Result<()> {
-    let payload = KeyEventPayload {
-        event_type: "char",
-        modifiers: 0,
-        text: Some(text.to_string()),
-        key: Some(text.to_string()),
-        code: None,
-        windows_vk: None,
-    };
-    dispatch_key_events(tab, std::slice::from_ref(&payload)).await
-}
-
 /// Dispatch a single character as a full keyDown/keyUp pair (with shift /
 /// code / vk synthesis via [`key_events`]).
 ///
@@ -1180,7 +1168,6 @@ pub(crate) async fn dispatch_char(tab: &Tab, c: char, modifier_bits: i32) -> Res
 }
 
 /// Dispatch a named special key (Enter, Tab, etc) as a rawKeyDown/keyUp pair.
-#[allow(dead_code)]
 pub(crate) async fn dispatch_special(tab: &Tab, k: SpecialKey, modifier_bits: i32) -> Result<()> {
     let mods = KeyModifiers::from_bits_truncate(modifier_bits as u8);
     let events = key_events(Key::Special(k), mods, KeyPress::DownAndUp);
@@ -1195,7 +1182,6 @@ pub(crate) async fn dispatch_special(tab: &Tab, k: SpecialKey, modifier_bits: i3
 /// route to a `char` event, and space / tab / newline become the matching
 /// [`SpecialKey`]). The per-cluster delay / typo / thinking-pause wrapper is
 /// preserved; typos still apply only to ASCII letters (via [`neighbor_key`]).
-#[allow(dead_code)]
 pub(crate) async fn type_text_realistic(
     input: &InputController,
     tab: &Tab,
@@ -1261,7 +1247,6 @@ pub(crate) async fn type_text_realistic(
 /// Segments into grapheme clusters and dispatches each via
 /// [`cluster_events`], so the full unicode / shift / special-key handling of
 /// the realistic path applies without any timing jitter.
-#[allow(dead_code)]
 pub(crate) async fn type_text_fast(input: &InputController, tab: &Tab, text: &str) -> Result<()> {
     let held_mods = input.state.lock().await.modifiers_held;
     for cluster in UnicodeSegmentation::graphemes(text, true) {

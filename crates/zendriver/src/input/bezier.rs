@@ -1,13 +1,10 @@
 //! Cubic Bezier path generation for realistic mouse movement.
 
-// Consumed by Task 6 (mouse dispatch); silence dead-code until then.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct BezierPath {
     pub points: Vec<(f64, f64)>,
 }
 
-#[allow(dead_code)]
 impl BezierPath {
     /// Build a cubic Bezier from `start` to `end`, with control points at
     /// ~25% and ~75% positions perturbed by up to `jitter_px`. The number of
@@ -45,7 +42,6 @@ impl BezierPath {
     }
 }
 
-#[allow(dead_code)]
 fn cubic_bezier(
     p0: (f64, f64),
     p1: (f64, f64),
