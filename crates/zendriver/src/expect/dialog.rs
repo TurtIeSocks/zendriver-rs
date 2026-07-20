@@ -1,7 +1,7 @@
 //! [`DialogExpectation`] + [`MatchedDialog`] + [`crate::Tab::expect_dialog`]
 //! (gated `expect`).
 //!
-//! Registers a one-shot subscription against `Page.javascriptDialogOpened`
+//! Registers a one-shot subscription against `Page.javascriptDialogOpening`
 //! on a tab's session, resolves with the first dialog event, and exposes
 //! [`MatchedDialog::accept`] / [`MatchedDialog::dismiss`] which dispatch
 //! `Page.handleJavaScriptDialog`. No URL matcher: dialogs don't carry a URL
@@ -31,7 +31,7 @@ use crate::error::{Result, ZendriverError};
 const DEFAULT_EXPECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// JavaScript dialog flavor reported by Chrome on
-/// `Page.javascriptDialogOpened`.
+/// `Page.javascriptDialogOpening`.
 ///
 /// `Beforeunload` corresponds to the browser's leave-confirmation dialog;
 /// the others mirror the `window.alert` / `confirm` / `prompt` builtins.
@@ -61,7 +61,7 @@ impl DialogType {
     }
 }
 
-/// A JavaScript dialog observed via `Page.javascriptDialogOpened`.
+/// A JavaScript dialog observed via `Page.javascriptDialogOpening`.
 ///
 /// The session handle is retained so [`Self::accept`] / [`Self::dismiss`]
 /// can dispatch `Page.handleJavaScriptDialog` against the same target the
@@ -247,10 +247,10 @@ impl Future for DialogExpectation {
     }
 }
 
-/// CDP `Page.javascriptDialogOpened` payload. Field names follow the
+/// CDP `Page.javascriptDialogOpening` payload. Field names follow the
 /// protocol (camelCase) via serde rename.
 #[derive(Debug, Deserialize)]
-struct JavascriptDialogOpenedEvent {
+struct JavascriptDialogOpeningEvent {
     url: String,
     message: String,
     #[serde(rename = "type")]
@@ -259,15 +259,17 @@ struct JavascriptDialogOpenedEvent {
     default_prompt: Option<String>,
 }
 
-/// Spawn a one-shot subscriber that watches `Page.javascriptDialogOpened`
+/// Spawn a one-shot subscriber that watches `Page.javascriptDialogOpening`
 /// on `session`, sends the first event through the `tx`, and exits.
 /// Subscription registers synchronously before the returned
 /// [`DialogExpectation`] is constructed so dialogs fired immediately after
 /// a trigger action cannot slip past us.
 pub(crate) fn register(session: &SessionHandle) -> DialogExpectation {
     let (tx, rx) = oneshot::channel();
-    let mut stream =
-        crate::expect::watch::<JavascriptDialogOpenedEvent>(session, "Page.javascriptDialogOpened");
+    let mut stream = crate::expect::watch::<JavascriptDialogOpeningEvent>(
+        session,
+        "Page.javascriptDialogOpening",
+    );
     let session_for_dialog = session.clone();
     tokio::spawn(async move {
         if let Some(res) = stream.next().await {
@@ -307,7 +309,7 @@ mod tests {
     use serde_json::json;
     use zendriver_transport::testing::MockConnection;
 
-    /// Register an expectation, emit a `Page.javascriptDialogOpened`, and
+    /// Register an expectation, emit a `Page.javascriptDialogOpening`, and
     /// assert the expectation resolves with the decoded [`MatchedDialog`].
     #[tokio::test]
     async fn expect_dialog_resolves_on_javascript_dialog_opened() {
@@ -317,7 +319,7 @@ mod tests {
         let expectation = register(&session);
 
         mock.emit_event_for_session(
-            "Page.javascriptDialogOpened",
+            "Page.javascriptDialogOpening",
             json!({
                 "url": "https://example.com/form",
                 "message": "What is your name?",
