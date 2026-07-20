@@ -327,6 +327,18 @@ report the truncation via <code>body_truncated: bool</code> and <code>body_full_
 A body-fetch failure (e.g. Chrome already evicted the response) sets
 <code>body_capture_error: string</code> instead of silently omitting <code>body</code> /
 <code>body_base64</code> with no explanation.</p>
+<p><code>browser_monitor_start</code> also accepts <code>stream_bodies: bool</code> (default <code>false</code>)
+to opt in to incremental body delivery: <code>browser_monitor_read</code> then emits
+<code>http_data</code> chunk events (<code>request_id</code> + base64 <code>chunk_base64</code>) as each
+response streams in, ahead of the completed <code>http</code> event for the same
+request — correlate them by <code>request_id</code>, which <code>http</code> events now also carry.
+Uses passive CDP <code>Network.streamResourceContent</code> (no request interception, no
+response pausing) and filters by <code>url_pattern</code> like every other event (no
+separate filter for streaming). Falls back gracefully to the whole-body path
+on Chrome versions that don't support it (roughly pre-124) — the monitor
+never errors out over this. See
+<a href="./network-monitor.html#streaming-bodies">Network monitor</a> for the full
+mechanism.</p>
 <p><code>browser_monitor_read</code> can also return a <code>delivery_boundary</code> event: a
 lagged/reconnected/disconnected transport, a correlation-map eviction, or an
 undecodable payload on the underlying event stream, surfaced explicitly

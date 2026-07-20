@@ -214,6 +214,7 @@ while let Some(event) = monitor.next().await {
 <p><a href="https://docs.rs/zendriver/latest/zendriver/enum.NetworkEvent.html"><code>NetworkEvent</code></a> is a tagged enum:</p>
 <div class="table-wrapper"><table><thead><tr><th>Variant</th><th>Emitted when</th><th>Payload</th></tr></thead><tbody>
 <tr><td><code>Http(</code><a href="https://docs.rs/zendriver/latest/zendriver/struct.NetworkExchange.html"><code>NetworkExchange</code></a><code>)</code></td><td>a request reaches <code>loadingFinished</code> / <code>loadingFailed</code></td><td>request + optional response + optional error</td></tr>
+<tr><td><code>HttpData</code></td><td>a streamed chunk arrives (<code>stream_bodies: true</code> only)</td><td><code>request_id</code>, <code>chunk</code></td></tr>
 <tr><td><code>WebSocketOpen</code></td><td><code>Network.webSocketCreated</code></td><td><code>request_id</code>, <code>url</code></td></tr>
 <tr><td><code>WebSocketFrame</code></td><td>a frame is sent / received</td><td><code>direction</code>, <code>opcode</code>, inline <code>payload</code></td></tr>
 <tr><td><code>WebSocketClose</code></td><td><code>Network.webSocketClosed</code></td><td><code>request_id</code></td></tr>
@@ -223,8 +224,53 @@ while let Some(event) = monitor.next().await {
 <p>HTTP exchanges are <strong>completed</strong>: the monitor correlates
 <code>requestWillBeSent</code> → <code>responseReceived</code> → <code>loadingFinished</code> by <code>requestId</code>
 and emits one <a href="https://docs.rs/zendriver/latest/zendriver/enum.NetworkEvent.html#variant.Http"><code>NetworkEvent::Http</code></a> per request. WebSocket and EventSource
-payloads are delivered <strong>inline</strong> (they arrive whole in the CDP event); only
-HTTP bodies are lazy.</p>
+payloads are delivered <strong>inline</strong> (they arrive whole in the CDP event); HTTP
+bodies are lazy by default, or incrementally streamed as <code>HttpData</code> chunks
+when opted in — see <a href="#streaming-bodies">Streaming bodies</a> below.</p>
+<h3 id="streaming-bodies"><a class="header" href="#streaming-bodies">Streaming bodies</a></h3>
+<p>By default HTTP bodies are whole-body-buffered (fetched on demand, above).
+<a href="https://docs.rs/zendriver/latest/zendriver/struct.MonitorBuilder.html#method.stream_bodies"><code>MonitorBuilder::stream_bodies</code></a> opts a monitor into incremental delivery
+instead:</p>
+<pre><code class="language-rust ignore">let mut monitor = tab.monitor().stream_bodies(true).start().await?;
+tab.goto("https://example.com").await?;
+
+while let Some(event) = monitor.next().await {
+    match event {
+        zendriver::NetworkEvent::HttpData { request_id, chunk } =&gt; {
+            println!("{request_id}: {} bytes", chunk.len());
+        }
+        zendriver::NetworkEvent::Http(ex) =&gt; {
+            println!("{} -&gt; {:?} (request_id {})", ex.request.url, ex.status(), ex.request_id());
+        }
+        _ =&gt; {}
+    }
+}</code></pre>
+<p>Mechanism: CDP <code>Network.streamResourceContent</code> — passive, no <code>Fetch</code> domain
+interception, no response pausing (unlike <code>Fetch.takeResponseBodyAsStream</code>,
+which was rejected for exactly that reason). The correlator enables it for
+each request as soon as it's observed (<code>requestWillBeSent</code>), before it's even
+sent on the wire — empirically, waiting for <code>responseReceived</code> leaves too
+little headroom for the enable call (an async CDP round-trip) to land before
+a fast response's <code>loadingFinished</code>, past which Chrome rejects the call.
+Filtered by <a href="https://docs.rs/zendriver/latest/zendriver/struct.MonitorBuilder.html#method.url_pattern"><code>MonitorBuilder::url_pattern</code></a> like every other event — there is
+no separate filter for streaming.</p>
+<p><a href="https://docs.rs/zendriver/latest/zendriver/enum.NetworkEvent.html#variant.HttpData"><code>NetworkEvent::HttpData</code></a> is a sibling to <code>WebSocketFrame</code> /
+<code>EventSourceMessage</code>: emitted once per received chunk, not accumulated.
+Chunks for a request always arrive before the <a href="https://docs.rs/zendriver/latest/zendriver/enum.NetworkEvent.html#variant.Http"><code>NetworkEvent::Http</code></a> exchange
+for the same request (which only fires on <code>loadingFinished</code> /
+<code>loadingFailed</code>) — correlate them by <code>request_id</code>, which matches
+<a href="https://docs.rs/zendriver/latest/zendriver/struct.NetworkExchange.html#method.request_id"><code>NetworkExchange::request_id</code></a> on the eventual <code>Http</code> event. Any bytes Chrome
+already buffered before the enable call landed are emitted as the first
+chunk, so nothing from that window is lost.</p>
+<p><strong>Chrome version / graceful fallback:</strong> <code>Network.streamResourceContent</code>
+needs roughly Chrome 124+. On an older Chrome the enable call errors — the
+monitor logs one <code>tracing::warn!</code> (not once per request) and simply never
+emits <code>HttpData</code> for that session; <a href="https://docs.rs/zendriver/latest/zendriver/struct.NetworkExchange.html#method.body"><code>NetworkExchange::body</code></a> keeps working as
+the whole-body fallback the entire time. The monitor never fails or ends over
+this.</p>
+<p>Off by default — streaming every response is wasted CDP round-trips when
+bodies are small; opt in only when you need bytes as they arrive rather than
+once the whole response completes.</p>
 <h3 id="lazy-bodies"><a class="header" href="#lazy-bodies">Lazy bodies</a></h3>
 <p>HTTP bodies are fetched on demand via <a href="https://docs.rs/zendriver/latest/zendriver/struct.NetworkExchange.html#method.body"><code>NetworkExchange::body</code></a> /
 <a href="https://docs.rs/zendriver/latest/zendriver/struct.NetworkExchange.html#method.text"><code>NetworkExchange::text</code></a> (CDP <code>Network.getResponseBody</code>):</p>
@@ -356,6 +402,12 @@ async fn main() -&gt; zendriver::Result&lt;()&gt; {
                     "[HTTP] {} {} -&gt; {}",
                     exchange.request.method, exchange.request.url, status
                 );
+            }
+            // Only emitted when the monitor is started with
+            // `.stream_bodies(true)` (not enabled in this example) — shown
+            // here for completeness since the match must be exhaustive.
+            NetworkEvent::HttpData { request_id, chunk } =&gt; {
+                println!("[DATA] id={request_id} {} bytes", chunk.len());
             }
             NetworkEvent::WebSocketOpen { url, request_id } =&gt; {
                 println!("[WS  ] open  id={request_id} url={url}");

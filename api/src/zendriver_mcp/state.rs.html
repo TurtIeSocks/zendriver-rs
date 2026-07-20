@@ -224,199 +224,218 @@
 <a href=#224 id=224 data-nosnippet>224</a></span><span class="kw">pub enum </span>MonitorEvent {
 <a href=#225 id=225 data-nosnippet>225</a>    <span class="doccomment">/// A completed HTTP request/response pair (or a failed request).
 <a href=#226 id=226 data-nosnippet>226</a>    </span>Http {
-<a href=#227 id=227 data-nosnippet>227</a>        <span class="doccomment">/// Request URL.
-<a href=#228 id=228 data-nosnippet>228</a>        </span>url: String,
-<a href=#229 id=229 data-nosnippet>229</a>        <span class="doccomment">/// HTTP method (e.g. `"GET"`, `"POST"`).
-<a href=#230 id=230 data-nosnippet>230</a>        </span>method: String,
-<a href=#231 id=231 data-nosnippet>231</a>        <span class="doccomment">/// Response status code, if a response was received before the request
-<a href=#232 id=232 data-nosnippet>232</a>        /// finished (`None` for a network-level failure).
-<a href=#233 id=233 data-nosnippet>233</a>        </span>status: <span class="prelude-ty">Option</span>&lt;u16&gt;,
-<a href=#234 id=234 data-nosnippet>234</a>        <span class="doccomment">/// Network-level error text, if the request failed.
-<a href=#235 id=235 data-nosnippet>235</a>        </span>error: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#236 id=236 data-nosnippet>236</a>        <span class="doccomment">/// UTF-8–lossy decode of the captured response body, bounded by
-<a href=#237 id=237 data-nosnippet>237</a>        /// `capture_body_max_bytes`. Present only when the monitor captured
-<a href=#238 id=238 data-nosnippet>238</a>        /// bodies and the fetch succeeded — a truncated body still decodes
-<a href=#239 id=239 data-nosnippet>239</a>        /// (lossily) whatever prefix was kept.
-<a href=#240 id=240 data-nosnippet>240</a>        </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
-<a href=#241 id=241 data-nosnippet>241</a>        </span>body: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#242 id=242 data-nosnippet>242</a>        <span class="doccomment">/// Base64 of the captured (possibly bounded) raw response body bytes.
-<a href=#243 id=243 data-nosnippet>243</a>        /// Present only when the monitor captured bodies and the fetch
-<a href=#244 id=244 data-nosnippet>244</a>        /// succeeded.
-<a href=#245 id=245 data-nosnippet>245</a>        </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
-<a href=#246 id=246 data-nosnippet>246</a>        </span>body_base64: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#247 id=247 data-nosnippet>247</a>        <span class="doccomment">/// `true` if the body's full length exceeded `capture_body_max_bytes`
-<a href=#248 id=248 data-nosnippet>248</a>        /// and `body` / `body_base64` hold only a prefix. `false` means the
-<a href=#249 id=249 data-nosnippet>249</a>        /// entire body was captured. Present only alongside `body`.
-<a href=#250 id=250 data-nosnippet>250</a>        </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
-<a href=#251 id=251 data-nosnippet>251</a>        </span>body_truncated: <span class="prelude-ty">Option</span>&lt;bool&gt;,
-<a href=#252 id=252 data-nosnippet>252</a>        <span class="doccomment">/// The full (pre-truncation) response body length in bytes,
-<a href=#253 id=253 data-nosnippet>253</a>        /// regardless of how much was kept in `body` / `body_base64`. Present
-<a href=#254 id=254 data-nosnippet>254</a>        /// only alongside `body`.
-<a href=#255 id=255 data-nosnippet>255</a>        </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
-<a href=#256 id=256 data-nosnippet>256</a>        </span>body_full_bytes: <span class="prelude-ty">Option</span>&lt;u64&gt;,
-<a href=#257 id=257 data-nosnippet>257</a>        <span class="doccomment">/// Set instead of `body` / `body_base64` when body capture was
-<a href=#258 id=258 data-nosnippet>258</a>        /// requested (`capture_bodies: true`) but the `getResponseBody` fetch
-<a href=#259 id=259 data-nosnippet>259</a>        /// itself failed (e.g. Chrome already evicted the body) — distinct
-<a href=#260 id=260 data-nosnippet>260</a>        /// from a genuinely empty body, which decodes to `body: ""` rather
-<a href=#261 id=261 data-nosnippet>261</a>        /// than setting this field.
+<a href=#227 id=227 data-nosnippet>227</a>        <span class="doccomment">/// CDP request ID for this exchange. Correlates with `http_data`
+<a href=#228 id=228 data-nosnippet>228</a>        /// chunk events on the same stream when the monitor was started with
+<a href=#229 id=229 data-nosnippet>229</a>        /// `stream_bodies: true` — chunks for this request arrive (and carry
+<a href=#230 id=230 data-nosnippet>230</a>        /// this same id) before this event does, since `http_data` streams
+<a href=#231 id=231 data-nosnippet>231</a>        /// as the response arrives while `http` only fires once the exchange
+<a href=#232 id=232 data-nosnippet>232</a>        /// completes.
+<a href=#233 id=233 data-nosnippet>233</a>        </span>request_id: String,
+<a href=#234 id=234 data-nosnippet>234</a>        <span class="doccomment">/// Request URL.
+<a href=#235 id=235 data-nosnippet>235</a>        </span>url: String,
+<a href=#236 id=236 data-nosnippet>236</a>        <span class="doccomment">/// HTTP method (e.g. `"GET"`, `"POST"`).
+<a href=#237 id=237 data-nosnippet>237</a>        </span>method: String,
+<a href=#238 id=238 data-nosnippet>238</a>        <span class="doccomment">/// Response status code, if a response was received before the request
+<a href=#239 id=239 data-nosnippet>239</a>        /// finished (`None` for a network-level failure).
+<a href=#240 id=240 data-nosnippet>240</a>        </span>status: <span class="prelude-ty">Option</span>&lt;u16&gt;,
+<a href=#241 id=241 data-nosnippet>241</a>        <span class="doccomment">/// Network-level error text, if the request failed.
+<a href=#242 id=242 data-nosnippet>242</a>        </span>error: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#243 id=243 data-nosnippet>243</a>        <span class="doccomment">/// UTF-8–lossy decode of the captured response body, bounded by
+<a href=#244 id=244 data-nosnippet>244</a>        /// `capture_body_max_bytes`. Present only when the monitor captured
+<a href=#245 id=245 data-nosnippet>245</a>        /// bodies and the fetch succeeded — a truncated body still decodes
+<a href=#246 id=246 data-nosnippet>246</a>        /// (lossily) whatever prefix was kept.
+<a href=#247 id=247 data-nosnippet>247</a>        </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
+<a href=#248 id=248 data-nosnippet>248</a>        </span>body: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#249 id=249 data-nosnippet>249</a>        <span class="doccomment">/// Base64 of the captured (possibly bounded) raw response body bytes.
+<a href=#250 id=250 data-nosnippet>250</a>        /// Present only when the monitor captured bodies and the fetch
+<a href=#251 id=251 data-nosnippet>251</a>        /// succeeded.
+<a href=#252 id=252 data-nosnippet>252</a>        </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
+<a href=#253 id=253 data-nosnippet>253</a>        </span>body_base64: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#254 id=254 data-nosnippet>254</a>        <span class="doccomment">/// `true` if the body's full length exceeded `capture_body_max_bytes`
+<a href=#255 id=255 data-nosnippet>255</a>        /// and `body` / `body_base64` hold only a prefix. `false` means the
+<a href=#256 id=256 data-nosnippet>256</a>        /// entire body was captured. Present only alongside `body`.
+<a href=#257 id=257 data-nosnippet>257</a>        </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
+<a href=#258 id=258 data-nosnippet>258</a>        </span>body_truncated: <span class="prelude-ty">Option</span>&lt;bool&gt;,
+<a href=#259 id=259 data-nosnippet>259</a>        <span class="doccomment">/// The full (pre-truncation) response body length in bytes,
+<a href=#260 id=260 data-nosnippet>260</a>        /// regardless of how much was kept in `body` / `body_base64`. Present
+<a href=#261 id=261 data-nosnippet>261</a>        /// only alongside `body`.
 <a href=#262 id=262 data-nosnippet>262</a>        </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
-<a href=#263 id=263 data-nosnippet>263</a>        </span>body_capture_error: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#264 id=264 data-nosnippet>264</a>    },
-<a href=#265 id=265 data-nosnippet>265</a>    <span class="doccomment">/// A new WebSocket connection was opened.
-<a href=#266 id=266 data-nosnippet>266</a>    </span>WebSocketOpen {
-<a href=#267 id=267 data-nosnippet>267</a>        <span class="doccomment">/// CDP request ID for this WebSocket connection.
-<a href=#268 id=268 data-nosnippet>268</a>        </span>request_id: String,
-<a href=#269 id=269 data-nosnippet>269</a>        <span class="doccomment">/// The WebSocket URL.
-<a href=#270 id=270 data-nosnippet>270</a>        </span>url: String,
+<a href=#263 id=263 data-nosnippet>263</a>        </span>body_full_bytes: <span class="prelude-ty">Option</span>&lt;u64&gt;,
+<a href=#264 id=264 data-nosnippet>264</a>        <span class="doccomment">/// Set instead of `body` / `body_base64` when body capture was
+<a href=#265 id=265 data-nosnippet>265</a>        /// requested (`capture_bodies: true`) but the `getResponseBody` fetch
+<a href=#266 id=266 data-nosnippet>266</a>        /// itself failed (e.g. Chrome already evicted the body) — distinct
+<a href=#267 id=267 data-nosnippet>267</a>        /// from a genuinely empty body, which decodes to `body: ""` rather
+<a href=#268 id=268 data-nosnippet>268</a>        /// than setting this field.
+<a href=#269 id=269 data-nosnippet>269</a>        </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
+<a href=#270 id=270 data-nosnippet>270</a>        </span>body_capture_error: <span class="prelude-ty">Option</span>&lt;String&gt;,
 <a href=#271 id=271 data-nosnippet>271</a>    },
-<a href=#272 id=272 data-nosnippet>272</a>    <span class="doccomment">/// A WebSocket frame was sent or received.
-<a href=#273 id=273 data-nosnippet>273</a>    </span>WebSocketFrame {
-<a href=#274 id=274 data-nosnippet>274</a>        <span class="doccomment">/// CDP request ID for the owning WebSocket connection.
-<a href=#275 id=275 data-nosnippet>275</a>        </span>request_id: String,
-<a href=#276 id=276 data-nosnippet>276</a>        <span class="doccomment">/// `"sent"` (page → server) or `"received"` (server → page).
-<a href=#277 id=277 data-nosnippet>277</a>        </span>direction: String,
-<a href=#278 id=278 data-nosnippet>278</a>        <span class="doccomment">/// WebSocket opcode (1 = text, 2 = binary, 8 = close, …).
-<a href=#279 id=279 data-nosnippet>279</a>        </span>opcode: u8,
-<a href=#280 id=280 data-nosnippet>280</a>        <span class="doccomment">/// Frame payload (text frames as UTF-8; binary frames as base64).
-<a href=#281 id=281 data-nosnippet>281</a>        </span>payload: String,
-<a href=#282 id=282 data-nosnippet>282</a>    },
-<a href=#283 id=283 data-nosnippet>283</a>    <span class="doccomment">/// A WebSocket connection was closed.
-<a href=#284 id=284 data-nosnippet>284</a>    </span>WebSocketClose {
-<a href=#285 id=285 data-nosnippet>285</a>        <span class="doccomment">/// CDP request ID for the closed WebSocket connection.
-<a href=#286 id=286 data-nosnippet>286</a>        </span>request_id: String,
-<a href=#287 id=287 data-nosnippet>287</a>    },
-<a href=#288 id=288 data-nosnippet>288</a>    <span class="doccomment">/// An SSE `EventSource` message was received.
-<a href=#289 id=289 data-nosnippet>289</a>    </span>EventSourceMessage {
-<a href=#290 id=290 data-nosnippet>290</a>        <span class="doccomment">/// CDP request ID for the `EventSource` stream.
-<a href=#291 id=291 data-nosnippet>291</a>        </span>request_id: String,
-<a href=#292 id=292 data-nosnippet>292</a>        <span class="doccomment">/// The SSE `event:` field (empty string if omitted).
-<a href=#293 id=293 data-nosnippet>293</a>        </span>event_name: String,
-<a href=#294 id=294 data-nosnippet>294</a>        <span class="doccomment">/// The SSE `id:` field (empty string if omitted).
-<a href=#295 id=295 data-nosnippet>295</a>        </span>event_id: String,
-<a href=#296 id=296 data-nosnippet>296</a>        <span class="doccomment">/// The SSE `data:` payload.
-<a href=#297 id=297 data-nosnippet>297</a>        </span>data: String,
-<a href=#298 id=298 data-nosnippet>298</a>    },
-<a href=#299 id=299 data-nosnippet>299</a>    <span class="doccomment">/// A delivery-loss boundary on the monitor's underlying event stream (or
-<a href=#300 id=300 data-nosnippet>300</a>    /// its own correlation bookkeeping) — a wire mirror of
-<a href=#301 id=301 data-nosnippet>301</a>    /// `zendriver::NetworkDeliveryBoundary`. Previously these losses were
-<a href=#302 id=302 data-nosnippet>302</a>    /// silent; they're now explicit events on the same stream. A
-<a href=#303 id=303 data-nosnippet>303</a>    /// `disconnected` boundary means the underlying lib-side monitor's
-<a href=#304 id=304 data-nosnippet>304</a>    /// correlator task has ended — no further events will be buffered for
-<a href=#305 id=305 data-nosnippet>305</a>    /// this handle; start a new monitor to resume.
-<a href=#306 id=306 data-nosnippet>306</a>    </span>DeliveryBoundary {
-<a href=#307 id=307 data-nosnippet>307</a>        <span class="doccomment">/// `"lagged"` | `"reconnected"` | `"disconnected"` |
-<a href=#308 id=308 data-nosnippet>308</a>        /// `"correlation_evicted"` | `"decode_failed"` | `"unknown"`.
-<a href=#309 id=309 data-nosnippet>309</a>        </span>boundary: String,
-<a href=#310 id=310 data-nosnippet>310</a>        <span class="doccomment">/// Present for `lagged` / `reconnected` / `disconnected`: the
-<a href=#311 id=311 data-nosnippet>311</a>        /// transport connection generation active when the boundary occurred.
-<a href=#312 id=312 data-nosnippet>312</a>        </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
-<a href=#313 id=313 data-nosnippet>313</a>        </span>generation: <span class="prelude-ty">Option</span>&lt;u64&gt;,
-<a href=#314 id=314 data-nosnippet>314</a>        <span class="doccomment">/// Present for `lagged`: number of events this subscription missed.
-<a href=#315 id=315 data-nosnippet>315</a>        </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
-<a href=#316 id=316 data-nosnippet>316</a>        </span>missed: <span class="prelude-ty">Option</span>&lt;u64&gt;,
-<a href=#317 id=317 data-nosnippet>317</a>        <span class="doccomment">/// Present for `reconnected`: generation of the connection actor that
-<a href=#318 id=318 data-nosnippet>318</a>        /// was replaced.
-<a href=#319 id=319 data-nosnippet>319</a>        </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
-<a href=#320 id=320 data-nosnippet>320</a>        </span>previous: <span class="prelude-ty">Option</span>&lt;u64&gt;,
-<a href=#321 id=321 data-nosnippet>321</a>        <span class="doccomment">/// Present for `correlation_evicted`: URL of the evicted in-flight
-<a href=#322 id=322 data-nosnippet>322</a>        /// exchange.
-<a href=#323 id=323 data-nosnippet>323</a>        </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
-<a href=#324 id=324 data-nosnippet>324</a>        </span>url: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#325 id=325 data-nosnippet>325</a>    },
-<a href=#326 id=326 data-nosnippet>326</a>}
-<a href=#327 id=327 data-nosnippet>327</a>
-<a href=#328 id=328 data-nosnippet>328</a><span class="doccomment">/// The bounded event ring shared between a monitor's drain task and its
-<a href=#329 id=329 data-nosnippet>329</a>/// `read` handler.
-<a href=#330 id=330 data-nosnippet>330</a>///
-<a href=#331 id=331 data-nosnippet>331</a>/// Holding this behind its own `Arc&lt;Mutex&lt;_&gt;&gt;` (separate from [`MonitorState`])
-<a href=#332 id=332 data-nosnippet>332</a>/// is what lets the drain task be spawned *before* [`MonitorState`] is
-<a href=#333 id=333 data-nosnippet>333</a>/// constructed: the task captures a clone of the buffer `Arc`, and the real
-<a href=#334 id=334 data-nosnippet>334</a>/// `JoinHandle` then goes into [`MonitorState`] with no placeholder spawn and
-<a href=#335 id=335 data-nosnippet>335</a>/// no self-referential cycle.
-<a href=#336 id=336 data-nosnippet>336</a></span><span class="attr">#[cfg(feature = <span class="string">"monitor"</span>)]
-<a href=#337 id=337 data-nosnippet>337</a>#[derive(Debug, Default)]
-<a href=#338 id=338 data-nosnippet>338</a></span><span class="kw">pub struct </span>MonitorBuffer {
-<a href=#339 id=339 data-nosnippet>339</a>    <span class="doccomment">/// Bounded ring of buffered, not-yet-read events.
-<a href=#340 id=340 data-nosnippet>340</a>    </span><span class="kw">pub </span>events: std::collections::VecDeque&lt;MonitorEvent&gt;,
-<a href=#341 id=341 data-nosnippet>341</a>    <span class="doccomment">/// Count of events evicted because the buffer was full since the last
-<a href=#342 id=342 data-nosnippet>342</a>    /// `read`. Reset to 0 by `read`.
-<a href=#343 id=343 data-nosnippet>343</a>    </span><span class="kw">pub </span>dropped: usize,
-<a href=#344 id=344 data-nosnippet>344</a>}
-<a href=#345 id=345 data-nosnippet>345</a>
-<a href=#346 id=346 data-nosnippet>346</a><span class="doccomment">/// Live state for one running monitor.
-<a href=#347 id=347 data-nosnippet>347</a>///
-<a href=#348 id=348 data-nosnippet>348</a>/// A drain task (spawned by `browser_monitor_start`) owns the lib-side
-<a href=#349 id=349 data-nosnippet>349</a>/// `NetworkMonitor` stream and pushes each converted [`MonitorEvent`] into the
-<a href=#350 id=350 data-nosnippet>350</a>/// shared [`Self::buffer`] — a bounded ring capped at [`MONITOR_BUFFER_CAP`].
-<a href=#351 id=351 data-nosnippet>351</a>/// When the buffer is full the oldest event is evicted and `dropped` is bumped.
-<a href=#352 id=352 data-nosnippet>352</a>/// `browser_monitor_read` drains the buffer; `browser_monitor_stop` cancels the
-<a href=#353 id=353 data-nosnippet>353</a>/// task via [`Self::cancel`] and aborts [`Self::task`].
-<a href=#354 id=354 data-nosnippet>354</a>///
-<a href=#355 id=355 data-nosnippet>355</a>/// Each mutex is held only briefly — the drain task locks the buffer per event,
-<a href=#356 id=356 data-nosnippet>356</a>/// `read` locks it per drain, neither across an `.await` that waits on the
-<a href=#357 id=357 data-nosnippet>357</a>/// other — so the drain/read pair cannot deadlock.
-<a href=#358 id=358 data-nosnippet>358</a></span><span class="attr">#[cfg(feature = <span class="string">"monitor"</span>)]
-<a href=#359 id=359 data-nosnippet>359</a></span><span class="kw">pub struct </span>MonitorState {
-<a href=#360 id=360 data-nosnippet>360</a>    <span class="doccomment">/// Shared bounded ring (also held by the drain task).
-<a href=#361 id=361 data-nosnippet>361</a>    </span><span class="kw">pub </span>buffer: std::sync::Arc&lt;tokio::sync::Mutex&lt;MonitorBuffer&gt;&gt;,
-<a href=#362 id=362 data-nosnippet>362</a>    <span class="doccomment">/// Cancels the drain task cooperatively (checked in its `select!`).
-<a href=#363 id=363 data-nosnippet>363</a>    </span><span class="kw">pub </span>cancel: tokio_util::sync::CancellationToken,
-<a href=#364 id=364 data-nosnippet>364</a>    <span class="doccomment">/// The drain task's join handle, aborted on `stop`.
-<a href=#365 id=365 data-nosnippet>365</a>    </span><span class="kw">pub </span>task: tokio::task::JoinHandle&lt;()&gt;,
-<a href=#366 id=366 data-nosnippet>366</a>}
-<a href=#367 id=367 data-nosnippet>367</a>
-<a href=#368 id=368 data-nosnippet>368</a><span class="attr">#[cfg(feature = <span class="string">"monitor"</span>)]
-<a href=#369 id=369 data-nosnippet>369</a></span><span class="kw">impl </span>Drop <span class="kw">for </span>MonitorState {
-<a href=#370 id=370 data-nosnippet>370</a>    <span class="doccomment">/// Stop the drain task on drop (session teardown / `browser_close` /
-<a href=#371 id=371 data-nosnippet>371</a>    /// map eviction). Dropping the `JoinHandle` alone detaches the task — it
-<a href=#372 id=372 data-nosnippet>372</a>    /// holds its own `CancellationToken` clone and the live stream — so we
-<a href=#373 id=373 data-nosnippet>373</a>    /// cancel (breaks the task's `select!`) and abort here.
-<a href=#374 id=374 data-nosnippet>374</a>    </span><span class="kw">fn </span>drop(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-<a href=#375 id=375 data-nosnippet>375</a>        <span class="self">self</span>.cancel.cancel();
-<a href=#376 id=376 data-nosnippet>376</a>        <span class="self">self</span>.task.abort();
-<a href=#377 id=377 data-nosnippet>377</a>    }
-<a href=#378 id=378 data-nosnippet>378</a>}
-<a href=#379 id=379 data-nosnippet>379</a>
-<a href=#380 id=380 data-nosnippet>380</a><span class="kw">impl </span>SessionState {
-<a href=#381 id=381 data-nosnippet>381</a>    <span class="doccomment">/// Construct an empty session — no browser, no tabs, default profile.
-<a href=#382 id=382 data-nosnippet>382</a>    </span><span class="kw">pub fn </span>new() -&gt; <span class="self">Self </span>{
-<a href=#383 id=383 data-nosnippet>383</a>        <span class="self">Self </span>{
-<a href=#384 id=384 data-nosnippet>384</a>            browser: <span class="prelude-val">None</span>,
-<a href=#385 id=385 data-nosnippet>385</a>            current_tab_id: <span class="prelude-val">None</span>,
-<a href=#386 id=386 data-nosnippet>386</a>            stealth_profile_choice: StealthProfileChoice::default(),
-<a href=#387 id=387 data-nosnippet>387</a>            stealth_overrides: StealthOverrides::default(),
-<a href=#388 id=388 data-nosnippet>388</a>            <span class="attr">#[cfg(feature = <span class="string">"expect"</span>)]
-<a href=#389 id=389 data-nosnippet>389</a>            </span>expectations: HashMap::new(),
-<a href=#390 id=390 data-nosnippet>390</a>            <span class="attr">#[cfg(feature = <span class="string">"interception"</span>)]
-<a href=#391 id=391 data-nosnippet>391</a>            </span>rules: HashMap::new(),
-<a href=#392 id=392 data-nosnippet>392</a>            <span class="attr">#[cfg(feature = <span class="string">"monitor"</span>)]
-<a href=#393 id=393 data-nosnippet>393</a>            </span>monitors: HashMap::new(),
-<a href=#394 id=394 data-nosnippet>394</a>        }
-<a href=#395 id=395 data-nosnippet>395</a>    }
-<a href=#396 id=396 data-nosnippet>396</a>}
-<a href=#397 id=397 data-nosnippet>397</a>
-<a href=#398 id=398 data-nosnippet>398</a><span class="kw">impl </span>Default <span class="kw">for </span>SessionState {
-<a href=#399 id=399 data-nosnippet>399</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
-<a href=#400 id=400 data-nosnippet>400</a>        <span class="self">Self</span>::new()
-<a href=#401 id=401 data-nosnippet>401</a>    }
-<a href=#402 id=402 data-nosnippet>402</a>}
-<a href=#403 id=403 data-nosnippet>403</a>
-<a href=#404 id=404 data-nosnippet>404</a><span class="attr">#[cfg(test)]
-<a href=#405 id=405 data-nosnippet>405</a></span><span class="kw">mod </span>tests {
-<a href=#406 id=406 data-nosnippet>406</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
-<a href=#407 id=407 data-nosnippet>407</a>
-<a href=#408 id=408 data-nosnippet>408</a>    <span class="attr">#[test]
-<a href=#409 id=409 data-nosnippet>409</a>    </span><span class="kw">fn </span>new_state_is_empty() {
-<a href=#410 id=410 data-nosnippet>410</a>        <span class="kw">let </span>s = SessionState::new();
-<a href=#411 id=411 data-nosnippet>411</a>        <span class="macro">assert!</span>(s.browser.is_none());
-<a href=#412 id=412 data-nosnippet>412</a>        <span class="macro">assert!</span>(s.current_tab_id.is_none());
-<a href=#413 id=413 data-nosnippet>413</a>        <span class="macro">assert_eq!</span>(s.stealth_profile_choice, StealthProfileChoice::Auto);
-<a href=#414 id=414 data-nosnippet>414</a>        <span class="attr">#[cfg(feature = <span class="string">"expect"</span>)]
-<a href=#415 id=415 data-nosnippet>415</a>        </span><span class="macro">assert!</span>(s.expectations.is_empty());
-<a href=#416 id=416 data-nosnippet>416</a>        <span class="attr">#[cfg(feature = <span class="string">"interception"</span>)]
-<a href=#417 id=417 data-nosnippet>417</a>        </span><span class="macro">assert!</span>(s.rules.is_empty());
-<a href=#418 id=418 data-nosnippet>418</a>        <span class="attr">#[cfg(feature = <span class="string">"monitor"</span>)]
-<a href=#419 id=419 data-nosnippet>419</a>        </span><span class="macro">assert!</span>(s.monitors.is_empty());
+<a href=#272 id=272 data-nosnippet>272</a>    <span class="doccomment">/// One incrementally-delivered chunk of an HTTP response body — emitted
+<a href=#273 id=273 data-nosnippet>273</a>    /// only when the monitor was started with `stream_bodies: true`
+<a href=#274 id=274 data-nosnippet>274</a>    /// (`browser_monitor_start`). A wire mirror of
+<a href=#275 id=275 data-nosnippet>275</a>    /// `zendriver::NetworkEvent::HttpData`; arrives interleaved with other
+<a href=#276 id=276 data-nosnippet>276</a>    /// events, always before the `http` event for the same `request_id`.
+<a href=#277 id=277 data-nosnippet>277</a>    </span>HttpData {
+<a href=#278 id=278 data-nosnippet>278</a>        <span class="doccomment">/// CDP request ID this chunk belongs to — matches the eventual
+<a href=#279 id=279 data-nosnippet>279</a>        /// `http` event's `request_id`.
+<a href=#280 id=280 data-nosnippet>280</a>        </span>request_id: String,
+<a href=#281 id=281 data-nosnippet>281</a>        <span class="doccomment">/// Base64 of the chunk's raw bytes.
+<a href=#282 id=282 data-nosnippet>282</a>        </span>chunk_base64: String,
+<a href=#283 id=283 data-nosnippet>283</a>    },
+<a href=#284 id=284 data-nosnippet>284</a>    <span class="doccomment">/// A new WebSocket connection was opened.
+<a href=#285 id=285 data-nosnippet>285</a>    </span>WebSocketOpen {
+<a href=#286 id=286 data-nosnippet>286</a>        <span class="doccomment">/// CDP request ID for this WebSocket connection.
+<a href=#287 id=287 data-nosnippet>287</a>        </span>request_id: String,
+<a href=#288 id=288 data-nosnippet>288</a>        <span class="doccomment">/// The WebSocket URL.
+<a href=#289 id=289 data-nosnippet>289</a>        </span>url: String,
+<a href=#290 id=290 data-nosnippet>290</a>    },
+<a href=#291 id=291 data-nosnippet>291</a>    <span class="doccomment">/// A WebSocket frame was sent or received.
+<a href=#292 id=292 data-nosnippet>292</a>    </span>WebSocketFrame {
+<a href=#293 id=293 data-nosnippet>293</a>        <span class="doccomment">/// CDP request ID for the owning WebSocket connection.
+<a href=#294 id=294 data-nosnippet>294</a>        </span>request_id: String,
+<a href=#295 id=295 data-nosnippet>295</a>        <span class="doccomment">/// `"sent"` (page → server) or `"received"` (server → page).
+<a href=#296 id=296 data-nosnippet>296</a>        </span>direction: String,
+<a href=#297 id=297 data-nosnippet>297</a>        <span class="doccomment">/// WebSocket opcode (1 = text, 2 = binary, 8 = close, …).
+<a href=#298 id=298 data-nosnippet>298</a>        </span>opcode: u8,
+<a href=#299 id=299 data-nosnippet>299</a>        <span class="doccomment">/// Frame payload (text frames as UTF-8; binary frames as base64).
+<a href=#300 id=300 data-nosnippet>300</a>        </span>payload: String,
+<a href=#301 id=301 data-nosnippet>301</a>    },
+<a href=#302 id=302 data-nosnippet>302</a>    <span class="doccomment">/// A WebSocket connection was closed.
+<a href=#303 id=303 data-nosnippet>303</a>    </span>WebSocketClose {
+<a href=#304 id=304 data-nosnippet>304</a>        <span class="doccomment">/// CDP request ID for the closed WebSocket connection.
+<a href=#305 id=305 data-nosnippet>305</a>        </span>request_id: String,
+<a href=#306 id=306 data-nosnippet>306</a>    },
+<a href=#307 id=307 data-nosnippet>307</a>    <span class="doccomment">/// An SSE `EventSource` message was received.
+<a href=#308 id=308 data-nosnippet>308</a>    </span>EventSourceMessage {
+<a href=#309 id=309 data-nosnippet>309</a>        <span class="doccomment">/// CDP request ID for the `EventSource` stream.
+<a href=#310 id=310 data-nosnippet>310</a>        </span>request_id: String,
+<a href=#311 id=311 data-nosnippet>311</a>        <span class="doccomment">/// The SSE `event:` field (empty string if omitted).
+<a href=#312 id=312 data-nosnippet>312</a>        </span>event_name: String,
+<a href=#313 id=313 data-nosnippet>313</a>        <span class="doccomment">/// The SSE `id:` field (empty string if omitted).
+<a href=#314 id=314 data-nosnippet>314</a>        </span>event_id: String,
+<a href=#315 id=315 data-nosnippet>315</a>        <span class="doccomment">/// The SSE `data:` payload.
+<a href=#316 id=316 data-nosnippet>316</a>        </span>data: String,
+<a href=#317 id=317 data-nosnippet>317</a>    },
+<a href=#318 id=318 data-nosnippet>318</a>    <span class="doccomment">/// A delivery-loss boundary on the monitor's underlying event stream (or
+<a href=#319 id=319 data-nosnippet>319</a>    /// its own correlation bookkeeping) — a wire mirror of
+<a href=#320 id=320 data-nosnippet>320</a>    /// `zendriver::NetworkDeliveryBoundary`. Previously these losses were
+<a href=#321 id=321 data-nosnippet>321</a>    /// silent; they're now explicit events on the same stream. A
+<a href=#322 id=322 data-nosnippet>322</a>    /// `disconnected` boundary means the underlying lib-side monitor's
+<a href=#323 id=323 data-nosnippet>323</a>    /// correlator task has ended — no further events will be buffered for
+<a href=#324 id=324 data-nosnippet>324</a>    /// this handle; start a new monitor to resume.
+<a href=#325 id=325 data-nosnippet>325</a>    </span>DeliveryBoundary {
+<a href=#326 id=326 data-nosnippet>326</a>        <span class="doccomment">/// `"lagged"` | `"reconnected"` | `"disconnected"` |
+<a href=#327 id=327 data-nosnippet>327</a>        /// `"correlation_evicted"` | `"decode_failed"` | `"unknown"`.
+<a href=#328 id=328 data-nosnippet>328</a>        </span>boundary: String,
+<a href=#329 id=329 data-nosnippet>329</a>        <span class="doccomment">/// Present for `lagged` / `reconnected` / `disconnected`: the
+<a href=#330 id=330 data-nosnippet>330</a>        /// transport connection generation active when the boundary occurred.
+<a href=#331 id=331 data-nosnippet>331</a>        </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
+<a href=#332 id=332 data-nosnippet>332</a>        </span>generation: <span class="prelude-ty">Option</span>&lt;u64&gt;,
+<a href=#333 id=333 data-nosnippet>333</a>        <span class="doccomment">/// Present for `lagged`: number of events this subscription missed.
+<a href=#334 id=334 data-nosnippet>334</a>        </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
+<a href=#335 id=335 data-nosnippet>335</a>        </span>missed: <span class="prelude-ty">Option</span>&lt;u64&gt;,
+<a href=#336 id=336 data-nosnippet>336</a>        <span class="doccomment">/// Present for `reconnected`: generation of the connection actor that
+<a href=#337 id=337 data-nosnippet>337</a>        /// was replaced.
+<a href=#338 id=338 data-nosnippet>338</a>        </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
+<a href=#339 id=339 data-nosnippet>339</a>        </span>previous: <span class="prelude-ty">Option</span>&lt;u64&gt;,
+<a href=#340 id=340 data-nosnippet>340</a>        <span class="doccomment">/// Present for `correlation_evicted`: URL of the evicted in-flight
+<a href=#341 id=341 data-nosnippet>341</a>        /// exchange.
+<a href=#342 id=342 data-nosnippet>342</a>        </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
+<a href=#343 id=343 data-nosnippet>343</a>        </span>url: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#344 id=344 data-nosnippet>344</a>    },
+<a href=#345 id=345 data-nosnippet>345</a>}
+<a href=#346 id=346 data-nosnippet>346</a>
+<a href=#347 id=347 data-nosnippet>347</a><span class="doccomment">/// The bounded event ring shared between a monitor's drain task and its
+<a href=#348 id=348 data-nosnippet>348</a>/// `read` handler.
+<a href=#349 id=349 data-nosnippet>349</a>///
+<a href=#350 id=350 data-nosnippet>350</a>/// Holding this behind its own `Arc&lt;Mutex&lt;_&gt;&gt;` (separate from [`MonitorState`])
+<a href=#351 id=351 data-nosnippet>351</a>/// is what lets the drain task be spawned *before* [`MonitorState`] is
+<a href=#352 id=352 data-nosnippet>352</a>/// constructed: the task captures a clone of the buffer `Arc`, and the real
+<a href=#353 id=353 data-nosnippet>353</a>/// `JoinHandle` then goes into [`MonitorState`] with no placeholder spawn and
+<a href=#354 id=354 data-nosnippet>354</a>/// no self-referential cycle.
+<a href=#355 id=355 data-nosnippet>355</a></span><span class="attr">#[cfg(feature = <span class="string">"monitor"</span>)]
+<a href=#356 id=356 data-nosnippet>356</a>#[derive(Debug, Default)]
+<a href=#357 id=357 data-nosnippet>357</a></span><span class="kw">pub struct </span>MonitorBuffer {
+<a href=#358 id=358 data-nosnippet>358</a>    <span class="doccomment">/// Bounded ring of buffered, not-yet-read events.
+<a href=#359 id=359 data-nosnippet>359</a>    </span><span class="kw">pub </span>events: std::collections::VecDeque&lt;MonitorEvent&gt;,
+<a href=#360 id=360 data-nosnippet>360</a>    <span class="doccomment">/// Count of events evicted because the buffer was full since the last
+<a href=#361 id=361 data-nosnippet>361</a>    /// `read`. Reset to 0 by `read`.
+<a href=#362 id=362 data-nosnippet>362</a>    </span><span class="kw">pub </span>dropped: usize,
+<a href=#363 id=363 data-nosnippet>363</a>}
+<a href=#364 id=364 data-nosnippet>364</a>
+<a href=#365 id=365 data-nosnippet>365</a><span class="doccomment">/// Live state for one running monitor.
+<a href=#366 id=366 data-nosnippet>366</a>///
+<a href=#367 id=367 data-nosnippet>367</a>/// A drain task (spawned by `browser_monitor_start`) owns the lib-side
+<a href=#368 id=368 data-nosnippet>368</a>/// `NetworkMonitor` stream and pushes each converted [`MonitorEvent`] into the
+<a href=#369 id=369 data-nosnippet>369</a>/// shared [`Self::buffer`] — a bounded ring capped at [`MONITOR_BUFFER_CAP`].
+<a href=#370 id=370 data-nosnippet>370</a>/// When the buffer is full the oldest event is evicted and `dropped` is bumped.
+<a href=#371 id=371 data-nosnippet>371</a>/// `browser_monitor_read` drains the buffer; `browser_monitor_stop` cancels the
+<a href=#372 id=372 data-nosnippet>372</a>/// task via [`Self::cancel`] and aborts [`Self::task`].
+<a href=#373 id=373 data-nosnippet>373</a>///
+<a href=#374 id=374 data-nosnippet>374</a>/// Each mutex is held only briefly — the drain task locks the buffer per event,
+<a href=#375 id=375 data-nosnippet>375</a>/// `read` locks it per drain, neither across an `.await` that waits on the
+<a href=#376 id=376 data-nosnippet>376</a>/// other — so the drain/read pair cannot deadlock.
+<a href=#377 id=377 data-nosnippet>377</a></span><span class="attr">#[cfg(feature = <span class="string">"monitor"</span>)]
+<a href=#378 id=378 data-nosnippet>378</a></span><span class="kw">pub struct </span>MonitorState {
+<a href=#379 id=379 data-nosnippet>379</a>    <span class="doccomment">/// Shared bounded ring (also held by the drain task).
+<a href=#380 id=380 data-nosnippet>380</a>    </span><span class="kw">pub </span>buffer: std::sync::Arc&lt;tokio::sync::Mutex&lt;MonitorBuffer&gt;&gt;,
+<a href=#381 id=381 data-nosnippet>381</a>    <span class="doccomment">/// Cancels the drain task cooperatively (checked in its `select!`).
+<a href=#382 id=382 data-nosnippet>382</a>    </span><span class="kw">pub </span>cancel: tokio_util::sync::CancellationToken,
+<a href=#383 id=383 data-nosnippet>383</a>    <span class="doccomment">/// The drain task's join handle, aborted on `stop`.
+<a href=#384 id=384 data-nosnippet>384</a>    </span><span class="kw">pub </span>task: tokio::task::JoinHandle&lt;()&gt;,
+<a href=#385 id=385 data-nosnippet>385</a>}
+<a href=#386 id=386 data-nosnippet>386</a>
+<a href=#387 id=387 data-nosnippet>387</a><span class="attr">#[cfg(feature = <span class="string">"monitor"</span>)]
+<a href=#388 id=388 data-nosnippet>388</a></span><span class="kw">impl </span>Drop <span class="kw">for </span>MonitorState {
+<a href=#389 id=389 data-nosnippet>389</a>    <span class="doccomment">/// Stop the drain task on drop (session teardown / `browser_close` /
+<a href=#390 id=390 data-nosnippet>390</a>    /// map eviction). Dropping the `JoinHandle` alone detaches the task — it
+<a href=#391 id=391 data-nosnippet>391</a>    /// holds its own `CancellationToken` clone and the live stream — so we
+<a href=#392 id=392 data-nosnippet>392</a>    /// cancel (breaks the task's `select!`) and abort here.
+<a href=#393 id=393 data-nosnippet>393</a>    </span><span class="kw">fn </span>drop(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+<a href=#394 id=394 data-nosnippet>394</a>        <span class="self">self</span>.cancel.cancel();
+<a href=#395 id=395 data-nosnippet>395</a>        <span class="self">self</span>.task.abort();
+<a href=#396 id=396 data-nosnippet>396</a>    }
+<a href=#397 id=397 data-nosnippet>397</a>}
+<a href=#398 id=398 data-nosnippet>398</a>
+<a href=#399 id=399 data-nosnippet>399</a><span class="kw">impl </span>SessionState {
+<a href=#400 id=400 data-nosnippet>400</a>    <span class="doccomment">/// Construct an empty session — no browser, no tabs, default profile.
+<a href=#401 id=401 data-nosnippet>401</a>    </span><span class="kw">pub fn </span>new() -&gt; <span class="self">Self </span>{
+<a href=#402 id=402 data-nosnippet>402</a>        <span class="self">Self </span>{
+<a href=#403 id=403 data-nosnippet>403</a>            browser: <span class="prelude-val">None</span>,
+<a href=#404 id=404 data-nosnippet>404</a>            current_tab_id: <span class="prelude-val">None</span>,
+<a href=#405 id=405 data-nosnippet>405</a>            stealth_profile_choice: StealthProfileChoice::default(),
+<a href=#406 id=406 data-nosnippet>406</a>            stealth_overrides: StealthOverrides::default(),
+<a href=#407 id=407 data-nosnippet>407</a>            <span class="attr">#[cfg(feature = <span class="string">"expect"</span>)]
+<a href=#408 id=408 data-nosnippet>408</a>            </span>expectations: HashMap::new(),
+<a href=#409 id=409 data-nosnippet>409</a>            <span class="attr">#[cfg(feature = <span class="string">"interception"</span>)]
+<a href=#410 id=410 data-nosnippet>410</a>            </span>rules: HashMap::new(),
+<a href=#411 id=411 data-nosnippet>411</a>            <span class="attr">#[cfg(feature = <span class="string">"monitor"</span>)]
+<a href=#412 id=412 data-nosnippet>412</a>            </span>monitors: HashMap::new(),
+<a href=#413 id=413 data-nosnippet>413</a>        }
+<a href=#414 id=414 data-nosnippet>414</a>    }
+<a href=#415 id=415 data-nosnippet>415</a>}
+<a href=#416 id=416 data-nosnippet>416</a>
+<a href=#417 id=417 data-nosnippet>417</a><span class="kw">impl </span>Default <span class="kw">for </span>SessionState {
+<a href=#418 id=418 data-nosnippet>418</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
+<a href=#419 id=419 data-nosnippet>419</a>        <span class="self">Self</span>::new()
 <a href=#420 id=420 data-nosnippet>420</a>    }
 <a href=#421 id=421 data-nosnippet>421</a>}
+<a href=#422 id=422 data-nosnippet>422</a>
+<a href=#423 id=423 data-nosnippet>423</a><span class="attr">#[cfg(test)]
+<a href=#424 id=424 data-nosnippet>424</a></span><span class="kw">mod </span>tests {
+<a href=#425 id=425 data-nosnippet>425</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#426 id=426 data-nosnippet>426</a>
+<a href=#427 id=427 data-nosnippet>427</a>    <span class="attr">#[test]
+<a href=#428 id=428 data-nosnippet>428</a>    </span><span class="kw">fn </span>new_state_is_empty() {
+<a href=#429 id=429 data-nosnippet>429</a>        <span class="kw">let </span>s = SessionState::new();
+<a href=#430 id=430 data-nosnippet>430</a>        <span class="macro">assert!</span>(s.browser.is_none());
+<a href=#431 id=431 data-nosnippet>431</a>        <span class="macro">assert!</span>(s.current_tab_id.is_none());
+<a href=#432 id=432 data-nosnippet>432</a>        <span class="macro">assert_eq!</span>(s.stealth_profile_choice, StealthProfileChoice::Auto);
+<a href=#433 id=433 data-nosnippet>433</a>        <span class="attr">#[cfg(feature = <span class="string">"expect"</span>)]
+<a href=#434 id=434 data-nosnippet>434</a>        </span><span class="macro">assert!</span>(s.expectations.is_empty());
+<a href=#435 id=435 data-nosnippet>435</a>        <span class="attr">#[cfg(feature = <span class="string">"interception"</span>)]
+<a href=#436 id=436 data-nosnippet>436</a>        </span><span class="macro">assert!</span>(s.rules.is_empty());
+<a href=#437 id=437 data-nosnippet>437</a>        <span class="attr">#[cfg(feature = <span class="string">"monitor"</span>)]
+<a href=#438 id=438 data-nosnippet>438</a>        </span><span class="macro">assert!</span>(s.monitors.is_empty());
+<a href=#439 id=439 data-nosnippet>439</a>    }
+<a href=#440 id=440 data-nosnippet>440</a>}
 </code></pre></div></section></main></body></html>
