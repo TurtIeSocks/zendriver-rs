@@ -65,19 +65,17 @@ pub(crate) struct ElementInner {
     /// `.await` on the CDP session.
     pub(crate) backend_node_id: Mutex<Option<i64>>,
     pub(crate) remote_object_id: Mutex<Option<String>>,
-    /// How this element was first obtained — drives T17's
-    /// `Element::refresh` re-resolution path.
-    #[allow(dead_code)] // First reader is T17 (refresh.rs).
+    /// How this element was first obtained — drives `Element::refresh`'s
+    /// re-resolution path (`element::refresh::resolve_origin`).
     pub(crate) origin: ElementOrigin,
 }
 
-/// How an `Element` was obtained. Drives `Element::refresh` (T17): a
+/// How an `Element` was obtained. Drives `Element::refresh`: a
 /// `Query`-origin element re-runs its selector against its original
 /// scope; a `Traversal`-origin element re-traverses from its parent
 /// (which itself may need refreshing recursively); an `Evaluation`
 /// origin has no way to re-resolve and surfaces `NotRefreshable`.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Variants consumed by T17 (refresh).
 pub(crate) enum ElementOrigin {
     Query {
         scope_kind: ScopeKind,
@@ -94,22 +92,21 @@ pub(crate) enum ElementOrigin {
 }
 
 /// The root context against which a `Query` origin's selector was
-/// originally resolved. P3 keeps this coarse — we only need to know
-/// "tab vs subtree" to decide where refresh should run. Re-resolving
-/// an element-subtree origin against a stale parent is deferred to P4
-/// (full traversal-chain refresh).
+/// originally resolved. Kept coarse — we only need to know "tab vs
+/// subtree" to decide where refresh should run. Re-resolving an
+/// element-subtree origin against a stale parent is not yet supported
+/// (see `ElementOrigin::Query { scope_kind: ElementSubtree, .. }`'s
+/// `NotRefreshable` arm in `element::refresh`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // Variants consumed by T17 (refresh).
 pub(crate) enum ScopeKind {
     TabMain,
     ElementSubtree,
 }
 
 /// The traversal step that produced a `Traversal`-origin element from
-/// its parent. P3 lands `Parent` + `NthChild`; richer relationships
+/// its parent. Covers `Parent` + `NthChild`; richer relationships
 /// (sibling indices, etc.) can extend the enum without churn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // Variants consumed by T17 (refresh).
 pub(crate) enum TraversalKind {
     Parent,
     NthChild(usize),
@@ -149,12 +146,10 @@ impl Element {
     }
 
     /// Construct an `Element` returned from a JS expression (e.g. a
-    /// `Runtime.evaluate` that yielded a node handle). No selector to
-    /// replay → `Element::refresh` will error with `NotRefreshable`
-    /// once T17 lands. This is the constructor P2's `Element::new`
-    /// becomes — the P2 semantics of "raw remote handle, no provenance"
-    /// match the new `Evaluation` origin exactly.
-    #[allow(dead_code)] // First public callers land with isolated_eval/traversal in T23+.
+    /// `Runtime.evaluate` that yielded a node handle, or a predicate
+    /// query's match — see `Resolver::synthesize` in `query::mod`). No
+    /// selector to replay → `Element::refresh` errors with
+    /// `NotRefreshable` for elements built this way.
     pub(crate) fn from_jsret(tab: Tab, backend_node_id: i64, remote_object_id: String) -> Self {
         Self {
             inner: Arc::new(ElementInner {
@@ -276,7 +271,6 @@ impl Element {
     /// through `call_on` (which re-locks once more). The double-lock is
     /// cheap — `tokio::sync::Mutex` is uncontended in the common case
     /// and the guard is dropped before any `.await`.
-    #[allow(dead_code)] // First callers (actionability predicates) wire up in T15.
     pub(crate) async fn call_on_main(&self, function: &str, args: Value) -> Result<Value> {
         let object_id = self.remote_object_id_cloned().await?;
         let mut full_args = vec![json!({ "objectId": object_id })];
