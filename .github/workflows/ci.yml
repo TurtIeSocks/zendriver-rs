@@ -288,10 +288,14 @@ jobs:
   #    (belongs on a dedicated fetcher-network lane, not this one) and
   #    `end_to_end_cookies_storage_lifecycle` navigates httpbin.org +
   #    example.com with `wait_for: idle` (real egress, not a code bug).
-  #  - The `TODO(P5)` per-tab dialog-routing tests, pending that feature:
-  #    `expect_dialog_resolves_on_alert` (`integration_phase5.rs:215,221`)
-  #    and `zendriver-mcp`'s `end_to_end_dialog_accept`. Tracked in backlog
-  #    §3; re-include once the dialog-routing override ships.
+  #  - The two dialog tests (`expect_dialog_resolves_on_alert` and
+  #    `zendriver-mcp`'s `end_to_end_dialog_accept`) were excluded here while
+  #    believed to need a "per-tab dialog-routing override". Fixed 2026-07-19:
+  #    the real bug was `expect_dialog` subscribing to a non-existent CDP
+  #    event `Page.javascriptDialogOpened` (Chrome fires `...Opening`), so the
+  #    expectation always timed out on real Chrome while the mock unit test —
+  #    firing the same wrong name — stayed green and hid it. Both pass now and
+  #    are no longer excluded.
   #  - `random_canvas_differs_across_reads` was investigated 2026-07-19 and
   #    excluded pending that investigation (see backlog §3 at the time). Fixed
   #    2026-07-19 (four stacked defects: missing `.stealth(StealthProfile::
@@ -327,5 +331,5 @@ jobs:
             sudo apt-get install -y chromium-browser
             chromium-browser --version
           fi
-      - run: cargo nextest run --workspace --features integration-tests --run-ignored ignored-only --locked --profile ci-integration -E 'not (binary(stealth_phase2) or binary(cloudflare_phase5) or binary(imperva_v0) or binary(integration_cloudflare) or binary(integration_imperva) or test(end_to_end_install_chrome_to_tempdir) or test(end_to_end_cookies_storage_lifecycle) or test(expect_dialog_resolves_on_alert) or test(end_to_end_dialog_accept))'
+      - run: cargo nextest run --workspace --features integration-tests --run-ignored ignored-only --locked --profile ci-integration -E 'not (binary(stealth_phase2) or binary(cloudflare_phase5) or binary(imperva_v0) or binary(integration_cloudflare) or binary(integration_imperva) or test(end_to_end_install_chrome_to_tempdir) or test(end_to_end_cookies_storage_lifecycle))'
 

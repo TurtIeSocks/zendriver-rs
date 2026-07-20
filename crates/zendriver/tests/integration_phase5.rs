@@ -206,32 +206,32 @@ async fn expect_response_returns_matched() {
     browser.close().await.unwrap();
 }
 
-// Disabled: under `--headless=new` (Chromium / Chrome Canary observed
-// locally and on CI) the renderer suppresses `alert()` / `confirm()` /
-// `prompt()` without firing `Page.javascriptDialogOpened`, so the
-// expectation correctly times out. The underlying `expect_dialog`
-// plumbing is exercised by the unit test in
-// `expect/dialog.rs::expect_dialog_resolves_on_javascript_dialog_opened`,
-// which drives the same code path against a mocked CDP transport.
-// TODO(P5): re-enable once we have a per-tab dialog-routing override
-// (Page.setOverrideUserAgent style) that forces headless to surface the
-// event, or move the trigger to a path-driven `window.confirm` from a
-// user-gesture context which headless still routes through CDP.
+// `expect_dialog` against a real dialog on real Chrome, driven by a user
+// gesture (a click whose handler calls `alert()`).
+//
+// This test was `#[ignore]`d for a long time with a note blaming
+// `--headless=new` for "suppressing script-driven `alert()`". That was
+// WRONG. The real bug: `expect_dialog` subscribed to
+// `Page.javascriptDialogOpened` — a CDP event that DOES NOT EXIST (Chrome
+// fires `Page.javascriptDialogOpening`). So the expectation always timed
+// out against real Chrome, while the mock unit test — firing the same
+// non-existent name — stayed green and hid it. Fixed in `expect/dialog.rs`.
+// (Verified after the fix: a plain script-driven `alert()` resolves fine
+// too, headless included — the MCP `end_to_end_dialog_accept` test drives
+// exactly that. The gesture trigger here is just a stronger, more realistic
+// end-to-end.) `#[ignore]` now only because it needs real Chrome — runs in
+// the `nightly-ignored-tests` lane.
 #[tokio::test]
 #[serial]
-#[ignore = "headless=new suppresses Page.javascriptDialogOpened for script-driven alert()"]
+#[ignore = "real-Chrome; runs in the nightly-ignored-tests lane"]
 async fn expect_dialog_resolves_on_alert() {
-    // The page schedules `alert('hi')` 100ms after load. Register
-    // `expect_dialog` BEFORE navigation so the `Page.javascriptDialogOpened`
-    // subscriber is live before the dialog opens — Chrome blocks JS at
-    // the alert until handled.
     let mock = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/"))
         .respond_with(
             ResponseTemplate::new(200).set_body_raw(
                 r#"<!doctype html><html><body>
-              <script>setTimeout(() => alert('hi'), 100);</script>
+              <button id="go" onclick="alert('hi')">go</button>
             </body></html>"#
                     .as_bytes()
                     .to_vec(),
@@ -243,17 +243,24 @@ async fn expect_dialog_resolves_on_alert() {
 
     let browser = Browser::builder().headless(true).launch().await.unwrap();
     let tab = browser.main_tab();
+    tab.goto(&mock.uri()).await.unwrap();
+    tab.wait_for_load().await.unwrap();
 
+    // Register BEFORE the click so the `Page.javascriptDialogOpened`
+    // subscriber is live when the dialog opens.
     let expectation = tab.expect_dialog().timeout(Duration::from_secs(5));
 
-    // Don't `await` goto's wait_for_load — the load event may stall
-    // until the dialog is dismissed. Just dispatch navigate and let the
-    // expectation resolve when the alert opens.
-    tab.goto(&mock.uri()).await.unwrap();
+    // Click WITHOUT awaiting: `alert()` blocks the renderer's JS thread, so
+    // the mouseup dispatch won't return until the dialog is handled —
+    // awaiting the click here would deadlock against the expectation below.
+    // Fire it on a task; it completes once we `accept()` and JS unblocks.
+    let btn = tab.find().css("#go").one().await.unwrap();
+    let click = tokio::spawn(async move { btn.click().await });
 
     let matched = expectation.await.expect("expect_dialog should resolve");
     assert_eq!(matched.message, "hi");
     matched.accept(None).await.unwrap();
+    let _ = click.await;
 
     browser.close().await.unwrap();
 }
