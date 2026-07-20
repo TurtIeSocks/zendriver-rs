@@ -2,10 +2,11 @@
 //! receives_pointer. Each runs a small JS function on the element's remote
 //! handle via `Element::call_on_main` and returns a `bool`.
 //!
-//! The aggregate gate (`wait_actionable`) and `NotActionable` emission land
-//! in T15; T14 only ships the four predicate primitives + the
-//! `ActionabilityCheck` requirements struct that downstream actions use to
-//! describe which checks they need.
+//! The aggregate gate ([`wait_actionable`]) polls the four predicates in
+//! order and raises `NotActionable` on deadline; `Element::click_with`,
+//! `hover`, `focus`, `type_text`, and `screenshot` (in `element::actions`
+//! / `element::screenshot`) each pick the [`ActionabilityCheck`] preset
+//! matching what they need before dispatching.
 
 use std::time::Duration;
 
@@ -17,10 +18,9 @@ use crate::error::{Result, ZendriverError};
 
 /// Set of actionability checks an action wants the element to satisfy
 /// before its CDP dispatch. Per-field booleans gate the corresponding
-/// `check_*` predicate in `wait_actionable` (T15). Three named presets
+/// `check_*` predicate in `wait_actionable`. Three named presets
 /// cover the common combinations (`FULL`, `VISIBLE_ONLY`, `TEXT_INPUT`);
 /// callers may also construct ad-hoc sets directly.
-#[allow(dead_code)] // First caller (`wait_actionable`) lands in T15.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ActionabilityCheck {
     pub visible: bool,
@@ -32,7 +32,6 @@ pub(crate) struct ActionabilityCheck {
 impl ActionabilityCheck {
     /// All four predicates — used by `click` and similar pointer-driven
     /// actions where layout stability + an unobstructed hit point matter.
-    #[allow(dead_code)] // Consumed by `click_with` in T20.
     pub(crate) const FULL: Self = Self {
         visible: true,
         stable: true,
@@ -43,7 +42,6 @@ impl ActionabilityCheck {
     /// Visibility only — used by `screenshot` (we just need pixels to
     /// capture; we don't care if a sibling overlay covers part of the
     /// element).
-    #[allow(dead_code)] // Consumed by `Element::screenshot` in T26.
     pub(crate) const VISIBLE_ONLY: Self = Self {
         visible: true,
         stable: false,
@@ -55,7 +53,6 @@ impl ActionabilityCheck {
     /// must be visible + enabled but doesn't need a hit-tested pointer
     /// path (keystrokes route through the focused element, not the
     /// cursor's position).
-    #[allow(dead_code)] // Consumed by `type_text` / `focus` in T19/T22.
     pub(crate) const TEXT_INPUT: Self = Self {
         visible: true,
         stable: false,
@@ -94,7 +91,6 @@ pub(crate) async fn check_visible(el: &Element) -> Result<bool> {
 /// `requestAnimationFrame` ticks (within 0.5px on each of x/y/w/h). This
 /// catches mid-transition layout shifts that would race a synthesized
 /// click.
-#[allow(dead_code)] // First caller (`wait_actionable`) lands in T15.
 pub(crate) async fn check_stable(el: &Element) -> Result<bool> {
     let js = r#"
         function(el) {
@@ -122,7 +118,6 @@ pub(crate) async fn check_stable(el: &Element) -> Result<bool> {
 /// `true` iff the element is not disabled: native `el.disabled` is
 /// false-ish AND `aria-disabled` is not `'true'`. Non-form elements
 /// (which have no `disabled` property) are considered enabled.
-#[allow(dead_code)] // First callers (`is_enabled` + `wait_actionable`) land in T15/T18.
 pub(crate) async fn check_enabled(el: &Element) -> Result<bool> {
     let js = r#"
         function(el) {
@@ -144,7 +139,6 @@ pub(crate) async fn check_enabled(el: &Element) -> Result<bool> {
 /// of `document.elementFromPoint(cx, cy)`; if our element appears in that
 /// chain, pointer events reach it. Returns `false` when a sibling overlay
 /// covers the hit point.
-#[allow(dead_code)] // First caller (`wait_actionable`) lands in T15.
 pub(crate) async fn check_receives_pointer(el: &Element) -> Result<bool> {
     let js = r#"
         function(el) {
@@ -175,7 +169,6 @@ pub(crate) async fn check_receives_pointer(el: &Element) -> Result<bool> {
 /// receives_pointer. This matches Playwright's gate ordering and avoids
 /// running the more-expensive stability + hit-testing checks while the
 /// element is still hidden or disabled.
-#[allow(dead_code)] // First callers (`click_with`, `hover`, `focus`, …) land in T19/T20/T22/T26.
 pub(crate) async fn wait_actionable(
     el: &Element,
     require: ActionabilityCheck,
