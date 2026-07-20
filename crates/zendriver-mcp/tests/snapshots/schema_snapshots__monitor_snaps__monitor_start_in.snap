@@ -17,6 +17,10 @@ properties:
     format: uint
     default: 0
     minimum: 0
+  stream_bodies:
+    description: "Opt in to incremental HTTP response body delivery: as each response\nstreams in, `browser_monitor_read` emits `http_data` chunk events\n(`request_id` + base64 `chunk_base64`) ahead of the completed `http`\nevent for the same request. Uses passive CDP\n`Network.streamResourceContent` — no request interception, no\nresponse pausing. Filtered by `url_pattern` like every other event\n(no separate filter). Falls back gracefully to the whole-body\n`capture_bodies` / on-demand path on Chrome versions that don't\nsupport it (roughly pre-124) — the monitor never errors out over\nthis. Off by default: streaming every response is wasted CDP\nround-trips when bodies are small."
+    type: boolean
+    default: false
   url_pattern:
     description: "Restrict buffered events to those whose URL contains this substring.\nOmit to buffer every observed event."
     type:

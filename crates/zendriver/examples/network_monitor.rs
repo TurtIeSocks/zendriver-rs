@@ -49,6 +49,12 @@ async fn main() -> zendriver::Result<()> {
                     exchange.request.method, exchange.request.url, status
                 );
             }
+            // Only emitted when the monitor is started with
+            // `.stream_bodies(true)` (not enabled in this example) — shown
+            // here for completeness since the match must be exhaustive.
+            NetworkEvent::HttpData { request_id, chunk } => {
+                println!("[DATA] id={request_id} {} bytes", chunk.len());
+            }
             NetworkEvent::WebSocketOpen { url, request_id } => {
                 println!("[WS  ] open  id={request_id} url={url}");
             }

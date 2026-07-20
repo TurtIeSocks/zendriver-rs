@@ -89,6 +89,21 @@ pub(crate) struct EventSourceMessage {
     pub data: String,
 }
 
+/// `Network.dataReceived` params. Fired for every in-flight request as
+/// progress info (`dataLength`/`encodedDataLength`, not modeled here — the
+/// correlator has no use for them), but `data` itself is only populated when
+/// `Network.streamResourceContent` was enabled for this `requestId` — see
+/// [`crate::monitor`]'s streaming design. `data` is CDP's `Binary` type,
+/// which is wire-transparent as a plain base64 string, so a plain
+/// `Option<String>` deserializes it directly.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DataReceived {
+    pub request_id: String,
+    #[serde(default)]
+    pub data: Option<String>,
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
@@ -224,5 +239,34 @@ mod tests {
         assert_eq!(p.event_name, "");
         assert_eq!(p.event_id, "");
         assert_eq!(p.data, "");
+    }
+
+    #[test]
+    fn parses_data_received_with_data() {
+        // `data` (CDP `Binary`) is wire-transparent as a plain base64 string.
+        let v = json!({
+            "requestId": "12",
+            "timestamp": 1.0,
+            "dataLength": 4,
+            "encodedDataLength": 4,
+            "data": "aGk="
+        });
+        let p: DataReceived = serde_json::from_value(v).unwrap();
+        assert_eq!(p.request_id, "12");
+        assert_eq!(p.data.as_deref(), Some("aGk="));
+    }
+
+    #[test]
+    fn parses_data_received_without_streaming_enabled() {
+        // No `data` field at all — the common case when
+        // `Network.streamResourceContent` was never enabled for this request.
+        let v = json!({
+            "requestId": "13",
+            "timestamp": 1.0,
+            "dataLength": 4,
+            "encodedDataLength": 4
+        });
+        let p: DataReceived = serde_json::from_value(v).unwrap();
+        assert!(p.data.is_none());
     }
 }

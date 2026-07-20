@@ -171,6 +171,19 @@ A body-fetch failure (e.g. Chrome already evicted the response) sets
 `body_capture_error: string` instead of silently omitting `body` /
 `body_base64` with no explanation.
 
+`browser_monitor_start` also accepts `stream_bodies: bool` (default `false`)
+to opt in to incremental body delivery: `browser_monitor_read` then emits
+`http_data` chunk events (`request_id` + base64 `chunk_base64`) as each
+response streams in, ahead of the completed `http` event for the same
+request — correlate them by `request_id`, which `http` events now also carry.
+Uses passive CDP `Network.streamResourceContent` (no request interception, no
+response pausing) and filters by `url_pattern` like every other event (no
+separate filter for streaming). Falls back gracefully to the whole-body path
+on Chrome versions that don't support it (roughly pre-124) — the monitor
+never errors out over this. See
+[Network monitor](./network-monitor.md#streaming-bodies) for the full
+mechanism.
+
 `browser_monitor_read` can also return a `delivery_boundary` event: a
 lagged/reconnected/disconnected transport, a correlation-map eviction, or an
 undecodable payload on the underlying event stream, surfaced explicitly

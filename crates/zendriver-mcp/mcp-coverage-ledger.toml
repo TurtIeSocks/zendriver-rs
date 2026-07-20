@@ -347,6 +347,19 @@ covered = "browser_monitor_read"
 api = "zendriver::monitor::NetworkEvent::Http"
 covered = "browser_monitor_read"
 
+# ── Phase-5 opt-in stream_bodies (Network.streamResourceContent) ───────────
+[[entry]]
+api = "zendriver::monitor::NetworkEvent::HttpData"
+covered = "browser_monitor_start.stream_bodies / browser_monitor_read (http_data events)"
+
+[[entry]]
+api = "zendriver::monitor::MonitorBuilder::stream_bodies"
+covered = "browser_monitor_start.stream_bodies"
+
+[[entry]]
+api = "zendriver::monitor::NetworkExchange::request_id"
+covered = "browser_monitor_read (Http.request_id, correlates with http_data.request_id)"
+
 [[entry]]
 api = "zendriver::monitor::NetworkEvent::WebSocketClose"
 covered = "browser_monitor_read"

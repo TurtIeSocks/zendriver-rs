@@ -65,6 +65,9 @@ $defs:
           method:
             description: "HTTP method (e.g. `\"GET\"`, `\"POST\"`)."
             type: string
+          request_id:
+            description: "CDP request ID for this exchange. Correlates with `http_data`\nchunk events on the same stream when the monitor was started with\n`stream_bodies: true` — chunks for this request arrive (and carry\nthis same id) before this event does, since `http_data` streams\nas the response arrives while `http` only fires once the exchange\ncompletes."
+            type: string
           status:
             description: "Response status code, if a response was received before the request\nfinished (`None` for a network-level failure)."
             type:
@@ -78,8 +81,25 @@ $defs:
             type: string
         required:
           - kind
+          - request_id
           - url
           - method
+      - description: "One incrementally-delivered chunk of an HTTP response body — emitted\nonly when the monitor was started with `stream_bodies: true`\n(`browser_monitor_start`). A wire mirror of\n`zendriver::NetworkEvent::HttpData`; arrives interleaved with other\nevents, always before the `http` event for the same `request_id`."
+        type: object
+        properties:
+          chunk_base64:
+            description: "Base64 of the chunk's raw bytes."
+            type: string
+          kind:
+            type: string
+            const: http_data
+          request_id:
+            description: "CDP request ID this chunk belongs to — matches the eventual\n`http` event's `request_id`."
+            type: string
+        required:
+          - kind
+          - request_id
+          - chunk_base64
       - description: A new WebSocket connection was opened.
         type: object
         properties:

@@ -3023,6 +3023,9 @@ pub zendriver::monitor::NetworkEvent::EventSourceMessage::event_id: alloc::strin
 pub zendriver::monitor::NetworkEvent::EventSourceMessage::event_name: alloc::string::String
 pub zendriver::monitor::NetworkEvent::EventSourceMessage::request_id: alloc::string::String
 pub zendriver::monitor::NetworkEvent::Http(zendriver::monitor::NetworkExchange)
+pub zendriver::monitor::NetworkEvent::HttpData
+pub zendriver::monitor::NetworkEvent::HttpData::chunk: alloc::vec::Vec<u8>
+pub zendriver::monitor::NetworkEvent::HttpData::request_id: alloc::string::String
 pub zendriver::monitor::NetworkEvent::WebSocketClose
 pub zendriver::monitor::NetworkEvent::WebSocketClose::request_id: alloc::string::String
 pub zendriver::monitor::NetworkEvent::WebSocketFrame
@@ -3078,6 +3081,7 @@ pub fn zendriver::monitor::NetworkEvent::vzip(self) -> V
 pub struct zendriver::monitor::MonitorBuilder
 impl zendriver::monitor::MonitorBuilder
 pub async fn zendriver::monitor::MonitorBuilder::start(self) -> zendriver::error::Result<zendriver::monitor::NetworkMonitor>
+pub fn zendriver::monitor::MonitorBuilder::stream_bodies(self, bool) -> Self
 pub fn zendriver::monitor::MonitorBuilder::url_pattern(self, impl core::convert::Into<zendriver::UrlMatcher>) -> Self
 impl core::marker::Freeze for zendriver::monitor::MonitorBuilder
 impl core::marker::Send for zendriver::monitor::MonitorBuilder
@@ -3212,6 +3216,7 @@ pub zendriver::monitor::NetworkExchange::response: core::option::Option<zendrive
 impl zendriver::monitor::NetworkExchange
 pub async fn zendriver::monitor::NetworkExchange::body(&self) -> zendriver::error::Result<alloc::vec::Vec<u8>>
 pub fn zendriver::monitor::NetworkExchange::is_success(&self) -> bool
+pub fn zendriver::monitor::NetworkExchange::request_id(&self) -> &str
 pub fn zendriver::monitor::NetworkExchange::status(&self) -> core::option::Option<u16>
 pub async fn zendriver::monitor::NetworkExchange::text(&self) -> zendriver::error::Result<alloc::string::String>
 impl core::clone::Clone for zendriver::monitor::NetworkExchange
@@ -5546,6 +5551,9 @@ pub zendriver::NetworkEvent::EventSourceMessage::event_id: alloc::string::String
 pub zendriver::NetworkEvent::EventSourceMessage::event_name: alloc::string::String
 pub zendriver::NetworkEvent::EventSourceMessage::request_id: alloc::string::String
 pub zendriver::NetworkEvent::Http(zendriver::monitor::NetworkExchange)
+pub zendriver::NetworkEvent::HttpData
+pub zendriver::NetworkEvent::HttpData::chunk: alloc::vec::Vec<u8>
+pub zendriver::NetworkEvent::HttpData::request_id: alloc::string::String
 pub zendriver::NetworkEvent::WebSocketClose
 pub zendriver::NetworkEvent::WebSocketClose::request_id: alloc::string::String
 pub zendriver::NetworkEvent::WebSocketFrame
@@ -7694,6 +7702,7 @@ pub fn zendriver::expect::response::MatchedResponse::vzip(self) -> V
 pub struct zendriver::MonitorBuilder
 impl zendriver::monitor::MonitorBuilder
 pub async fn zendriver::monitor::MonitorBuilder::start(self) -> zendriver::error::Result<zendriver::monitor::NetworkMonitor>
+pub fn zendriver::monitor::MonitorBuilder::stream_bodies(self, bool) -> Self
 pub fn zendriver::monitor::MonitorBuilder::url_pattern(self, impl core::convert::Into<zendriver::UrlMatcher>) -> Self
 impl core::marker::Freeze for zendriver::monitor::MonitorBuilder
 impl core::marker::Send for zendriver::monitor::MonitorBuilder
@@ -7828,6 +7837,7 @@ pub zendriver::NetworkExchange::response: core::option::Option<zendriver::monito
 impl zendriver::monitor::NetworkExchange
 pub async fn zendriver::monitor::NetworkExchange::body(&self) -> zendriver::error::Result<alloc::vec::Vec<u8>>
 pub fn zendriver::monitor::NetworkExchange::is_success(&self) -> bool
+pub fn zendriver::monitor::NetworkExchange::request_id(&self) -> &str
 pub fn zendriver::monitor::NetworkExchange::status(&self) -> core::option::Option<u16>
 pub async fn zendriver::monitor::NetworkExchange::text(&self) -> zendriver::error::Result<alloc::string::String>
 impl core::clone::Clone for zendriver::monitor::NetworkExchange

@@ -224,6 +224,13 @@ pub struct InterceptRuleHandle {
 pub enum MonitorEvent {
     /// A completed HTTP request/response pair (or a failed request).
     Http {
+        /// CDP request ID for this exchange. Correlates with `http_data`
+        /// chunk events on the same stream when the monitor was started with
+        /// `stream_bodies: true` — chunks for this request arrive (and carry
+        /// this same id) before this event does, since `http_data` streams
+        /// as the response arrives while `http` only fires once the exchange
+        /// completes.
+        request_id: String,
         /// Request URL.
         url: String,
         /// HTTP method (e.g. `"GET"`, `"POST"`).
@@ -261,6 +268,18 @@ pub enum MonitorEvent {
         /// than setting this field.
         #[serde(skip_serializing_if = "Option::is_none")]
         body_capture_error: Option<String>,
+    },
+    /// One incrementally-delivered chunk of an HTTP response body — emitted
+    /// only when the monitor was started with `stream_bodies: true`
+    /// (`browser_monitor_start`). A wire mirror of
+    /// `zendriver::NetworkEvent::HttpData`; arrives interleaved with other
+    /// events, always before the `http` event for the same `request_id`.
+    HttpData {
+        /// CDP request ID this chunk belongs to — matches the eventual
+        /// `http` event's `request_id`.
+        request_id: String,
+        /// Base64 of the chunk's raw bytes.
+        chunk_base64: String,
     },
     /// A new WebSocket connection was opened.
     WebSocketOpen {
