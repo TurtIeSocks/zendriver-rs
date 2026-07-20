@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-20
+
+### Added
+
+- Opt-in stream_bodies via Network.streamResourceContent
+
+
 ## [0.3.6] - 2026-07-19
 
 ### Added

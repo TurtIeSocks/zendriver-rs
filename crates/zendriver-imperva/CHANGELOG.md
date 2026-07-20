@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.2.13] - 2026-07-20
+
+### Added
+
+- Opt-in stream_bodies via Network.streamResourceContent
+
+
 ## [0.2.12] - 2026-07-19
 
 ### Added
