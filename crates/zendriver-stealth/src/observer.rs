@@ -9,7 +9,7 @@
 //! patched globals.
 
 use serde_json::json;
-use zendriver_transport::{ObserverError, PausedSession, TargetObserver};
+use zendriver_transport::{CallError, ObserverError, PausedSession, TargetObserver};
 
 use crate::patches::{bootstrap_script, bootstrap_script_native_webgl};
 use crate::persona::GeoPos;
@@ -189,9 +189,30 @@ impl TargetObserver for StealthObserver {
                 .cloned()
         });
         if let Some(ref locale) = effective_locale {
-            session
+            // `Emulation.setLocaleOverride` is browser-global: only one override
+            // can be in effect at a time. A page with a cross-origin OOPIF (its
+            // own target -> its own session) attaches this observer per session,
+            // so a later session finds the override already set by the first and
+            // Chrome replies `[-32000] Another locale override is already in
+            // effect`. That is benign — the same coherent locale is already
+            // applied — and must NOT propagate: propagating detaches the observer
+            // and strips the frame's remaining patches (CSP bypass, the bootstrap
+            // fingerprint script). Tolerate that one reply; surface every other error.
+            match session
                 .call("Emulation.setLocaleOverride", json!({ "locale": locale }))
-                .await?;
+                .await
+            {
+                Ok(_) => {}
+                Err(CallError::Rpc(_, ref message, _))
+                    if message.contains("locale override is already in effect") =>
+                {
+                    tracing::debug!(
+                        %locale,
+                        "locale override already in effect (set by an earlier session); tolerating"
+                    );
+                }
+                Err(e) => return Err(e.into()),
+            }
         }
         if let Some(ref geo) = self.geolocation {
             // Sets the value the Geolocation API *would* return — it does
@@ -409,6 +430,81 @@ mod tests {
             Some("de-DE"),
             "locale override must be derived from pinned languages so JS locale stays coherent with Accept-Language"
         );
+    }
+
+    #[tokio::test]
+    async fn locale_override_already_in_effect_does_not_detach_the_observer() {
+        // `Emulation.setLocaleOverride` is browser-global. A cross-origin OOPIF
+        // attaches this observer to its own session, where the override is
+        // already in effect from the first session, so Chrome replies -32000.
+        // The observer must tolerate that reply and keep applying the frame's
+        // remaining patches (CSP bypass, the bootstrap script) instead of
+        // detaching — otherwise the OOPIF loses its stealth surface.
+        let fp = Fingerprint {
+            platform: Platform::MacIntel,
+            chrome_major: 120,
+            chrome_full: "120.0.6099.234".into(),
+            cpu_count: 10,
+            memory_gb: 8,
+            ua_string: crate::ua::compose_ua_string(Platform::MacIntel, "120.0.6099.234"),
+            ua_metadata: crate::UserAgentMetadata::realistic(
+                Platform::MacIntel,
+                120,
+                "120.0.6099.234",
+            ),
+            timezone: None,
+            locale: None,
+            languages: Some(vec!["de-DE".into(), "de".into()]),
+            screen: None,
+        };
+        let observer = std::sync::Arc::new(StealthObserver::new(StealthProfile::spoofed(), fp));
+        let (mut mock, conn) = MockConnection::pair_with_observers(vec![observer]);
+
+        mock.emit_event(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": "S1",
+                "targetInfo": {
+                    "targetId": "T1",
+                    "type": "page",
+                    "url": "about:blank",
+                    "attached": true,
+                },
+                "waitingForDebugger": true,
+            }),
+        )
+        .await;
+
+        // Reply to setLocaleOverride with the browser-global "already in effect"
+        // error; OK to everything else. Seeing the commands AFTER setLocaleOverride
+        // proves the observer tolerated the error rather than detaching.
+        for expected in [
+            "Page.enable",
+            "Emulation.setUserAgentOverride",
+            "Emulation.setDeviceMetricsOverride",
+            "Emulation.setFocusEmulationEnabled",
+            "Emulation.setLocaleOverride",
+            "Page.setBypassCSP",
+            "Page.addScriptToEvaluateOnNewDocument",
+            "Runtime.runIfWaitingForDebugger",
+        ] {
+            let id =
+                tokio::time::timeout(std::time::Duration::from_secs(2), mock.expect_cmd(expected))
+                    .await
+                    .unwrap_or_else(|_| {
+                        panic!(
+                            "observer stopped early — never saw {expected} within 2s \
+                             (locale 'already in effect' error was not tolerated?)"
+                        )
+                    });
+            if expected == "Emulation.setLocaleOverride" {
+                mock.reply_err(id, -32000, "Another locale override is already in effect")
+                    .await;
+            } else {
+                mock.reply(id, json!({})).await;
+            }
+        }
+        conn.shutdown();
     }
 
     #[tokio::test]
