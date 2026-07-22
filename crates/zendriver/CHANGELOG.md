@@ -5,6 +5,14 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-22
+
+### Fixed
+
+- Scope Tab::cookies() to the tab's own BrowserContext
+- Bound the entire Browser::close() under one deadline
+
+
 ## [0.4.0] - 2026-07-20
 
 ### Added
