@@ -679,6 +679,7 @@ impl zendriver::cookies::CookieJar
 pub async fn zendriver::cookies::CookieJar::all(&self) -> zendriver::error::Result<alloc::vec::Vec<zendriver::cookies::Cookie>>
 pub async fn zendriver::cookies::CookieJar::clear(&self) -> zendriver::error::Result<()>
 pub async fn zendriver::cookies::CookieJar::delete(&self, &str, core::option::Option<&str>, core::option::Option<&str>) -> zendriver::error::Result<()>
+pub fn zendriver::cookies::CookieJar::for_session(zendriver_transport::connection::Connection, impl core::convert::Into<alloc::string::String>) -> Self
 pub async fn zendriver::cookies::CookieJar::for_url(&self, &url::Url) -> zendriver::error::Result<alloc::vec::Vec<zendriver::cookies::Cookie>>
 pub fn zendriver::cookies::CookieJar::new(zendriver_transport::connection::Connection) -> Self
 pub async fn zendriver::cookies::CookieJar::set(&self, zendriver::cookies::Cookie) -> zendriver::error::Result<()>
@@ -6573,6 +6574,7 @@ impl zendriver::cookies::CookieJar
 pub async fn zendriver::cookies::CookieJar::all(&self) -> zendriver::error::Result<alloc::vec::Vec<zendriver::cookies::Cookie>>
 pub async fn zendriver::cookies::CookieJar::clear(&self) -> zendriver::error::Result<()>
 pub async fn zendriver::cookies::CookieJar::delete(&self, &str, core::option::Option<&str>, core::option::Option<&str>) -> zendriver::error::Result<()>
+pub fn zendriver::cookies::CookieJar::for_session(zendriver_transport::connection::Connection, impl core::convert::Into<alloc::string::String>) -> Self
 pub async fn zendriver::cookies::CookieJar::for_url(&self, &url::Url) -> zendriver::error::Result<alloc::vec::Vec<zendriver::cookies::Cookie>>
 pub fn zendriver::cookies::CookieJar::new(zendriver_transport::connection::Connection) -> Self
 pub async fn zendriver::cookies::CookieJar::set(&self, zendriver::cookies::Cookie) -> zendriver::error::Result<()>

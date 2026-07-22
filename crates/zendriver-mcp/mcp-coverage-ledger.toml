@@ -826,3 +826,14 @@ excluded = "signature grew a CachePolicy param (lib-only cache-freshness knob); 
 [[entry]]
 api = "zendriver_fingerprints::generative::Generator::load_or_download_default"
 excluded = "signature grew a CachePolicy param (lib-only cache-freshness knob); not called by zendriver-mcp today"
+
+# ── CookieJar::for_session (Tab::cookies() BrowserContext scoping) ──────────
+# `Tab::cookies()` now builds its jar via `CookieJar::for_session` so cookie
+# CDP calls route with the tab's own `sessionId` (its own BrowserContext)
+# instead of the browser-wide default context. Same rationale as
+# `CookieJar::new` (lib-internal, baseline-grandfathered, unledgered): a jar
+# CONSTRUCTOR is plumbing, not an MCP tool — cookie operations reach MCP
+# through the tab/browser surfaces that own the jar, never jar construction.
+[[entry]]
+api = "zendriver::cookies::CookieJar::for_session"
+excluded = "internal jar constructor (session-scoped variant of CookieJar::new, itself lib-internal/baseline-grandfathered); scopes Tab::cookies() to the tab's own BrowserContext — no distinct MCP request/response surface"
