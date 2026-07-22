@@ -2,10 +2,15 @@
 //!
 //! [`CookieJar`] wraps a [`Connection`] and exposes ergonomic CRUD over
 //! Chrome's cookie store. The jar is cheap to clone — internally an `Arc`
-//! over a thin inner struct — so it can be passed around freely and is
-//! suitable as both [`crate::Browser::cookies`] and [`crate::Tab::cookies`]
-//! (both bind to the same browser-scope connection, since Chrome's cookie
-//! store is browser-wide).
+//! over a thin inner struct — so it can be passed around freely.
+//!
+//! A jar is either **browser-scoped** ([`CookieJar::new`], via
+//! [`crate::Browser::cookies`]) — reading/writing the default
+//! `BrowserContext` — or **session-scoped** ([`CookieJar::for_session`], via
+//! [`crate::Tab::cookies`]) — routing each command with the tab's `sessionId`
+//! so it resolves against that tab's own `BrowserContext`. The two are
+//! equivalent when every tab shares the default context, and differ only
+//! when a caller opens tabs under per-target isolated `BrowserContext`s.
 //!
 //! ```no_run
 //! # async fn ex() -> zendriver::Result<()> {
@@ -265,15 +270,30 @@ impl From<CdpCookie> for Cookie {
     }
 }
 
-/// Cheap-to-clone handle to the browser's cookie store.
+/// Cheap-to-clone handle to a Chrome cookie store.
 ///
 /// Wraps a [`Connection`] in an [`Arc`]; cloning is reference-bump cheap.
 ///
-/// All methods send commands at browser scope (no `sessionId`) — Chrome's
-/// cookie store is shared across all tabs in the browser, so per-tab
-/// scoping is meaningless for cookies. Construct via
-/// [`crate::Browser::cookies`] or [`crate::Tab::cookies`] — both produce
-/// jars bound to the same underlying store.
+/// ## Scoping — default vs. per-target `BrowserContext`
+///
+/// A jar dispatches its `Storage.*`/`Network.*` cookie commands either at
+/// **browser scope** (no `sessionId`) or scoped to a **specific target's
+/// session** (`sessionId` attached):
+///
+/// - [`CookieJar::new`] — browser scope, no `sessionId`. Reads and writes
+///   the **default** `BrowserContext`. This is what [`crate::Browser::cookies`]
+///   returns.
+/// - [`CookieJar::for_session`] — carries a target's `sessionId`, so the
+///   command resolves against **that target's own `BrowserContext`**. This is
+///   what [`crate::Tab::cookies`] returns.
+///
+/// The distinction matters for callers that open pages under **per-target
+/// isolated `BrowserContext`s** (`Target.createBrowserContext`): the default
+/// context and an isolated context have **separate** cookie stores, so a
+/// browser-scope read returns the wrong context's cookies for such a tab.
+/// Routing the command through the tab's own session fixes this — Chrome
+/// resolves the cookie store from the session's target. For the common case
+/// (a single default context shared by every tab), the two are equivalent.
 #[derive(Clone, Debug)]
 pub struct CookieJar {
     inner: Arc<CookieJarInner>,
@@ -282,18 +302,48 @@ pub struct CookieJar {
 #[derive(Debug)]
 struct CookieJarInner {
     conn: Connection,
+    /// When `Some`, every cookie command is routed with this CDP `sessionId`
+    /// so it resolves against the session's target `BrowserContext`. When
+    /// `None`, commands go at browser scope (the default `BrowserContext`).
+    session_id: Option<String>,
 }
 
 impl CookieJar {
-    /// Construct a jar around a [`Connection`].
+    /// Construct a browser-scope jar around a [`Connection`].
     ///
-    /// Typically called by [`crate::Browser::cookies`] /
-    /// [`crate::Tab::cookies`] rather than user code.
+    /// Cookie commands dispatch with **no** `sessionId`, so they read and
+    /// write the **default** `BrowserContext`. Typically called by
+    /// [`crate::Browser::cookies`] rather than user code.
     #[must_use]
     pub fn new(conn: Connection) -> Self {
         Self {
-            inner: Arc::new(CookieJarInner { conn }),
+            inner: Arc::new(CookieJarInner {
+                conn,
+                session_id: None,
+            }),
         }
+    }
+
+    /// Construct a jar scoped to a specific target's CDP `session_id`.
+    ///
+    /// Cookie commands dispatch **with** that `sessionId`, so Chrome resolves
+    /// them against the session's target `BrowserContext` — the correct store
+    /// for a tab opened under a per-target isolated `BrowserContext`.
+    /// Typically called by [`crate::Tab::cookies`] rather than user code.
+    #[must_use]
+    pub fn for_session(conn: Connection, session_id: impl Into<String>) -> Self {
+        Self {
+            inner: Arc::new(CookieJarInner {
+                conn,
+                session_id: Some(session_id.into()),
+            }),
+        }
+    }
+
+    /// The `sessionId` (if any) every cookie command is routed with. Cloned
+    /// per call because [`Connection::call_raw`] takes an owned `Option`.
+    fn session(&self) -> Option<String> {
+        self.inner.session_id.clone()
     }
 
     /// Return every cookie in the browser's store.
@@ -315,7 +365,7 @@ impl CookieJar {
         let resp = self
             .inner
             .conn
-            .call_raw("Storage.getCookies", json!({}), None)
+            .call_raw("Storage.getCookies", json!({}), self.session())
             .await?;
         parse_cookies(&resp)
     }
@@ -344,7 +394,7 @@ impl CookieJar {
             .call_raw(
                 "Network.getCookies",
                 json!({ "urls": [url.as_str()] }),
-                None,
+                self.session(),
             )
             .await?;
         parse_cookies(&resp)
@@ -385,7 +435,11 @@ impl CookieJar {
         let cdp_json = serde_json::to_value(&cdp).map_err(ZendriverError::Serde)?;
         self.inner
             .conn
-            .call_raw("Storage.setCookies", json!({ "cookies": [cdp_json] }), None)
+            .call_raw(
+                "Storage.setCookies",
+                json!({ "cookies": [cdp_json] }),
+                self.session(),
+            )
             .await?;
         Ok(())
     }
@@ -412,7 +466,11 @@ impl CookieJar {
         let cdp: Vec<CdpCookie> = cookies.into_iter().map(CdpCookie::from).collect();
         self.inner
             .conn
-            .call_raw("Storage.setCookies", json!({ "cookies": cdp }), None)
+            .call_raw(
+                "Storage.setCookies",
+                json!({ "cookies": cdp }),
+                self.session(),
+            )
             .await?;
         Ok(())
     }
@@ -441,7 +499,7 @@ impl CookieJar {
         }
         self.inner
             .conn
-            .call_raw("Network.deleteCookies", params, None)
+            .call_raw("Network.deleteCookies", params, self.session())
             .await?;
         Ok(())
     }
@@ -463,7 +521,7 @@ impl CookieJar {
     pub async fn clear(&self) -> Result<()> {
         self.inner
             .conn
-            .call_raw("Storage.clearCookies", json!({}), None)
+            .call_raw("Storage.clearCookies", json!({}), self.session())
             .await?;
         Ok(())
     }
@@ -546,6 +604,112 @@ mod tests {
         assert!(!cookies[1].http_only);
         assert_eq!(cookies[1].expires, None);
         assert_eq!(cookies[1].same_site, None);
+
+        conn.shutdown();
+    }
+
+    /// A **session-scoped** jar ([`CookieJar::for_session`]) must attach the
+    /// target's `sessionId` to `Storage.getCookies`, so Chrome resolves the
+    /// read against that tab's own `BrowserContext` — not the browser-wide
+    /// default. This is the isolated-`BrowserContext` correctness fix: a
+    /// caller opening tabs under `Target.createBrowserContext` would otherwise
+    /// read the wrong context's cookies.
+    #[tokio::test]
+    async fn for_session_scopes_get_cookies_to_the_tabs_session() {
+        let (mut mock, conn) = MockConnection::pair();
+        let jar = CookieJar::for_session(conn.clone(), "SESSION-42");
+
+        let call = tokio::spawn({
+            let j = jar.clone();
+            async move { j.all().await }
+        });
+
+        let id = mock.expect_cmd("Storage.getCookies").await;
+        // The command frame must carry the tab's sessionId — this is what
+        // routes the cookie read to the tab's own BrowserContext.
+        assert_eq!(
+            mock.last_sent()["sessionId"],
+            "SESSION-42",
+            "session-scoped jar must attach the tab's sessionId"
+        );
+        mock.reply(id, json!({ "cookies": [] })).await;
+        call.await.unwrap().unwrap();
+
+        conn.shutdown();
+    }
+
+    /// A **browser-scoped** jar ([`CookieJar::new`]) must NOT attach any
+    /// `sessionId` — it operates on the default `BrowserContext` at browser
+    /// scope. This pins the contract that [`crate::Browser::cookies`] keeps
+    /// its browser-wide semantics while [`crate::Tab::cookies`] is
+    /// context-scoped.
+    #[tokio::test]
+    async fn browser_scoped_jar_omits_session_id() {
+        let (mut mock, conn) = MockConnection::pair();
+        let jar = CookieJar::new(conn.clone());
+
+        let call = tokio::spawn({
+            let j = jar.clone();
+            async move { j.all().await }
+        });
+
+        let id = mock.expect_cmd("Storage.getCookies").await;
+        assert!(
+            mock.last_sent().get("sessionId").is_none(),
+            "browser-scoped jar must not attach a sessionId"
+        );
+        mock.reply(id, json!({ "cookies": [] })).await;
+        call.await.unwrap().unwrap();
+
+        conn.shutdown();
+    }
+
+    /// Every mutating cookie command on a session-scoped jar must also carry
+    /// the `sessionId`, so writes/clears land in the tab's own
+    /// `BrowserContext` rather than the default one.
+    #[tokio::test]
+    async fn for_session_scopes_all_mutations_to_the_tabs_session() {
+        let (mut mock, conn) = MockConnection::pair();
+        let jar = CookieJar::for_session(conn.clone(), "S9");
+
+        // set -> Storage.setCookies
+        let set = tokio::spawn({
+            let j = jar.clone();
+            async move {
+                j.set(Cookie {
+                    name: "a".into(),
+                    value: "1".into(),
+                    domain: ".x.com".into(),
+                    path: "/".into(),
+                    ..Default::default()
+                })
+                .await
+            }
+        });
+        let id = mock.expect_cmd("Storage.setCookies").await;
+        assert_eq!(mock.last_sent()["sessionId"], "S9");
+        mock.reply(id, json!({})).await;
+        set.await.unwrap().unwrap();
+
+        // delete -> Network.deleteCookies
+        let del = tokio::spawn({
+            let j = jar.clone();
+            async move { j.delete("a", None, None).await }
+        });
+        let id = mock.expect_cmd("Network.deleteCookies").await;
+        assert_eq!(mock.last_sent()["sessionId"], "S9");
+        mock.reply(id, json!({})).await;
+        del.await.unwrap().unwrap();
+
+        // clear -> Storage.clearCookies
+        let clr = tokio::spawn({
+            let j = jar.clone();
+            async move { j.clear().await }
+        });
+        let id = mock.expect_cmd("Storage.clearCookies").await;
+        assert_eq!(mock.last_sent()["sessionId"], "S9");
+        mock.reply(id, json!({})).await;
+        clr.await.unwrap().unwrap();
 
         conn.shutdown();
     }
