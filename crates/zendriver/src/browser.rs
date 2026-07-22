@@ -2067,6 +2067,18 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 /// exists for — must not stall teardown for long. `SHUTDOWN_GRACE` still
 /// governs how long Chrome then gets to actually exit.
 const BROWSER_CLOSE_TIMEOUT: Duration = Duration::from_secs(3);
+/// Hard upper bound on the **entire** [`Browser::close`] teardown of an owned
+/// Chrome — the CDP quit, acquiring the child lock, the grace waits, and the
+/// final reap, combined.
+///
+/// The per-phase timeouts ([`BROWSER_CLOSE_TIMEOUT`], [`SHUTDOWN_GRACE`]) shape
+/// the happy path; this deadline is the backstop that guarantees `close()`
+/// returns even when a phase that is otherwise unbounded — acquiring the child
+/// lock, or reaping a process wedged in uninterruptible sleep that never
+/// exits — would block forever. Sized comfortably above the sum of the
+/// intended per-phase waits, so it only bites on a genuine wedge, never on a
+/// close that is merely slow but still making progress.
+const BROWSER_CLOSE_DEADLINE: Duration = Duration::from_secs(15);
 /// How long [`resolve_ws_from_http`] waits for the `/json/version` round-trip.
 const JSON_VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -3949,6 +3961,13 @@ impl Browser {
     /// does not exit. Cleans up the `user_data_dir` tempdir if one was
     /// allocated at launch time.
     ///
+    /// The whole teardown — the CDP quit, acquiring the internal child lock,
+    /// the grace waits, and the final reap — is bounded by a single hard
+    /// deadline ([`BROWSER_CLOSE_DEADLINE`]), so `close()` always returns even
+    /// if a phase wedges (an un-acquirable lock, a process stuck in
+    /// uninterruptible sleep that never reaps). Callers do not need to wrap
+    /// `close()` in their own timeout.
+    ///
     /// The CDP quit matters because the signal path only ever targets the
     /// single `chrome.exe` PID we tracked at spawn. Any *other* window Chrome
     /// opened (a first-run window, a `chrome://newtab/`) is not that PID's
@@ -3981,13 +4000,50 @@ impl Browser {
         self,
         browser_close_budget: Duration,
     ) -> Result<(), ZendriverError> {
+        self.close_within_deadline(browser_close_budget, BROWSER_CLOSE_DEADLINE)
+            .await
+    }
+
+    /// [`Browser::close_within`] with the overall hard deadline also injectable,
+    /// so tests can prove the whole close stays bounded when an inner phase
+    /// (lock acquisition, the final reap) would otherwise block forever,
+    /// without waiting out the real [`BROWSER_CLOSE_DEADLINE`].
+    pub(crate) async fn close_within_deadline(
+        self,
+        browser_close_budget: Duration,
+        overall_deadline: Duration,
+    ) -> Result<(), ZendriverError> {
         // Attached (non-owning) sessions must never terminate the process we
         // connected to — only the transport is torn down. Spawn-only below.
+        // Bounded and non-blocking, so it needs no deadline.
         if !self.inner.owns_process {
             self.inner.conn.shutdown();
             return Ok(());
         }
 
+        // Bound the ENTIRE owning teardown under one deadline. Previously only
+        // the `Browser.close` round-trip was bounded; the child-lock
+        // acquisition and the post-signal reap were not, so a wedge in either
+        // hung the caller forever. The single outer timeout covers every phase
+        // — quit, lock, grace waits, reap — while the per-phase budgets inside
+        // still return the common case promptly.
+        match timeout(overall_deadline, self.close_owning(browser_close_budget)).await {
+            Ok(res) => res,
+            Err(_elapsed) => {
+                warn!(
+                    deadline = ?overall_deadline,
+                    "browser close exceeded its hard deadline; abandoning teardown (process may be left behind)",
+                );
+                Ok(())
+            }
+        }
+    }
+
+    /// The owning-process teardown body, run under the deadline established by
+    /// [`Browser::close_within_deadline`]. Split out so a single `timeout`
+    /// bounds every phase; borrows `&self` because the outer wrapper owns the
+    /// `Browser` for the duration of the call.
+    async fn close_owning(&self, browser_close_budget: Duration) -> Result<(), ZendriverError> {
         // Ask Chrome to quit over the protocol first. This must precede
         // `conn.shutdown()` — that tears down the very transport the command
         // travels over.
@@ -6951,6 +7007,59 @@ mod tests {
             "a Browser.close timeout must still hard-kill the process (pid {pid} alive)",
         );
         drop(mock);
+    }
+
+    /// The whole close must stay bounded even when a phase that is otherwise
+    /// unbounded would block forever. Here we wedge the child-lock acquisition
+    /// (previously an unbounded `child.lock().await`) by holding the lock for
+    /// the entire close attempt; the overall deadline must still make
+    /// `close()` return promptly instead of hanging the caller.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn close_stays_bounded_when_child_lock_is_wedged() {
+        let (child, pid) = spawn_stand_in_chrome();
+        // `_mock` (named, not bare `_`) is held to end of scope so the
+        // transport stays up and the unanswered `Browser.close` times out at
+        // its budget rather than draining early.
+        let (_mock, browser) = owning_browser_with_child(Some(child)).await;
+
+        // Wedge the lock-acquisition phase: hold the child lock via a second
+        // handle to the same inner state for the whole close attempt.
+        let inner = browser.inner.clone();
+        let held = inner.child.lock().await;
+
+        // Tiny quit budget (unanswered → falls through fast) + tiny overall
+        // deadline. Without deadline-bounded lock acquisition this would block
+        // forever on `child.lock().await`; the outer 5s guard would then fire
+        // and fail the test.
+        let start = tokio::time::Instant::now();
+        let closed = tokio::time::timeout(
+            Duration::from_secs(5),
+            browser.close_within_deadline(Duration::from_millis(50), Duration::from_millis(300)),
+        )
+        .await;
+
+        assert!(
+            closed.is_ok(),
+            "close() hung past its deadline while the child lock was held",
+        );
+        closed
+            .unwrap()
+            .expect("a deadline-bounded close returns Ok (best-effort teardown)");
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "close() should return shortly after its 300ms deadline, took {:?}",
+            start.elapsed(),
+        );
+
+        // The reap was abandoned (the lock was never acquired), so the
+        // stand-in is still alive under our held guard — clean it up.
+        drop(held);
+        drop(inner);
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
     }
 
     /// T2 safety: a browser produced by `connect()` was attached to, not

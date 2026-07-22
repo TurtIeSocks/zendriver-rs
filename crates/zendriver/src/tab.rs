@@ -789,17 +789,19 @@ impl Tab {
         Ok(map.values().find(|f| f.name() == Some(name)).cloned())
     }
 
-    /// Browser-wide cookie store handle.
+    /// Cookie store handle scoped to **this tab's own `BrowserContext`**.
     ///
-    /// Convenience accessor that delegates to the owning [`crate::Browser`]'s
-    /// root [`zendriver_transport::Connection`] — Chrome's cookie store is
-    /// browser-scoped, so this jar is functionally identical to
-    /// [`crate::Browser::cookies`] for the same browser.
+    /// The jar routes every `Storage.*`/`Network.*` cookie command with this
+    /// tab's CDP `sessionId` (via [`crate::CookieJar::for_session`]), so Chrome
+    /// resolves it against the `BrowserContext` the tab actually lives in —
+    /// not necessarily the browser-wide default one.
     ///
-    /// If the owning Browser has already been dropped (which shouldn't happen
-    /// in practice because Drop ordering keeps it alive while any Tab clone
-    /// exists, but is handled defensively here), the jar falls back to the
-    /// Tab's session-level connection.
+    /// This matters when the tab was opened under a **per-target isolated**
+    /// `BrowserContext` (`Target.createBrowserContext`): the default context
+    /// and an isolated context have separate cookie stores, so a browser-scope
+    /// read would return the wrong context's cookies. For the common case (a
+    /// single default context shared by every tab), this is equivalent to
+    /// [`crate::Browser::cookies`].
     ///
     /// # Examples
     ///
@@ -815,11 +817,10 @@ impl Tab {
     /// ```
     #[must_use]
     pub fn cookies(&self) -> crate::CookieJar {
-        let conn = self.inner.browser.upgrade().map_or_else(
-            || self.inner.session.connection().clone(),
-            |b| b.conn.clone(),
-        );
-        crate::CookieJar::new(conn)
+        crate::CookieJar::for_session(
+            self.inner.session.connection().clone(),
+            self.inner.session.session_id(),
+        )
     }
 
     /// Per-tab `localStorage` accessor.
@@ -3069,6 +3070,34 @@ mod tests {
     use super::*;
     use zendriver_transport::testing::MockConnection;
 
+    /// `Tab::cookies()` must hand back a jar scoped to the tab's own session,
+    /// so `Storage.getCookies` carries the tab's `sessionId` and resolves
+    /// against the tab's `BrowserContext` (correct for tabs opened under a
+    /// per-target isolated `BrowserContext`) rather than the browser-wide
+    /// default context.
+    #[tokio::test]
+    async fn cookies_reads_from_the_tabs_own_session_context() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "TAB-SESSION");
+        let tab = Tab::new_for_test(sess);
+
+        let call = tokio::spawn({
+            let jar = tab.cookies();
+            async move { jar.all().await }
+        });
+
+        let id = mock.expect_cmd("Storage.getCookies").await;
+        assert_eq!(
+            mock.last_sent()["sessionId"],
+            "TAB-SESSION",
+            "tab.cookies() must scope the read to the tab's own session"
+        );
+        mock.reply(id, json!({ "cookies": [] })).await;
+        call.await.unwrap().unwrap();
+
+        conn.shutdown();
+    }
+
     #[tokio::test]
     async fn goto_sends_page_enable_then_page_navigate_with_url() {
         let (mut mock, conn) = MockConnection::pair();
@@ -3790,51 +3819,18 @@ mod tests {
 
     // --- Tab::cookies (P4 T10) ----------------------------------------
 
-    /// [`Tab::cookies`] returns a [`crate::CookieJar`] bound to the owning
-    /// browser's root connection — discovered via the cached `Weak<BrowserInner>`
-    /// upgrade. The test builds a synthetic `BrowserInner` with a known
-    /// connection, attaches a Tab whose Weak ref points at it, and asserts
-    /// that calling `.set(...)` dispatches `Storage.setCookies` on that
-    /// browser-level connection (not the Tab's session channel).
+    /// [`Tab::cookies`] returns a [`crate::CookieJar`] scoped to the tab's own
+    /// session, so a **write** through it (`.set(...)` → `Storage.setCookies`)
+    /// carries the tab's `sessionId` and lands in the tab's own
+    /// `BrowserContext` — not the browser-wide default one. This is the
+    /// isolated-`BrowserContext` correctness contract on the mutation path.
     #[tokio::test]
-    async fn tab_cookies_dispatches_through_browser_connection_via_weak_upgrade() {
-        use crate::browser::BrowserInner;
+    async fn tab_cookies_mutations_dispatch_through_the_tabs_session() {
         use crate::cookies::Cookie;
-        use std::collections::HashMap;
-        use std::sync::{Arc, Weak};
 
-        let input_profile = zendriver_stealth::InputProfile::native();
         let (mut mock, conn) = MockConnection::pair();
-
-        let inner = Arc::new_cyclic(|weak: &Weak<BrowserInner>| {
-            let main_session = SessionHandle::new(conn.clone(), "S1");
-            let main_input = crate::input::InputController::new(input_profile.clone());
-            let main_tab = Tab::new(main_session, weak.clone(), main_input, "T1".to_string());
-            let mut map = HashMap::new();
-            map.insert("S1".to_string(), main_tab.clone());
-            BrowserInner {
-                conn: conn.clone(),
-                main_tab,
-                child: tokio::sync::Mutex::new(None),
-                job: crate::browser::ProcessJob::none(),
-                _user_data: None,
-                _extension_dirs: Vec::new(),
-                owns_process: false,
-                tabs: tokio::sync::RwLock::new(map),
-                debug_host_port: None,
-                ws_url: None,
-                tabs_changed: tokio::sync::Notify::new(),
-                #[cfg(feature = "interception")]
-                proxy_auth_handle: std::sync::OnceLock::new(),
-                #[cfg(feature = "interception")]
-                context_proxy_auth: tokio::sync::Mutex::new(HashMap::new()),
-                #[cfg(feature = "tracker-blocking")]
-                tracker_matcher: None,
-                #[cfg(feature = "interception")]
-                session_intercept_handles: tokio::sync::Mutex::new(std::collections::HashMap::new()),
-            }
-        });
-        let tab = inner.main_tab.clone();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
         let jar = tab.cookies();
 
         let fut = tokio::spawn(async move {
@@ -3843,11 +3839,6 @@ mod tests {
                 value: "abc".into(),
                 domain: ".example.com".into(),
                 path: "/".into(),
-                expires: None,
-                http_only: false,
-                secure: false,
-                same_site: None,
-                url: None,
                 ..Default::default()
             })
             .await
@@ -3860,15 +3851,12 @@ mod tests {
             .expect("setCookies payload must carry a cookies array");
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["name"], "sid");
-        // Browser-scope command — no session_id (jar dispatches against
-        // the browser's connection, not the tab's session).
-        assert!(mock.last_sent().get("sessionId").is_none());
+        // Session-scope command — the tab's session_id rides on the wire so
+        // the write resolves against the tab's own BrowserContext.
+        assert_eq!(mock.last_sent()["sessionId"], "S1");
         mock.reply(id, json!({})).await;
 
         fut.await.unwrap().unwrap();
-        // Keep `inner` alive until after the dispatch so the Weak upgrade
-        // succeeds — that's the path under test.
-        drop(inner);
         conn.shutdown();
     }
 
