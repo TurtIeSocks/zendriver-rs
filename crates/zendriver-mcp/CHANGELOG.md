@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.14.1] - 2026-07-22
+
+### Fixed
+
+- Ledger CookieJar::for_session + refresh public-api baseline
+
+
 ## [0.14.0] - 2026-07-20
 
 ### Added

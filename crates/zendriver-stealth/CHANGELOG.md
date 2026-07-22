@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.8.5] - 2026-07-22
+
+### Fixed
+
+- Tolerate a browser-global locale override already set by another session
+
+
 ## [0.8.4] - 2026-07-20
 
 ### Added
