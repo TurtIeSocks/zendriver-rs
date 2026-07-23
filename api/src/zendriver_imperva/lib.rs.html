@@ -53,7 +53,7 @@
 <a href=#53 id=53 data-nosnippet>53</a>//!         println!("token: {reese84}")
 <a href=#54 id=54 data-nosnippet>54</a>//!     }
 <a href=#55 id=55 data-nosnippet>55</a>//!     ClearanceOutcome::ChallengeGone =&gt; println!("legacy cleared"),
-<a href=#56 id=56 data-nosnippet>56</a>//!     ClearanceOutcome::AlreadyClear =&gt; println!("no challenge present"),
+<a href=#56 id=56 data-nosnippet>56</a>//!     ClearanceOutcome::AlreadyClear { .. } =&gt; println!("no challenge present"),
 <a href=#57 id=57 data-nosnippet>57</a>//!     ClearanceOutcome::TimedOut { last_surface } =&gt; {
 <a href=#58 id=58 data-nosnippet>58</a>//!         println!("timed out; last_surface = {last_surface:?}")
 <a href=#59 id=59 data-nosnippet>59</a>//!     }
