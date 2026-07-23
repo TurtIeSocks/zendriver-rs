@@ -30,7 +30,10 @@ pub use zendriver::ImpervaSurface
 pub use zendriver::InterceptBuilder
 pub use zendriver::InterceptHandle
 pub use zendriver::InterceptionError
+pub use zendriver::ObserverError
+pub use zendriver::ObserverFailurePolicy
 pub use zendriver::PausedRequest
+pub use zendriver::PausedSession
 pub use zendriver::Persona
 pub use zendriver::PersonaBuilder
 pub use zendriver::Platform
@@ -44,6 +47,8 @@ pub use zendriver::Seed
 pub use zendriver::SessionHandle
 pub use zendriver::Strategy
 pub use zendriver::Surface
+pub use zendriver::TargetInfo
+pub use zendriver::TargetObserver
 pub use zendriver::TransportError
 pub use zendriver::VersionSpec
 pub use zendriver::WebgpuSpec

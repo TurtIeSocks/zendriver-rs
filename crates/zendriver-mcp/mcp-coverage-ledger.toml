@@ -837,3 +837,28 @@ excluded = "signature grew a CachePolicy param (lib-only cache-freshness knob); 
 [[entry]]
 api = "zendriver::cookies::CookieJar::for_session"
 excluded = "internal jar constructor (session-scoped variant of CookieJar::new, itself lib-internal/baseline-grandfathered); scopes Tab::cookies() to the tab's own BrowserContext — no distinct MCP request/response surface"
+
+# ── observer surface hoisted into the facade ────────────────────────────────
+# The TargetObserver trait + supporting types, re-exported so a consumer can
+# implement a custom target-attach hook via the facade instead of depending on
+# zendriver-transport directly. Not an MCP tool surface — the MCP server exposes
+# high-level browser actions, not in-process custom-observer registration.
+[[entry]]
+api = "zendriver::TargetObserver"
+excluded = "advanced transport trait for custom target-attach hooks (in-process); no MCP tool — the server exposes browser actions, not observer registration"
+
+[[entry]]
+api = "zendriver::ObserverError"
+excluded = "error type of the TargetObserver trait; advanced transport surface, no distinct MCP tool"
+
+[[entry]]
+api = "zendriver::ObserverFailurePolicy"
+excluded = "timeout-policy enum for the TargetObserver trait; advanced transport surface, no distinct MCP tool"
+
+[[entry]]
+api = "zendriver::PausedSession"
+excluded = "argument of TargetObserver::on_target_attached; advanced transport surface, no distinct MCP tool"
+
+[[entry]]
+api = "zendriver::TargetInfo"
+excluded = "target metadata passed to the observer surface; advanced transport type, no distinct MCP tool"

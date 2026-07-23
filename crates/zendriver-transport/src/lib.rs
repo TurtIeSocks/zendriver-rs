@@ -1,10 +1,10 @@
 //! Internal CDP transport for `zendriver`: WebSocket I/O, command/response
 //! routing, event broadcast.
 //!
-//! **Use via the `zendriver` crate's re-exports.** This crate is published so
-//! the workspace can compile end-to-end but its surface is not covered by the
-//! same SemVer guarantees as `zendriver`; expect minor versions to rearrange
-//! types here freely. See [`SEMVER.md`] in the repo root for the policy.
+//! > [!WARNING]
+//! > This crate has **no independent SemVer contract** — its surface may
+//! > rearrange in any minor release. Depend on the [`zendriver`] crate's
+//! > re-exports instead; see [`SEMVER.md`] for the policy.
 //!
 //! For a high-level walkthrough of the actor/observer model see the
 //! [Architecture chapter](https://turtiesocks.github.io/zendriver-rs/architecture.html)
@@ -28,7 +28,8 @@
 //! - [`CallError`] / [`TransportError`] — error types surfaced via
 //!   `zendriver`'s `ZendriverError::Transport` / `Cdp` variants.
 //!
-//! [`SEMVER.md`]: https://github.com/TurtIeSocks/zendriver-rs/blob/main/SEMVER.md
+//! [`zendriver`]: https://docs.rs/zendriver
+//! [`SEMVER.md`]: https://github.com/TurtIeSocks/zendriver-rs/blob/main/SEMVER.md#internal-crates
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 

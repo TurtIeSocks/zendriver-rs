@@ -24,6 +24,9 @@ use crate::error::CallError;
 /// `zendriver-stealth::StealthObserver` implements this trait to install
 /// patches on every new page target before the page's first script runs.
 ///
+/// Reachable via `zendriver`'s re-exports (`zendriver::TargetObserver`) — prefer
+/// that over depending on this crate directly; see the crate-root docs.
+///
 /// [`Target.attachedToTarget`]: https://chromedevtools.github.io/devtools-protocol/tot/Target/#event-attachedToTarget
 #[async_trait::async_trait]
 pub trait TargetObserver: Send + Sync {
