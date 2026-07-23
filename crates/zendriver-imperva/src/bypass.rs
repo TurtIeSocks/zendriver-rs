@@ -51,7 +51,13 @@ pub enum ClearanceOutcome {
     /// Body markers gone but no reese84 token (e.g., legacy Incapsula flow).
     ChallengeGone,
     /// No Imperva surface present at call time. Fast path; no waiting.
-    AlreadyClear,
+    /// Carries whatever cookie state the single probe already collected —
+    /// `reese84` is `Some` if a (non-empty) token cookie was already present
+    /// on the page, `None` if this simply isn't an Imperva-fronted page.
+    AlreadyClear {
+        reese84: Option<String>,
+        sessions: Vec<crate::detection::CookieSnapshot>,
+    },
     /// Deadline elapsed without clearance. `last_surface` is the most recent
     /// surface the poll loop observed (`None` if the deadline won before the
     /// first probe completed).
@@ -221,7 +227,10 @@ impl<'tab> ImpervaBypass<'tab> {
         // Fast path: nothing to clear.
         if matches!(snapshot.surface, crate::detection::ImpervaSurface::None) && snapshot.body_clean
         {
-            return Ok(ClearanceOutcome::AlreadyClear);
+            return Ok(ClearanceOutcome::AlreadyClear {
+                reese84: snapshot.reese84.filter(|v| !v.is_empty()),
+                sessions: snapshot.sessions,
+            });
         }
 
         // CAPTCHA escalation: dispatch to solver or fast-fail.
@@ -450,7 +459,84 @@ mod tests {
         .await;
 
         let outcome = fut.await.unwrap().unwrap();
-        assert!(matches!(outcome, ClearanceOutcome::AlreadyClear));
+        match outcome {
+            ClearanceOutcome::AlreadyClear { reese84, sessions } => {
+                assert_eq!(reese84, None);
+                assert!(sessions.is_empty());
+            }
+            other => panic!("expected AlreadyClear, got {other:?}"),
+        }
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn wait_for_clearance_already_clear_carries_existing_reese84_cookie() {
+        // Already-cleared page (e.g. warmed by an earlier bypass) that still
+        // carries the token: the fast path must surface it, not drop it.
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move { ImpervaBypass::new(&s).wait_for_clearance().await }
+        });
+
+        let id = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id,
+            snapshot_reply(json!({
+                "surface": { "kind": "None" },
+                "reese84": "EXISTING_TOKEN",
+                "body_clean": true,
+                "sessions": [{ "name": "reese84", "value": "EXISTING_TOKEN" }],
+                "has_imperva_signal": false,
+            })),
+        )
+        .await;
+
+        let outcome = fut.await.unwrap().unwrap();
+        match outcome {
+            ClearanceOutcome::AlreadyClear { reese84, sessions } => {
+                assert_eq!(reese84.as_deref(), Some("EXISTING_TOKEN"));
+                assert_eq!(sessions.len(), 1);
+                assert_eq!(sessions[0].name, "reese84");
+                assert_eq!(sessions[0].value, "EXISTING_TOKEN");
+            }
+            other => panic!("expected AlreadyClear, got {other:?}"),
+        }
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn wait_for_clearance_already_clear_treats_empty_reese84_as_unset() {
+        // Empty-string token cookie is treated as unset on the fast path too,
+        // matching the same convention on the TokenAcquired path.
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move { ImpervaBypass::new(&s).wait_for_clearance().await }
+        });
+
+        let id = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id,
+            snapshot_reply(json!({
+                "surface": { "kind": "None" },
+                "reese84": "",
+                "body_clean": true,
+                "sessions": [],
+                "has_imperva_signal": false,
+            })),
+        )
+        .await;
+
+        let outcome = fut.await.unwrap().unwrap();
+        match outcome {
+            ClearanceOutcome::AlreadyClear { reese84, .. } => assert_eq!(reese84, None),
+            other => panic!("expected AlreadyClear, got {other:?}"),
+        }
         conn.shutdown();
     }
 
