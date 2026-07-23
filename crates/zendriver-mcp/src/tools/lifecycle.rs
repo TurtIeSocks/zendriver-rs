@@ -392,6 +392,9 @@ fn apply_overrides(mut profile: StealthProfile, overrides: &StealthOverrides) ->
     if let Some(native_isolation) = overrides.native_isolation {
         profile = profile.native_isolation(native_isolation);
     }
+    if let Some(native_webgl) = overrides.native_webgl {
+        profile = profile.native_webgl(native_webgl);
+    }
     profile
 }
 
@@ -659,6 +662,29 @@ mod tests {
         assert!(!profile.native_isolation_enabled());
         let flags = profile.build_flags();
         assert!(flags.iter().any(|f| f.contains("IsolateOrigins")));
+    }
+
+    #[test]
+    fn native_webgl_override_wires_through_to_profile() {
+        let overrides = StealthOverrides {
+            native_webgl: Some(true),
+            ..Default::default()
+        };
+        let profile = apply_overrides(StealthProfile::spoofed(), &overrides);
+        assert!(profile.native_webgl_enabled());
+        // Axis 2 only — the launch flags stay as a plain spoofed profile's.
+        let flags = profile.build_flags();
+        assert!(
+            flags.iter().any(|f| f.contains("IsolateOrigins")),
+            "native_webgl override must not touch the launch flags: {flags:?}"
+        );
+    }
+
+    #[test]
+    fn absent_native_webgl_override_leaves_default_profile_unchanged() {
+        let overrides = StealthOverrides::default();
+        let profile = apply_overrides(StealthProfile::spoofed(), &overrides);
+        assert!(!profile.native_webgl_enabled());
     }
 
     #[cfg(feature = "interception")]

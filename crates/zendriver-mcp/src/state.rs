@@ -104,14 +104,23 @@ pub struct StealthOverrides {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bypass_csp: Option<bool>,
     /// Opt in to Chrome's real site isolation (`IsolateOrigins`/
-    /// `site-per-process` stay enabled) and, for `spoof_*` profiles, skip
-    /// the WebGL vendor/renderer patch — the host's real WebGL renderer
-    /// passes through unpatched. **Trade-off, not a strict stealth
-    /// improvement**: dropping the WebGL patch removes an anti-WAF
-    /// coherence defense (see `StealthProfile::native_isolation` rustdoc).
+    /// `site-per-process` stay enabled). Affects **only** the launch flags — a
+    /// test-harness knob for Chrome's stock process-isolation boundary, not a
+    /// stealth axis (see `StealthProfile::native_isolation` rustdoc). To skip
+    /// the WebGL/WebGPU identity patch, use [`native_webgl`](Self::native_webgl).
     /// Off (`false`/unset) by default — existing behavior unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_isolation: Option<bool>,
+    /// For `spoof_*` profiles, skip the WebGL vendor/renderer patch (and the
+    /// coupled WebGPU value/fabrication spoof) — the host's real WebGL/WebGPU
+    /// identity passes through unpatched. **Trade-off, not a strict stealth
+    /// improvement**: dropping the patch removes an anti-WAF coherence defense
+    /// (see `StealthProfile::native_webgl` rustdoc). Independent of
+    /// [`native_isolation`](Self::native_isolation); set both to reproduce the
+    /// pre-split bundle. Off (`false`/unset) by default — existing behavior
+    /// unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_webgl: Option<bool>,
     /// Derive a coherent `locale` + `languages` from a country code
     /// (ISO 3166-1 alpha-2, e.g. `"US"`). Overridden by an explicit `locale`.
     ///

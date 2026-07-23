@@ -84,6 +84,11 @@ pub struct StealthProfile {
     pub(crate) per_field: PerFieldOverride,
     pub(crate) bypass_csp: bool,
     pub(crate) native_isolation: bool,
+    /// Skip the WebGL vendor/renderer identity patch (and the coupled WebGPU
+    /// value/fabrication spoof) for `spoofed`, independent of the real
+    /// render-process site-isolation launch flags. See
+    /// [`native_webgl`](Self::native_webgl) for the caller-facing setter.
+    pub(crate) native_webgl: bool,
     // Wired by `BrowserBuilder::stealth` in Task 17.
     #[allow(dead_code)]
     pub(crate) user_data_dir: Option<PathBuf>,
@@ -110,6 +115,7 @@ impl StealthProfile {
             per_field: PerFieldOverride::default(),
             bypass_csp: false,
             native_isolation: false,
+            native_webgl: false,
             user_data_dir: None,
         }
     }
@@ -133,6 +139,7 @@ impl StealthProfile {
             per_field: PerFieldOverride::default(),
             bypass_csp: false,
             native_isolation: false,
+            native_webgl: false,
             user_data_dir: None,
         }
     }
@@ -157,6 +164,7 @@ impl StealthProfile {
             per_field: PerFieldOverride::default(),
             bypass_csp: true, // default ON for spoofed; see spec assumption #2
             native_isolation: false,
+            native_webgl: false,
             user_data_dir: None,
         }
     }
@@ -289,42 +297,27 @@ impl StealthProfile {
         self.bypass_csp = on;
         self
     }
-    /// Opt in to Chrome's **real** render-process site isolation
-    /// (`IsolateOrigins`/`site-per-process` stay enabled — the launch flags
-    /// omit the isolation-disabling `--disable-features=...` entries) and,
-    /// for [`spoofed`](Self::spoofed), skip the WebGL vendor/renderer
-    /// value-substitution patch entirely — the host's real
-    /// `WebGLRenderingContext.getParameter`/`getSupportedExtensions` values
-    /// pass through unpatched instead of reporting the coherent
-    /// ANGLE/Direct3D11 Intel identity `patches/webgl.js` spoofs by default.
+    /// Opt in to Chrome's **real** render-process site isolation:
+    /// `IsolateOrigins`/`site-per-process` stay enabled — the launch flags
+    /// omit the isolation-disabling `--disable-features=...` entries the
+    /// library applies by default. Affects **only** the launch flags.
     ///
     /// # This is a trade-off, not a strict improvement
     ///
-    /// The defaults this opts out of exist for a reason: disabling site
-    /// isolation keeps every frame in one render process (simpler CDP target
-    /// attachment), and the WebGL patch is itself an anti-WAF *coherence*
-    /// defense — some WAFs (Imperva/Incapsula) cross-check the WebGL
-    /// identity against other signals and flag a real, host-specific
-    /// renderer string as a bot tell when it doesn't match the rest of the
-    /// spoofed fingerprint. Turning this on trades that coherence-with-a-
-    /// fake-identity for coherence-with-the-real-host: useful when you need
-    /// the host's actual GPU behavior (WebGL-heavy rendering/testing,
-    /// screenshot fidelity) or want Chrome's stock process-isolation
-    /// security boundary, and evasion is not the priority. It is **not**
-    /// "more stealthy" than the default — it removes an anti-detection
-    /// defense.
+    /// The default this opts out of exists for a reason: disabling site
+    /// isolation keeps every frame in one render process, which makes CDP
+    /// target attachment simpler. Turning real isolation back on is useful
+    /// when you want Chrome's stock process-isolation security boundary for a
+    /// test harness. It is orthogonal to stealth — it changes no JS
+    /// fingerprint surface.
+    ///
+    /// To skip the WebGL/WebGPU identity patch — a separate stealth axis this
+    /// setter used to bundle in — use [`native_webgl`](Self::native_webgl).
+    /// Set both to reproduce the pre-split `native_isolation(true)` behavior.
     ///
     /// Off by default. [`native`](Self::native) and [`spoofed`](Self::spoofed)
     /// are unaffected unless you call this explicitly, so existing callers
     /// see no behavior change.
-    ///
-    /// WebGL/WebGPU stay coherent: when this drops the WebGL patch, the
-    /// separate WebGPU **value** adapter spoof (driven by the
-    /// [`Persona`](crate::Persona) `webgpu` surface, `Value` by default) is
-    /// skipped too, so `navigator.gpu` reports the real host adapter rather
-    /// than one derived from a renderer the WebGL patch no longer applies. An
-    /// explicit WebGPU [`Strategy::Block`](crate::Strategy) (hiding
-    /// `navigator.gpu`) is renderer-neutral and is still honored.
     ///
     /// ```
     /// use zendriver_stealth::StealthProfile;
@@ -335,6 +328,54 @@ impl StealthProfile {
     #[must_use]
     pub fn native_isolation(mut self, on: bool) -> Self {
         self.native_isolation = on;
+        self
+    }
+
+    /// Skip the WebGL vendor/renderer value-substitution patch (and the
+    /// coupled WebGPU value/fabrication spoof, kept coherent with it) for the
+    /// [`spoofed`](Self::spoofed) profile — the host's real
+    /// `WebGLRenderingContext.getParameter`/`getSupportedExtensions` (and
+    /// `navigator.gpu`) values pass through unpatched instead of reporting the
+    /// coherent ANGLE/Direct3D11 Intel identity `patches/webgl.js` spoofs by
+    /// default.
+    ///
+    /// # This is a trade-off, not a strict improvement
+    ///
+    /// The WebGL patch is itself an anti-WAF *coherence* defense — some WAFs
+    /// (Imperva/Incapsula) cross-check the WebGL identity against other
+    /// signals and flag a real, host-specific renderer string as a bot tell
+    /// when it doesn't match the rest of the spoofed fingerprint. Turning this
+    /// on trades that coherence-with-a-fake-identity for coherence-with-the-
+    /// real-host: useful when you need the host's actual GPU behavior
+    /// (WebGL-heavy rendering/testing, screenshot fidelity) and evasion is not
+    /// the priority. It is **not** "more stealthy" than the default — it
+    /// removes an anti-detection defense.
+    ///
+    /// WebGL/WebGPU stay coherent: when this drops the WebGL patch, the
+    /// separate WebGPU **value** adapter spoof (driven by the
+    /// [`Persona`](crate::Persona) `webgpu` surface, `Value` by default) is
+    /// skipped too, so `navigator.gpu` reports the real host adapter rather
+    /// than one derived from a renderer the WebGL patch no longer applies. An
+    /// explicit WebGPU [`Strategy::Block`](crate::Strategy) (hiding
+    /// `navigator.gpu`) is renderer-neutral and is still honored.
+    ///
+    /// Independent of [`native_isolation`](Self::native_isolation), which only
+    /// changes Chrome's launch flags. Set both to reproduce the pre-split
+    /// `native_isolation(true)` bundle.
+    ///
+    /// Off by default — existing callers see no behavior change.
+    ///
+    /// ```
+    /// use zendriver_stealth::StealthProfile;
+    /// let p = StealthProfile::spoofed().native_webgl(true);
+    /// // Axis 2 only: the launch flags are unchanged from a plain spoofed
+    /// // profile — real site isolation stays disabled by default.
+    /// assert!(p.build_flags().iter().any(|f| f.contains("IsolateOrigins")));
+    /// assert!(p.native_webgl_enabled());
+    /// ```
+    #[must_use]
+    pub fn native_webgl(mut self, on: bool) -> Self {
+        self.native_webgl = on;
         self
     }
     /// Add a single extra Chrome launch flag (e.g. `"--proxy-server=..."`).
@@ -494,6 +535,13 @@ impl StealthProfile {
         self.native_isolation
     }
 
+    /// Whether the [`native_webgl`](Self::native_webgl) opt-in is active for
+    /// this profile. `false` unless explicitly set.
+    #[must_use]
+    pub fn native_webgl_enabled(&self) -> bool {
+        self.native_webgl
+    }
+
     /// Returns the input-realism profile appropriate for this stealth profile.
     /// `spoofed` returns realistic timings; `native` and `off` return zero-overhead.
     #[must_use]
@@ -580,6 +628,42 @@ mod profile_tests {
         // Existing default (no opt-in) must be unchanged.
         let flags = StealthProfile::native().build_flags();
         assert!(flags.iter().any(|f| f.contains("IsolateOrigins")));
+    }
+
+    #[test]
+    fn native_webgl_off_by_default_on_every_profile() {
+        assert!(!StealthProfile::off().native_webgl_enabled());
+        assert!(!StealthProfile::native().native_webgl_enabled());
+        assert!(!StealthProfile::spoofed().native_webgl_enabled());
+    }
+
+    #[test]
+    fn native_webgl_toggle_sets_flag() {
+        let p = StealthProfile::spoofed().native_webgl(true);
+        assert!(p.native_webgl_enabled());
+        // The WebGL axis is independent — it must not flip the isolation axis.
+        assert!(!p.native_isolation_enabled());
+    }
+
+    #[test]
+    fn native_webgl_true_native_isolation_false_build_flags_unaffected() {
+        // The split is real, not cosmetic: toggling axis 2 (WebGL patch skip)
+        // alone must leave the launch-flag list (axis 1) byte-for-byte equal to
+        // a plain spoofed profile.
+        let baseline = StealthProfile::spoofed().build_flags();
+        let webgl_only = StealthProfile::spoofed().native_webgl(true).build_flags();
+        assert_eq!(baseline, webgl_only);
+    }
+
+    #[test]
+    fn native_isolation_true_native_webgl_false_build_flags_omit_isolate_origins() {
+        // Axis 1 alone still drops the isolation-disabling features from the
+        // launch flags, matching the pre-split behavior.
+        let flags = StealthProfile::spoofed()
+            .native_isolation(true)
+            .build_flags();
+        assert!(!flags.iter().any(|f| f.contains("IsolateOrigins")));
+        assert!(!flags.iter().any(|f| f.contains("site-per-process")));
     }
 
     #[test]
