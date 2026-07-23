@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.15.0] - 2026-07-23
+
+### Added
+
+- Split native_isolation's two concerns into separate opt-ins **(BREAKING)**
+
+
 ## [0.14.2] - 2026-07-23
 
 

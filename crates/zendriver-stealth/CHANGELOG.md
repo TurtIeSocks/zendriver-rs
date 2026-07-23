@@ -3,6 +3,14 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.9.0] - 2026-07-23
+
+### Added
+
+- Split native_isolation's two concerns into separate opt-ins **(BREAKING)**
+- Give fabricated WebGPU objects real prototype chains
+
+
 ## [0.8.6] - 2026-07-23
 
 

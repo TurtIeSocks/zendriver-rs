@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-07-23
+
+### Added
+
+- Give fabricated WebGPU objects real prototype chains
+
+
 ## [0.4.2] - 2026-07-23
 
 ### Added
