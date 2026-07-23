@@ -33,6 +33,10 @@ commit_parsers = [
     { message = "^fix", group = "Fixed" },
     { message = "^perf", group = "Performance" },
     { message = "^refactor", group = "Changed" },
+    # Label release-plz's synthetic dependency-only-bump commit (first-match-wins,
+    # so it must precede the generic ^chore skip) instead of leaving a pure
+    # lockstep version bump as a silent, contentless version header.
+    { message = '^chore: update Cargo\.(toml|lock) dependencies$', group = "Internal" },
     { message = "^docs", skip = true },
     { message = "^test", skip = true },
     { message = "^ci", skip = true },
