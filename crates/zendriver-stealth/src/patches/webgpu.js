@@ -29,10 +29,18 @@
 //       no usable GPU (there `requestAdapter()` just resolves null). Restoring
 //       that presence is the caller's explicit opt-in.
 //
-// Known v1 limitations (acceptable per scope):
-//   - the returned info / limits / features are plain objects, not real
-//     GPUAdapterInfo / GPUSupportedLimits / GPUSupportedFeatures instances
-//     (an `instanceof` check would tell); info omits
+// Coherence notes / remaining limitations (acceptable per scope):
+//   - `navigator.gpu`, the fabricated adapter, and its `.info` inherit the real
+//     GPU / GPUAdapter / GPUAdapterInfo prototypes (or a synthesized same-named
+//     constructor, installed as a global, when the WebGPU IDL is absent), so
+//     `instanceof` holds for all three. Their VALUES are own getters, not
+//     prototype getters like a genuine instance — a deeper
+//     Object.getOwnPropertyDescriptor probe still tells (unchanged from before);
+//   - `.limits` / `.features` are still a plain object / Set, not real
+//     GPUSupportedLimits / GPUSupportedFeatures instances — rebinding a
+//     caller-supplied SUBSET of ~30 limit fields to those classes risks a
+//     genuine brand-check throwing on the fields we did not override, a bigger
+//     change than this closes (tracked as a follow-up); info omits
 //     subgroupMinSize/subgroupMaxSize;
 //   - the Block path can only shadow navigator.gpu, it cannot make
 //     `'gpu' in navigator` false;
@@ -41,9 +49,7 @@
 //     cannot provide, so fabrication only makes `requestAdapter()` resolve a
 //     coherent adapter for detection scripts that stop there, never actual
 //     WebGPU rendering on a GPU-less host;
-//   - when case (b) synthesizes `navigator.gpu`, the synthetic object is a
-//     plain object, so `navigator.gpu instanceof GPU` is false (same class of
-//     limitation as the plain-object adapter above), and fabrication flips
+//   - when case (b) synthesizes `navigator.gpu`, fabrication flips
 //     `'gpu' in navigator` to true (coherent for a modern-Chrome persona, the
 //     caller's explicit choice — see case (b) above).
 (function (vendor, architecture, device, description, limits, features, mode, fabricate) {
@@ -59,8 +65,40 @@
 
   if (vendor === null) return;
 
+  // Get (or synthesize + install) the named WebGPU constructor's prototype so
+  // objects built with Object.create(...) pass `instanceof` (see the header's
+  // limitations note). When the real class exists — the WebGPU IDL is compiled
+  // into this Chrome build, even with no hardware adapter behind it — its
+  // prototype is reused directly. When the class is absent entirely, synthesize
+  // a minimal same-named constructor and install it as a (non-enumerable)
+  // global, mirroring how real Chrome always exposes the constructor whether or
+  // not a usable instance is available (so `typeof window.GPU === 'function'`
+  // stays true, coherent for a modern-Chrome persona). Values stay OWN getters
+  // on each instance below — we deliberately do NOT override getters on a real
+  // prototype here, so a real adapter passing through the case-(a) wrapper keeps
+  // its own limits/features.
+  function __zdGpuProto(globalName) {
+    var root = (typeof self !== 'undefined') ? self : window;
+    var Ctor = root[globalName];
+    if (typeof Ctor === 'function' && Ctor.prototype) return Ctor.prototype;
+    Ctor = __zdMark(function () {}, globalName, 0);
+    Ctor.prototype = {};
+    try {
+      Object.defineProperty(root, globalName, { value: Ctor, writable: true, enumerable: false, configurable: true });
+    } catch (e) {}
+    return Ctor.prototype;
+  }
+
   // Shared synthetic info / feature set used by both decorate and fabricate.
-  var info = { vendor: vendor, architecture: architecture, device: device || '', description: description || '', isFallbackAdapter: false };
+  // `info` inherits GPUAdapterInfo.prototype so `info instanceof GPUAdapterInfo`
+  // holds (closing the cheapest deep probe); its fields are own getters, whose
+  // values are always defined.
+  var info = Object.create(__zdGpuProto('GPUAdapterInfo'));
+  __zdGetter(info, 'vendor', function () { return vendor; }, { enumerable: true });
+  __zdGetter(info, 'architecture', function () { return architecture; }, { enumerable: true });
+  __zdGetter(info, 'device', function () { return device || ''; }, { enumerable: true });
+  __zdGetter(info, 'description', function () { return description || ''; }, { enumerable: true });
+  __zdGetter(info, 'isFallbackAdapter', function () { return false; }, { enumerable: true });
   var featureSet = null;
   if (features) {
     try { featureSet = new Set(features); } catch (e) { featureSet = null; }
@@ -96,11 +134,14 @@
   // absent, we simply fall through and return — no auto behavior.
   if (!fabricate) return;
   try {
-    // The synthetic adapter, shared by both fabrication cases.
-    var synthetic = { isFallbackAdapter: false };
+    // The synthetic adapter, shared by both fabrication cases. Inherits
+    // GPUAdapter.prototype (real or synthesized) so `synthetic instanceof
+    // GPUAdapter` holds; info/limits/features stay own getters.
+    var synthetic = Object.create(__zdGpuProto('GPUAdapter'));
     __zdGetter(synthetic, 'info', function () { return info; }, { enumerable: false });
     __zdGetter(synthetic, 'limits', function () { return limits || {}; }, { enumerable: false });
     __zdGetter(synthetic, 'features', function () { return featureSet || new Set(); }, { enumerable: false });
+    __zdGetter(synthetic, 'isFallbackAdapter', function () { return false; }, { enumerable: false });
     synthetic.requestDevice = __zdMark(function requestDevice() {
       return Promise.reject(new DOMException(
         'WebGPU device creation is not supported for this adapter.',
@@ -112,7 +153,11 @@
       // Case (b): navigator.gpu entirely absent → define a synthetic one on
       // Navigator.prototype (prototype accessor, like real Chrome — so
       // Object.getOwnPropertyDescriptor(navigator,'gpu') stays undefined).
-      var syntheticGpu = {};
+      // Inherits GPU.prototype (real or synthesized) so `navigator.gpu
+      // instanceof GPU` holds. requestAdapter / getPreferredCanvasFormat stay
+      // own methods — moving them onto GPU.prototype would mutate the real
+      // class globally; instanceof holds regardless.
+      var syntheticGpu = Object.create(__zdGpuProto('GPU'));
       syntheticGpu.requestAdapter = __zdMark(function requestAdapter() {
         return Promise.resolve(synthetic);
       }, 'requestAdapter', 0);

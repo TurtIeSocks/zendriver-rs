@@ -62,7 +62,12 @@ $defs:
         format: uint32
         minimum: 0
       native_isolation:
-        description: "Opt in to Chrome's real site isolation (`IsolateOrigins`/\n`site-per-process` stay enabled) and, for `spoof_*` profiles, skip\nthe WebGL vendor/renderer patch — the host's real WebGL renderer\npasses through unpatched. **Trade-off, not a strict stealth\nimprovement**: dropping the WebGL patch removes an anti-WAF\ncoherence defense (see `StealthProfile::native_isolation` rustdoc).\nOff (`false`/unset) by default — existing behavior unchanged."
+        description: "Opt in to Chrome's real site isolation (`IsolateOrigins`/\n`site-per-process` stay enabled). Affects **only** the launch flags — a\ntest-harness knob for Chrome's stock process-isolation boundary, not a\nstealth axis (see `StealthProfile::native_isolation` rustdoc). To skip\nthe WebGL/WebGPU identity patch, use [`native_webgl`](Self::native_webgl).\nOff (`false`/unset) by default — existing behavior unchanged."
+        type:
+          - boolean
+          - "null"
+      native_webgl:
+        description: "For `spoof_*` profiles, skip the WebGL vendor/renderer patch (and the\ncoupled WebGPU value/fabrication spoof) — the host's real WebGL/WebGPU\nidentity passes through unpatched. **Trade-off, not a strict stealth\nimprovement**: dropping the patch removes an anti-WAF coherence defense\n(see `StealthProfile::native_webgl` rustdoc). Independent of\n[`native_isolation`](Self::native_isolation); set both to reproduce the\npre-split bundle. Off (`false`/unset) by default — existing behavior\nunchanged."
         type:
           - boolean
           - "null"

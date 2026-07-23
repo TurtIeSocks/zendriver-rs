@@ -14,6 +14,9 @@
 //! ```
 
 #![cfg(feature = "integration-tests")]
+// Test-only: these headful checks panic!/assert on failure to surface a broken
+// shim loudly. Matches the convention on the other test files in this repo.
+#![allow(clippy::panic)]
 
 use std::time::Duration;
 
@@ -249,6 +252,16 @@ async fn fabricate_when_absent_synthesizes_navigator_gpu() {
               deviceRejected,
               preferredFormat: typeof navigator.gpu.getPreferredCanvasFormat === 'function'
                 ? navigator.gpu.getPreferredCanvasFormat() : null,
+              // Item 2: fabricated objects carry real prototype chains.
+              gpuIsInstance: (typeof GPU !== 'undefined' && navigator.gpu)
+                ? (navigator.gpu instanceof GPU) : null,
+              adapterIsInstance: (typeof GPUAdapter !== 'undefined' && a)
+                ? (a instanceof GPUAdapter) : null,
+              infoIsInstance: (typeof GPUAdapterInfo !== 'undefined' && a && a.info)
+                ? (a.info instanceof GPUAdapterInfo) : null,
+              // The patch installs the GPU constructor even when the IDL didn't
+              // expose it before, so this is a function after the patch runs.
+              gpuCtor: (typeof GPU === 'function'),
             };
         })()"#;
     let mut v = serde_json::Value::Null;
@@ -267,6 +280,23 @@ async fn fabricate_when_absent_synthesizes_navigator_gpu() {
     assert_eq!(
         v["present"], true,
         "fabricate_when_absent must make 'gpu' in navigator true: {v}"
+    );
+
+    // Item 2: the fabricated objects carry real prototype chains. When the
+    // WebGPU IDL exposes each class, `instanceof` must hold; the GPU
+    // constructor is installed by the patch even if the IDL did not expose it.
+    for (key, label) in [
+        ("gpuIsInstance", "navigator.gpu instanceof GPU"),
+        ("adapterIsInstance", "adapter instanceof GPUAdapter"),
+        ("infoIsInstance", "adapter.info instanceof GPUAdapterInfo"),
+    ] {
+        if !v[key].is_null() {
+            assert_eq!(v[key], true, "{label} must hold after fabrication: {v}");
+        }
+    }
+    assert_eq!(
+        v["gpuCtor"], true,
+        "the GPU constructor must be present after the patch runs: {v}"
     );
 
     // On a GPU-less host the synthetic adapter is what `requestAdapter()`

@@ -926,6 +926,31 @@ mod tests {
     }
 
     #[test]
+    fn webgpu_objects_built_via_prototype_helper_for_instanceof() {
+        // GPU objects must be built through the __zdGpuProto prototype helper so
+        // `instanceof` holds — not the old bare `var info = { vendor: ... }`
+        // object literal. All three helper calls are static template text
+        // (present regardless of the runtime fabricate flag).
+        let s = bootstrap_script(&Persona::default(), &mock_identity());
+        assert!(
+            s.contains("__zdGpuProto('GPUAdapterInfo')"),
+            "info must inherit GPUAdapterInfo.prototype: {s}"
+        );
+        assert!(
+            s.contains("__zdGpuProto('GPUAdapter')"),
+            "fabricated adapter must inherit GPUAdapter.prototype"
+        );
+        assert!(
+            s.contains("__zdGpuProto('GPU')"),
+            "synthetic navigator.gpu must inherit GPU.prototype"
+        );
+        assert!(
+            !s.contains("var info = { vendor:"),
+            "old plain-object info literal must be gone"
+        );
+    }
+
+    #[test]
     fn webgpu_none_everywhere_is_byte_for_byte_regression_guard() {
         // A `WebgpuSpec::default()` (all-None) must produce the exact same
         // bootstrap output as no spec at all (`persona.webgpu = None`) — the

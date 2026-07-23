@@ -174,11 +174,12 @@ pub struct WebglSpec {
 ///
 /// # v1 limitations
 ///
-/// - The decorated / fabricated `.info`, `.limits`, `.features` are **plain
-///   objects**, not real `GPUAdapterInfo` / `GPUSupportedLimits` /
-///   `GPUSupportedFeatures` instances — an `instanceof` check would tell.
-///   Likewise a synthesized `navigator.gpu` is a plain object, so
-///   `navigator.gpu instanceof GPU` is `false`.
+/// - `navigator.gpu`, the fabricated adapter, and its `.info` inherit the real
+///   `GPU` / `GPUAdapter` / `GPUAdapterInfo` prototypes (or a synthesized
+///   same-named constructor when the WebGPU IDL is absent), so `instanceof`
+///   holds for all three. Their `.limits` / `.features` are still a plain
+///   object / `Set`, not real `GPUSupportedLimits` / `GPUSupportedFeatures`
+///   instances — an `instanceof` check on those two still tells.
 /// - [`fabricate_when_absent`](Self::fabricate_when_absent)'s synthetic
 ///   adapter's `requestDevice()` **always rejects**. Faking a working
 ///   `GPUDevice` needs a real GPU behind it, which this patch cannot
@@ -249,7 +250,7 @@ pub struct WebgpuSpec {
     /// with nothing else is refused (silently, no-op) because there is nothing
     /// coherent to fabricate; this project never auto-invents fingerprint
     /// values. See the v1 limitations above for what fabrication does NOT
-    /// cover (no working `GPUDevice`; plain-object `instanceof`).
+    /// cover (no working `GPUDevice`; `limits`/`features` `instanceof`).
     pub fabricate_when_absent: Option<bool>,
 }
 
