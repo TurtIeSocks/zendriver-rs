@@ -147,6 +147,34 @@ impl<'tab> InterceptBuilder<'tab> {
         self
     }
 
+    /// Auto-respond to `Fetch.authRequired` challenges with the given
+    /// credentials, scoped to `Document`-type requests only.
+    ///
+    /// Equivalent to [`handle_auth`](Self::handle_auth) plus
+    /// `.pattern("*").resource(ResourceType::Document)`, packaged as its own
+    /// preset so a proxy/HTTP-auth-only caller doesn't have to discover — by
+    /// reading [`start`](Self::start)'s source — that leaving patterns unset
+    /// pauses *every* request on the page, not just the one carrying the auth
+    /// challenge.
+    ///
+    /// Narrowing to `Document` means only the main-frame navigation pauses and
+    /// round-trips through the interception actor; other requests (XHR,
+    /// subresources, and any parallel/pipelined connection that also needs
+    /// credentials) are not paused and will not have their auth challenge
+    /// answered by this builder. Use plain [`handle_auth`](Self::handle_auth)
+    /// (which falls back to a match-all pattern in [`start`](Self::start)) if
+    /// you need every connection's 407 covered.
+    #[must_use]
+    pub fn handle_auth_scoped_to_document(
+        self,
+        user: impl Into<String>,
+        pass: impl Into<String>,
+    ) -> Self {
+        self.handle_auth(user, pass)
+            .pattern("*")
+            .resource(ResourceType::Document)
+    }
+
     /// Push a new pattern entry with the given URL pattern string.
     ///
     /// Subsequent [`at_request`](Self::at_request) /
@@ -602,6 +630,70 @@ mod tests {
             "auth-only must send exactly one match-all pattern, never an empty array"
         );
         assert_eq!(arr[0]["urlPattern"], "*");
+        mock.reply(enable_id, json!({})).await;
+
+        drop(handle);
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn start_auth_scoped_to_document_sends_single_document_pattern() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+
+        let handle = InterceptBuilder::new(&sess)
+            .handle_auth_scoped_to_document("puser", "ppass")
+            .start();
+
+        let enable_id =
+            tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Fetch.enable"))
+                .await
+                .expect("actor did not send Fetch.enable within 2s");
+        let params = mock.last_sent()["params"].clone();
+        assert_eq!(params["handleAuthRequests"], true);
+        let arr = params["patterns"]
+            .as_array()
+            .expect("patterns must be a JSON array");
+        assert_eq!(arr.len(), 1, "scoped preset must send exactly one pattern");
+        assert_eq!(arr[0]["urlPattern"], "*");
+        assert_eq!(
+            arr[0]["resourceType"], "Document",
+            "scoped preset must narrow to the Document navigation — the difference from plain handle_auth"
+        );
+        mock.reply(enable_id, json!({})).await;
+
+        drop(handle);
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn handle_auth_scoped_to_document_composes_with_rules() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+
+        let builder = InterceptBuilder::new(&sess)
+            .block("*/ads/*")
+            .unwrap()
+            .handle_auth_scoped_to_document("puser", "ppass");
+        assert_eq!(
+            builder.rules_count(),
+            1,
+            "the preset must not clobber a rule registered before it in the chain"
+        );
+        let handle = builder.start();
+
+        let enable_id =
+            tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Fetch.enable"))
+                .await
+                .expect("actor did not send Fetch.enable within 2s");
+        let params = mock.last_sent()["params"].clone();
+        let arr = params["patterns"]
+            .as_array()
+            .expect("patterns must be a JSON array");
+        assert!(
+            arr.iter().any(|p| p["resourceType"] == "Document"),
+            "the Document-scoped auth pattern must survive alongside the block rule: {arr:?}"
+        );
         mock.reply(enable_id, json!({})).await;
 
         drop(handle);
