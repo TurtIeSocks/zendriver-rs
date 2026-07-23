@@ -8,6 +8,9 @@
 //! their `CHANGELOG.md`s with entries for features they never received. Each crate
 //! now has its own short README; these tests fail if the shared pointer returns.
 
+// Setup failures in a hygiene test legitimately panic to fail the test loudly.
+#![allow(clippy::panic)]
+
 use std::path::Path;
 
 const SIBLING_CRATES: &[&str] = &[
