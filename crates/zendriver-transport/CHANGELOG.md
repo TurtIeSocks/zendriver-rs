@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-07-23
+
+### Added
+
+- Hoist the observer surface into the facade; flag transport internal
+
+
 ## [0.2.2] - 2026-07-20
 
 ### Added
