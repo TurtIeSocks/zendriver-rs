@@ -53,7 +53,7 @@
 //!         println!("token: {reese84}")
 //!     }
 //!     ClearanceOutcome::ChallengeGone => println!("legacy cleared"),
-//!     ClearanceOutcome::AlreadyClear => println!("no challenge present"),
+//!     ClearanceOutcome::AlreadyClear { .. } => println!("no challenge present"),
 //!     ClearanceOutcome::TimedOut { last_surface } => {
 //!         println!("timed out; last_surface = {last_surface:?}")
 //!     }

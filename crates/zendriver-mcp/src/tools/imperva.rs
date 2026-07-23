@@ -131,9 +131,9 @@ pub async fn solve_imperva(
             outcome: Outcome::ChallengeGone,
             reese84: None,
         }),
-        Ok(ImpervaClearanceOutcome::AlreadyClear) => Ok(SolveImpervaOutput {
+        Ok(ImpervaClearanceOutcome::AlreadyClear { reese84, .. }) => Ok(SolveImpervaOutput {
             outcome: Outcome::AlreadyClear,
-            reese84: None,
+            reese84,
         }),
         // TimedOut is a lib-side success terminal; collapse it into the
         // success-channel `Outcome::Timeout` — see module docs.

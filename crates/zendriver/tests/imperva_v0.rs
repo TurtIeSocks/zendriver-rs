@@ -54,7 +54,7 @@ async fn imperva_bypass_env_driven_smoke() {
             outcome,
             ImpervaClearanceOutcome::TokenAcquired { .. }
                 | ImpervaClearanceOutcome::ChallengeGone
-                | ImpervaClearanceOutcome::AlreadyClear
+                | ImpervaClearanceOutcome::AlreadyClear { .. }
         ),
         "unexpected outcome: {outcome:?}"
     );
