@@ -138,9 +138,13 @@ pub use window::{WindowBounds, WindowState};
 // opt-in knob whose whole point is caller discoverability — see its rustdoc.
 pub use zendriver_stealth::{Persona, PersonaBuilder, Seed, Strategy, Surface, WebgpuSpec};
 
-// Re-export selected transport types for advanced users.
+// Re-export selected transport types for advanced users. Includes the observer
+// surface (TargetObserver + supporting types) so a consumer can implement a
+// custom target-attach hook without depending on zendriver-transport directly —
+// the crate SEMVER.md steers them away from.
 pub use zendriver_transport::{
-    AccountedRawEvent, CallError, Connection, SessionHandle, TransportError,
+    AccountedRawEvent, CallError, Connection, ObserverError, ObserverFailurePolicy, PausedSession,
+    SessionHandle, TargetInfo, TargetObserver, TransportError,
 };
 
 /// Network interception API re-exports.
