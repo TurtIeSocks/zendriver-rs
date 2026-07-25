@@ -19,10 +19,12 @@ use serde::{Deserialize, Serialize};
 /// section). The two decisions are therefore coupled and owned together here,
 /// rather than left to the caller to combine correctly.
 ///
-/// ```ignore
-/// use zendriver::GpuBackend;
-/// // Use the host's real GPU instead of a software rasterizer.
-/// let builder = zendriver::Browser::builder().gpu_backend(GpuBackend::Native);
+/// ```
+/// use zendriver_stealth::GpuBackend;
+/// // Selecting a backend never probes the host — the caller decides.
+/// let flags = GpuBackend::Native.angle_flags();
+/// assert_eq!(flags[0], "--use-gl=angle");
+/// assert!(!GpuBackend::Native.allows_disable_gpu());
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
