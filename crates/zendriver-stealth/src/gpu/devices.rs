@@ -195,7 +195,12 @@ const NVIDIA_D3D11: DeviceRow = DEVICES[3];
 ///
 /// Three tiers ship today (SwiftShader, Apple Metal, D3D11 FL11+), so `None`
 /// is still expected for the backends none of them covers — a Linux Vulkan or
-/// desktop-GL renderer, or a D3D9/FL10 string. Callers that need a value
+/// desktop-GL renderer, or a D3D9 string. A **feature-level-10** D3D11
+/// renderer does *not* answer `None`: ANGLE emits the same trailing `, D3D11)`
+/// tag at every feature level, so an FL10 string matches the D3D11 row's
+/// `match_token` and is served the FL11 numbers silently. Telling the two
+/// apart needs an FL10 capture to compare against, which nobody has taken.
+/// Callers that need a value
 /// regardless should reach for [`default_device`] explicitly rather than have
 /// one guessed here. Adding a tier means capturing it on that hardware, not
 /// inventing values for an existing row.
