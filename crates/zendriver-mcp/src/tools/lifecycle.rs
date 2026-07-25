@@ -126,18 +126,44 @@ const fn default_true() -> bool {
 
 /// Schema-only mirror of [`zendriver::GpuBackend`], which lives in
 /// `zendriver-stealth` and doesn't derive `schemars::JsonSchema` (a
-/// dependency that crate has no other reason to take on). Never
-/// constructed — referenced only via `#[schemars(with = "GpuBackendSchema")]`
-/// so the generator can describe the field's shape without requiring the
-/// real type to implement the trait. Variant names/casing must track
-/// [`zendriver::GpuBackend`] exactly.
-#[derive(JsonSchema)]
+/// dependency that crate has no other reason to take on). Never constructed
+/// in non-test code — referenced only via
+/// `#[schemars(with = "GpuBackendSchema")]` so the generator can describe the
+/// field's shape without requiring the real type to implement the trait.
+/// Kept in sync with [`zendriver::GpuBackend`] by [`schema_variant_for`]
+/// (compile-time exhaustiveness) and a serde-name equality test, not by
+/// convention — see that function's doc comment.
+#[derive(Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-#[allow(dead_code)]
+#[allow(dead_code)] // constructed only by schema_variant_for, which itself
+// is only called from the #[cfg(test)] module below — the plain `--lib`
+// target (compiled without `cfg(test)`) never calls it. `allow(dead_code)`
+// silences only the unused-code *lint*; it has no effect on match
+// exhaustiveness, which is a hard compiler error (E0004) checked
+// independently of any lint attribute, so the guard below stays fully live.
 enum GpuBackendSchema {
     Disabled,
     SwiftShader,
     Native,
+}
+
+/// Compile-time guard tying [`GpuBackendSchema`] to the real
+/// [`zendriver::GpuBackend`].
+///
+/// This match is deliberately exhaustive with no wildcard arm: adding a
+/// variant to `GpuBackend` fails to compile here, which is the only thing
+/// forcing whoever adds it to also extend the advertised MCP schema. Without
+/// this, the schema would silently keep advertising the old variant set while
+/// the server accepted the new one. Only called from the test module below
+/// (hence `#[allow(dead_code)]`), but exhaustiveness is checked at the match
+/// site regardless of whether the function is ever called.
+#[allow(dead_code)]
+fn schema_variant_for(backend: zendriver::GpuBackend) -> GpuBackendSchema {
+    match backend {
+        zendriver::GpuBackend::Disabled => GpuBackendSchema::Disabled,
+        zendriver::GpuBackend::SwiftShader => GpuBackendSchema::SwiftShader,
+        zendriver::GpuBackend::Native => GpuBackendSchema::Native,
+    }
 }
 
 /// Output of `browser_open`.
@@ -598,6 +624,24 @@ mod tests {
     fn browser_open_input_parses_swift_shader_gpu_backend() {
         let input: OpenInput = serde_json::from_str(r#"{"gpu_backend":"swift_shader"}"#).unwrap();
         assert_eq!(input.gpu_backend, zendriver::GpuBackend::SwiftShader);
+    }
+
+    #[test]
+    fn schema_shadow_enum_serializes_identically_to_the_real_gpu_backend() {
+        // The shadow enum only earns its keep if its wire names match the real
+        // type's exactly — that string is what MCP clients validate against.
+        for backend in [
+            zendriver::GpuBackend::Disabled,
+            zendriver::GpuBackend::SwiftShader,
+            zendriver::GpuBackend::Native,
+        ] {
+            let real = serde_json::to_string(&backend).unwrap();
+            let shadow = serde_json::to_string(&schema_variant_for(backend)).unwrap();
+            assert_eq!(
+                real, shadow,
+                "shadow schema name drifted from the real GpuBackend for {backend:?}"
+            );
+        }
     }
 
     #[tokio::test]
