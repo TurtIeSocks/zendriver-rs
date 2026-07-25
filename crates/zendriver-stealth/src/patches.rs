@@ -150,6 +150,7 @@ fn bootstrap_script_impl(persona: &Persona, identity: &Fingerprint, spoof_webgl:
         &mut body,
         persona.webgpu.as_ref(),
         persona.webgl.as_ref(),
+        persona.gpu.as_ref(),
         spoof_webgl,
     );
     push_fonts(&mut body, persona.fonts.as_ref(), seed);
@@ -237,6 +238,24 @@ fn json_or_null(v: Option<&String>) -> String {
     )
 }
 
+/// The GPU renderer string the persona claims, finest-grained layer first:
+/// the [`WebglSpec`]'s, then a pinned [`Persona::gpu`]'s, then the default
+/// device row.
+///
+/// One function because both GPU surfaces resolve it: WebGL serves it (and
+/// picks its capability tier from it), and WebGPU derives its adapter
+/// vendor/architecture from it. Resolving it twice is how the two drift onto
+/// different GPUs — `gpu::devices` exists precisely so one renderer drives
+/// both.
+fn resolved_renderer<'a>(spec: Option<&'a WebglSpec>, gpu: Option<&'a GpuProfile>) -> &'a str {
+    spec.and_then(|s| s.unmasked_renderer.as_deref())
+        .or_else(|| {
+            gpu.map(|g| g.unmasked_renderer.as_str())
+                .filter(|r| !r.is_empty())
+        })
+        .unwrap_or(crate::gpu::devices::DEFAULT_RENDERER)
+}
+
 /// Append the WebGL surface patch, substituting one resolved profile.
 ///
 /// Three layers, coarsest first, each overlaying the last — the precedence
@@ -265,16 +284,7 @@ fn push_webgl(
     if strat == Strategy::Native {
         return;
     }
-    // Same precedence as everything else, finest-grained first. The renderer
-    // selects the tier as well as being served, so the name and the numbers
-    // behind it are drawn from one layer rather than two.
-    let renderer = spec
-        .and_then(|s| s.unmasked_renderer.as_deref())
-        .or_else(|| {
-            gpu.map(|g| g.unmasked_renderer.as_str())
-                .filter(|r| !r.is_empty())
-        })
-        .unwrap_or(crate::gpu::devices::DEFAULT_RENDERER);
+    let renderer = resolved_renderer(spec, gpu);
     // `device_for_renderer` returns None when no shipped tier matches. Only
     // SwiftShader and Apple Metal tiers exist today, so a D3D11-family
     // renderer lands here routinely. Falling back means serving that
@@ -323,24 +333,24 @@ fn push_webgl(
 }
 
 /// Append the WebGPU coherence patch. Adapter info defaults to values derived
-/// from the persona's WebGL renderer (or the hardcoded Intel default the
-/// webgl block falls back to), so navigator.gpu agrees with WebGL — unless
-/// the caller's [`WebgpuSpec`] explicitly overrides `vendor`/`architecture`.
-/// Omitted under `Native`.
+/// from [`resolved_renderer`] — the same string the WebGL patch serves, so
+/// `navigator.gpu` agrees with WebGL — unless the caller's [`WebgpuSpec`]
+/// explicitly overrides `vendor`/`architecture`. Omitted under `Native`.
 ///
 /// `spoof_webgl` reflects whether the WebGL value patch ran. When it is
 /// `false` (the native-WebGL opt-in — [`bootstrap_script_native_webgl`]) the
 /// real WebGL renderer passes through unpatched, so a spoofed WebGPU *value*
-/// adapter — derived from the WebGL renderer we did NOT apply, or the
-/// hardcoded default below — would disagree with the real GPU. That cross-API
-/// mismatch is the exact coherence tell the opt-in exists to avoid, so the
-/// value spoof (and any fabrication) is skipped too and the real
-/// `navigator.gpu` adapter passes through. An explicit `Block` (hide
-/// `navigator.gpu`) is renderer-neutral and stays honored regardless.
+/// adapter — derived from the renderer we did NOT apply — would disagree with
+/// the real GPU. That cross-API mismatch is the exact coherence tell the
+/// opt-in exists to avoid, so the value spoof (and any fabrication) is skipped
+/// too and the real `navigator.gpu` adapter passes through. An explicit
+/// `Block` (hide `navigator.gpu`) is renderer-neutral and stays honored
+/// regardless.
 fn push_webgpu(
     out: &mut String,
     spec: Option<&WebgpuSpec>,
     webgl: Option<&WebglSpec>,
+    gpu: Option<&GpuProfile>,
     spoof_webgl: bool,
 ) {
     use crate::gpu::devices::adapter_for_renderer;
@@ -372,12 +382,11 @@ fn push_webgpu(
         return;
     }
 
-    const DEFAULT_RENDERER: &str =
-        "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)";
-    let renderer = webgl
-        .and_then(|w| w.unmasked_renderer.as_deref())
-        .unwrap_or(DEFAULT_RENDERER);
-    let derived = adapter_for_renderer(renderer);
+    // The same renderer the WebGL patch serves, resolved the same way. This
+    // used to fall back to a local Intel string while the WebGL side fell back
+    // to the Apple device row, so a persona that pinned no renderer reported
+    // an Apple GPU to WebGL and an Intel one to WebGPU.
+    let derived = adapter_for_renderer(resolved_renderer(webgl, gpu));
 
     let vendor = spec
         .and_then(|s| s.vendor.clone())
@@ -1201,6 +1210,45 @@ mod tests {
         assert!(
             s.contains("\"metal-3\""),
             "validated architecture for Apple Metal (real Chrome probe)"
+        );
+    }
+
+    #[test]
+    fn webgl_and_webgpu_report_the_same_gpu_with_no_persona_spec() {
+        // The two surfaces used to fall back to different renderers: the WebGL
+        // block to the Apple device row, the WebGPU block to a local Intel
+        // string. A page reading both saw an Apple GPU and an Intel adapter in
+        // the same document — a cross-API tell in the *default* configuration.
+        let s = bootstrap_script(&Persona::default(), &mock_identity());
+        assert!(
+            s.contains("ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro"),
+            "the default WebGL renderer is the Apple device row"
+        );
+        assert!(
+            s.contains("\"apple\"") && s.contains("\"metal-3\""),
+            "the WebGPU adapter must derive from that same renderer"
+        );
+        assert!(
+            !s.contains("\"intel\""),
+            "no Intel adapter beside an Apple WebGL renderer"
+        );
+    }
+
+    #[test]
+    fn a_pinned_gpu_profile_drives_the_webgpu_adapter_too() {
+        // `Persona::gpu` is documented as one coherent GPU identity covering
+        // both surfaces, so its renderer has to reach the WebGPU adapter as
+        // well — not just the WebGL values.
+        let mut pinned = GpuProfile::empty();
+        pinned.unmasked_renderer = "ANGLE (NVIDIA, NVIDIA GeForce RTX 4090, D3D11)".into();
+        let p = Persona {
+            gpu: Some(pinned),
+            ..Persona::default()
+        };
+        let s = bootstrap_script(&p, &mock_identity());
+        assert!(
+            s.contains("\"nvidia\"") && s.contains("\"lovelace\""),
+            "the WebGPU adapter must derive from the pinned renderer"
         );
     }
 
