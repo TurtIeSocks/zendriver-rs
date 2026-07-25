@@ -42,6 +42,9 @@
 //! - `precision` — object of shader precision formats, keyed by
 //!   `VERTEX_SHADER/<level>` / `FRAGMENT_SHADER/<level>` (e.g.,
 //!   `"VERTEX_SHADER/HIGH_FLOAT": [127, 127, 24]` for `rangeMin, rangeMax, precision`).
+//! - `enums` — object mapping each `params` key to its GL enum number (e.g.,
+//!   `"MAX_TEXTURE_SIZE": 3379`). The runtime patch receives the number from
+//!   `getParameter(3379)` and needs this to map it back to a name.
 //!
 //! This output is the input format for GPU tier tables: capture it on a real
 //! device, then hand it to the profile dataset.
@@ -103,6 +106,13 @@ const PROBE_JS: &str = r#"
       for (const pt of ['LOW_FLOAT','MEDIUM_FLOAT','HIGH_FLOAT','LOW_INT','MEDIUM_INT','HIGH_INT']) {
         const f = gl.getShaderPrecisionFormat(gl[st], gl[pt]);
         if (f) r.precision[st + '/' + pt] = [f.rangeMin, f.rangeMax, f.precision];
+      }
+    }
+    r.enums = {};
+    for (const name of Object.keys(Object.getPrototypeOf(gl))) {
+      const val = gl[name];
+      if (typeof val === 'number' && Object.prototype.hasOwnProperty.call(r.params, name)) {
+        r.enums[name] = val;
       }
     }
     return r;
