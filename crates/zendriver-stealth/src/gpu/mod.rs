@@ -12,12 +12,20 @@ pub(crate) mod types;
 pub use types::{GlParam, Provenance, ShaderPrecision};
 use types::{GlParamRef, Tier};
 
-/// Everything a page can read about one GPU, fully resolved.
+/// One GPU's identity and static capabilities, fully resolved.
 ///
 /// Produced by flattening the shared base table, the tier's overrides, the
 /// device row, and any caller-supplied spec. Callers only ever see this
 /// flattened form, so the internal base/override split can change without
 /// breaking anyone.
+///
+/// The parameter maps hold *device capabilities* only — the values that are
+/// implementation-fixed and differ per GPU. Per-context mutable state
+/// (`VIEWPORT`, `BLEND`, the `STENCIL_*`/`PACK_*`/`UNPACK_*` families, ...)
+/// is deliberately absent so it delegates to the real backend; freezing it
+/// would contradict the page's own GL calls. A caller may still pin such a
+/// key through [`overlay`](Self::overlay) — nothing here forbids it — but the
+/// shipped tiers never do.
 ///
 /// Derives `Serialize`/`Deserialize` because [`Persona`](crate::Persona) does
 /// (it round-trips through JSON as `browser_fingerprint_generate`'s return
@@ -95,12 +103,16 @@ fn lookup<'a, V>(table: &'a [(&str, V)], key: &str) -> Option<&'a V> {
 
 /// Merge one context version's base table with a tier's overrides.
 ///
-/// The two context versions are kept apart deliberately. WebGL1 exposes 82
-/// parameters and WebGL2 exposes up to 132 (132 on Metal, 130 on SwiftShader,
-/// which lacks `DRAW_BUFFER6`/`7` because its `MAX_DRAW_BUFFERS` is 6);
-/// serving the WebGL2 set to a WebGL1
-/// context would answer enums that context has no constant for, where real
-/// Chrome returns `null` and raises `INVALID_ENUM`.
+/// The two context versions are kept apart deliberately: a WebGL1 context
+/// serves 18 capabilities and a WebGL2 context 47, and serving the WebGL2 set
+/// to a WebGL1 context would answer enums that context has no constant for,
+/// where real Chrome returns `null` and raises `INVALID_ENUM`.
+///
+/// Those counts are the *static device capabilities* out of the 82 and up-to-132
+/// parameters the captures enumerate. The remainder is per-context mutable
+/// state and is deliberately absent from the tables, so it delegates to the
+/// real backend — see `gpu-tier-gen`'s `SERVED_CAPS` for the rule and
+/// `DELEGATED_PARAMS` for why each excluded name is excluded.
 fn flatten(
     base: &[(&str, GlParamRef)],
     overrides: &[(&str, &[(&str, GlParamRef)])],
@@ -326,29 +338,53 @@ mod tests {
 
     #[test]
     fn base_values_reach_every_tier() {
-        // A param both tiers agreed on lives only in base; resolution must
-        // still surface it, or ~104 params would silently vanish.
-        let sw = profile_for_tier(types::Tier::SwiftShader);
-        let mt = profile_for_tier(types::Tier::MetalAppleFamily3);
-        assert!(
-            sw.params_webgl2.len() > 100,
-            "got {}",
-            sw.params_webgl2.len()
-        );
-        assert!(
-            mt.params_webgl2.len() > 100,
-            "got {}",
-            mt.params_webgl2.len()
-        );
+        // A capability both tiers agreed on lives only in base; resolution
+        // must still surface it, or the ~19 shared WebGL2 capabilities would
+        // silently vanish and fall through to the real backend.
+        for tier in types::Tier::ALL {
+            let p = profile_for_tier(*tier);
+            // MAX_3D_TEXTURE_SIZE and MAX_SAMPLES are identical on both tiers,
+            // so they exist only in the base table.
+            assert_eq!(p.params_webgl2["MAX_3D_TEXTURE_SIZE"], GlParam::Int(2048));
+            assert_eq!(p.params_webgl2["MAX_SAMPLES"], GlParam::Int(4));
+        }
     }
 
     #[test]
-    fn draw_buffer_params_do_not_leak_across_tiers() {
-        // DRAW_BUFFER6/7 exist only where MAX_DRAW_BUFFERS allows.
-        let sw = profile_for_tier(types::Tier::SwiftShader);
-        let mt = profile_for_tier(types::Tier::MetalAppleFamily3);
-        assert!(!sw.params_webgl2.contains_key("DRAW_BUFFER6"));
-        assert!(mt.params_webgl2.contains_key("DRAW_BUFFER6"));
+    fn per_context_mutable_state_is_never_table_served() {
+        // The C1 regression guard at the Rust layer: `getParameter` answers
+        // both static device capabilities and per-context mutable state, and
+        // only the first may come from a table. A frozen `BLEND` contradicts
+        // the `gl.enable(gl.BLEND)` the page just called, and a frozen
+        // `VIEWPORT` contradicts `gl.drawingBufferWidth` after a canvas
+        // resize. Absent from the map is all it takes: `webgl.js` falls
+        // through to the real backend for any name the table does not carry.
+        for tier in types::Tier::ALL {
+            let p = profile_for_tier(*tier);
+            for name in [
+                "BLEND",                      // gl.enable / gl.disable
+                "VIEWPORT",                   // gl.viewport, and canvas resize
+                "SCISSOR_BOX",                // gl.scissor
+                "COLOR_CLEAR_VALUE",          // gl.clearColor
+                "STENCIL_REF",                // gl.stencilFunc
+                "UNPACK_FLIP_Y_WEBGL",        // gl.pixelStorei
+                "ACTIVE_TEXTURE",             // gl.activeTexture
+                "DRAW_BUFFER0",               // gl.drawBuffers
+                "STENCIL_BITS",               // getContext({stencil: true})
+                "SAMPLES",                    // getContext({antialias: false})
+                "COMPRESSED_TEXTURE_FORMATS", // grows as extensions enable
+            ] {
+                for (version, params) in
+                    [("WebGL1", &p.params_webgl1), ("WebGL2", &p.params_webgl2)]
+                {
+                    assert!(
+                        !params.contains_key(name),
+                        "{tier:?} serves {name} to a {version} context; it is mutable state, \
+                         not a device capability, and must be delegated"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -385,10 +421,40 @@ mod tests {
         let js: serde_json::Value = serde_json::from_str(&profile_to_js(&p)).unwrap();
         assert_eq!(js["params2"]["MAX_VIEWPORT_DIMS"]["t"], "i32pair");
         assert_eq!(js["params2"]["ALIASED_POINT_SIZE_RANGE"]["t"], "f32pair");
-        assert_eq!(js["params2"]["COMPRESSED_TEXTURE_FORMATS"]["t"], "u32list");
+        assert_eq!(js["params2"]["MAX_TEXTURE_LOD_BIAS"]["t"], "f");
         assert_eq!(js["params2"]["MAX_TEXTURE_SIZE"]["t"], "i");
         assert_eq!(js["params2"]["VERSION"]["t"], "s");
+    }
+
+    #[test]
+    fn serialized_profile_tags_the_shapes_only_a_caller_can_supply() {
+        // The served capabilities are all scalars, strings, and int/float
+        // pairs — every boolean, quad, and list `getParameter` answers is
+        // mutable state, and therefore delegated. Those shapes still have to
+        // serialize correctly, because a caller can pin any of them through a
+        // `GpuProfile` overlay.
+        let p = GpuProfile::empty().overlay(GpuProfile {
+            params_webgl2: [
+                ("BLEND".to_string(), GlParam::Bool(true)),
+                ("VIEWPORT".to_string(), GlParam::IntQuad([0, 0, 800, 600])),
+                (
+                    "COLOR_CLEAR_VALUE".to_string(),
+                    GlParam::FloatQuad([0.0, 0.0, 0.0, 1.0]),
+                ),
+                (
+                    "COMPRESSED_TEXTURE_FORMATS".to_string(),
+                    GlParam::IntList(vec![33776]),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            ..GpuProfile::empty()
+        });
+        let js: serde_json::Value = serde_json::from_str(&profile_to_js(&p)).unwrap();
         assert_eq!(js["params2"]["BLEND"]["t"], "b");
+        assert_eq!(js["params2"]["VIEWPORT"]["t"], "i32quad");
+        assert_eq!(js["params2"]["COLOR_CLEAR_VALUE"]["t"], "f32quad");
+        assert_eq!(js["params2"]["COMPRESSED_TEXTURE_FORMATS"]["t"], "u32list");
     }
 
     #[test]

@@ -91,19 +91,35 @@ pub(crate) fn device_for_renderer(renderer: &str) -> Option<DeviceRow> {
     DEVICES.iter().copied().find(|d| r.contains(d.match_token))
 }
 
-/// Extensions whose objects carry nothing but constants, so a synthesized
-/// stub is indistinguishable from the real thing. Functional extensions are
-/// deliberately absent: those are only ever claimed when the backend really
-/// provides them, so a stub would be a lie the page can catch by calling it.
+/// Extensions that may be claimed even where the backend lacks them, because
+/// a synthesized stub is indistinguishable from the real object.
+///
+/// The bar is narrow, and both halves of it matter: the extension object must
+/// carry constants **and nothing else in the API may consume them**. An
+/// extension whose constants feed some other call is not inert, because the
+/// stub satisfies `getExtension` while that other call still fails — a
+/// contradiction the page reaches in one line.
+///
+/// [`WEBGL_debug_renderer_info`] qualifies in the strict sense that matters
+/// here: its two constants are consumed by `getParameter`, and the patch
+/// serves both of them from the tier profile, so the stub is backed all the
+/// way through.
+///
+/// `EXT_texture_filter_anisotropic` deliberately does **not** qualify, and was
+/// removed after being listed here: its constants are consumed by
+/// `getParameter` **and** `texParameterf`, and neither is table-served. On a
+/// backend without it, the claimed list named it, `getExtension` handed over a
+/// stub, and `getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT)` answered
+/// `null` with `INVALID_ENUM` — exactly the contradiction this rule exists to
+/// prevent. It is now claimed only where the backend really provides it, like
+/// every other functional extension.
+///
+/// [`WEBGL_debug_renderer_info`]: https://registry.khronos.org/webgl/extensions/WEBGL_debug_renderer_info/
 pub(crate) fn inert_stubs() -> serde_json::Value {
     serde_json::json!({
         "WEBGL_debug_renderer_info": {
             "UNMASKED_VENDOR_WEBGL": 37445,
             "UNMASKED_RENDERER_WEBGL": 37446
-        },
-        "EXT_texture_filter_anisotropic": {
-            "TEXTURE_MAX_ANISOTROPY_EXT": 34046,
-            "MAX_TEXTURE_MAX_ANISOTROPY_EXT": 34047
         }
     })
 }
@@ -321,6 +337,24 @@ mod tests {
             device_for_renderer(intel).map(|d| d.tier),
             Some(Tier::SwiftShader),
             "a real Intel GPU must never resolve to the software rasterizer's values"
+        );
+    }
+
+    #[test]
+    fn only_extensions_nothing_else_consumes_are_claimed_unconditionally() {
+        let stubs = inert_stubs();
+        let stubs = stubs.as_object().expect("inert stubs is an object");
+        // The unmasked pair is served from the tier profile, so the stub is
+        // backed all the way through.
+        assert!(stubs.contains_key("WEBGL_debug_renderer_info"));
+        // Not inert: getParameter and texParameterf both consume its
+        // constants, and neither is table-served. Claiming it on a backend
+        // that lacks it yields getExtension -> stub but
+        // getParameter(MAX_TEXTURE_MAX_ANISOTROPY_EXT) -> null + INVALID_ENUM.
+        assert!(
+            !stubs.contains_key("EXT_texture_filter_anisotropic"),
+            "EXT_texture_filter_anisotropic is not inert; it must be claimed only where the \
+             backend really provides it"
         );
     }
 

@@ -59,6 +59,10 @@ fn pair_min(p: &GpuProfile, k: &str) -> Option<i64> {
 ///   spec only defines `DRAW_BUFFER0` through `DRAW_BUFFER{MAX_DRAW_BUFFERS -
 ///   1}`; a driver has no backing constant for the rest, so a real
 ///   `getParameter` call for one throws `INVALID_ENUM` rather than answering.
+///   The tier tables no longer carry `DRAW_BUFFERn` at all — it is written by
+///   `drawBuffers()`, so it is delegated to the real backend — which leaves
+///   this check guarding the one place the pair can still be set
+///   incoherently: a caller-supplied [`GpuProfile`] overlay.
 pub(crate) fn check_coherence(p: &GpuProfile) -> Result<(), String> {
     if let (Some(tex), Some(vp)) = (int(p, "MAX_TEXTURE_SIZE"), pair_min(p, "MAX_VIEWPORT_DIMS")) {
         if vp < tex {
@@ -176,6 +180,9 @@ mod tests {
     fn draw_buffer_params_beyond_max_draw_buffers_are_rejected() {
         let mut p = profile_for_tier(Tier::SwiftShader);
         // SwiftShader has MAX_DRAW_BUFFERS = 6, so DRAW_BUFFER6 must not exist.
+        // The tier tables never produce this pairing (DRAW_BUFFERn is
+        // delegated), so the insert models the case that can still reach it:
+        // a caller pinning DRAW_BUFFER6 through a GpuProfile overlay.
         p.params_webgl2
             .insert("DRAW_BUFFER6".into(), GlParam::Int(0));
         assert!(check_coherence(&p).is_err());
@@ -188,18 +195,35 @@ mod tests {
 
     // --- completeness (spec invariant 1) ------------------------------------
 
+    /// Served capabilities per context version, from `gpu-tier-gen`'s
+    /// `SERVED_CAPS` intersected with what each context reports: 18 of the 82
+    /// parameters a WebGL1 context exposes, 47 of the up-to-132 a WebGL2 one
+    /// does. The rest is per-context mutable state, which the tables must not
+    /// carry — see `SERVED_CAPS` for the rule and `DELEGATED_PARAMS` for the
+    /// reason each one is disqualified.
+    const SERVED_WEBGL1: usize = 18;
+    const SERVED_WEBGL2: usize = 47;
+
     #[test]
-    fn every_tier_covers_the_whole_measured_parameter_surface() {
-        // The captures enumerated 82 WebGL1 and ~132 WebGL2 params. A tier
-        // that resolves materially fewer means the base/override split dropped
-        // entries, and every dropped param falls through to the real backend
-        // — which is exactly the leak this work exists to close.
+    fn every_tier_covers_the_whole_served_capability_surface() {
+        // Both directions matter. Resolving *fewer* means the base/override
+        // split dropped entries, and a dropped capability falls through to the
+        // real backend — the leak this work exists to close. Resolving *more*
+        // means mutable state crept back into the tables, which freezes values
+        // the page just wrote — the regression C1 was reported against.
         for &tier in Tier::ALL {
             let p = profile_for_tier(tier);
-            assert!(
-                p.params_webgl2.len() >= 130,
-                "tier {tier:?} resolves only {} WebGL2 params; expected >= 130",
+            assert_eq!(
+                p.params_webgl2.len(),
+                SERVED_WEBGL2,
+                "tier {tier:?} resolves {} WebGL2 params, expected {SERVED_WEBGL2}",
                 p.params_webgl2.len()
+            );
+            assert_eq!(
+                p.params_webgl1.len(),
+                SERVED_WEBGL1,
+                "tier {tier:?} resolves {} WebGL1 params, expected {SERVED_WEBGL1}",
+                p.params_webgl1.len()
             );
             assert_eq!(
                 p.precision.len(),

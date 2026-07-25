@@ -1,11 +1,27 @@
 // Coherent WebGL surface driven by one substituted profile object.
 //
-// Every value a fingerprinter can read comes from the table: the two
+// The table serves the values that identify the *device*: the two
 // DEBUG_renderer_info UNMASKED strings (only once that extension has been
-// fetched, exactly as Chrome gates them), the plain VENDOR/RENDERER, every
-// spec-defined getParameter enum, getShaderPrecisionFormat, and a
-// per-context-version extension list. Enums outside the table fall through to
-// the real backend, which is correct for vendor-specific enums we do not model.
+// fetched, exactly as Chrome gates them), the plain VENDOR/RENDERER, the
+// static capability enums (MAX_*, ALIASED_*_RANGE, SUBPIXEL_BITS, the version
+// strings, ...), getShaderPrecisionFormat, and a per-context-version extension
+// list.
+//
+// Everything else falls through to the real backend, which is not a gap but
+// the design. `getParameter` also answers per-context *mutable state* —
+// VIEWPORT, SCISSOR_BOX, BLEND, every STENCIL_*/PACK_*/UNPACK_*, DRAW_BUFFERn,
+// and the rest — plus values fixed by the context attributes the page asked
+// for (RED_BITS, STENCIL_BITS, SAMPLES, ...) and the extension-dependent
+// COMPRESSED_TEXTURE_FORMATS. None of those carry device entropy (every real
+// Chrome reports the same defaults), and serving them from a table is a live
+// tell rather than a spoof: `gl.enable(gl.BLEND); gl.getParameter(gl.BLEND)`
+// would answer false forever, a resized canvas would report the stale
+// [0, 0, 300, 150] viewport beside an 800-wide drawingBufferWidth, and every
+// state-caching renderer that saves and restores through getParameter would
+// restore the wrong state. The Rust side (`gpu-tier-gen`'s SERVED_CAPS) is
+// what enforces the split; no branch is needed here, because a name the table
+// does not carry already delegates — the same path an unknown vendor-specific
+// enum takes.
 //
 // Why per-context extension lists: about sixteen WebGL1 extensions are core in
 // WebGL2 and a real WebGL2 context does not list them. Serving one array to
@@ -252,8 +268,10 @@
         // A functional extension is claimed only where the backend really
         // provides it, so every claimed method actually works — a stub that
         // lies about a capability the page then CALLS is worse than not
-        // claiming it. Inert extensions carry nothing but constants, so there
-        // is nothing to break and they are claimed unconditionally.
+        // claiming it. The inert set is claimed unconditionally, and its bar
+        // is narrow: the object must carry constants AND nothing else in the
+        // API may consume them, or the stub satisfies getExtension while the
+        // consuming call still fails. See `gpu::devices::inert_stubs`.
         var out = [];
         for (var j = 0; j < exts.length; j++) {
           if (realSet[exts[j].toLowerCase()] || INERT_STUBS[exts[j]]) out.push(exts[j]);

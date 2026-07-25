@@ -47,6 +47,235 @@ pub fn gl_type_for(name: &str) -> GlType {
     }
 }
 
+/// Parameters the tier tables serve: static device capabilities.
+///
+/// `getParameter` answers two categories, and the probe
+/// (`crates/zendriver/examples/probe_gpu.rs`) captures both indiscriminately
+/// because it walks the context prototype. Only this first category may be
+/// table-served:
+///
+/// - **Static device capability** — implementation-fixed for the life of the
+///   context and unchangeable by any GL call or context attribute. These
+///   differ per device and carry the fingerprint entropy. Listed here.
+/// - **Per-context mutable state** — the current blend/stencil/scissor/pixel-
+///   store/viewport settings. Every real Chrome reports the same defaults, so
+///   they carry no entropy, and they change as the page draws. Listed in
+///   [`DELEGATED_PARAMS`] and emitted nowhere: serving them freezes state the
+///   page just set (`gl.enable(gl.BLEND); gl.getParameter(gl.BLEND)` → `false`
+///   forever) and breaks state-caching renderers that save and restore through
+///   `getParameter`.
+///
+/// The rule, applied against the WebGL 1.0 / 2.0 specifications' state tables:
+/// a parameter is served **only** if it is implementation-fixed and cannot be
+/// changed by any GL call or context attribute. When uncertain, delegate —
+/// delegating loses a little entropy, freezing a mutable value is a live
+/// detector.
+///
+/// Delegation needs no support in `webgl.js`: a name absent from the table
+/// already falls through to the real backend, exactly as an unknown enum does.
+///
+/// Measured against the two committed captures, this partition keeps **every**
+/// parameter whose value differs between the tiers (10 of 10 in WebGL1, 26 of
+/// 28 in WebGL2). The two exceptions are `DRAW_BUFFER6`/`7`, which differ only
+/// in *presence*, and that presence is implied by `MAX_DRAW_BUFFERS` — which is
+/// served. Everything delegated is byte-identical across both measured
+/// backends, so the entropy cost of delegating it is zero.
+pub const SERVED_CAPS: &[&str] = &[
+    // Implementation-dependent ranges and limits (ES 2.0 Table 6.20 /
+    // ES 3.0 Table 6.35, "Implementation Dependent Values"). Nothing in the
+    // API writes to any of them.
+    "ALIASED_LINE_WIDTH_RANGE",
+    "ALIASED_POINT_SIZE_RANGE",
+    "MAX_3D_TEXTURE_SIZE",
+    "MAX_ARRAY_TEXTURE_LAYERS",
+    "MAX_CLIENT_WAIT_TIMEOUT_WEBGL",
+    "MAX_COLOR_ATTACHMENTS",
+    "MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS",
+    "MAX_COMBINED_TEXTURE_IMAGE_UNITS",
+    "MAX_COMBINED_UNIFORM_BLOCKS",
+    "MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS",
+    "MAX_CUBE_MAP_TEXTURE_SIZE",
+    "MAX_DRAW_BUFFERS",
+    "MAX_ELEMENTS_INDICES",
+    "MAX_ELEMENTS_VERTICES",
+    "MAX_ELEMENT_INDEX",
+    "MAX_FRAGMENT_INPUT_COMPONENTS",
+    "MAX_FRAGMENT_UNIFORM_BLOCKS",
+    "MAX_FRAGMENT_UNIFORM_COMPONENTS",
+    "MAX_FRAGMENT_UNIFORM_VECTORS",
+    "MAX_PROGRAM_TEXEL_OFFSET",
+    "MAX_RENDERBUFFER_SIZE",
+    "MAX_SAMPLES",
+    "MAX_SERVER_WAIT_TIMEOUT",
+    "MAX_TEXTURE_IMAGE_UNITS",
+    "MAX_TEXTURE_LOD_BIAS",
+    "MAX_TEXTURE_SIZE",
+    "MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS",
+    "MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS",
+    "MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS",
+    "MAX_UNIFORM_BLOCK_SIZE",
+    "MAX_UNIFORM_BUFFER_BINDINGS",
+    "MAX_VARYING_COMPONENTS",
+    "MAX_VARYING_VECTORS",
+    "MAX_VERTEX_ATTRIBS",
+    "MAX_VERTEX_OUTPUT_COMPONENTS",
+    "MAX_VERTEX_TEXTURE_IMAGE_UNITS",
+    "MAX_VERTEX_UNIFORM_BLOCKS",
+    "MAX_VERTEX_UNIFORM_COMPONENTS",
+    "MAX_VERTEX_UNIFORM_VECTORS",
+    "MAX_VIEWPORT_DIMS",
+    "MIN_PROGRAM_TEXEL_OFFSET",
+    "SUBPIXEL_BITS",
+    "UNIFORM_BUFFER_OFFSET_ALIGNMENT",
+    // Identity strings. Fixed per implementation; `RENDERER`/`VENDOR` are the
+    // masked pair ("WebKit WebGL" / "WebKit"), and the unmasked pair reaches
+    // the page separately (see `gpu::profile_to_js`).
+    "RENDERER",
+    "SHADING_LANGUAGE_VERSION",
+    "VENDOR",
+    "VERSION",
+];
+
+/// Parameters the tier tables must **never** serve, with the reason each one
+/// is disqualified. See [`SERVED_CAPS`] for the rule.
+///
+/// This list exists so the coverage guard can tell "classified as delegated"
+/// apart from "nobody has looked at it yet": a capture introducing an
+/// unclassified name fails the build rather than being silently dropped.
+pub const DELEGATED_PARAMS: &[&str] = &[
+    // --- Per-context mutable state -----------------------------------------
+    // Each is written by an ordinary GL call, so a frozen answer contradicts
+    // the call the page just made. The naming makes the writer obvious:
+    // `blendFunc`/`blendEquation`/`blendColor`, `stencil*`, `pixelStorei` (the
+    // PACK_*/UNPACK_* family), `enable`/`disable` (the GLboolean toggles),
+    // `viewport`, `scissor`, `depthRange`, `clearColor`/`clearDepth`/
+    // `clearStencil`, `hint`, `activeTexture`, `drawBuffers`, `readBuffer`,
+    // `lineWidth`, `polygonOffset`, `sampleCoverage`, `cullFace`, `frontFace`,
+    // `depthFunc`/`depthMask`, and the transform-feedback begin/pause pair.
+    "ACTIVE_TEXTURE",
+    "BLEND",
+    "BLEND_COLOR",
+    "BLEND_DST_ALPHA",
+    "BLEND_DST_RGB",
+    "BLEND_EQUATION",
+    "BLEND_EQUATION_ALPHA",
+    "BLEND_EQUATION_RGB",
+    "BLEND_SRC_ALPHA",
+    "BLEND_SRC_RGB",
+    "COLOR_CLEAR_VALUE",
+    "CULL_FACE",
+    "CULL_FACE_MODE",
+    "DEPTH_CLEAR_VALUE",
+    "DEPTH_FUNC",
+    "DEPTH_RANGE",
+    "DEPTH_TEST",
+    "DEPTH_WRITEMASK",
+    "DITHER",
+    // DRAW_BUFFERn is written by `drawBuffers()` and is per-framebuffer. Its
+    // *presence* does carry entropy (a backend with MAX_DRAW_BUFFERS 6 has no
+    // DRAW_BUFFER6), but that presence is implied by the served
+    // MAX_DRAW_BUFFERS, and freezing the value would contradict every
+    // multiple-render-target page on its first `drawBuffers` call.
+    "DRAW_BUFFER0",
+    "DRAW_BUFFER1",
+    "DRAW_BUFFER2",
+    "DRAW_BUFFER3",
+    "DRAW_BUFFER4",
+    "DRAW_BUFFER5",
+    "DRAW_BUFFER6",
+    "DRAW_BUFFER7",
+    "FRAGMENT_SHADER_DERIVATIVE_HINT",
+    "FRONT_FACE",
+    "GENERATE_MIPMAP_HINT",
+    "LINE_WIDTH",
+    "PACK_ALIGNMENT",
+    "PACK_ROW_LENGTH",
+    "PACK_SKIP_PIXELS",
+    "PACK_SKIP_ROWS",
+    "POLYGON_OFFSET_FACTOR",
+    "POLYGON_OFFSET_FILL",
+    "POLYGON_OFFSET_UNITS",
+    "RASTERIZER_DISCARD",
+    "READ_BUFFER",
+    "SAMPLE_ALPHA_TO_COVERAGE",
+    "SAMPLE_COVERAGE",
+    "SAMPLE_COVERAGE_INVERT",
+    "SAMPLE_COVERAGE_VALUE",
+    "SCISSOR_BOX",
+    "SCISSOR_TEST",
+    "STENCIL_BACK_FAIL",
+    "STENCIL_BACK_FUNC",
+    "STENCIL_BACK_PASS_DEPTH_FAIL",
+    "STENCIL_BACK_PASS_DEPTH_PASS",
+    "STENCIL_BACK_REF",
+    "STENCIL_BACK_VALUE_MASK",
+    "STENCIL_BACK_WRITEMASK",
+    "STENCIL_CLEAR_VALUE",
+    "STENCIL_FAIL",
+    "STENCIL_FUNC",
+    "STENCIL_PASS_DEPTH_FAIL",
+    "STENCIL_PASS_DEPTH_PASS",
+    "STENCIL_REF",
+    "STENCIL_TEST",
+    "STENCIL_VALUE_MASK",
+    "STENCIL_WRITEMASK",
+    "TRANSFORM_FEEDBACK_ACTIVE",
+    "TRANSFORM_FEEDBACK_PAUSED",
+    "UNPACK_ALIGNMENT",
+    "UNPACK_COLORSPACE_CONVERSION_WEBGL",
+    "UNPACK_FLIP_Y_WEBGL",
+    "UNPACK_IMAGE_HEIGHT",
+    "UNPACK_PREMULTIPLY_ALPHA_WEBGL",
+    "UNPACK_ROW_LENGTH",
+    "UNPACK_SKIP_IMAGES",
+    "UNPACK_SKIP_PIXELS",
+    "UNPACK_SKIP_ROWS",
+    // VIEWPORT also tracks the canvas: it is reset to the drawing-buffer size
+    // when the context is created and after a resize, so a frozen
+    // `[0, 0, 300, 150]` contradicts `gl.drawingBufferWidth` on any page that
+    // sizes its canvas.
+    "VIEWPORT",
+    // --- Determined by the context attributes the page asked for ------------
+    // `getContext('webgl', {...})` decides these, so no table value can be
+    // right for every caller: `{stencil: true}` makes STENCIL_BITS 8 where the
+    // captures say 0, `{alpha: false}` makes ALPHA_BITS 0 where they say 8,
+    // and `{antialias: false}` makes SAMPLES 0 and SAMPLE_BUFFERS 0 where they
+    // say 4 and 1. In WebGL2 they additionally track whatever framebuffer is
+    // bound. Never promote these.
+    "ALPHA_BITS",
+    "BLUE_BITS",
+    "DEPTH_BITS",
+    "GREEN_BITS",
+    "RED_BITS",
+    "SAMPLES",
+    "SAMPLE_BUFFERS",
+    "STENCIL_BITS",
+    // --- Grows as extensions are enabled ------------------------------------
+    // The probe reads parameters before enabling any extension, so both
+    // captures record an empty list. In real Chrome the array grows with each
+    // compressed-texture extension the page enables, so a table value pins it
+    // empty forever: `getExtension('WEBGL_compressed_texture_s3tc')` succeeds,
+    // `compressedTexImage2D` works, and the format list stays empty — a
+    // three-line contradiction.
+    "COMPRESSED_TEXTURE_FORMATS",
+    // --- Determined by the bound read framebuffer ---------------------------
+    // Judgment call, resolved toward delegating. The spec's state tables file
+    // these under "Implementation Dependent Values", but both ES 2.0 (via
+    // OES_read_format) and ES 3.0 define them against the *current read
+    // surface*: bind an FBO backed by an RGBA8UI texture and real WebGL2
+    // answers RGBA_INTEGER/UNSIGNED_INT instead of RGBA/UNSIGNED_BYTE. Both
+    // committed captures also record the identical 6408/5121 pair, so serving
+    // them adds no entropy at all while adding a mutable value to freeze.
+    "IMPLEMENTATION_COLOR_READ_FORMAT",
+    "IMPLEMENTATION_COLOR_READ_TYPE",
+];
+
+/// Whether a parameter is a static device capability the tables may serve.
+#[must_use]
+pub fn is_served_cap(name: &str) -> bool {
+    SERVED_CAPS.contains(&name)
+}
+
 /// One emitted parameter value.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParamValue {
@@ -352,9 +581,34 @@ fn lit(v: &ParamValue) -> String {
     }
 }
 
-/// Emit the whole `tiers.rs`. Deterministic: every map is a `BTreeMap` and
-/// every list is sorted before it gets here.
+/// Drop every parameter that is not a static device capability.
+///
+/// See [`SERVED_CAPS`]. Applied at emission rather than at parse time so the
+/// capture still parses in full — a malformed value fails loudly, and the
+/// coverage guard still sees every captured name.
+fn retain_served_caps(t: &TierData) -> TierData {
+    let keep = |m: &BTreeMap<String, ParamValue>| -> BTreeMap<String, ParamValue> {
+        m.iter()
+            .filter(|(k, _)| is_served_cap(k))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    };
+    TierData {
+        params_webgl1: keep(&t.params_webgl1),
+        params_webgl2: keep(&t.params_webgl2),
+        ..t.clone()
+    }
+}
+
+/// Emit the whole `tiers.rs`. Deterministic: every map is a `BTreeMap`, and
+/// the extension lists arrive in the captures' own (deterministic) order.
+///
+/// Only [`SERVED_CAPS`] reach the emitted tables. Per-context mutable state is
+/// filtered out here, which is all the delegation takes: `webgl.js` already
+/// falls through to the real backend for any name the table does not carry.
 pub fn emit_rust(tiers: &[TierData]) -> String {
+    let served: Vec<TierData> = tiers.iter().map(retain_served_caps).collect();
+    let tiers: &[TierData] = &served;
     let mut s = String::new();
     s.push_str("// Generated by `cargo run -p gpu-tier-gen`. DO NOT EDIT.\n");
     s.push_str("// Sources:\n");
@@ -369,9 +623,11 @@ pub fn emit_rust(tiers: &[TierData]) -> String {
     s.push_str("#![allow(clippy::type_complexity)]\n");
     s.push_str("\nuse super::types::GlParamRef as GlParam;\n\n");
 
-    // Both context versions get their own tables. WebGL1 exposes 82 params and
-    // WebGL2 exposes 132; sharing one table would answer WebGL2-only enums on
-    // a WebGL1 context, where real Chrome returns null and raises INVALID_ENUM.
+    // Both context versions get their own tables. Of the captured parameters
+    // a WebGL1 context exposes 82 and a WebGL2 context up to 132, of which 18
+    // and 47 respectively are served capabilities; sharing one table would
+    // answer WebGL2-only enums on a WebGL1 context, where real Chrome returns
+    // null and raises INVALID_ENUM.
     for (suffix, pick) in [
         (
             "WEBGL1",
@@ -524,12 +780,14 @@ mod tests {
             "webgl1": {
                 "params": {"MAX_TEXTURE_SIZE": 8192, "ALIASED_POINT_SIZE_RANGE": [1, 1023]},
                 "precision": {"VERTEX_SHADER/MEDIUM_FLOAT": [15, 15, 10]},
-                "extensions": ["OES_texture_float"]
+                "extensions": ["OES_texture_float"],
+                "enums": {}
             },
             "webgl2": {
                 "params": {"MAX_TEXTURE_SIZE": 8192},
                 "precision": {"VERTEX_SHADER/MEDIUM_FLOAT": [15, 15, 10]},
-                "extensions": []
+                "extensions": [],
+                "enums": {}
             }
         });
         let t = tier_from_capture("swiftshader", "probed: test", &capture);
@@ -693,28 +951,7 @@ mod tests {
     /// contain."
     #[test]
     fn every_captured_param_is_classified() {
-        const SWIFTSHADER: &str =
-            include_str!("../../zendriver-stealth/data/gpu-tiers/swiftshader.json");
-        const METAL_APPLE_FAMILY3: &str =
-            include_str!("../../zendriver-stealth/data/gpu-tiers/metal-apple-family3.json");
-
-        let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        for raw in [SWIFTSHADER, METAL_APPLE_FAMILY3] {
-            let doc: Value =
-                serde_json::from_str(raw).expect("committed capture must be valid JSON");
-            for ctx in ["webgl1", "webgl2"] {
-                if let Some(params) = doc["capture"][ctx]["params"].as_object() {
-                    names.extend(params.keys().cloned());
-                }
-            }
-        }
-        assert!(
-            !names.is_empty(),
-            "no parameter names found in the committed captures — the include_str! path or \
-             the capture's JSON shape probably changed out from under this test"
-        );
-
-        for name in names {
+        for name in captured_param_names() {
             let overridden = gl_type_for(&name) != GlType::FromJson;
             let verified_plain = VERIFIED_PLAIN_PARAMS.contains(&name.as_str());
             assert!(
@@ -730,6 +967,131 @@ mod tests {
                 "parameter `{name}` is listed in both gl_type_for's override arms and \
                  VERIFIED_PLAIN_PARAMS — it can only be one or the other, pick the correct one \
                  and remove it from the other list"
+            );
+        }
+    }
+
+    /// Every parameter name found in the two committed captures, both context
+    /// versions. The ground truth the classification guards are checked
+    /// against — it changes when a capture changes, independently of the
+    /// hand-authored lists in this file.
+    fn captured_param_names() -> std::collections::BTreeSet<String> {
+        const SWIFTSHADER: &str =
+            include_str!("../../zendriver-stealth/data/gpu-tiers/swiftshader.json");
+        const METAL_APPLE_FAMILY3: &str =
+            include_str!("../../zendriver-stealth/data/gpu-tiers/metal-apple-family3.json");
+
+        let mut names = std::collections::BTreeSet::new();
+        for raw in [SWIFTSHADER, METAL_APPLE_FAMILY3] {
+            let doc: Value =
+                serde_json::from_str(raw).expect("committed capture must be valid JSON");
+            for ctx in ["webgl1", "webgl2"] {
+                if let Some(params) = doc["capture"][ctx]["params"].as_object() {
+                    names.extend(params.keys().cloned());
+                }
+            }
+        }
+        assert!(
+            !names.is_empty(),
+            "no parameter names found in the committed captures — the include_str! path or \
+             the capture's JSON shape probably changed out from under this test"
+        );
+        names
+    }
+
+    /// The served/delegated partition must be total over the captures.
+    ///
+    /// Same shape as `every_captured_param_is_classified`: the captures are
+    /// the independent ground truth, and both lists are hand-authored from the
+    /// spec, so a capture introducing a name nobody has classified fails the
+    /// build rather than being silently dropped from the tables (or, worse,
+    /// silently served).
+    #[test]
+    fn every_captured_param_is_served_or_delegated() {
+        for name in captured_param_names() {
+            let served = SERVED_CAPS.contains(&name.as_str());
+            let delegated = DELEGATED_PARAMS.contains(&name.as_str());
+            assert!(
+                served || delegated,
+                "parameter `{name}` appears in a committed capture but is in neither \
+                 SERVED_CAPS nor DELEGATED_PARAMS. Look it up in the WebGL 1.0 / 2.0 spec's \
+                 state tables and classify it: SERVED_CAPS only if it is implementation-fixed \
+                 and no GL call or context attribute can change it, DELEGATED_PARAMS (with the \
+                 reason) otherwise. When uncertain, delegate — delegating loses a little \
+                 entropy, freezing a mutable value is a live detector."
+            );
+            assert!(
+                !(served && delegated),
+                "parameter `{name}` is in both SERVED_CAPS and DELEGATED_PARAMS — it can only \
+                 be one, pick the correct one and remove it from the other list"
+            );
+        }
+    }
+
+    /// Mutable state must not survive into the emitted tables, whatever the
+    /// capture contains. These are the exact reads C1 was reported against:
+    /// `gl.enable(gl.BLEND); gl.getParameter(gl.BLEND)` answering a frozen
+    /// `false`, and `VIEWPORT` answering `[0, 0, 300, 150]` beside an
+    /// 800-wide drawing buffer.
+    #[test]
+    fn emitted_tables_carry_no_mutable_state() {
+        let capture = serde_json::json!({
+            "webgl1": {
+                "params": {
+                    "MAX_TEXTURE_SIZE": 8192,
+                    "BLEND": false,
+                    "VIEWPORT": [0, 0, 300, 150],
+                    "STENCIL_BITS": 0,
+                    "COMPRESSED_TEXTURE_FORMATS": [],
+                    "UNPACK_FLIP_Y_WEBGL": false
+                },
+                "precision": {}, "extensions": [], "enums": {}
+            },
+            "webgl2": {
+                "params": {
+                    "MAX_TEXTURE_SIZE": 8192,
+                    "BLEND": false,
+                    "VIEWPORT": [0, 0, 300, 150],
+                    "DRAW_BUFFER0": 1029,
+                    "SAMPLES": 4,
+                    "IMPLEMENTATION_COLOR_READ_FORMAT": 6408
+                },
+                "precision": {}, "extensions": [], "enums": {}
+            }
+        });
+        let out = emit_rust(&[tier_from_capture("swiftshader", "probed: test", &capture)]);
+        assert!(
+            out.contains("MAX_TEXTURE_SIZE"),
+            "a static capability must still be served"
+        );
+        for delegated in [
+            "BLEND",
+            "VIEWPORT",
+            "STENCIL_BITS",
+            "COMPRESSED_TEXTURE_FORMATS",
+            "UNPACK_FLIP_Y_WEBGL",
+            "DRAW_BUFFER0",
+            "SAMPLES",
+            "IMPLEMENTATION_COLOR_READ_FORMAT",
+        ] {
+            assert!(
+                !out.contains(&format!("(\"{delegated}\", GlParam")),
+                "`{delegated}` reached the emitted table; delegated params must not appear in \
+                 tiers.rs at all, so webgl.js falls through to the real backend"
+            );
+        }
+    }
+
+    /// The whole delegated set, checked against the real captures rather than
+    /// a hand-picked sample.
+    #[test]
+    fn no_delegated_param_survives_into_the_real_tables() {
+        let committed = include_str!("../../zendriver-stealth/src/gpu/tiers.rs").replace('\n', " ");
+        for name in DELEGATED_PARAMS {
+            assert!(
+                !committed.contains(&format!("(\"{name}\", GlParam")),
+                "committed tiers.rs serves delegated param `{name}`; rerun \
+                 `cargo run -p gpu-tier-gen`"
             );
         }
     }
@@ -829,21 +1191,22 @@ mod tests {
 
     #[test]
     fn webgl1_and_webgl2_tables_stay_separate_per_context() {
-        // SHARED_NAME is reported by both contexts but with different
-        // values, and WEBGL2_ONLY is reported only by WebGL2 — the same
-        // shape as the real 82-vs-132 param gap. If the WebGL1 and WebGL2
-        // tables were ever merged or crossed, either a WebGL1 context would
-        // gain an enum it has no constant for, or it would report the
-        // WebGL2 capture's value instead of its own.
+        // MAX_TEXTURE_SIZE is reported by both contexts (here with different
+        // values), and MAX_3D_TEXTURE_SIZE only by WebGL2 — the same shape as
+        // the real 18-vs-47 served-param gap. If the WebGL1 and WebGL2 tables
+        // were ever merged or crossed, either a WebGL1 context would gain an
+        // enum it has no constant for, or it would report the WebGL2
+        // capture's value instead of its own. Both names are real served
+        // capabilities because `emit_rust` drops everything else.
         let a = tier_with_versions(
             "swiftshader",
-            &[("SHARED_NAME", 111)],
-            &[("SHARED_NAME", 222), ("WEBGL2_ONLY", 999)],
+            &[("MAX_TEXTURE_SIZE", 111)],
+            &[("MAX_TEXTURE_SIZE", 222), ("MAX_3D_TEXTURE_SIZE", 999)],
         );
         let b = tier_with_versions(
             "metal",
-            &[("SHARED_NAME", 111)],
-            &[("SHARED_NAME", 222), ("WEBGL2_ONLY", 999)],
+            &[("MAX_TEXTURE_SIZE", 111)],
+            &[("MAX_TEXTURE_SIZE", 222), ("MAX_3D_TEXTURE_SIZE", 999)],
         );
         let out = emit_rust(&[a, b]);
 
@@ -867,18 +1230,18 @@ mod tests {
         // the WebGL1 section — a WebGL1 context has no constant for it, and
         // real Chrome returns null + INVALID_ENUM if asked.
         assert!(
-            webgl2_section.contains("\"WEBGL2_ONLY\""),
+            webgl2_section.contains("\"MAX_3D_TEXTURE_SIZE\""),
             "a WebGL2-only param must appear in the WebGL2 tables"
         );
         assert!(
-            !webgl1_section.contains("WEBGL2_ONLY"),
+            !webgl1_section.contains("MAX_3D_TEXTURE_SIZE"),
             "a WebGL2-only param must never leak into the WebGL1 tables"
         );
 
         // A param reported by both contexts must keep each context's own
         // value rather than the two getting crossed.
         assert!(
-            webgl1_section.contains("(\"SHARED_NAME\", GlParam::Int(111))"),
+            webgl1_section.contains("(\"MAX_TEXTURE_SIZE\", GlParam::Int(111))"),
             "the WebGL1 table must use the WebGL1 input's value"
         );
         assert!(
@@ -886,7 +1249,7 @@ mod tests {
             "the WebGL1 table must not pick up the WebGL2 input's value"
         );
         assert!(
-            webgl2_section.contains("(\"SHARED_NAME\", GlParam::Int(222))"),
+            webgl2_section.contains("(\"MAX_TEXTURE_SIZE\", GlParam::Int(222))"),
             "the WebGL2 table must use the WebGL2 input's value"
         );
     }

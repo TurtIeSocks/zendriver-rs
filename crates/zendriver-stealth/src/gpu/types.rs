@@ -37,6 +37,14 @@ pub enum GlParam {
 ///
 /// `GlParam` owns its `String`/`Vec` payloads so callers can build one at
 /// runtime; a `static` table cannot. The two convert with [`GlParamRef::to_owned_param`].
+///
+/// Every shape `getParameter` can return is represented, even though the
+/// currently generated tables only construct `Int`/`Float`/`Str`/`IntPair`/
+/// `FloatPair`. The served set is static device capabilities only, and today
+/// none of those is a boolean, a quad, or a list — but the generator's
+/// emitter covers all nine, so a future capture that promotes such a
+/// capability must not need a type change here to be emittable.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum GlParamRef {
     Int(i64),

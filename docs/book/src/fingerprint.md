@@ -23,7 +23,7 @@ You can mix any persona source with any per-surface strategy independently.
 | `Canvas` | Noise | `Seeded` | `getImageData`, `toDataURL` pixel data |
 | `Audio` | Noise | `Seeded` | `AnalyserNode` frequency / time-domain data |
 | `ClientRects` | Noise | `Seeded` | `getBoundingClientRect` sub-pixel dimensions |
-| `Webgl` | Value | `Value` | Every readable `getParameter` value (WebGL1 + WebGL2), both extension lists, and `getShaderPrecisionFormat` — not just `UNMASKED_VENDOR_WEBGL`/`UNMASKED_RENDERER_WEBGL` |
+| `Webgl` | Value | `Value` | Every static device capability `getParameter` reports (WebGL1 + WebGL2), both extension lists, and `getShaderPrecisionFormat` — not just `UNMASKED_VENDOR_WEBGL`/`UNMASKED_RENDERER_WEBGL`. Per-context mutable state stays the backend's |
 | `Webgpu` | Value | `Value` | `GPUAdapterInfo` (vendor/architecture/device/description) + optional `.limits`/`.features` |
 | `Fonts` | Value | `Value` | `measureText` width noise + `FontFaceSet.check` allow-list |
 | `Hardware` | Value | `Value` | Battery level, media-device count, speech voices |
@@ -202,11 +202,27 @@ let browser = Browser::builder()
 ## WebGL (full-surface value spoof, resolved from measured tiers)
 
 The `Webgl` surface's default `Value` strategy no longer substitutes a
-handful of hand-picked numbers. It resolves and serves **every**
-spec-defined `getParameter` value for both WebGL1 (82 parameters) and
-WebGL2 (130–132, depending on tier), both contexts' `getSupportedExtensions`
-lists, and every `getShaderPrecisionFormat` result — the same surface a page
-would read from real hardware, not just the vendor/renderer pair.
+handful of hand-picked numbers. It resolves and serves every static **device
+capability** a page can read — 18 `getParameter` values on a WebGL1 context
+and 47 on a WebGL2 one — plus both contexts' `getSupportedExtensions` lists
+(in Chrome's own order, which is itself a fingerprint input) and every
+`getShaderPrecisionFormat` result. That is the whole surface that identifies
+the GPU, not just the vendor/renderer pair.
+
+**The rest of `getParameter` is deliberately left to the real backend.** The
+other ~85 values it answers are not device capabilities: they are per-context
+*mutable state* (`VIEWPORT`, `BLEND`, `SCISSOR_BOX`, the `STENCIL_*`,
+`PACK_*` and `UNPACK_*` families, `DRAW_BUFFERn`, …), values fixed by the
+context attributes the page asked for (`RED_BITS`, `STENCIL_BITS`, `SAMPLES`
+— `getContext('webgl', {stencil: true})` changes them), or the
+extension-dependent `COMPRESSED_TEXTURE_FORMATS`. Every real Chrome reports
+the same defaults for all of them, so they carry no entropy to spoof, and
+serving them from a table would be a tell rather than a disguise:
+`gl.enable(gl.BLEND); gl.getParameter(gl.BLEND)` would answer `false`
+forever, and a resized canvas would report a stale viewport beside its real
+`drawingBufferWidth`. Delegating also keeps real WebGL pages working —
+state-caching renderers (deck.gl's `withParameters`, Babylon's state cache)
+save and restore through `getParameter`.
 
 **Values come from measured capability tiers, not per-parameter guesses.**
 ANGLE (Chrome's GL layer) computes most numeric caps from constants branched

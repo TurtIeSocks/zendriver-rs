@@ -274,7 +274,9 @@ fn resolved_renderer<'a>(spec: Option<&'a WebglSpec>, gpu: Option<&'a GpuProfile
 /// [`Persona::gpu`] documents:
 ///
 /// 1. the capability tier the renderer string selects, which supplies every
-///    readable parameter;
+///    static device capability the page can read (per-context mutable state is
+///    deliberately left to the real backend — see `gpu-tier-gen`'s
+///    `SERVED_CAPS`);
 /// 2. `gpu`, a caller-pinned whole device, merged key-wise so a partial
 ///    profile overrides only what it set;
 /// 3. `spec`, the finest-grained layer, pinning the two masked identity
