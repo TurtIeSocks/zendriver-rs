@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn shipped_tiers_are_all_coherent() {
-        for tier in [Tier::SwiftShader, Tier::MetalAppleFamily3] {
+        for &tier in Tier::ALL {
             let p = profile_for_tier(tier);
             assert_eq!(check_coherence(&p), Ok(()), "tier {tier:?} is incoherent");
         }
@@ -194,7 +194,7 @@ mod tests {
         // that resolves materially fewer means the base/override split dropped
         // entries, and every dropped param falls through to the real backend
         // — which is exactly the leak this work exists to close.
-        for tier in [Tier::SwiftShader, Tier::MetalAppleFamily3] {
+        for &tier in Tier::ALL {
             let p = profile_for_tier(tier);
             assert!(
                 p.params_webgl2.len() >= 130,

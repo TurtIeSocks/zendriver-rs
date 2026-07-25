@@ -95,6 +95,13 @@ pub(crate) enum Tier {
     MetalAppleFamily3,
 }
 
+impl Tier {
+    /// Every shipped tier, in one place: the invariant checks and the tests
+    /// that sweep "all tiers" iterate this, so adding a tier cannot quietly
+    /// leave one of them behind.
+    pub(crate) const ALL: &'static [Tier] = &[Tier::SwiftShader, Tier::MetalAppleFamily3];
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {

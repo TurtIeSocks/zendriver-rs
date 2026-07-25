@@ -260,19 +260,38 @@ pub(crate) fn profile_to_js(p: &GpuProfile) -> String {
 /// values**, which is asserted below rather than assumed — if a future capture
 /// ever gives an aliased pair different values, silently keeping one would
 /// serve the wrong number for the other.
+///
+/// The comparison runs over each tier's *resolved* maps, both context
+/// versions, because that is what the page actually reads. Consulting the
+/// shared WebGL2 base alone would pass a tier override that moved one spelling
+/// of a collapsed pair and not the other, and would never look at WebGL1 at
+/// all. A present/absent split fails too: whichever spelling survives has to
+/// be the one the table carries, or the lookup misses and the enum falls
+/// through to the real backend.
 fn enum_names() -> serde_json::Map<String, serde_json::Value> {
+    let resolved: Vec<(Tier, GpuProfile)> = Tier::ALL
+        .iter()
+        .map(|tier| (*tier, profile_for_tier(*tier)))
+        .collect();
     let mut out = serde_json::Map::new();
     let mut chosen: BTreeMap<u32, &str> = BTreeMap::new();
     for (num, name) in tiers::ENUM_NAMES {
         if let Some(prev) = chosen.insert(*num, *name) {
             // Both spellings must resolve to the same value, or collapsing
             // them changes what the page reads.
-            assert_eq!(
-                lookup(tiers::BASE_PARAMS_WEBGL2, prev),
-                lookup(tiers::BASE_PARAMS_WEBGL2, name),
-                "GL enum {num} aliases {prev} and {name}, which hold different \
-                 values; collapsing them would serve the wrong one"
-            );
+            for (tier, p) in &resolved {
+                for (version, params) in
+                    [("WebGL1", &p.params_webgl1), ("WebGL2", &p.params_webgl2)]
+                {
+                    assert_eq!(
+                        params.get(prev),
+                        params.get(*name),
+                        "GL enum {num} aliases {prev} and {name}, which hold different \
+                         {version} values on {tier:?}; collapsing them would serve the \
+                         wrong one"
+                    );
+                }
+            }
             continue;
         }
         out.insert(num.to_string(), serde_json::Value::from(*name));
