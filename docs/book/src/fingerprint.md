@@ -203,13 +203,16 @@ fabricated) — the same behavior it always had. `WebgpuSpec` (mirroring
 2. **Synthetic adapter fabrication** (`fabricate_when_absent: true`) — when
    the host has no real WebGPU adapter, resolve a synthetic one built from
    your supplied values. This covers **both** GPU-less shapes:
-   - `navigator.gpu` **entirely absent** (`'gpu' in navigator === false` —
-     the common case, since zendriver's default headless launch adds
-     `--disable-gpu`): a synthetic `navigator.gpu` is *created* on
-     `Navigator.prototype`, flipping `'gpu' in navigator` to **true**. That's
-     coherent for a modern-Chrome persona — real modern Chrome always exposes
-     `navigator.gpu` even GPU-less (there `requestAdapter()` just returns
-     `null`).
+   - `navigator.gpu` **entirely absent** (`'gpu' in navigator === false`).
+     This is governed by the **page**, not by launch flags: `navigator.gpu` is
+     `[SecureContext]`-gated, so it is absent on an opaque origin such as
+     `about:blank` or a `data:` URL no matter what hardware or flags are in
+     play. On a secure page under zendriver's default flags, `'gpu' in
+     navigator` is `true` and `requestAdapter()` merely resolves `null`
+     (measured on Chrome 150). Where it is absent, a synthetic `navigator.gpu`
+     is *created* on `Navigator.prototype`, flipping `'gpu' in navigator` to
+     **true** — coherent for a modern-Chrome persona, since real modern Chrome
+     exposes `navigator.gpu` even with no usable GPU.
    - `navigator.gpu` present but `requestAdapter()` returns `null`: the real
      `requestAdapter` is wrapped so a `null` result falls back to the
      synthetic adapter (a real adapter passes through untouched).
