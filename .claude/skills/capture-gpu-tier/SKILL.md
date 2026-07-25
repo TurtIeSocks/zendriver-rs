@@ -92,16 +92,27 @@ print(json.dumps({'tier': os.environ['TIER'],
    SwiftShader describes the wrong backend entirely. Both produce a file that
    looks fine and is wrong.
 
-4. **Register the tier in the code.** Three places, all small:
+4. **Register the tier in the code.** Six places, all small. Miss one and the
+   tier is half-registered:
    - `crates/zendriver-stealth/src/gpu/types.rs` — add a `Tier` variant.
+   - `crates/zendriver-stealth/src/gpu/types.rs` — add it to `Tier::ALL` too.
+     **This is the one whose omission is silent**: `ALL` is what every
+     all-tiers invariant sweep and the alias-equality check in `enum_names`
+     iterate, so a tier left out of it simply skips all of them and every test
+     still passes.
    - `crates/zendriver-stealth/src/gpu/mod.rs` — add the variant to `tier_key`,
      returning the same string as the capture's filename.
-   - `crates/gpu-tier-gen/src/main.rs` — add the `(name, path)` pair to
-     `CAPTURES`.
+   - `crates/gpu-tier-gen/src/lib.rs` — add the `(name, include_str!(...))`
+     pair to `CAPTURES`.
    - `crates/zendriver-stealth/src/gpu/devices.rs` — add a `DeviceRow` with the
      captured `unmasked_vendor`/`unmasked_renderer`, the new `tier`, its
      `match_token` (a lowercase substring unique to this backend's renderer
      string), and the WebGPU vendor/architecture the capture reported.
+   - `crates/zendriver-stealth/src/gpu/invariants.rs` — add the tier to
+     `platform_skew`'s coherent-pair arm if its backend belongs to one OS
+     (Metal → `MacIntel`, D3D11 → `Win32`), or return early like SwiftShader
+     if it is platform-neutral. Otherwise every persona on the new tier logs a
+     skew warning.
 
 5. **Regenerate and verify.**
 
@@ -123,9 +134,9 @@ print(json.dumps({'tier': os.environ['TIER'],
    disagrees with a relation real hardware satisfies — investigate the capture
    before touching the invariant.
 
-6. **Commit** the capture, the regenerated `tiers.rs`, and the four
-   registration edits together, so the generated file never lands out of sync
-   with its input:
+6. **Commit** the capture, the regenerated `tiers.rs`, and every registration
+   edit together, so the generated file never lands out of sync with its
+   input:
 
    ```bash
    git add crates/zendriver-stealth/data/gpu-tiers crates/zendriver-stealth/src/gpu crates/gpu-tier-gen
