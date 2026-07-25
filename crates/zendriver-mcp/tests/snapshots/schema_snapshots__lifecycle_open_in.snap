@@ -62,7 +62,7 @@ properties:
 additionalProperties: false
 $defs:
   GpuBackendSchema:
-    description: "Schema-only mirror of [`zendriver::GpuBackend`], which lives in\n`zendriver-stealth` and doesn't derive `schemars::JsonSchema` (a\ndependency that crate has no other reason to take on). Never\nconstructed — referenced only via `#[schemars(with = \"GpuBackendSchema\")]`\nso the generator can describe the field's shape without requiring the\nreal type to implement the trait. Variant names/casing must track\n[`zendriver::GpuBackend`] exactly."
+    description: "Schema-only mirror of [`zendriver::GpuBackend`], which lives in\n`zendriver-stealth` and doesn't derive `schemars::JsonSchema` (a\ndependency that crate has no other reason to take on). Never constructed\nin non-test code — referenced only via\n`#[schemars(with = \"GpuBackendSchema\")]` so the generator can describe the\nfield's shape without requiring the real type to implement the trait.\nKept in sync with [`zendriver::GpuBackend`] by [`schema_variant_for`]\n(compile-time exhaustiveness) and a serde-name equality test, not by\nconvention — see that function's doc comment."
     type: string
     enum:
       - disabled
