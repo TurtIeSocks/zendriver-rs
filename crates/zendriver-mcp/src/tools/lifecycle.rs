@@ -124,15 +124,23 @@ const fn default_true() -> bool {
     true
 }
 
-/// Schema-only mirror of [`zendriver::GpuBackend`], which lives in
-/// `zendriver-stealth` and doesn't derive `schemars::JsonSchema` (a
-/// dependency that crate has no other reason to take on). Never constructed
-/// in non-test code — referenced only via
-/// `#[schemars(with = "GpuBackendSchema")]` so the generator can describe the
-/// field's shape without requiring the real type to implement the trait.
-/// Kept in sync with [`zendriver::GpuBackend`] by [`schema_variant_for`]
-/// (compile-time exhaustiveness) and a serde-name equality test, not by
-/// convention — see that function's doc comment.
+/// GPU backend Chrome renders WebGL / WebGPU with.
+//
+// Schema-only mirror of [`zendriver::GpuBackend`], which lives in
+// `zendriver-stealth` and doesn't derive `schemars::JsonSchema` (a
+// dependency that crate has no other reason to take on). Never constructed
+// in non-test code — referenced only via
+// `#[schemars(with = "GpuBackendSchema")]` so the generator can describe the
+// field's shape without requiring the real type to implement the trait.
+// Kept in sync with `zendriver::GpuBackend` by `schema_variant_for`
+// (compile-time exhaustiveness) and a serde-name equality test, not by
+// convention — see that function's doc comment.
+//
+// NOTE: the `///` line above this block is the ONLY doc comment on this
+// type — it becomes `$defs.GpuBackendSchema.description` in the published
+// MCP JSON Schema, so every client reads it. Everything else here is a
+// plain `//` comment (implementation rationale for this crate's
+// maintainers) precisely so it does NOT leak onto the wire.
 #[derive(Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[allow(dead_code)] // constructed only by schema_variant_for, which itself
