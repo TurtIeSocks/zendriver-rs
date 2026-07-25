@@ -23,7 +23,7 @@ You can mix any persona source with any per-surface strategy independently.
 | `Canvas` | Noise | `Seeded` | `getImageData`, `toDataURL` pixel data |
 | `Audio` | Noise | `Seeded` | `AnalyserNode` frequency / time-domain data |
 | `ClientRects` | Noise | `Seeded` | `getBoundingClientRect` sub-pixel dimensions |
-| `Webgl` | Value | `Value` | `UNMASKED_VENDOR_WEBGL`, `UNMASKED_RENDERER_WEBGL` |
+| `Webgl` | Value | `Value` | Every readable `getParameter` value (WebGL1 + WebGL2), both extension lists, and `getShaderPrecisionFormat` — not just `UNMASKED_VENDOR_WEBGL`/`UNMASKED_RENDERER_WEBGL` |
 | `Webgpu` | Value | `Value` | `GPUAdapterInfo` (vendor/architecture/device/description) + optional `.limits`/`.features` |
 | `Fonts` | Value | `Value` | `measureText` width noise + `FontFaceSet.check` allow-list |
 | `Hardware` | Value | `Value` | Battery level, media-device count, speech voices |
@@ -198,6 +198,58 @@ let browser = Browser::builder()
     .surface(Surface::Canvas, Strategy::Random)  // fresh per-page-load seed
     .launch().await?;
 ```
+
+## WebGL (full-surface value spoof, resolved from measured tiers)
+
+The `Webgl` surface's default `Value` strategy no longer substitutes a
+handful of hand-picked numbers. It resolves and serves **every**
+spec-defined `getParameter` value for both WebGL1 (82 parameters) and
+WebGL2 (130–132, depending on tier), both contexts' `getSupportedExtensions`
+lists, and every `getShaderPrecisionFormat` result — the same surface a page
+would read from real hardware, not just the vendor/renderer pair.
+
+**Values come from measured capability tiers, not per-parameter guesses.**
+ANGLE (Chrome's GL layer) computes most numeric caps from constants branched
+on backend and feature level, not from querying the physical device — so
+values cluster by *(backend, capability tier)* rather than by exact GPU
+model. Two tiers ship today:
+
+- `SwiftShader` — Chrome's software rasterizer.
+- Apple Metal (family 3) — the default when a persona names no renderer of
+  its own, because a persona that says nothing should look like ordinary
+  hardware; SwiftShader's own renderer string is itself a bot signal.
+
+**A renderer matching neither tier falls back to the Apple Metal device and
+logs a warning.** Serving an unrecognized renderer's *name* above a
+different backend's *numbers* would be its own incoherence — an unmatched
+D3D11 or Vulkan renderer string (Intel, NVIDIA, AMD) is expected and common,
+since only two tiers are captured so far. Adding a tier requires probing
+real hardware with that backend; values are never invented. See the
+[`capture-gpu-tier` skill](https://github.com/TurtIeSocks/zendriver-rs/blob/main/.claude/skills/capture-gpu-tier/SKILL.md)
+for the procedure if you hit this warning and have the hardware to fix it.
+
+**`Persona.gpu: Option<GpuProfile>` lets you pin a whole coherent device.**
+Unset, it resolves from the persona's WebGL renderer string, matched against
+the two shipped devices above. Set, it overlays the resolved tier key-wise,
+so a partial profile only overrides the keys it sets. It merges as one
+atomic value across personas (like `screen`), never field-by-field —
+composing two devices' values could describe hardware that exists nowhere.
+The finer-grained `WebglSpec` (the `unmasked_vendor`/`unmasked_renderer`
+strings) still overlays on top of whatever `Persona.gpu` produces, so you can
+pin just the renderer string without restating an entire device's parameter
+table.
+
+**`Strategy::Native` on `Webgl` emits no WebGL patch at all** — `getParameter`
+and friends return the host's real, unmodified values. As covered above,
+this also suppresses the `Webgpu` value spoof, so neither surface serves a
+value that contradicts the other.
+
+**The tables are generated, never hand-edited.**
+`crates/zendriver-stealth/src/gpu/tiers.rs` is produced by the `gpu-tier-gen`
+crate from committed probe captures
+(`crates/zendriver-stealth/data/gpu-tiers/*.json`); a CI step regenerates it
+and fails the build on any diff, so the shipped file can never drift from
+its source captures.
 
 ## WebGPU (opt-in adapter override / fabrication)
 

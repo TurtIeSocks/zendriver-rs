@@ -47,7 +47,7 @@ More working examples in [`crates/zendriver/examples/`](crates/zendriver/example
 
 | Feature        | Default? | Use case                                                      | Extra deps                            |
 | -------------- | -------- | ------------------------------------------------------------- | ------------------------------------- |
-| `stealth`      | yes      | Anti-detection: spoofed UA/platform, isolated worlds, JS shim, opt-in `gpu_backend` for real-GPU WebGL/WebGPU rendering | (built-in to `zendriver`)             |
+| `stealth`      | yes      | Anti-detection: spoofed UA/platform, full-surface WebGL parameter spoof resolved from measured GPU capability tiers, isolated worlds, JS shim, opt-in `gpu_backend` for real-GPU WebGL/WebGPU rendering | (built-in to `zendriver`)             |
 | `interception` | no       | Block/modify requests via CDP `Fetch.*`; rule-based + streams | `zendriver-interception`              |
 | `expect`       | no       | Playwright-style `expect_response()` / `expect_request()`     | (in-tree, no extra crate)             |
 | `cloudflare`   | no       | Solve Cloudflare Turnstile challenges                         | `zendriver-cloudflare`                |
