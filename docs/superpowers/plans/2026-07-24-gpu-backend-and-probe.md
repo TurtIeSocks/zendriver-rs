@@ -565,8 +565,38 @@ Add the setter immediately after the `headless` setter (which ends at line 667):
 
 Replace the headless block at `crates/zendriver/src/browser.rs:1444-1447` with:
 
+The backend must be resolved from **both** sources, not just the builder's own field. `StealthProfile::gpu_backend` is a public setter, so a caller can attach a backend via `.stealth(StealthProfile::native().gpu_backend(GpuBackend::Native))` without ever calling `BrowserBuilder::gpu_backend`. If `build_flags` only consults its own field, that caller gets `--disable-gpu` *and* an explicit ANGLE backend in the same argv — the exact decoupled combination this task exists to prevent.
+
+`StealthProfile.gpu_backend` is `pub(crate)` to `zendriver-stealth`, so add a getter there following the existing `bypass_csp_enabled()` / `native_isolation_enabled()` precedent (a distinct name is required — the consuming setter already owns `gpu_backend`):
+
 ```rust
-        let gpu_backend = self.gpu_backend.unwrap_or_default();
+    /// The GPU backend selected on this profile
+    /// (default: [`GpuBackend::Disabled`](crate::GpuBackend::Disabled)).
+    #[must_use]
+    pub fn selected_gpu_backend(&self) -> crate::GpuBackend {
+        self.gpu_backend
+    }
+```
+
+Then resolve once in `BrowserBuilder`, so a single value drives both the `--disable-gpu` decision and the ANGLE flags:
+
+```rust
+    /// Backend in force for this launch: the builder's own value when set,
+    /// otherwise whatever the attached stealth profile carries.
+    ///
+    /// `--disable-gpu` suppression and ANGLE-backend emission must both read
+    /// this, never `self.gpu_backend` directly — a backend set only on the
+    /// profile would otherwise produce `--disable-gpu` alongside an explicit
+    /// backend, which is the combination that hangs headless Chrome.
+    pub(crate) fn effective_gpu_backend(&self) -> GpuBackend {
+        self.gpu_backend
+            .or_else(|| self.stealth.as_ref().map(StealthProfile::selected_gpu_backend))
+            .unwrap_or_default()
+    }
+```
+
+```rust
+        let gpu_backend = self.effective_gpu_backend();
         if self.headless.unwrap_or(true) {
             v.push("--headless=new".to_string());
             // `--disable-gpu` and an explicit ANGLE backend are mutually

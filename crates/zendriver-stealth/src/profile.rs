@@ -567,6 +567,13 @@ impl StealthProfile {
         self.native_webgl
     }
 
+    /// The GPU backend selected on this profile
+    /// (default: [`GpuBackend::Disabled`](crate::GpuBackend::Disabled)).
+    #[must_use]
+    pub fn selected_gpu_backend(&self) -> crate::GpuBackend {
+        self.gpu_backend
+    }
+
     /// Returns the input-realism profile appropriate for this stealth profile.
     /// `spoofed` returns realistic timings; `native` and `off` return zero-overhead.
     #[must_use]

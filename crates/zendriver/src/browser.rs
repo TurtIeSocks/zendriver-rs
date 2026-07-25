@@ -568,6 +568,7 @@ impl std::fmt::Debug for BrowserBuilder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = f.debug_struct("BrowserBuilder");
         s.field("headless", &self.headless)
+            .field("gpu_backend", &self.gpu_backend)
             .field("executable", &self.executable)
             .field("user_data_dir", &self.user_data_dir)
             .field("downloads_dir", &self.downloads_dir)
@@ -672,7 +673,11 @@ impl BrowserBuilder {
     /// [`GpuBackend::Native`] drops `--disable-gpu` **and** names the
     /// platform's ANGLE backend together — doing only the former hangs
     /// headless Chrome. When a stealth profile also carries a backend, the
-    /// value set here wins.
+    /// value set here wins; if this builder never calls `.gpu_backend`, a
+    /// backend set via
+    /// [`StealthProfile::gpu_backend`](zendriver_stealth::StealthProfile::gpu_backend)
+    /// on the attached profile is honoured instead — see
+    /// [`effective_gpu_backend`](Self::effective_gpu_backend).
     ///
     /// # Examples
     ///
@@ -684,6 +689,23 @@ impl BrowserBuilder {
     pub fn gpu_backend(mut self, backend: GpuBackend) -> Self {
         self.gpu_backend = Some(backend);
         self
+    }
+
+    /// Backend in force for this launch: the builder's own value when set,
+    /// otherwise whatever the attached stealth profile carries.
+    ///
+    /// `--disable-gpu` suppression and ANGLE-backend emission must both read
+    /// this, never `self.gpu_backend` directly — a backend set only on the
+    /// profile would otherwise produce `--disable-gpu` alongside an explicit
+    /// backend, which is the combination that hangs headless Chrome.
+    pub(crate) fn effective_gpu_backend(&self) -> GpuBackend {
+        self.gpu_backend
+            .or_else(|| {
+                self.stealth
+                    .as_ref()
+                    .map(StealthProfile::selected_gpu_backend)
+            })
+            .unwrap_or_default()
     }
 
     /// Override the Chrome executable path.
@@ -1463,7 +1485,7 @@ impl BrowserBuilder {
                     .to_string(),
             );
         }
-        let gpu_backend = self.gpu_backend.unwrap_or_default();
+        let gpu_backend = self.effective_gpu_backend();
         if self.headless.unwrap_or(true) {
             v.push("--headless=new".to_string());
             // `--disable-gpu` and an explicit ANGLE backend are mutually
@@ -5088,6 +5110,57 @@ mod tests {
     #[test]
     fn build_flags_swiftshader_backend_keeps_disable_gpu() {
         let b = Browser::builder().gpu_backend(GpuBackend::SwiftShader);
+        let flags = b.build_flags(Path::new("/tmp/zd-test"));
+        assert!(flags.contains(&"--disable-gpu".to_string()));
+    }
+
+    #[test]
+    fn build_flags_profile_only_native_backend_omits_disable_gpu() {
+        // Backend set only via `StealthProfile::gpu_backend`, never through
+        // `BrowserBuilder::gpu_backend` — this is the path Finding 1 missed:
+        // `build_flags` used to read only `self.gpu_backend` (`None` here),
+        // resolving to `Disabled` and pushing `--disable-gpu` alongside the
+        // profile's own `--use-angle=` flags.
+        let b =
+            Browser::builder().stealth(StealthProfile::native().gpu_backend(GpuBackend::Native));
+        let flags = b.build_flags(Path::new("/tmp/zd-test"));
+        assert!(
+            !flags.contains(&"--disable-gpu".to_string()),
+            "profile-only Native backend must not disable the GPU, got: {flags:?}"
+        );
+        assert!(
+            flags.iter().any(|f| f.starts_with("--use-angle=")),
+            "profile-only Native backend must still emit an ANGLE backend, got: {flags:?}"
+        );
+    }
+
+    #[test]
+    fn build_flags_builder_backend_wins_over_profile_backend() {
+        let b = Browser::builder()
+            .stealth(StealthProfile::native().gpu_backend(GpuBackend::Native))
+            .gpu_backend(GpuBackend::SwiftShader);
+        let flags = b.build_flags(Path::new("/tmp/zd-test"));
+        assert!(
+            flags.contains(&"--disable-gpu".to_string()),
+            "builder's SwiftShader must win and keep --disable-gpu, got: {flags:?}"
+        );
+        assert!(
+            flags.contains(&"--use-angle=swiftshader".to_string()),
+            "got: {flags:?}"
+        );
+        assert!(
+            !flags.iter().any(|f| f == "--use-angle=metal"
+                || f == "--use-angle=d3d11"
+                || f == "--use-angle=vulkan"),
+            "the profile's Native backend must not leak through, got: {flags:?}"
+        );
+    }
+
+    #[test]
+    fn build_flags_profile_disabled_backend_is_unchanged() {
+        // Profile carries the default `GpuBackend::Disabled` — today's argv
+        // must be byte-for-byte identical.
+        let b = Browser::builder().stealth(StealthProfile::native());
         let flags = b.build_flags(Path::new("/tmp/zd-test"));
         assert!(flags.contains(&"--disable-gpu".to_string()));
     }
