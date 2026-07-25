@@ -53,7 +53,7 @@ pub mod ua;
 pub use error::StealthError;
 pub use fingerprint::{Brand, Fingerprint, UserAgentMetadata};
 pub use flags::GpuBackend;
-pub use gpu::{GlParam, Provenance, ShaderPrecision};
+pub use gpu::{GlParam, GpuProfile, Provenance, ShaderPrecision};
 pub use input_profile::InputProfile;
 pub use lang::accept_language;
 pub use observer::StealthObserver;

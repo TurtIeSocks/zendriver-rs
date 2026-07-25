@@ -38,7 +38,6 @@ pub enum GlParam {
 /// `GlParam` owns its `String`/`Vec` payloads so callers can build one at
 /// runtime; a `static` table cannot. The two convert with [`GlParamRef::to_owned_param`].
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[allow(dead_code)] // consumed starting with profile_for_tier (Task 4)
 pub(crate) enum GlParamRef {
     Int(i64),
     Float(f64),
@@ -53,7 +52,6 @@ pub(crate) enum GlParamRef {
 
 impl GlParamRef {
     /// Widen a table entry into the owned form callers see.
-    #[allow(dead_code)] // consumed starting with profile_for_tier (Task 4)
     pub(crate) fn to_owned_param(self) -> GlParam {
         match self {
             Self::Int(i) => GlParam::Int(i),
@@ -92,6 +90,9 @@ pub enum Provenance {
 /// A backend capability tier. Values cluster by tier, not by GPU model:
 /// ANGLE computes them from constants branched on backend and feature level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+// `profile_for_tier` (Task 4) matches on `Tier`, but nothing outside tests
+// constructs a `Tier` value yet — that starts with the persona/fingerprint
+// wiring that calls `profile_for_tier` in production code (a later task).
 #[allow(dead_code)]
 pub(crate) enum Tier {
     SwiftShader,
