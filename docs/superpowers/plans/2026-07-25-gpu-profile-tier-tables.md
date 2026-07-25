@@ -1889,7 +1889,19 @@ fn push_webgl(out: &mut String, spec: Option<&WebglSpec>) {
     let renderer = spec
         .and_then(|s| s.unmasked_renderer.as_deref())
         .unwrap_or(crate::gpu::devices::DEFAULT_RENDERER);
-    let device = crate::gpu::devices::device_for_renderer(renderer);
+    // `device_for_renderer` returns None when no shipped tier matches. Only
+    // SwiftShader and Apple Metal tiers exist today, so a D3D11-family
+    // renderer lands here routinely. Falling back means serving that
+    // renderer's name above another backend's numbers, so it is warned about
+    // rather than done silently — the real fix is capturing that tier.
+    let device = crate::gpu::devices::device_for_renderer(renderer).unwrap_or_else(|| {
+        tracing::warn!(
+            renderer,
+            "no captured GPU tier matches this renderer; using the fallback \
+             device, whose capability values come from a different backend"
+        );
+        crate::gpu::devices::FALLBACK_DEVICE
+    });
     let mut profile = crate::gpu::profile_for_tier(device.tier);
     profile.unmasked_vendor = spec
         .and_then(|s| s.unmasked_vendor.clone())
