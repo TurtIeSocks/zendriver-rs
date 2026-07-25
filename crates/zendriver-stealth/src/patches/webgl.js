@@ -64,6 +64,33 @@
     return o;
   }
 
+  // Real Chrome answers getExtension with an instance of the extension's own
+  // interface. A plain object literal is three one-liners away from telling:
+  // Object.prototype.toString reports [object Object] instead of
+  // [object WEBGL_debug_renderer_info], `instanceof` fails, and — because IDL
+  // constants live on the *prototype* — Object.keys lists the constants where
+  // a real instance has no own properties at all. Same fix as precisionFormat
+  // above: build over the real interface prototype, which already carries both
+  // the constants and the toStringTag. Chrome exposes these interfaces as
+  // globals, so the synthesized prototype below is only a fallback; it mirrors
+  // the IDL's own shape (constants enumerable and non-writable, on the
+  // prototype, plus the toStringTag).
+  function inertExtension(name, consts) {
+    var Ctor = window[name];
+    if (Ctor && Ctor.prototype) return Object.create(Ctor.prototype);
+    var proto = {};
+    if (typeof Symbol !== 'undefined' && Symbol.toStringTag) {
+      Object.defineProperty(proto, Symbol.toStringTag, {
+        value: name,
+        configurable: true,
+      });
+    }
+    for (var k in consts) {
+      Object.defineProperty(proto, k, { value: consts[k], enumerable: true });
+    }
+    return Object.create(proto);
+  }
+
   function patch(proto, isV2) {
     var table = paramsFor(isV2);
     var exts = isV2 ? profile.extensions2 : profile.extensions1;
@@ -149,11 +176,7 @@
         if (stub) {
           // Inert extension: pure constants, nothing to break. Synthesize it
           // so the claimed list and getExtension agree.
-          ext = orig.call(this, canonical);
-          if (!ext) {
-            ext = {};
-            for (var k in stub) ext[k] = stub[k];
-          }
+          ext = orig.call(this, canonical) || inertExtension(canonical, stub);
         } else {
           // Functional extension: the list above only claims it when the
           // backend really has it, so both answers agree either way.
