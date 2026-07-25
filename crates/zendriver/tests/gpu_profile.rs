@@ -3,7 +3,9 @@
 //! Every other check on the GPU tier tables is a unit test, a generated table,
 //! or a model of Blink. This file is the only place the tables meet an actual
 //! browser, so it reads the pairs a fingerprinter cross-checks and asserts the
-//! relations real hardware always satisfies.
+//! relations real hardware always satisfies. It also covers the other half of
+//! the split the tables encode: everything the table does *not* serve has to
+//! keep coming from the real context, which only a browser can show.
 //!
 //! Run with:
 //! ```sh
@@ -22,7 +24,17 @@ use serde_json::Value;
 use zendriver::stealth::StealthProfile;
 use zendriver::{Browser, Tab};
 
-/// Reads the pairs a fingerprinter cross-checks.
+/// Reads the pairs a fingerprinter cross-checks, plus the two reads that prove
+/// per-context state still reaches the real backend.
+///
+/// The device capabilities and the delegated values are read in the **same**
+/// invocation on purpose: a run where `maxTexture` matches the tier table is a
+/// run where the spoof is demonstrably live, so the delegated reads below
+/// cannot be passing merely because the patch never installed.
+///
+/// `stencilGl` is a second context because context attributes are fixed at
+/// creation: `getContext` on a canvas that already has one ignores the
+/// attributes and hands back the existing context.
 const CHECK_JS: &str = r#"
 (() => {
   const gl = document.createElement('canvas').getContext('webgl2');
@@ -31,6 +43,13 @@ const CHECK_JS: &str = r#"
   const listed = gl.getSupportedExtensions();
   const claimedButMissing = listed.filter(n => gl.getExtension(n) === null);
   const aliased = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE);
+  // Mutable state: a table that answered BLEND would answer false forever.
+  const blendBefore = gl.getParameter(gl.BLEND);
+  gl.enable(gl.BLEND);
+  const blendAfter = gl.getParameter(gl.BLEND);
+  // Context-attribute-dependent state: STENCIL_BITS is a property of the
+  // context that was actually created, not of the device.
+  const stencilGl = document.createElement('canvas').getContext('webgl2', {stencil: true});
   return JSON.stringify({
     renderer: dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : null,
     maxTexture: gl.getParameter(gl.MAX_TEXTURE_SIZE),
@@ -40,6 +59,11 @@ const CHECK_JS: &str = r#"
     vert: gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS),
     claimedButMissing,
     aliasedIsFloat32: aliased instanceof Float32Array,
+    blendBefore,
+    blendAfter,
+    stencilRequested: stencilGl ? stencilGl.getContextAttributes().stencil : null,
+    stencilBits: stencilGl ? stencilGl.getParameter(stencilGl.STENCIL_BITS) : null,
+    stencilBitsDefault: gl.getParameter(gl.STENCIL_BITS),
   });
 })()
 "#;
@@ -162,9 +186,9 @@ async fn spoofed_surface(tab: &Tab) -> Value {
     for attempt in 0..MAX_POLL_TRIES {
         let raw: String = tab.evaluate_main(CHECK_JS).await.expect("main-world probe");
         let got: Value = serde_json::from_str(&raw).expect("probe json");
-        // `CHECK_JS` creates a fresh WebGL2 context per invocation and never
-        // releases it, so a long poll accumulates contexts against Chrome's
-        // live-context cap. Once that cap is hit this returns
+        // `CHECK_JS` creates two fresh WebGL2 contexts per invocation and
+        // never releases them, so a long poll accumulates contexts against
+        // Chrome's live-context cap. Once that cap is hit this returns
         // `{error: 'no webgl2'}`, which — because it carries neither
         // `renderer` field — would otherwise read as "different from
         // `native`" and get returned below as though it were the spoof,
@@ -274,6 +298,89 @@ async fn spoofed_profile_is_internally_coherent() {
     assert_eq!(
         got["aliasedIsFloat32"], true,
         "ALIASED_POINT_SIZE_RANGE must be a Float32Array, not Int32Array: {got:#}"
+    );
+}
+
+/// Everything the table does **not** serve must still come from the real
+/// context.
+///
+/// This is the branch's headline fix in a real browser. Freezing per-context
+/// mutable state into the served table made `gl.enable(gl.BLEND);
+/// gl.getParameter(gl.BLEND)` answer `false` forever — a contradiction a page
+/// reaches in two adjacent expressions, and one that breaks every
+/// state-caching renderer that saves and restores through `getParameter`. Two
+/// classes are checked, because they fail for different reasons:
+///
+/// 1. **Mutable state** (`BLEND`) — set by the page, so a table answer is
+///    stale the moment the page writes it.
+/// 2. **Context-attribute-dependent state** (`STENCIL_BITS`) — fixed by the
+///    attributes the page passed to `getContext`, so a table answer describes
+///    a context that was never created.
+///
+/// The served capabilities are read in the same invocation (see [`CHECK_JS`])
+/// and asserted here against the resolved tier, so this cannot pass by the
+/// spoof simply being absent.
+#[tokio::test]
+#[ignore = "launches real Chrome"]
+async fn delegated_state_comes_from_the_real_context_not_the_table() {
+    let browser = Browser::builder()
+        .stealth(StealthProfile::spoofed())
+        .persona(mac_persona())
+        .launch()
+        .await
+        .expect("launch");
+    let tab = browser.main_tab();
+    // Distinct filename per test — same reasoning as `gpu_backend.rs`.
+    tab.goto(&file_url("zendriver-gpu-delegation.html"))
+        .await
+        .expect("goto");
+    tab.wait_for_load().await.expect("load");
+    let got = spoofed_surface(&tab).await;
+    browser.close().await.ok();
+
+    // The spoof is live in this very read: a served capability still comes
+    // from the tier table, so the delegated reads below are not passing
+    // merely because the patch never installed.
+    let (expect_tex, _) = resolved_tier_texture_and_viewport();
+    assert_eq!(
+        got["maxTexture"].as_i64(),
+        Some(expect_tex),
+        "MAX_TEXTURE_SIZE must still be table-served in the same run, else this test proves \
+         nothing about delegation: {got:#}"
+    );
+
+    assert_eq!(
+        got["blendBefore"], false,
+        "BLEND starts disabled on a fresh context: {got:#}"
+    );
+    assert_eq!(
+        got["blendAfter"], true,
+        "gl.enable(gl.BLEND) must be visible to gl.getParameter(gl.BLEND) — a frozen table \
+         answers false forever: {got:#}"
+    );
+
+    assert_eq!(
+        got["stencilRequested"], true,
+        "the second context must have been created with {{stencil: true}}: {got:#}"
+    );
+    let stencil_bits = got["stencilBits"].as_i64().expect("stencilBits");
+    let stencil_default = got["stencilBitsDefault"]
+        .as_i64()
+        .expect("stencilBitsDefault");
+    assert!(
+        stencil_bits > 0,
+        "STENCIL_BITS must reflect the context that was actually created ({{stencil: true}}), \
+         got {stencil_bits}: {got:#}"
+    );
+    // Non-zero alone would also hold for a table that happened to serve a
+    // stencil-enabled capture. What proves the value tracks the *context* is
+    // that the two contexts in this same document disagree — one asked for a
+    // stencil buffer and one did not. A served value cannot do that: both
+    // reads go through the same prototype and would answer identically.
+    assert_ne!(
+        stencil_bits, stencil_default,
+        "STENCIL_BITS must differ between a {{stencil: true}} context and a default one; both \
+         reporting {stencil_bits} means the value is served, not delegated: {got:#}"
     );
 }
 
