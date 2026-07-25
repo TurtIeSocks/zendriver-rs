@@ -90,10 +90,6 @@ pub enum Provenance {
 /// A backend capability tier. Values cluster by tier, not by GPU model:
 /// ANGLE computes them from constants branched on backend and feature level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-// `profile_for_tier` (Task 4) matches on `Tier`, but nothing outside tests
-// constructs a `Tier` value yet — that starts with the persona/fingerprint
-// wiring that calls `profile_for_tier` in production code (a later task).
-#[allow(dead_code)]
 pub(crate) enum Tier {
     SwiftShader,
     MetalAppleFamily3,

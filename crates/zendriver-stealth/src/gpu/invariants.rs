@@ -99,12 +99,11 @@ pub(crate) fn check_coherence(p: &GpuProfile) -> Result<(), String> {
 /// purpose, and refusing to launch over a fingerprint detail is a worse
 /// failure than reporting one. Same stance as the header-coherence check
 /// (#43).
-// Not wired into a patch yet: `push_webgl` resolves a tier from the renderer
-// string alone and never sees the persona's claimed platform, so calling this
-// means threading that platform down to it. Until then the skew this reports
-// — most notably a Win32 persona served the default Apple Metal tier — goes
-// unreported.
-#[allow(dead_code)]
+///
+/// Called by [`push_webgl`](crate::patches) with the platform the page claims
+/// (the persona's, else the probed host's), so the common default — an Apple
+/// Metal tier under a Win32 or Linux persona, the only tiers captured so far —
+/// is reported rather than shipped silently.
 pub(crate) fn platform_skew(platform: Platform, tier: Tier) -> Option<String> {
     // SwiftShader is a software rasterizer, available on every platform, so it
     // never conflicts with a claimed OS.

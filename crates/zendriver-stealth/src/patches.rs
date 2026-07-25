@@ -12,7 +12,7 @@ use serde_json::json;
 
 use crate::persona::surface::{Strategy, Surface};
 use crate::persona::{FontSpec, HardwareSpec, SurfaceCfg, WebglSpec, WebgpuSpec, WebrtcSpec};
-use crate::{Fingerprint, Persona, Seed, UserAgentMetadata};
+use crate::{Fingerprint, GpuProfile, Persona, Platform, Seed, UserAgentMetadata};
 
 // --- Native-function masking prelude (runs first, wraps everything) ------
 const NATIVE: &str = include_str!("patches/_native.js");
@@ -139,7 +139,12 @@ fn bootstrap_script_impl(persona: &Persona, identity: &Fingerprint, spoof_webgl:
     );
 
     if spoof_webgl {
-        push_webgl(&mut body, persona.webgl.as_ref());
+        push_webgl(
+            &mut body,
+            persona.webgl.as_ref(),
+            persona.gpu.as_ref(),
+            resolved_platform(persona, identity),
+        );
     }
     push_webgpu(
         &mut body,
@@ -156,11 +161,19 @@ fn bootstrap_script_impl(persona: &Persona, identity: &Fingerprint, spoof_webgl:
     format!("(function(){{\n{body}\n}})();")
 }
 
+/// The platform the page will claim: the persona's when it pins one, else the
+/// host's as probed. Both the identity IIFE and the WebGL profile resolve it
+/// this way — the GPU tier has to be judged against the OS the page claims,
+/// not the one the process runs on.
+fn resolved_platform(persona: &Persona, identity: &Fingerprint) -> Platform {
+    persona.platform.unwrap_or(identity.platform)
+}
+
 /// Emit the 9 identity patches wrapped in `(function(fp){ ... })(fpJson)`.
 /// Identity is resolved from `identity` with `persona` overrides applied,
 /// preserving UA coherence (see [`bootstrap_script`]).
 fn identity_iife(persona: &Persona, identity: &Fingerprint) -> String {
-    let platform = persona.platform.unwrap_or(identity.platform);
+    let platform = resolved_platform(persona, identity);
 
     // If the persona changes the platform, rebuild UA-CH metadata coherently
     // against the REAL probed Chrome version (never a fallback) so platform +
@@ -226,16 +239,41 @@ fn json_or_null(v: Option<&String>) -> String {
 
 /// Append the WebGL surface patch, substituting one resolved profile.
 ///
+/// Three layers, coarsest first, each overlaying the last — the precedence
+/// [`Persona::gpu`] documents:
+///
+/// 1. the capability tier the renderer string selects, which supplies every
+///    readable parameter;
+/// 2. `gpu`, a caller-pinned whole device, merged key-wise so a partial
+///    profile overrides only what it set;
+/// 3. `spec`, the finest-grained layer, pinning the two masked identity
+///    strings without restating a device.
+///
+/// `platform` is the OS the page will claim, and is only used to report a
+/// tier that could not run on it (a Win32 persona served Apple Metal values).
+///
 /// Under [`Strategy::Native`] nothing is emitted at all: the caller asked for
 /// the real backend, and a partial patch is what produces incoherent pairs
 /// like a spoofed viewport beside a real texture limit.
-fn push_webgl(out: &mut String, spec: Option<&WebglSpec>) {
+fn push_webgl(
+    out: &mut String,
+    spec: Option<&WebglSpec>,
+    gpu: Option<&GpuProfile>,
+    platform: Platform,
+) {
     let strat = Surface::Webgl.resolve_strategy(spec.and_then(|s| s.strategy));
     if strat == Strategy::Native {
         return;
     }
+    // Same precedence as everything else, finest-grained first. The renderer
+    // selects the tier as well as being served, so the name and the numbers
+    // behind it are drawn from one layer rather than two.
     let renderer = spec
         .and_then(|s| s.unmasked_renderer.as_deref())
+        .or_else(|| {
+            gpu.map(|g| g.unmasked_renderer.as_str())
+                .filter(|r| !r.is_empty())
+        })
         .unwrap_or(crate::gpu::devices::DEFAULT_RENDERER);
     // `device_for_renderer` returns None when no shipped tier matches. Only
     // SwiftShader and Apple Metal tiers exist today, so a D3D11-family
@@ -251,9 +289,17 @@ fn push_webgl(out: &mut String, spec: Option<&WebglSpec>) {
         crate::gpu::devices::FALLBACK_DEVICE
     });
     let mut profile = crate::gpu::profile_for_tier(device.tier);
-    profile.unmasked_vendor = spec
-        .and_then(|s| s.unmasked_vendor.clone())
-        .unwrap_or_else(|| device.unmasked_vendor.to_string());
+    if let Some(pinned) = gpu {
+        profile = profile.overlay(pinned.clone());
+    }
+    // The vendor falls back to the device row only when neither the spec nor
+    // the pinned profile named one; overwriting unconditionally would undo the
+    // overlay a caller just asked for.
+    if let Some(vendor) = spec.and_then(|s| s.unmasked_vendor.clone()) {
+        profile.unmasked_vendor = vendor;
+    } else if profile.unmasked_vendor.is_empty() {
+        profile.unmasked_vendor = device.unmasked_vendor.to_string();
+    }
     profile.unmasked_renderer = renderer.to_string();
 
     if let Err(why) = crate::gpu::invariants::check_coherence(&profile) {
@@ -262,6 +308,14 @@ fn push_webgl(out: &mut String, spec: Option<&WebglSpec>) {
         // worse failure than reporting one. Matches the header-coherence
         // warn-on-skew precedent.
         tracing::warn!(reason = %why, "GPU profile is internally incoherent");
+    }
+    // Same stance across surfaces: a tier that cannot exist on the OS the page
+    // claims (the default Apple Metal device under a Win32 or Linux persona)
+    // is reported, not corrected — only capturing that platform's tier fixes
+    // it, and guessing one would pair a real name with another backend's
+    // numbers.
+    if let Some(why) = crate::gpu::invariants::platform_skew(platform, device.tier) {
+        tracing::warn!(reason = %why, "GPU profile disagrees with the persona's platform");
     }
 
     out.push('\n');
@@ -678,10 +732,58 @@ mod tests {
         );
     }
 
+    /// The JSON profile `push_webgl` substitutes, parsed back out of the
+    /// emitted JS. The patch ends with `})(<profile>);`, so the last `})(`
+    /// bounds it — no `})(` can appear inside JSON.
+    fn emitted_profile(js: &str) -> serde_json::Value {
+        let arg = js
+            .rsplit_once("})(")
+            .expect("the patch is an IIFE applied to the profile")
+            .1;
+        // Drop the `);` that closes the call; the profile itself ends in `}`.
+        let json = arg.trim().trim_end_matches([';', ')']);
+        serde_json::from_str(json).expect("the substituted argument is JSON")
+    }
+
+    /// Run `f` with a tracing subscriber capturing WARN and above, and return
+    /// what it logged. A coherence warning nobody can observe is
+    /// indistinguishable from no warning at all.
+    fn captured_warnings(f: impl FnOnce()) -> String {
+        use std::io::Write;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Default)]
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl Write for Sink {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Sink {
+            type Writer = Self;
+            fn make_writer(&'a self) -> Self {
+                self.clone()
+            }
+        }
+
+        let sink = Sink::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(sink.clone())
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+        tracing::subscriber::with_default(subscriber, f);
+        let bytes = sink.0.lock().unwrap().clone();
+        String::from_utf8(bytes).expect("log output is utf-8")
+    }
+
     #[test]
     fn webgl_patch_substitutes_a_complete_profile() {
         let mut out = String::new();
-        push_webgl(&mut out, None);
+        push_webgl(&mut out, None, None, Platform::MacIntel);
         // The profile arrives as one JSON object, not a ladder of literals.
         assert!(out.contains("\"params2\""), "got: {out}");
         assert!(out.contains("\"precision\""), "got: {out}");
@@ -707,7 +809,7 @@ mod tests {
     #[test]
     fn webgl_patch_serves_different_extension_lists_per_context_version() {
         let mut out = String::new();
-        push_webgl(&mut out, None);
+        push_webgl(&mut out, None, None, Platform::MacIntel);
         let profile = out
             .split_once("\"extensions1\":")
             .and_then(|(_, r)| r.split_once("\"extensions2\":"))
@@ -728,10 +830,118 @@ mod tests {
                 strategy: Some(Strategy::Native),
                 ..Default::default()
             }),
+            None,
+            Platform::MacIntel,
         );
         assert!(
             out.is_empty(),
             "Native must leave the real backend alone, got: {out}"
+        );
+    }
+
+    // --- persona.gpu wiring + platform skew ---------------------------------
+
+    #[test]
+    fn a_caller_pinned_gpu_profile_reaches_the_emitted_js() {
+        // `Persona::gpu` used to be inert: a caller pinning a whole device was
+        // silently ignored and got the tier's values verbatim.
+        let mut pinned = GpuProfile::empty();
+        pinned
+            .params_webgl2
+            .insert("MAX_TEXTURE_SIZE".into(), crate::GlParam::Int(4096));
+        pinned.unmasked_vendor = "Google Inc. (NVIDIA)".into();
+        pinned.unmasked_renderer = "ANGLE (NVIDIA GeForce RTX 4090)".into();
+
+        let mut out = String::new();
+        push_webgl(&mut out, None, Some(&pinned), Platform::Win32);
+        let profile = emitted_profile(&out);
+
+        assert_eq!(profile["params2"]["MAX_TEXTURE_SIZE"]["v"], 4096);
+        assert_eq!(
+            profile["params2"]["UNMASKED_RENDERER_WEBGL"]["v"],
+            "ANGLE (NVIDIA GeForce RTX 4090)"
+        );
+        assert_eq!(
+            profile["params2"]["UNMASKED_VENDOR_WEBGL"]["v"],
+            "Google Inc. (NVIDIA)"
+        );
+        // Everything it did not pin still comes from the tier, so one pinned
+        // value cannot hollow out the rest of the device.
+        assert!(
+            profile["params2"]["MAX_VIEWPORT_DIMS"]["v"].is_array(),
+            "unpinned params must survive the overlay"
+        );
+    }
+
+    #[test]
+    fn the_webgl_spec_strings_overlay_a_pinned_gpu_profile() {
+        // Documented precedence: tier, then `Persona::gpu`, then the
+        // finer-grained `WebglSpec` on top.
+        let mut pinned = GpuProfile::empty();
+        pinned.unmasked_vendor = "Google Inc. (NVIDIA)".into();
+        pinned.unmasked_renderer = "ANGLE (NVIDIA GeForce RTX 4090)".into();
+        let spec = WebglSpec {
+            strategy: Some(Strategy::Value),
+            unmasked_vendor: Some("Google Inc. (Apple)".into()),
+            unmasked_renderer: Some("ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro)".into()),
+        };
+
+        let mut out = String::new();
+        push_webgl(&mut out, Some(&spec), Some(&pinned), Platform::MacIntel);
+        let profile = emitted_profile(&out);
+
+        assert_eq!(
+            profile["params2"]["UNMASKED_RENDERER_WEBGL"]["v"],
+            "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro)"
+        );
+        assert_eq!(
+            profile["params2"]["UNMASKED_VENDOR_WEBGL"]["v"],
+            "Google Inc. (Apple)"
+        );
+    }
+
+    #[test]
+    fn a_windows_persona_on_the_metal_tier_warns_about_the_skew() {
+        // The default renderer is the Apple Metal row, so every non-Mac
+        // persona that pins nothing lands here: a Win32 UA above Apple Metal
+        // capability values, which Chrome cannot produce.
+        let logs = captured_warnings(|| {
+            let mut out = String::new();
+            push_webgl(&mut out, None, None, Platform::Win32);
+        });
+        assert!(
+            logs.contains("Win32") && logs.contains("MetalAppleFamily3"),
+            "the platform/tier skew must be reported, got: {logs:?}"
+        );
+    }
+
+    #[test]
+    fn a_mac_persona_on_the_metal_tier_is_quiet() {
+        let logs = captured_warnings(|| {
+            let mut out = String::new();
+            push_webgl(&mut out, None, None, Platform::MacIntel);
+        });
+        assert!(
+            logs.is_empty(),
+            "a coherent platform/tier pair must not warn, got: {logs:?}"
+        );
+    }
+
+    #[test]
+    fn the_bootstrap_passes_the_personas_claimed_platform_to_the_webgl_profile() {
+        // The skew is judged against the OS the *page* claims, not the host's:
+        // the mock identity is MacIntel, and only the persona's Win32 makes
+        // the default Apple Metal tier incoherent.
+        let persona = Persona {
+            platform: Some(Platform::Win32),
+            ..Persona::default()
+        };
+        let logs = captured_warnings(|| {
+            let _ = bootstrap_script(&persona, &mock_identity());
+        });
+        assert!(
+            logs.contains("Win32"),
+            "the persona's platform must reach push_webgl, got: {logs:?}"
         );
     }
 

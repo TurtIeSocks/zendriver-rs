@@ -3623,6 +3623,7 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tracing",
+ "tracing-subscriber",
  "zendriver-transport",
 ]
 
