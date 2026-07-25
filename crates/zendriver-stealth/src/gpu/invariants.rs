@@ -248,20 +248,28 @@ mod tests {
     fn every_resolved_param_has_a_known_enum_number() {
         // A param with no enum number can never be served: the JS looks up
         // profile.enumNames[param] and falls through when it misses.
-        let p = profile_for_tier(Tier::MetalAppleFamily3);
+        //
+        // Swept over Tier::ALL like the neighbouring checks. Every shipped
+        // tier serves the same parameter *names* today, so one tier would be
+        // equivalent — but only incidentally, and a tier whose capture
+        // introduced a name the others lack is exactly the case this catches.
         let known: std::collections::BTreeSet<&str> = crate::gpu::tiers::ENUM_NAMES
             .iter()
             .map(|(_, n)| *n)
             .collect();
-        let orphans: Vec<&String> = p
-            .params_webgl2
-            .keys()
-            .filter(|k| !known.contains(k.as_str()))
-            .collect();
-        assert!(
-            orphans.is_empty(),
-            "params with no enum number: {orphans:?}"
-        );
+        for &tier in Tier::ALL {
+            let p = profile_for_tier(tier);
+            for (version, params) in [("WebGL1", &p.params_webgl1), ("WebGL2", &p.params_webgl2)] {
+                let orphans: Vec<&String> = params
+                    .keys()
+                    .filter(|k| !known.contains(k.as_str()))
+                    .collect();
+                assert!(
+                    orphans.is_empty(),
+                    "{tier:?} serves {version} params with no enum number: {orphans:?}"
+                );
+            }
+        }
     }
 
     // --- platform coherence (spec invariant 3) ------------------------------
