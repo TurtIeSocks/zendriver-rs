@@ -359,6 +359,17 @@ pub(crate) async fn poll_devtools_active_port(user_data_dir: &Path) -> String {
     }
 }
 
+/// Which timeout error a failed launch should report, given the GPU backend.
+///
+/// A `Native` launch on a host whose GPU process cannot start is by far the
+/// most likely cause of an endpoint timeout, so it gets its own variant.
+fn launch_timeout_error(backend: GpuBackend) -> BrowserError {
+    match backend {
+        GpuBackend::Native => BrowserError::GpuBackendUnavailable,
+        GpuBackend::Disabled | GpuBackend::SwiftShader => BrowserError::WsTimeout,
+    }
+}
+
 /// Load (or first-time generate + persist) the fingerprint [`Seed`] bound to a
 /// `user_data_dir`.
 ///
@@ -3125,7 +3136,7 @@ impl BrowserBuilder {
             }
         })
         .await
-        .map_err(|_| BrowserError::WsTimeout)??;
+        .map_err(|_| launch_timeout_error(self.effective_gpu_backend()))??;
 
         // 7–12. WS dial + shared post-connect handshake (auto-attach, main-tab
         // discovery + attach, BrowserInner construction, registrar wiring).
@@ -5179,6 +5190,32 @@ mod tests {
                 "headful must never disable the GPU, backend={backend:?}"
             );
         }
+    }
+
+    #[test]
+    fn native_backend_maps_ws_timeout_to_gpu_error() {
+        let e = super::launch_timeout_error(GpuBackend::Native);
+        assert!(
+            matches!(e, BrowserError::GpuBackendUnavailable),
+            "Native must report a GPU-specific failure, got: {e:?}"
+        );
+        // The message must name the knob and the escape hatch, without
+        // implying zendriver performed a fallback itself.
+        let msg = e.to_string();
+        assert!(msg.contains("gpu_backend"), "got: {msg}");
+        assert!(msg.contains("SwiftShader"), "got: {msg}");
+    }
+
+    #[test]
+    fn non_native_backends_keep_the_plain_ws_timeout() {
+        assert!(matches!(
+            super::launch_timeout_error(GpuBackend::Disabled),
+            BrowserError::WsTimeout
+        ));
+        assert!(matches!(
+            super::launch_timeout_error(GpuBackend::SwiftShader),
+            BrowserError::WsTimeout
+        ));
     }
 
     #[test]
