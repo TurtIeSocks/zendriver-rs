@@ -156,8 +156,13 @@ fn shared_stealth_flags(native_isolation: bool) -> Vec<String> {
 /// [`GpuBackend::Disabled`] (the default) reproduces today's behavior exactly:
 /// no ANGLE flags on `Native`, and the unconditional SwiftShader flags on
 /// `Spoofed` (see the `Spoofed` arm below for why those stay). An explicit
-/// backend adds/replaces the ANGLE flags on any non-Off profile; `Off` stays
-/// stock under every backend.
+/// backend adds/replaces the ANGLE flags on any non-Off profile; `Off`'s own
+/// flag contribution stays stock under every backend (this function never
+/// adds ANGLE flags to it). That is narrower than "the launch is unaffected"
+/// — a caller can still combine `StealthProfile::off()` with
+/// [`BrowserBuilder::gpu_backend`](https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.gpu_backend),
+/// which resolves independently of `ProfileKind` and adds its own ANGLE
+/// flags to the launch argv outside this function.
 #[must_use]
 pub fn flags_for_profile(
     kind: ProfileKind,
@@ -165,8 +170,12 @@ pub fn flags_for_profile(
     gpu_backend: GpuBackend,
 ) -> Vec<String> {
     match kind {
-        // Off stays a truly stock launch under every backend — selecting a
-        // GPU backend on an Off profile is a no-op by design.
+        // This function's own contribution for Off stays empty under every
+        // backend — `gpu_backend` never adds ANGLE flags to an Off profile's
+        // flag list. That does NOT mean an Off launch is unaffected by GPU
+        // backend selection end-to-end: the caller's `BrowserBuilder` resolves
+        // its effective backend independently of `ProfileKind` and can still
+        // add ANGLE flags / omit `--disable-gpu` for the overall launch argv.
         ProfileKind::Off => Vec::new(),
         ProfileKind::Native => {
             let mut v = shared_stealth_flags(native_isolation);
@@ -405,7 +414,12 @@ mod tests {
     #[test]
     fn off_profile_stays_empty_under_every_backend() {
         // `off()` is documented as a truly stock launch and its doctest
-        // asserts `build_flags().is_empty()`. A GPU backend must not break it.
+        // asserts `build_flags().is_empty()`. This checks only this
+        // function's own contribution for `ProfileKind::Off` — it must stay
+        // empty under every backend. It does not cover the end-to-end launch
+        // argv: `BrowserBuilder::gpu_backend` resolves independently of
+        // `ProfileKind` and can still add ANGLE flags on top of an Off
+        // profile (see `BrowserBuilder::effective_gpu_backend`).
         for backend in [
             GpuBackend::Disabled,
             GpuBackend::SwiftShader,
