@@ -231,16 +231,28 @@ values cluster by *(backend, capability tier)* rather than by exact GPU
 model. Two tiers ship today:
 
 - `SwiftShader` — Chrome's software rasterizer.
-- Apple Metal (family 3) — the default when a persona names no renderer of
-  its own, because a persona that says nothing should look like ordinary
-  hardware; SwiftShader's own renderer string is itself a bot signal.
+- Apple Metal (family 3) — real Apple silicon.
 
-**A renderer matching neither tier falls back to the Apple Metal device and
-logs a warning.** Serving an unrecognized renderer's *name* above a
-different backend's *numbers* would be its own incoherence — an unmatched
-D3D11 or Vulkan renderer string (Intel, NVIDIA, AMD) is expected and common,
-since only two tiers are captured so far. Adding a tier requires probing
-real hardware with that backend; values are never invented. See the
+**When a persona names no renderer, the default is chosen from its
+platform.** A renderer string is read beside `navigator.platform`, so the two
+have to be a pair Chrome can actually produce. A `MacIntel` persona gets the
+Apple Metal row; a `Win32` or `LinuxX86_64` persona gets the SwiftShader row,
+whose renderer string names no platform-specific API and which Chrome really
+does report on a GPU-blocklisted machine, a VM, or a headless container. The
+honest cost: SwiftShader says "no usable GPU", which some fingerprinters
+weight on its own. That is a real configuration rather than an impossible
+one, so it beats the alternative — a Windows-looking D3D11 name served above
+Apple Metal's numbers, or (as previously shipped) the Apple Metal string
+itself under a Win32 `navigator.platform`. The actual fix is capturing a
+D3D11 tier on Windows hardware.
+
+**A renderer you pin yourself that matches neither tier falls back to your
+platform's default device and logs a warning.** Serving an unrecognized
+renderer's *name* above a different backend's *numbers* is its own
+incoherence — an unmatched D3D11 or Vulkan renderer string (Intel, NVIDIA,
+AMD) is expected and common, since only two tiers are captured so far.
+Adding a tier requires probing real hardware with that backend; values are
+never invented. See the
 [`capture-gpu-tier` skill](https://github.com/TurtIeSocks/zendriver-rs/blob/main/.claude/skills/capture-gpu-tier/SKILL.md)
 for the procedure if you hit this warning and have the hardware to fix it.
 

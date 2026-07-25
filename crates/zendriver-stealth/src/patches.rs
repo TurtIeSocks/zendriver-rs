@@ -150,12 +150,16 @@ fn bootstrap_script_impl(persona: &Persona, identity: &Fingerprint, spoof_webgl:
         && Surface::Webgl.resolve_strategy(persona.webgl.as_ref().and_then(|s| s.strategy))
             != Strategy::Native;
 
+    // Both GPU surfaces need the platform the page will claim: WebGL judges
+    // its tier against it and WebGPU derives its adapter from the same
+    // renderer, so resolving it once here is what keeps the two on one device.
+    let platform = resolved_platform(persona, identity);
     if webgl_spoofed {
         push_webgl(
             &mut body,
             persona.webgl.as_ref(),
             persona.gpu.as_ref(),
-            resolved_platform(persona, identity),
+            platform,
         );
     }
     push_webgpu(
@@ -164,6 +168,7 @@ fn bootstrap_script_impl(persona: &Persona, identity: &Fingerprint, spoof_webgl:
         persona.webgl.as_ref(),
         persona.gpu.as_ref(),
         webgl_spoofed,
+        platform,
     );
     push_fonts(&mut body, persona.fonts.as_ref(), seed);
     push_hardware(&mut body, persona.hardware.as_ref());
@@ -252,20 +257,29 @@ fn json_or_null(v: Option<&String>) -> String {
 
 /// The GPU renderer string the persona claims, finest-grained layer first:
 /// the [`WebglSpec`]'s, then a pinned [`Persona::gpu`]'s, then the default
-/// device row.
+/// device row for `platform`.
 ///
 /// One function because both GPU surfaces resolve it: WebGL serves it (and
 /// picks its capability tier from it), and WebGPU derives its adapter
 /// vendor/architecture from it. Resolving it twice is how the two drift onto
 /// different GPUs — `gpu::devices` exists precisely so one renderer drives
 /// both.
-fn resolved_renderer<'a>(spec: Option<&'a WebglSpec>, gpu: Option<&'a GpuProfile>) -> &'a str {
+///
+/// `platform` only selects the default. A renderer string is read beside
+/// `navigator.platform`, so the fallback has to be one Chrome could report on
+/// the OS the page claims — see
+/// [`default_device`](crate::gpu::devices::default_device).
+fn resolved_renderer<'a>(
+    spec: Option<&'a WebglSpec>,
+    gpu: Option<&'a GpuProfile>,
+    platform: Platform,
+) -> &'a str {
     spec.and_then(|s| s.unmasked_renderer.as_deref())
         .or_else(|| {
             gpu.map(|g| g.unmasked_renderer.as_str())
                 .filter(|r| !r.is_empty())
         })
-        .unwrap_or(crate::gpu::devices::DEFAULT_RENDERER)
+        .unwrap_or_else(|| crate::gpu::devices::default_renderer(platform))
 }
 
 /// Append the WebGL surface patch, substituting one resolved profile.
@@ -298,19 +312,21 @@ fn push_webgl(
     if strat == Strategy::Native {
         return;
     }
-    let renderer = resolved_renderer(spec, gpu);
+    let renderer = resolved_renderer(spec, gpu, platform);
     // `device_for_renderer` returns None when no shipped tier matches. Only
-    // SwiftShader and Apple Metal tiers exist today, so a D3D11-family
-    // renderer lands here routinely. Falling back means serving that
-    // renderer's name above another backend's numbers, so it is warned about
-    // rather than done silently — the real fix is capturing that tier.
+    // SwiftShader and Apple Metal tiers exist today, so a caller-pinned
+    // D3D11-family renderer lands here routinely. Falling back means serving
+    // that renderer's name above another backend's numbers, so it is warned
+    // about rather than done silently — the real fix is capturing that tier.
+    // The default renderer never reaches this path: it is drawn from a shipped
+    // row by construction.
     let device = crate::gpu::devices::device_for_renderer(renderer).unwrap_or_else(|| {
         tracing::warn!(
             renderer,
-            "no captured GPU tier matches this renderer; using the fallback \
-             device, whose capability values come from a different backend"
+            "no captured GPU tier matches this renderer; using the platform's \
+             default device, whose capability values come from a different backend"
         );
-        crate::gpu::devices::FALLBACK_DEVICE
+        crate::gpu::devices::default_device(platform)
     });
     let mut profile = crate::gpu::profile_for_tier(device.tier);
     if let Some(pinned) = gpu {
@@ -367,6 +383,7 @@ fn push_webgpu(
     webgl: Option<&WebglSpec>,
     gpu: Option<&GpuProfile>,
     webgl_spoofed: bool,
+    platform: Platform,
 ) {
     use crate::gpu::devices::adapter_for_renderer;
     let strat = Surface::Webgpu.resolve_strategy(spec.and_then(|s| s.strategy));
@@ -401,7 +418,7 @@ fn push_webgpu(
     // used to fall back to a local Intel string while the WebGL side fell back
     // to the Apple device row, so a persona that pinned no renderer reported
     // an Apple GPU to WebGL and an Intel one to WebGPU.
-    let derived = adapter_for_renderer(resolved_renderer(webgl, gpu));
+    let derived = adapter_for_renderer(resolved_renderer(webgl, gpu, platform));
 
     let vendor = spec
         .and_then(|s| s.vendor.clone())
@@ -939,13 +956,65 @@ mod tests {
     }
 
     #[test]
-    fn a_windows_persona_on_the_metal_tier_warns_about_the_skew() {
-        // The default renderer is the Apple Metal row, so every non-Mac
-        // persona that pins nothing lands here: a Win32 UA above Apple Metal
-        // capability values, which Chrome cannot produce.
+    fn a_non_mac_persona_that_pins_nothing_gets_a_coherent_default() {
+        // The default used to be the Apple Metal row unconditionally, so every
+        // non-Mac persona reported an Apple renderer beside a Win32 or Linux
+        // navigator.platform — a pair Chrome cannot produce, which the skew
+        // check flagged on every launch. The default is now drawn from the
+        // platform, so the common case is coherent and silent.
+        for platform in [Platform::Win32, Platform::LinuxX86_64] {
+            let mut out = String::new();
+            let logs = captured_warnings(|| push_webgl(&mut out, None, None, platform));
+            assert!(
+                logs.is_empty(),
+                "the default profile must not warn on {platform:?}, got: {logs:?}"
+            );
+            let renderer = emitted_profile(&out)["params2"]["UNMASKED_RENDERER_WEBGL"]["v"]
+                .as_str()
+                .expect("renderer string")
+                .to_string();
+            assert!(
+                renderer.contains("SwiftShader"),
+                "{platform:?} must default to a renderer Chrome can report on it, got {renderer}"
+            );
+            assert!(
+                !renderer.contains("Apple"),
+                "{platform:?} must not default to an Apple renderer, got {renderer}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_mac_persona_that_pins_nothing_still_gets_the_apple_row() {
+        // Choosing the renderer string is platform-derived, not a retreat to
+        // software everywhere: macOS keeps the real hardware row.
+        let mut out = String::new();
+        push_webgl(&mut out, None, None, Platform::MacIntel);
+        let renderer = emitted_profile(&out)["params2"]["UNMASKED_RENDERER_WEBGL"]["v"]
+            .as_str()
+            .expect("renderer string")
+            .to_string();
+        assert!(
+            renderer.contains("Apple") && renderer.contains("Metal"),
+            "macOS must keep the Apple Metal row, got {renderer}"
+        );
+    }
+
+    #[test]
+    fn a_windows_persona_pinned_to_the_metal_tier_still_warns_about_the_skew() {
+        // A caller can still pair them deliberately, and that stays a warning
+        // rather than an error — the skew check must keep reaching push_webgl
+        // now that the default no longer trips it.
+        let spec = WebglSpec {
+            strategy: None,
+            unmasked_vendor: None,
+            unmasked_renderer: Some(
+                "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)".into(),
+            ),
+        };
         let logs = captured_warnings(|| {
             let mut out = String::new();
-            push_webgl(&mut out, None, None, Platform::Win32);
+            push_webgl(&mut out, Some(&spec), None, Platform::Win32);
         });
         assert!(
             logs.contains("Win32") && logs.contains("MetalAppleFamily3"),
@@ -967,20 +1036,45 @@ mod tests {
 
     #[test]
     fn the_bootstrap_passes_the_personas_claimed_platform_to_the_webgl_profile() {
-        // The skew is judged against the OS the *page* claims, not the host's:
-        // the mock identity is MacIntel, and only the persona's Win32 makes
-        // the default Apple Metal tier incoherent.
-        let persona = Persona {
-            platform: Some(Platform::Win32),
-            ..Persona::default()
+        // The default device is chosen against the OS the *page* claims, not
+        // the host's: the mock identity is MacIntel, so only the persona's own
+        // Win32 can move the default off the Apple Metal row. Observed through
+        // the emitted renderer rather than a warning, because the coherent
+        // default no longer warns at all.
+        let renderer_for = |platform: Option<Platform>| {
+            let persona = Persona {
+                platform,
+                ..Persona::default()
+            };
+            let script = bootstrap_script(&persona, &mock_identity());
+            let line = script
+                .lines()
+                .find(|l| l.starts_with("})({") && l.contains("\"params1\":"))
+                .expect("substituted WebGL profile");
+            let profile: serde_json::Value = serde_json::from_str(
+                line.trim_start_matches("})(")
+                    .trim_end_matches(';')
+                    .trim_end_matches(')'),
+            )
+            .expect("profile json");
+            profile["params2"]["UNMASKED_RENDERER_WEBGL"]["v"]
+                .as_str()
+                .expect("renderer string")
+                .to_string()
         };
-        let logs = captured_warnings(|| {
-            let _ = bootstrap_script(&persona, &mock_identity());
-        });
+
+        let win = renderer_for(Some(Platform::Win32));
         assert!(
-            logs.contains("Win32"),
-            "the persona's platform must reach push_webgl, got: {logs:?}"
+            win.contains("SwiftShader"),
+            "the persona's Win32 must reach the WebGL profile, got {win}"
         );
+        // Unset falls through to the identity's MacIntel, which keeps Apple.
+        let host = renderer_for(None);
+        assert!(
+            host.contains("Apple"),
+            "an unset persona platform must fall through to the host's, got {host}"
+        );
+        assert_ne!(win, host, "the platform must actually change the default");
     }
 
     // --- opt-in native-WebGL bootstrap (Task 10) ----------------------------

@@ -14,15 +14,17 @@
 //! unclassified GPUs, so empty is coherent and safe. A WRONG token reads as an
 //! unknown device to a fingerprinting WAF.
 
+use crate::Platform;
 use crate::gpu::types::Tier;
 
 /// One device's identity. Only what genuinely varies per device lives here;
 /// the capability values come from the device's [`Tier`].
 ///
-/// `unmasked_renderer` and the two `webgpu_*` fields are reference data that
-/// only this module's tests read today: `push_webgl` serves the caller's own
-/// renderer string (falling back to [`DEFAULT_RENDERER`]), and `push_webgpu`
-/// derives its adapter through [`adapter_for_renderer`] rather than from a row.
+/// `unmasked_renderer` is read both by this module's tests and by
+/// [`default_renderer`], which is what `push_webgl` falls back to when the
+/// caller pins no renderer of its own. The two `webgpu_*` fields are reference
+/// data only: `push_webgpu` derives its adapter through
+/// [`adapter_for_renderer`] rather than from a row.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DeviceRow {
@@ -57,24 +59,54 @@ const DEVICES: &[DeviceRow] = &[
     },
 ];
 
-/// Renderer assumed when a persona pins no WebGL renderer of its own.
+/// The device row assumed for a platform, used both when a persona pins no
+/// WebGL renderer at all and when the renderer it pins matches no shipped
+/// tier.
 ///
-/// The Apple Metal row rather than the software one: a persona that says
-/// nothing should look like ordinary hardware, and SwiftShader's renderer
-/// string is itself a bot signal.
-pub(crate) const DEFAULT_RENDERER: &str =
-    "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)";
+/// **The rule: pick a row whose renderer string real Chrome could report on
+/// that platform.** A renderer string is read beside `navigator.platform`, and
+/// the two have to be a pair Chrome can produce. Choosing the string needs no
+/// new hardware capture — only choosing new *capability values* would.
+///
+/// - macOS gets the Apple Metal row, which is both coherent and real hardware.
+/// - Every other platform gets the SwiftShader row. Chrome's software
+///   rasterizer runs on every OS and its renderer string names no
+///   platform-specific API, so the pairing is one real Chrome does produce
+///   (a GPU-blocklisted machine, a VM, a headless container), and the
+///   capability values served beside it are genuinely SwiftShader's.
+///
+/// The rejected alternative was a D3D11 Intel string, which is what shipped
+/// before the tier tables existed. It looks like ordinary hardware, but no
+/// captured tier matches it: [`device_for_renderer`] returns `None`, so an
+/// Intel name would be served above *Apple Metal's* numbers. That is a
+/// plausible-looking mismatch rather than a coherent identity — and the
+/// previous default was worse still, reporting the Apple Metal string itself
+/// under a Win32 or Linux `navigator.platform`, a pair Chrome cannot produce
+/// and which [`platform_skew`](crate::gpu::invariants::platform_skew) flagged
+/// on every launch.
+///
+/// The cost is honest and worth naming: SwiftShader means "this machine has no
+/// usable GPU", which some fingerprinters weight on its own. That is a real
+/// configuration rather than an impossible one, so it is the better trade —
+/// but the actual fix is capturing a D3D11 tier on Windows hardware, after
+/// which this should return that row for `Win32`. See the `capture-gpu-tier`
+/// skill.
+pub(crate) fn default_device(platform: Platform) -> DeviceRow {
+    match platform {
+        Platform::MacIntel => METAL_APPLE,
+        Platform::Win32 | Platform::LinuxX86_64 => SWIFTSHADER,
+    }
+}
 
-/// Row used when a renderer matches no shipped tier.
-///
-/// Deliberately the hardware row, not the software one: a persona that
-/// pins nothing should look like ordinary hardware, and SwiftShader's
-/// renderer string is itself a bot signal. Callers must reach for this
-/// explicitly, because using it for a renderer that named a *different*
-/// vendor means serving that vendor's name above Apple's capability
-/// values — incoherent, and only acceptable until that vendor's tier is
-/// actually captured.
-pub(crate) const FALLBACK_DEVICE: DeviceRow = DEVICES[1];
+/// Renderer string assumed for a platform. See [`default_device`].
+pub(crate) fn default_renderer(platform: Platform) -> &'static str {
+    default_device(platform).unmasked_renderer
+}
+
+/// Named row aliases, so the platform mapping above reads as intent rather
+/// than as an index into [`DEVICES`].
+const SWIFTSHADER: DeviceRow = DEVICES[0];
+const METAL_APPLE: DeviceRow = DEVICES[1];
 
 /// Pick the device row a renderer string belongs to, by explicit
 /// [`DeviceRow::match_token`] — never by a key derived from a row's own
@@ -83,7 +115,7 @@ pub(crate) const FALLBACK_DEVICE: DeviceRow = DEVICES[1];
 /// Only two tiers ship today (SwiftShader and Apple Metal), so `None` is
 /// common and expected for D3D11-family renderers (Intel/NVIDIA/AMD) that
 /// have no captured tier yet. Callers that need a value regardless should
-/// reach for [`FALLBACK_DEVICE`] explicitly rather than have one guessed
+/// reach for [`default_device`] explicitly rather than have one guessed
 /// here. Adding a tier means capturing it on that hardware, not inventing
 /// values for an existing row.
 pub(crate) fn device_for_renderer(renderer: &str) -> Option<DeviceRow> {
@@ -337,6 +369,47 @@ mod tests {
             device_for_renderer(intel).map(|d| d.tier),
             Some(Tier::SwiftShader),
             "a real Intel GPU must never resolve to the software rasterizer's values"
+        );
+    }
+
+    #[test]
+    fn the_default_renderer_is_coherent_with_every_platform() {
+        // A renderer string is read beside navigator.platform, so the default
+        // has to be a pair Chrome can produce. The regression this guards: the
+        // default was the Apple Metal string unconditionally, so a Win32 or
+        // Linux persona reported an Apple GPU.
+        for platform in [Platform::Win32, Platform::MacIntel, Platform::LinuxX86_64] {
+            let row = default_device(platform);
+            // Whatever is chosen must be a shipped row, so its renderer name
+            // and its capability values come from the same backend.
+            assert!(
+                DEVICES.contains(&row),
+                "{platform:?} defaults to a row that is not in DEVICES"
+            );
+            assert_eq!(
+                device_for_renderer(row.unmasked_renderer).map(|d| d.tier),
+                Some(row.tier),
+                "{platform:?}'s default renderer must resolve back to its own tier"
+            );
+            // An Apple renderer is only coherent on macOS.
+            if platform != Platform::MacIntel {
+                assert!(
+                    !row.unmasked_renderer.contains("Apple"),
+                    "{platform:?} must not default to an Apple renderer: {}",
+                    row.unmasked_renderer
+                );
+            }
+            // And the default must never trip the skew check, which is what
+            // fired on every non-Mac launch before.
+            assert_eq!(
+                crate::gpu::invariants::platform_skew(platform, row.tier),
+                None,
+                "{platform:?}'s default tier must not skew against it"
+            );
+        }
+        assert_eq!(
+            default_device(Platform::MacIntel).tier,
+            Tier::MetalAppleFamily3
         );
     }
 

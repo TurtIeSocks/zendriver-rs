@@ -55,7 +55,7 @@ const CHECK_JS: &str = r#"
 const MAX_POLL_TRIES: u32 = 20;
 const POLL_DELAY: Duration = Duration::from_millis(50);
 
-/// The capture the default spoofed persona's GPU renderer resolves to.
+/// The capture the persona's GPU renderer resolves to.
 ///
 /// Every assertion below this point also holds against an unpatched
 /// SwiftShader surface (16384/16384 vs 8192/8192 both satisfy `viewport >=
@@ -73,13 +73,29 @@ const POLL_DELAY: Duration = Duration::from_millis(50);
 /// from — table-derived, not a hand-copied literal — rather than the table
 /// itself.
 ///
-/// This is the Metal tier specifically because `StealthProfile::spoofed()`
-/// below pins no persona/WebGL spec, so `push_webgl` resolves the renderer to
-/// `gpu::devices::DEFAULT_RENDERER` ("ANGLE (Apple, ANGLE Metal Renderer:
-/// Apple M4 Pro, Unspecified Version)"), which `device_for_renderer` maps to
-/// `Tier::MetalAppleFamily3` — the same row this JSON was captured from.
+/// This is the Metal tier because every test below pins a `MacIntel` persona
+/// (see [`mac_persona`]). The default renderer is platform-derived — a
+/// `MacIntel` persona resolves the Apple Metal row, a `Win32` or
+/// `LinuxX86_64` one the SwiftShader row — so pinning the platform is what
+/// makes the expected tier the same on every host this test runs on.
+///
+/// Pinning also keeps the test meaningful rather than merely deterministic.
+/// `spoofed_surface` below proves the patch installed by observing that the
+/// main world reports a *different* renderer than the unpatched isolated
+/// world, and `StealthProfile::spoofed()` launches Chrome on SwiftShader. A
+/// non-Mac persona would therefore spoof SwiftShader's values over a
+/// SwiftShader backend, leaving nothing to tell apart.
 const RESOLVED_TIER_CAPTURE: &str =
     include_str!("../../zendriver-stealth/data/gpu-tiers/metal-apple-family3.json");
+
+/// The persona every test here launches with: a Mac, so the platform-derived
+/// default renderer resolves to the Apple Metal row on any host.
+fn mac_persona() -> zendriver::stealth::Persona {
+    zendriver::stealth::Persona {
+        platform: Some(zendriver::stealth::Platform::MacIntel),
+        ..Default::default()
+    }
+}
 
 /// `(MAX_TEXTURE_SIZE, MAX_VIEWPORT_DIMS)` from the capture the default
 /// persona's GPU tier resolves to — see [`RESOLVED_TIER_CAPTURE`].
@@ -183,6 +199,7 @@ async fn spoofed_surface(tab: &Tab) -> Value {
 async fn spoofed_profile_is_internally_coherent() {
     let browser = Browser::builder()
         .stealth(StealthProfile::spoofed())
+        .persona(mac_persona())
         .launch()
         .await
         .expect("launch");
@@ -222,6 +239,16 @@ async fn spoofed_profile_is_internally_coherent() {
     // actually resolved to — see `RESOLVED_TIER_CAPTURE` — so serving the
     // wrong tier, or falling back to the native surface, fails loudly here
     // instead of passing silently.
+    // The renderer the platform-derived default picked. A MacIntel persona
+    // must land on the Apple Metal row; before that default was derived from
+    // the platform at all, this string was Apple's under every persona,
+    // including Win32 ones Chrome could never pair it with.
+    let renderer = got["renderer"].as_str().expect("renderer");
+    assert!(
+        renderer.contains("Apple") && renderer.contains("Metal"),
+        "a MacIntel persona must resolve the Apple Metal row, got {renderer}"
+    );
+
     let (expect_tex, expect_vp) = resolved_tier_texture_and_viewport();
     assert_eq!(
         tex, expect_tex,
@@ -258,6 +285,7 @@ async fn spoofed_profile_is_internally_coherent() {
 async fn extension_lists_agree_with_get_extension() {
     let browser = Browser::builder()
         .stealth(StealthProfile::spoofed())
+        .persona(mac_persona())
         .launch()
         .await
         .expect("launch");
