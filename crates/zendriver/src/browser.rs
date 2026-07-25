@@ -687,8 +687,7 @@ impl BrowserBuilder {
     /// value set here wins; if this builder never calls `.gpu_backend`, a
     /// backend set via
     /// [`StealthProfile::gpu_backend`](zendriver_stealth::StealthProfile::gpu_backend)
-    /// on the attached profile is honoured instead — see
-    /// [`effective_gpu_backend`](Self::effective_gpu_backend).
+    /// on the attached profile is honoured instead.
     ///
     /// # Examples
     ///

@@ -1,10 +1,15 @@
 # GPU backend
 
-By default zendriver launches Chrome with `--disable-gpu`, which pushes WebGL
-and WebGPU onto Chrome's built-in software fallback (SwiftShader). That is a
-safe default for headless CI, but it produces a GPU surface no real device
-ever produces: numeric WebGL capability limits and the SwiftShader renderer
-string that no laptop or workstation reports.
+By default zendriver launches Chrome with `--disable-gpu` and no ANGLE
+backend named. Bare `--disable-gpu` does not by itself guarantee a working
+WebGL context — Chrome ≥116 returns `null` from `canvas.getContext('webgl')`
+without `--enable-unsafe-swiftshader`. It's the **spoofed** stealth profile
+that forces a working software fallback, by unconditionally adding
+`--use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader` so a
+WebGL context exists at all under headless. That is a safe default for
+headless CI, but it produces a GPU surface no real device ever produces:
+numeric WebGL capability limits and the SwiftShader renderer string that no
+laptop or workstation reports.
 
 `GpuBackend` is an opt-in `BrowserBuilder` option that lets Chrome use the
 host's real GPU instead.
@@ -15,7 +20,7 @@ use zendriver::{Browser, GpuBackend};
 # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
 let browser = Browser::builder()
     .gpu_backend(GpuBackend::Native)
-    .build()
+    .launch()
     .await?;
 # Ok(())
 # }
@@ -72,9 +77,14 @@ All figures below are from real Chrome (150.0.7871.186) on this project's
 darwin dev host (Apple M4 Pro), probed with the
 [`probe_gpu` example](#probing-your-own-host). WebGL figures are from a
 secure-context (`file://`) page — see the note on `navigator.gpu` below for
-why that matters.
+why that matters. The `SwiftShader` column is `GpuBackend::SwiftShader`
+(equivalently: `GpuBackend::Disabled` with a spoofed stealth profile
+attached, since that profile forces the same flags — see the intro above).
+Bare `GpuBackend::Disabled` with no spoofed profile was not measured here and
+is not shown — it emits no ANGLE flags, so nothing above the "does a WebGL
+context exist at all" question applies to it.
 
-| | `Disabled` / `SwiftShader` | `Native` |
+| | `SwiftShader` | `Native` |
 |---|---|---|
 | WebGPU adapter | none (`requestAdapter()` resolves `null`) | real: `vendor: "apple"`, `architecture: "metal-3"` |
 | `requestDevice()` | n/a (no adapter) | succeeds |
