@@ -794,8 +794,10 @@ At `crates/zendriver/src/browser.rs:3059`, replace:
 with:
 
 ```rust
-        .map_err(|_| launch_timeout_error(self.gpu_backend.unwrap_or_default()))??;
+        .map_err(|_| launch_timeout_error(self.effective_gpu_backend()))??;
 ```
+
+Use `effective_gpu_backend()` (added in Task 3), **not** `self.gpu_backend` — a backend carried only by the attached stealth profile must produce the same actionable error, otherwise the launch that is most likely to time out reports the least useful message.
 
 - [ ] **Step 6: Run tests to verify they pass**
 
