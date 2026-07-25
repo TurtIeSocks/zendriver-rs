@@ -2,6 +2,7 @@
 // Sources:
 //   swiftshader — probed: Google Chrome 150.0.7871.186  on Darwin
 //   metal-apple-family3 — probed: Google Chrome 150.0.7871.186  on Darwin
+//   d3d11-fl11 — probed: Chrome 150.0.7871.186 on Windows 10.0.21996
 #![allow(dead_code)]
 #![allow(clippy::type_complexity)]
 
@@ -27,6 +28,24 @@ pub(crate) static BASE_PARAMS_WEBGL1: &[(&str, GlParam)] = &[
 
 /// Per-tier WEBGL1 exceptions to the base, keyed by tier name.
 pub(crate) static PARAM_OVERRIDES_WEBGL1: &[(&str, &[(&str, GlParam)])] = &[
+    (
+        "d3d11-fl11",
+        &[
+            (
+                "ALIASED_POINT_SIZE_RANGE",
+                GlParam::FloatPair([1.0, 1024.0]),
+            ),
+            ("MAX_COMBINED_TEXTURE_IMAGE_UNITS", GlParam::Int(32)),
+            ("MAX_FRAGMENT_UNIFORM_VECTORS", GlParam::Int(1024)),
+            ("MAX_RENDERBUFFER_SIZE", GlParam::Int(16384)),
+            ("MAX_TEXTURE_IMAGE_UNITS", GlParam::Int(16)),
+            ("MAX_TEXTURE_SIZE", GlParam::Int(16384)),
+            ("MAX_VARYING_VECTORS", GlParam::Int(30)),
+            ("MAX_VERTEX_TEXTURE_IMAGE_UNITS", GlParam::Int(16)),
+            ("MAX_VERTEX_UNIFORM_VECTORS", GlParam::Int(4095)),
+            ("MAX_VIEWPORT_DIMS", GlParam::IntPair([32767, 32767])),
+        ],
+    ),
     (
         "metal-apple-family3",
         &[
@@ -72,13 +91,7 @@ pub(crate) static BASE_PARAMS_WEBGL2: &[(&str, GlParam)] = &[
     ("MAX_ELEMENTS_INDICES", GlParam::Int(2147483647)),
     ("MAX_ELEMENTS_VERTICES", GlParam::Int(2147483647)),
     ("MAX_PROGRAM_TEXEL_OFFSET", GlParam::Int(7)),
-    ("MAX_SAMPLES", GlParam::Int(4)),
     ("MAX_SERVER_WAIT_TIMEOUT", GlParam::Int(0)),
-    ("MAX_TEXTURE_LOD_BIAS", GlParam::Float(15.0)),
-    (
-        "MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS",
-        GlParam::Int(128),
-    ),
     ("MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS", GlParam::Int(4)),
     (
         "MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS",
@@ -102,6 +115,52 @@ pub(crate) static BASE_PARAMS_WEBGL2: &[(&str, GlParam)] = &[
 /// Per-tier WEBGL2 exceptions to the base, keyed by tier name.
 pub(crate) static PARAM_OVERRIDES_WEBGL2: &[(&str, &[(&str, GlParam)])] = &[
     (
+        "d3d11-fl11",
+        &[
+            (
+                "ALIASED_POINT_SIZE_RANGE",
+                GlParam::FloatPair([1.0, 1024.0]),
+            ),
+            ("MAX_COLOR_ATTACHMENTS", GlParam::Int(8)),
+            (
+                "MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS",
+                GlParam::Int(200704),
+            ),
+            ("MAX_COMBINED_TEXTURE_IMAGE_UNITS", GlParam::Int(32)),
+            ("MAX_COMBINED_UNIFORM_BLOCKS", GlParam::Int(24)),
+            (
+                "MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS",
+                GlParam::Int(212988),
+            ),
+            ("MAX_DRAW_BUFFERS", GlParam::Int(8)),
+            ("MAX_ELEMENT_INDEX", GlParam::Int(4294967294)),
+            ("MAX_FRAGMENT_INPUT_COMPONENTS", GlParam::Int(120)),
+            ("MAX_FRAGMENT_UNIFORM_BLOCKS", GlParam::Int(12)),
+            ("MAX_FRAGMENT_UNIFORM_COMPONENTS", GlParam::Int(4096)),
+            ("MAX_FRAGMENT_UNIFORM_VECTORS", GlParam::Int(1024)),
+            ("MAX_RENDERBUFFER_SIZE", GlParam::Int(16384)),
+            ("MAX_SAMPLES", GlParam::Int(8)),
+            ("MAX_TEXTURE_IMAGE_UNITS", GlParam::Int(16)),
+            ("MAX_TEXTURE_LOD_BIAS", GlParam::Float(2.0)),
+            ("MAX_TEXTURE_SIZE", GlParam::Int(16384)),
+            (
+                "MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS",
+                GlParam::Int(120),
+            ),
+            ("MAX_UNIFORM_BLOCK_SIZE", GlParam::Int(65536)),
+            ("MAX_UNIFORM_BUFFER_BINDINGS", GlParam::Int(24)),
+            ("MAX_VARYING_COMPONENTS", GlParam::Int(120)),
+            ("MAX_VARYING_VECTORS", GlParam::Int(30)),
+            ("MAX_VERTEX_OUTPUT_COMPONENTS", GlParam::Int(120)),
+            ("MAX_VERTEX_TEXTURE_IMAGE_UNITS", GlParam::Int(16)),
+            ("MAX_VERTEX_UNIFORM_BLOCKS", GlParam::Int(12)),
+            ("MAX_VERTEX_UNIFORM_COMPONENTS", GlParam::Int(16380)),
+            ("MAX_VERTEX_UNIFORM_VECTORS", GlParam::Int(4095)),
+            ("MAX_VIEWPORT_DIMS", GlParam::IntPair([32767, 32767])),
+            ("UNIFORM_BUFFER_OFFSET_ALIGNMENT", GlParam::Int(256)),
+        ],
+    ),
+    (
         "metal-apple-family3",
         &[
             ("ALIASED_POINT_SIZE_RANGE", GlParam::FloatPair([1.0, 511.0])),
@@ -123,8 +182,14 @@ pub(crate) static PARAM_OVERRIDES_WEBGL2: &[(&str, &[(&str, GlParam)])] = &[
             ("MAX_FRAGMENT_UNIFORM_COMPONENTS", GlParam::Int(4096)),
             ("MAX_FRAGMENT_UNIFORM_VECTORS", GlParam::Int(1024)),
             ("MAX_RENDERBUFFER_SIZE", GlParam::Int(16384)),
+            ("MAX_SAMPLES", GlParam::Int(4)),
             ("MAX_TEXTURE_IMAGE_UNITS", GlParam::Int(16)),
+            ("MAX_TEXTURE_LOD_BIAS", GlParam::Float(15.0)),
             ("MAX_TEXTURE_SIZE", GlParam::Int(16384)),
+            (
+                "MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS",
+                GlParam::Int(128),
+            ),
             ("MAX_UNIFORM_BLOCK_SIZE", GlParam::Int(16384)),
             ("MAX_UNIFORM_BUFFER_BINDINGS", GlParam::Int(32)),
             ("MAX_VARYING_COMPONENTS", GlParam::Int(120)),
@@ -163,8 +228,14 @@ pub(crate) static PARAM_OVERRIDES_WEBGL2: &[(&str, &[(&str, GlParam)])] = &[
             ("MAX_FRAGMENT_UNIFORM_COMPONENTS", GlParam::Int(16384)),
             ("MAX_FRAGMENT_UNIFORM_VECTORS", GlParam::Int(4096)),
             ("MAX_RENDERBUFFER_SIZE", GlParam::Int(8192)),
+            ("MAX_SAMPLES", GlParam::Int(4)),
             ("MAX_TEXTURE_IMAGE_UNITS", GlParam::Int(32)),
+            ("MAX_TEXTURE_LOD_BIAS", GlParam::Float(15.0)),
             ("MAX_TEXTURE_SIZE", GlParam::Int(8192)),
+            (
+                "MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS",
+                GlParam::Int(128),
+            ),
             ("MAX_UNIFORM_BLOCK_SIZE", GlParam::Int(65536)),
             ("MAX_UNIFORM_BUFFER_BINDINGS", GlParam::Int(72)),
             ("MAX_VARYING_COMPONENTS", GlParam::Int(124)),
@@ -201,6 +272,23 @@ pub(crate) static PRECISION: &[(&str, &[(&str, [i32; 3])])] = &[
     ),
     (
         "metal-apple-family3",
+        &[
+            ("FRAGMENT_SHADER/HIGH_FLOAT", [127, 127, 23]),
+            ("FRAGMENT_SHADER/HIGH_INT", [31, 30, 0]),
+            ("FRAGMENT_SHADER/LOW_FLOAT", [127, 127, 23]),
+            ("FRAGMENT_SHADER/LOW_INT", [31, 30, 0]),
+            ("FRAGMENT_SHADER/MEDIUM_FLOAT", [127, 127, 23]),
+            ("FRAGMENT_SHADER/MEDIUM_INT", [31, 30, 0]),
+            ("VERTEX_SHADER/HIGH_FLOAT", [127, 127, 23]),
+            ("VERTEX_SHADER/HIGH_INT", [31, 30, 0]),
+            ("VERTEX_SHADER/LOW_FLOAT", [127, 127, 23]),
+            ("VERTEX_SHADER/LOW_INT", [31, 30, 0]),
+            ("VERTEX_SHADER/MEDIUM_FLOAT", [127, 127, 23]),
+            ("VERTEX_SHADER/MEDIUM_INT", [31, 30, 0]),
+        ],
+    ),
+    (
+        "d3d11-fl11",
         &[
             ("FRAGMENT_SHADER/HIGH_FLOAT", [127, 127, 23]),
             ("FRAGMENT_SHADER/HIGH_INT", [31, 30, 0]),
@@ -305,6 +393,46 @@ pub(crate) static EXTENSIONS_WEBGL1: &[(&str, &[&str])] = &[
             "WEBGL_polygon_mode",
         ],
     ),
+    (
+        "d3d11-fl11",
+        &[
+            "ANGLE_instanced_arrays",
+            "EXT_blend_minmax",
+            "EXT_clip_control",
+            "EXT_color_buffer_half_float",
+            "EXT_depth_clamp",
+            "EXT_disjoint_timer_query",
+            "EXT_float_blend",
+            "EXT_frag_depth",
+            "EXT_polygon_offset_clamp",
+            "EXT_shader_texture_lod",
+            "EXT_texture_compression_bptc",
+            "EXT_texture_compression_rgtc",
+            "EXT_texture_filter_anisotropic",
+            "EXT_texture_mirror_clamp_to_edge",
+            "EXT_sRGB",
+            "KHR_parallel_shader_compile",
+            "OES_element_index_uint",
+            "OES_fbo_render_mipmap",
+            "OES_standard_derivatives",
+            "OES_texture_float",
+            "OES_texture_float_linear",
+            "OES_texture_half_float",
+            "OES_texture_half_float_linear",
+            "OES_vertex_array_object",
+            "WEBGL_blend_func_extended",
+            "WEBGL_color_buffer_float",
+            "WEBGL_compressed_texture_s3tc",
+            "WEBGL_compressed_texture_s3tc_srgb",
+            "WEBGL_debug_renderer_info",
+            "WEBGL_debug_shaders",
+            "WEBGL_depth_texture",
+            "WEBGL_draw_buffers",
+            "WEBGL_lose_context",
+            "WEBGL_multi_draw",
+            "WEBGL_polygon_mode",
+        ],
+    ),
 ];
 
 /// Extension list per tier for WebGL2.
@@ -382,6 +510,43 @@ pub(crate) static EXTENSIONS_WEBGL2: &[(&str, &[&str])] = &[
             "WEBGL_polygon_mode",
             "WEBGL_provoking_vertex",
             "WEBGL_render_shared_exponent",
+            "WEBGL_stencil_texturing",
+        ],
+    ),
+    (
+        "d3d11-fl11",
+        &[
+            "EXT_clip_control",
+            "EXT_color_buffer_float",
+            "EXT_color_buffer_half_float",
+            "EXT_conservative_depth",
+            "EXT_depth_clamp",
+            "EXT_disjoint_timer_query_webgl2",
+            "EXT_float_blend",
+            "EXT_polygon_offset_clamp",
+            "EXT_render_snorm",
+            "EXT_texture_compression_bptc",
+            "EXT_texture_compression_rgtc",
+            "EXT_texture_filter_anisotropic",
+            "EXT_texture_mirror_clamp_to_edge",
+            "EXT_texture_norm16",
+            "KHR_parallel_shader_compile",
+            "NV_shader_noperspective_interpolation",
+            "OES_draw_buffers_indexed",
+            "OES_sample_variables",
+            "OES_shader_multisample_interpolation",
+            "OES_texture_float_linear",
+            "OVR_multiview2",
+            "WEBGL_blend_func_extended",
+            "WEBGL_clip_cull_distance",
+            "WEBGL_compressed_texture_s3tc",
+            "WEBGL_compressed_texture_s3tc_srgb",
+            "WEBGL_debug_renderer_info",
+            "WEBGL_debug_shaders",
+            "WEBGL_lose_context",
+            "WEBGL_multi_draw",
+            "WEBGL_polygon_mode",
+            "WEBGL_provoking_vertex",
             "WEBGL_stencil_texturing",
         ],
     ),

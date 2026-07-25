@@ -74,12 +74,12 @@ pub fn gl_type_for(name: &str) -> GlType {
 /// Delegation needs no support in `webgl.js`: a name absent from the table
 /// already falls through to the real backend, exactly as an unknown enum does.
 ///
-/// Measured against the two committed captures, this partition keeps **every**
-/// parameter whose value differs between the tiers (10 of 10 in WebGL1, 26 of
-/// 28 in WebGL2). The two exceptions are `DRAW_BUFFER6`/`7`, which differ only
+/// Measured against the committed captures, this partition keeps **every**
+/// parameter whose value differs between the tiers (10 of 10 in WebGL1, 29 of
+/// 31 in WebGL2). The two exceptions are `DRAW_BUFFER6`/`7`, which differ only
 /// in *presence*, and that presence is implied by `MAX_DRAW_BUFFERS` — which is
-/// served. Everything delegated is byte-identical across both measured
-/// backends, so the entropy cost of delegating it is zero.
+/// served. Everything delegated is byte-identical across every measured
+/// backend, so the entropy cost of delegating it is zero.
 pub const SERVED_CAPS: &[&str] = &[
     // Implementation-dependent ranges and limits (ES 2.0 Table 6.20 /
     // ES 3.0 Table 6.35, "Implementation Dependent Values"). Nothing in the
@@ -251,8 +251,8 @@ pub const DELEGATED_PARAMS: &[&str] = &[
     "SAMPLE_BUFFERS",
     "STENCIL_BITS",
     // --- Grows as extensions are enabled ------------------------------------
-    // The probe reads parameters before enabling any extension, so both
-    // captures record an empty list. In real Chrome the array grows with each
+    // The probe reads parameters before enabling any extension, so every
+    // capture records an empty list. In real Chrome the array grows with each
     // compressed-texture extension the page enables, so a table value pins it
     // empty forever: `getExtension('WEBGL_compressed_texture_s3tc')` succeeds,
     // `compressedTexImage2D` works, and the format list stays empty — a
@@ -263,8 +263,8 @@ pub const DELEGATED_PARAMS: &[&str] = &[
     // these under "Implementation Dependent Values", but both ES 2.0 (via
     // OES_read_format) and ES 3.0 define them against the *current read
     // surface*: bind an FBO backed by an RGBA8UI texture and real WebGL2
-    // answers RGBA_INTEGER/UNSIGNED_INT instead of RGBA/UNSIGNED_BYTE. Both
-    // committed captures also record the identical 6408/5121 pair, so serving
+    // answers RGBA_INTEGER/UNSIGNED_INT instead of RGBA/UNSIGNED_BYTE. Every
+    // committed capture also records the identical 6408/5121 pair, so serving
     // them adds no entropy at all while adding a mutable value to freeze.
     "IMPLEMENTATION_COLOR_READ_FORMAT",
     "IMPLEMENTATION_COLOR_READ_TYPE",
@@ -525,6 +525,10 @@ const CAPTURES: &[(&str, &str)] = &[
     (
         "metal-apple-family3",
         include_str!("../../zendriver-stealth/data/gpu-tiers/metal-apple-family3.json"),
+    ),
+    (
+        "d3d11-fl11",
+        include_str!("../../zendriver-stealth/data/gpu-tiers/d3d11-fl11.json"),
     ),
 ];
 
@@ -802,8 +806,9 @@ mod tests {
         assert_eq!(gl_type_for("LINE_WIDTH"), GlType::Float);
         assert_eq!(gl_type_for("MAX_TEXTURE_MAX_ANISOTROPY_EXT"), GlType::Float);
         // WebGL2 / OpenGL ES 3.0 spec: glGetFloatv(GL_MAX_TEXTURE_LOD_BIAS),
-        // enum 0x84FD. Present in both committed captures as the integer 15,
-        // which is exactly the JSON-collapse case gl_type_for exists to catch.
+        // enum 0x84FD. Present in every committed capture as an integer (15 on
+        // SwiftShader and Metal, 2 on D3D11), which is exactly the JSON-collapse
+        // case gl_type_for exists to catch.
         assert_eq!(gl_type_for("MAX_TEXTURE_LOD_BIAS"), GlType::Float);
     }
 
@@ -1020,18 +1025,18 @@ mod tests {
         }
     }
 
-    /// Every parameter name found in the two committed captures, both context
+    /// Every parameter name found in the committed captures, both context
     /// versions. The ground truth the classification guards are checked
     /// against — it changes when a capture changes, independently of the
     /// hand-authored lists in this file.
+    ///
+    /// Reads [`CAPTURES`] rather than its own `include_str!` list, so a tier
+    /// added to the generator cannot be left out of the guard: the previous
+    /// hand-maintained pair would have silently kept passing while a third
+    /// capture's parameters went unclassified.
     fn captured_param_names() -> std::collections::BTreeSet<String> {
-        const SWIFTSHADER: &str =
-            include_str!("../../zendriver-stealth/data/gpu-tiers/swiftshader.json");
-        const METAL_APPLE_FAMILY3: &str =
-            include_str!("../../zendriver-stealth/data/gpu-tiers/metal-apple-family3.json");
-
         let mut names = std::collections::BTreeSet::new();
-        for raw in [SWIFTSHADER, METAL_APPLE_FAMILY3] {
+        for (_, raw) in CAPTURES {
             let doc: Value =
                 serde_json::from_str(raw).expect("committed capture must be valid JSON");
             for ctx in ["webgl1", "webgl2"] {

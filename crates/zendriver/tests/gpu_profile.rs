@@ -99,16 +99,20 @@ const POLL_DELAY: Duration = Duration::from_millis(50);
 ///
 /// This is the Metal tier because every test below pins a `MacIntel` persona
 /// (see [`mac_persona`]). The default renderer is platform-derived — a
-/// `MacIntel` persona resolves the Apple Metal row, a `Win32` or
-/// `LinuxX86_64` one the SwiftShader row — so pinning the platform is what
-/// makes the expected tier the same on every host this test runs on.
+/// `MacIntel` persona resolves the Apple Metal row, a `Win32` one the D3D11
+/// row, a `LinuxX86_64` one the SwiftShader row — so pinning the platform is
+/// what makes the expected tier the same on every host this test runs on.
 ///
 /// Pinning also keeps the test meaningful rather than merely deterministic.
 /// `spoofed_surface` below proves the patch installed by observing that the
 /// main world reports a *different* renderer than the unpatched isolated
 /// world, and `StealthProfile::spoofed()` launches Chrome on SwiftShader. A
-/// non-Mac persona would therefore spoof SwiftShader's values over a
-/// SwiftShader backend, leaving nothing to tell apart.
+/// `LinuxX86_64` persona resolves a SwiftShader row, so it would spoof
+/// SwiftShader's values over a SwiftShader backend, leaving nothing to tell
+/// apart. `Win32` resolves the D3D11 row and would discriminate as well as
+/// `MacIntel` does — both its renderer string and its numbers differ from the
+/// backend's — so the pin decides *which* capture this file includes, not
+/// whether the test can work at all.
 const RESOLVED_TIER_CAPTURE: &str =
     include_str!("../../zendriver-stealth/data/gpu-tiers/metal-apple-family3.json");
 

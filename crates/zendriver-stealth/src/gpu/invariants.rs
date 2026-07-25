@@ -36,9 +36,10 @@ fn pair_min(p: &GpuProfile, k: &str) -> Option<i64> {
 ///   (`D3D11_VIEWPORT_BOUNDS_MAX`) beside a 16384 texture max
 ///   (`D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION`) for feature level 11_0 and
 ///   above (ANGLE `GetMaximumViewportSize` / `GetMaximum2DTextureSize`,
-///   `src/libANGLE/renderer/d3d/d3d11/renderer11_utils.cpp:422-434`). What
-///   never happens on any backend measured or documented here — SwiftShader
-///   8192/8192, Metal 16384/16384, D3D11 32767/16384 — is the viewport
+///   `src/libANGLE/renderer/d3d/d3d11/renderer11_utils.cpp:422-434`), and the
+///   `d3d11-fl11` capture measures exactly that pair. What never happens on
+///   any backend measured here — SwiftShader 8192/8192, Metal 16384/16384,
+///   D3D11 32767/16384 — is the viewport
 ///   coming in *below* the texture max, so that direction is still a real
 ///   defect: a profile reporting a smaller viewport than texture max is
 ///   malformed. This check does not (and must not) catch the shipped bug —
@@ -105,18 +106,21 @@ pub(crate) fn check_coherence(p: &GpuProfile) -> Result<(), String> {
 /// (#43).
 ///
 /// Called by [`push_webgl`](crate::patches) with the platform the page claims
-/// (the persona's, else the probed host's), so the common default — an Apple
-/// Metal tier under a Win32 or Linux persona, the only tiers captured so far —
-/// is reported rather than shipped silently.
+/// (the persona's, else the probed host's). Every platform's *default* row is
+/// now coherent, so this stays silent on the common path and fires only where
+/// a caller pinned a renderer from another OS's backend.
 pub(crate) fn platform_skew(platform: Platform, tier: Tier) -> Option<String> {
     // SwiftShader is a software rasterizer, available on every platform, so it
     // never conflicts with a claimed OS.
     if tier == Tier::SwiftShader {
         return None;
     }
+    // Each remaining tier is tied to the one OS its backend exists on: Metal
+    // to macOS, D3D11 to Windows. A page claiming either OS beside the other's
+    // numbers is a pair Chrome cannot produce.
     let ok = matches!(
         (platform, tier),
-        (Platform::MacIntel, Tier::MetalAppleFamily3)
+        (Platform::MacIntel, Tier::MetalAppleFamily3) | (Platform::Win32, Tier::D3d11Fl11)
     );
     (!ok).then(|| format!("persona claims {platform:?} but its GPU values come from {tier:?}"))
 }
@@ -269,6 +273,11 @@ mod tests {
         // #43 — the caller may be doing it deliberately.
         assert!(platform_skew(Platform::Win32, Tier::MetalAppleFamily3).is_some());
         assert!(platform_skew(Platform::MacIntel, Tier::MetalAppleFamily3).is_none());
+        // D3D11 is the mirror image: coherent on Windows, impossible anywhere
+        // else. A Linux persona on it is as wrong as a Windows one on Metal.
+        assert!(platform_skew(Platform::Win32, Tier::D3d11Fl11).is_none());
+        assert!(platform_skew(Platform::MacIntel, Tier::D3d11Fl11).is_some());
+        assert!(platform_skew(Platform::LinuxX86_64, Tier::D3d11Fl11).is_some());
         // SwiftShader is platform-neutral: it is software, available anywhere.
         assert!(platform_skew(Platform::Win32, Tier::SwiftShader).is_none());
     }

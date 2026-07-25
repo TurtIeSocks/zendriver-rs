@@ -313,11 +313,12 @@ fn push_webgl(
         return;
     }
     let renderer = resolved_renderer(spec, gpu, platform);
-    // `device_for_renderer` returns None when no shipped tier matches. Only
-    // SwiftShader and Apple Metal tiers exist today, so a caller-pinned
-    // D3D11-family renderer lands here routinely. Falling back means serving
-    // that renderer's name above another backend's numbers, so it is warned
-    // about rather than done silently — the real fix is capturing that tier.
+    // `device_for_renderer` returns None when no shipped tier matches. Three
+    // tiers exist today (SwiftShader, Apple Metal, D3D11 FL11+), so what lands
+    // here is a caller-pinned renderer from a backend none of them covers — a
+    // Linux Vulkan or desktop-GL string, say. Falling back means serving that
+    // renderer's name above another backend's numbers, so it is warned about
+    // rather than done silently — the real fix is capturing that tier.
     // The default renderer never reaches this path: it is drawn from a shipped
     // row by construction.
     let device = crate::gpu::devices::device_for_renderer(renderer).unwrap_or_else(|| {
@@ -338,7 +339,15 @@ fn push_webgl(
     if let Some(vendor) = spec.and_then(|s| s.unmasked_vendor.clone()) {
         profile.unmasked_vendor = vendor;
     } else if profile.unmasked_vendor.is_empty() {
-        profile.unmasked_vendor = device.unmasked_vendor.to_string();
+        // Derived from the renderer actually being served, not from the row
+        // that matched it. One row now covers many cards — the D3D11 row's
+        // token matches Intel and AMD renderers because the *capability values*
+        // are shared — so taking the vendor from the row would answer
+        // `Google Inc. (NVIDIA)` beside an Intel renderer. The row is still the
+        // fallback for a renderer ANGLE did not format, and for the default
+        // renderers it derives exactly what the row itself declares.
+        profile.unmasked_vendor = crate::gpu::devices::vendor_for_renderer(renderer)
+            .unwrap_or_else(|| device.unmasked_vendor.to_string());
     }
     profile.unmasked_renderer = renderer.to_string();
 
@@ -350,10 +359,10 @@ fn push_webgl(
         tracing::warn!(reason = %why, "GPU profile is internally incoherent");
     }
     // Same stance across surfaces: a tier that cannot exist on the OS the page
-    // claims (the default Apple Metal device under a Win32 or Linux persona)
-    // is reported, not corrected — only capturing that platform's tier fixes
-    // it, and guessing one would pair a real name with another backend's
-    // numbers.
+    // claims (an Apple Metal renderer pinned under a Win32 persona, or a D3D11
+    // one under a Mac persona) is reported, not corrected — only capturing that
+    // platform's tier fixes it, and guessing one would pair a real name with
+    // another backend's numbers.
     if let Some(why) = crate::gpu::invariants::platform_skew(platform, device.tier) {
         tracing::warn!(reason = %why, "GPU profile disagrees with the persona's platform");
     }
@@ -962,7 +971,14 @@ mod tests {
         // navigator.platform — a pair Chrome cannot produce, which the skew
         // check flagged on every launch. The default is now drawn from the
         // platform, so the common case is coherent and silent.
-        for platform in [Platform::Win32, Platform::LinuxX86_64] {
+        //
+        // The expected backend differs per platform because the captured tiers
+        // do: Windows has a D3D11 tier, Linux has no Vulkan or desktop-GL one
+        // and keeps the platform-neutral software rasterizer.
+        for (platform, backend) in [
+            (Platform::Win32, "D3D11"),
+            (Platform::LinuxX86_64, "SwiftShader"),
+        ] {
             let mut out = String::new();
             let logs = captured_warnings(|| push_webgl(&mut out, None, None, platform));
             assert!(
@@ -974,7 +990,7 @@ mod tests {
                 .expect("renderer string")
                 .to_string();
             assert!(
-                renderer.contains("SwiftShader"),
+                renderer.contains(backend),
                 "{platform:?} must default to a renderer Chrome can report on it, got {renderer}"
             );
             assert!(
@@ -997,6 +1013,38 @@ mod tests {
         assert!(
             renderer.contains("Apple") && renderer.contains("Metal"),
             "macOS must keep the Apple Metal row, got {renderer}"
+        );
+    }
+
+    #[test]
+    fn a_pinned_d3d11_renderer_is_served_with_its_own_vendor() {
+        // End of the chain the unit test in `gpu::devices` covers: what the
+        // page actually reads. The D3D11 row supplies the numbers for every
+        // FL11+ card, so pinning an Intel renderer must yield Intel's *name*
+        // above D3D11's *values* — not the row's NVIDIA name, which is what
+        // was served (silently, since a matched row raises no warning) before
+        // the vendor was derived from the renderer.
+        let spec = WebglSpec {
+            strategy: None,
+            unmasked_vendor: None,
+            unmasked_renderer: Some(
+                "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)".into(),
+            ),
+        };
+        let mut out = String::new();
+        let logs = captured_warnings(|| push_webgl(&mut out, Some(&spec), None, Platform::Win32));
+        let p = emitted_profile(&out);
+        assert_eq!(
+            p["params2"]["UNMASKED_VENDOR_WEBGL"]["v"], "Google Inc. (Intel)",
+            "an Intel renderer must not be served the D3D11 row's NVIDIA vendor"
+        );
+        assert_eq!(
+            p["params2"]["MAX_TEXTURE_SIZE"]["v"], 16384,
+            "it must still get the shared D3D11 tier's measured values"
+        );
+        assert!(
+            logs.is_empty(),
+            "an Intel D3D11 renderer under Win32 is coherent and must not warn, got: {logs:?}"
         );
     }
 
@@ -1065,7 +1113,7 @@ mod tests {
 
         let win = renderer_for(Some(Platform::Win32));
         assert!(
-            win.contains("SwiftShader"),
+            win.contains("D3D11"),
             "the persona's Win32 must reach the WebGL profile, got {win}"
         );
         // Unset falls through to the identity's MacIntel, which keeps Apple.
@@ -1381,10 +1429,11 @@ mod tests {
         //
         // Every platform, not just the mock identity's: the default renderer is
         // platform-derived, so pinning only the mock's `MacIntel` exercised the
-        // Apple branch alone. The second split this caught: `Win32` and
-        // `LinuxX86_64` default to the SwiftShader row, whose renderer matched
-        // none of `adapter_for_renderer`'s branches and fell through to the
-        // Intel catch-all — an Intel WebGPU adapter beside a SwiftShader WebGL
+        // Apple branch alone. The second split this caught: `LinuxX86_64`
+        // defaults to the SwiftShader row (as `Win32` did before the D3D11 tier
+        // was captured), whose renderer matched none of
+        // `adapter_for_renderer`'s branches and fell through to the Intel
+        // catch-all — an Intel WebGPU adapter beside a SwiftShader WebGL
         // renderer, which is the same cross-API contradiction one layer down.
         const VENDOR_TOKENS: [&str; 4] = ["intel", "nvidia", "amd", "apple"];
         for platform in [Platform::MacIntel, Platform::Win32, Platform::LinuxX86_64] {

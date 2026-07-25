@@ -228,23 +228,34 @@ save and restore through `getParameter`.
 ANGLE (Chrome's GL layer) computes most numeric caps from constants branched
 on backend and feature level, not from querying the physical device — so
 values cluster by *(backend, capability tier)* rather than by exact GPU
-model. Two tiers ship today:
+model. Three tiers ship today:
 
 - `SwiftShader` — Chrome's software rasterizer.
 - Apple Metal (family 3) — real Apple silicon.
+- D3D11 (feature level 11_0+) — ANGLE's Direct3D 11 backend on Windows. One
+  tier covers every Intel, NVIDIA and AMD card at that feature level, because
+  ANGLE derives the values from `D3D11_REQ_*` constants rather than from the
+  card.
+
+A tier is shared *capability values*, never shared *identity*. Pin an Intel or
+AMD D3D11 renderer and you get that tier's numbers above your own vendor and
+renderer strings — `UNMASKED_VENDOR_WEBGL` is derived from the renderer you
+pinned (`ANGLE (Intel, …)` → `Google Inc. (Intel)`), not from the NVIDIA card
+the tier happened to be captured on.
 
 **When a persona names no renderer, the default is chosen from its
 platform.** A renderer string is read beside `navigator.platform`, so the two
 have to be a pair Chrome can actually produce. A `MacIntel` persona gets the
-Apple Metal row; a `Win32` or `LinuxX86_64` persona gets the SwiftShader row,
-whose renderer string names no platform-specific API and which Chrome really
-does report on a GPU-blocklisted machine, a VM, or a headless container. The
-honest cost: SwiftShader says "no usable GPU", which some fingerprinters
-weight on its own. That is a real configuration rather than an impossible
-one, so it beats the alternative — a Windows-looking D3D11 name served above
-Apple Metal's numbers, or (as previously shipped) the Apple Metal string
-itself under a Win32 `navigator.platform`. The actual fix is capturing a
-D3D11 tier on Windows hardware.
+Apple Metal row and a `Win32` persona the D3D11 row — both ordinary hardware
+identities whose name and numbers come from the same probe.
+
+A `LinuxX86_64` persona gets a SwiftShader row, whose renderer string names no
+platform-specific API and which Chrome really does report on a GPU-blocklisted
+machine, a VM, or a headless container. The honest cost: SwiftShader says "no
+usable GPU", which some fingerprinters weight on its own. That is a real
+configuration rather than an impossible one, so it beats the alternative — a
+Linux-looking Vulkan name served above another backend's numbers — until a
+Vulkan or desktop-GL tier is captured.
 
 **SwiftShader's numbers are platform-independent; its renderer string is
 not.** Probing Ubuntu 24 (Chrome 150.0.7871.114, GPU-less VM) against the
@@ -253,30 +264,30 @@ parameter differed, and the extension and precision lists matched — while the
 renderer string differed in one token, because SwiftShader chooses its JIT
 backend at build time and Chrome prints the choice:
 
-| persona platform | renderer string |
+| SwiftShader build | renderer string |
 |---|---|
-| `LinuxX86_64` | `ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)` |
-| `Win32` | same as Linux — inferred from that measurement, not measured |
-| macOS SwiftShader (matched, never a default) | `ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (LLVM 10.0.0) (0x0000C0DE)), SwiftShader driver)` |
+| Linux and Windows (both measured) | `ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)` |
+| macOS | `ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (LLVM 10.0.0) (0x0000C0DE)), SwiftShader driver)` |
 
 So one capability tier ships under two identity strings, and a Linux persona
 reports the string real Linux Chrome reports. Windows Chrome's SwiftShader
-build has not been probed and could use either backend; it currently follows
-Linux.
+build prints Subzero too (measured on Windows 10.0.21996, Chrome
+150.0.7871.186) — which no longer picks a default, since `Win32` resolves the
+D3D11 row, but does decide which row a Win32 persona lands on when it pins a
+SwiftShader renderer itself.
 
-**A renderer you pin yourself that matches neither tier falls back to your
+**A renderer you pin yourself that matches no tier falls back to your
 platform's default device and logs a warning.** Serving an unrecognized
 renderer's *name* above a different backend's *numbers* is its own
-incoherence — an unmatched D3D11 or Vulkan renderer string (Intel, NVIDIA,
-AMD) is expected and common, since only two tiers are captured so far.
-Adding a tier requires probing real hardware with that backend; values are
-never invented. See the
+incoherence — an unmatched Vulkan or desktop-GL renderer string is expected,
+since no tier covers those backends yet. Adding a tier requires probing real
+hardware with that backend; values are never invented. See the
 [`capture-gpu-tier` skill](https://github.com/TurtIeSocks/zendriver-rs/blob/main/.claude/skills/capture-gpu-tier/SKILL.md)
 for the procedure if you hit this warning and have the hardware to fix it.
 
 **`Persona.gpu: Option<GpuProfile>` lets you pin a whole coherent device.**
 Unset, it resolves from the persona's WebGL renderer string, matched against
-the two shipped devices above. Set, it overlays the resolved tier key-wise,
+the shipped devices above. Set, it overlays the resolved tier key-wise,
 so a partial profile only overrides the keys it sets. It merges as one
 atomic value across personas (like `screen`), never field-by-field —
 composing two devices' values could describe hardware that exists nowhere.
@@ -304,7 +315,7 @@ By default (`Persona.webgpu = None`, or `Some(WebgpuSpec::default())`), the
 a vendor/architecture DERIVED from the `Webgl` surface's renderer (never
 fabricated) — the same behavior it always had. Only a renderer naming a GPU
 family zendriver recognizes yields a vendor and architecture; anything else —
-including the SwiftShader row a `Win32` or `LinuxX86_64` persona defaults to —
+including the SwiftShader row a `LinuxX86_64` persona defaults to —
 derives both as `""`, which is what Chrome itself reports for an adapter it
 cannot classify. A software rasterizer has no vendor, and naming one beside a
 SwiftShader WebGL renderer would be the cross-API contradiction this derivation

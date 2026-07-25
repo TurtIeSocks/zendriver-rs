@@ -94,6 +94,7 @@ fn tier_key(tier: Tier) -> &'static str {
     match tier {
         Tier::SwiftShader => "swiftshader",
         Tier::MetalAppleFamily3 => "metal-apple-family3",
+        Tier::D3d11Fl11 => "d3d11-fl11",
     }
 }
 
@@ -337,16 +338,41 @@ mod tests {
     }
 
     #[test]
+    fn d3d11_tier_resolves_its_own_measured_values() {
+        // The D3D11 pair ANGLE derives from the feature-level constants:
+        // D3D11_VIEWPORT_BOUNDS_MAX (32767) beside
+        // D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION (16384). This is the pairing
+        // neither other tier produces — SwiftShader is 8192/8192 and Metal
+        // 16384/16384 — so it is what proves the tier is wired end to end
+        // rather than silently inheriting a neighbour's numbers.
+        let p = profile_for_tier(types::Tier::D3d11Fl11);
+        assert_eq!(p.params_webgl2["MAX_TEXTURE_SIZE"], GlParam::Int(16384));
+        assert_eq!(
+            p.params_webgl2["MAX_VIEWPORT_DIMS"],
+            GlParam::IntPair([32767, 32767])
+        );
+        // Measured 8 where both other tiers measured 4 — the value that moved
+        // MAX_SAMPLES out of the shared base table when this tier landed.
+        assert_eq!(p.params_webgl2["MAX_SAMPLES"], GlParam::Int(8));
+    }
+
+    #[test]
     fn base_values_reach_every_tier() {
         // A capability both tiers agreed on lives only in base; resolution
         // must still surface it, or the ~19 shared WebGL2 capabilities would
         // silently vanish and fall through to the real backend.
         for tier in types::Tier::ALL {
             let p = profile_for_tier(*tier);
-            // MAX_3D_TEXTURE_SIZE and MAX_SAMPLES are identical on both tiers,
-            // so they exist only in the base table.
+            // MAX_3D_TEXTURE_SIZE and MAX_ARRAY_TEXTURE_LAYERS are identical on
+            // every shipped tier, so they exist only in the base table.
+            // (MAX_SAMPLES used to be the second example and no longer is:
+            // D3D11 measured 8 where SwiftShader and Metal both measured 4, so
+            // it moved to the per-tier overrides.)
             assert_eq!(p.params_webgl2["MAX_3D_TEXTURE_SIZE"], GlParam::Int(2048));
-            assert_eq!(p.params_webgl2["MAX_SAMPLES"], GlParam::Int(4));
+            assert_eq!(
+                p.params_webgl2["MAX_ARRAY_TEXTURE_LAYERS"],
+                GlParam::Int(2048)
+            );
         }
     }
 

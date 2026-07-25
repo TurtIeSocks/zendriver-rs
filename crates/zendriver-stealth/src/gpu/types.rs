@@ -101,13 +101,20 @@ pub enum Provenance {
 pub(crate) enum Tier {
     SwiftShader,
     MetalAppleFamily3,
+    /// Direct3D 11 at feature level 11_0 or above. Named for the backend and
+    /// feature level rather than the card it was probed on (an RTX 4090):
+    /// ANGLE's D3D11 renderer derives every one of these values from
+    /// `D3D11_REQ_*` constants branched on the feature level, so an Intel UHD,
+    /// an AMD RX, and an NVIDIA RTX at FL11+ all report the same numbers.
+    D3d11Fl11,
 }
 
 impl Tier {
     /// Every shipped tier, in one place: the invariant checks and the tests
     /// that sweep "all tiers" iterate this, so adding a tier cannot quietly
     /// leave one of them behind.
-    pub(crate) const ALL: &'static [Tier] = &[Tier::SwiftShader, Tier::MetalAppleFamily3];
+    pub(crate) const ALL: &'static [Tier] =
+        &[Tier::SwiftShader, Tier::MetalAppleFamily3, Tier::D3d11Fl11];
 }
 
 #[cfg(test)]

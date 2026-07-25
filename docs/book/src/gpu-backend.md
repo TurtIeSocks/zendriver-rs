@@ -123,8 +123,12 @@ The one part of that row that *is* host-specific is the renderer string.
 Re-probing the same flags on Ubuntu 24 (Chrome 150.0.7871.114) reproduced
 every capability value above, but reported `SwiftShader Device (Subzero)`
 rather than `(LLVM 10.0.0)` — SwiftShader picks its JIT backend at build time
-and Chrome prints the choice. The spoofed profile serves whichever string
-matches the persona's platform; see
+and Chrome prints the choice. Windows reports Subzero too (measured on
+Windows 10.0.21996, Chrome 150.0.7871.186).
+
+Which of those strings the spoofed profile serves depends on the persona's
+platform — and on Windows it serves neither, because a `Win32` persona
+resolves the captured D3D11 tier rather than a software one. See
 [the WebGL section of the fingerprint chapter](./fingerprint.md#webgl-full-surface-value-spoof-resolved-from-measured-tiers).
 
 ## `navigator.gpu` visibility is governed by the page, not by this option
