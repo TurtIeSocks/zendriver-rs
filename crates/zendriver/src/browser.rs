@@ -370,6 +370,115 @@ fn launch_timeout_error(backend: GpuBackend) -> BrowserError {
     }
 }
 
+/// What Chrome's `gpu.featureStatus.webgl` says about the WebGL pipeline it
+/// actually initialized. See [`classify_webgl_feature_status`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WebglAcceleration {
+    /// Hardware-accelerated — what [`GpuBackend::Native`] promises.
+    Hardware,
+    /// Software-rasterized, blocklisted, or off. Either serves SwiftShader's
+    /// values under a "native" label or yields no WebGL context at all.
+    NotHardware,
+    /// A status string this table does not know. Deliberately *not* a failure
+    /// — see [`native_webgl_is_hardware_accelerated`].
+    Unrecognized,
+}
+
+/// Classify one `gpu.featureStatus.webgl` string from `SystemInfo.getInfo`.
+///
+/// Chrome assembles these strings in `content/browser/gpu/gpu_internals_ui.cc`
+/// from a `disabled`/`unavailable`/`enabled` stem plus suffixes. Measured
+/// directly on Chrome 150.0.7871.186 (darwin, Apple M4 Pro) — one launch per
+/// backend, `SystemInfo.getInfo` on the browser connection:
+///
+/// | launch | `featureStatus.webgl` | `featureStatus.gpu_compositing` |
+/// |---|---|---|
+/// | [`GpuBackend::Native`] (ANGLE Metal) | `enabled` | `enabled` |
+/// | [`GpuBackend::SwiftShader`] | `enabled_readback` | `disabled_software` |
+/// | [`GpuBackend::Disabled`] | `disabled_off` | `disabled_software` |
+///
+/// `enabled_readback` is Chrome saying "WebGL runs, but its output reaches the
+/// screen through a software readback" — the measured signature of the
+/// SwiftShader rasterizer. It is deliberately classified as
+/// [`NotHardware`](WebglAcceleration::NotHardware): a `Native` launch that
+/// quietly landed on software is precisely the outcome this check exists to
+/// reject. The trade-off is that a host with a real GPU but GPU *compositing*
+/// switched off would also be rejected; that configuration is rare, and
+/// erring toward rejection keeps `Native` from ever serving software values.
+fn classify_webgl_feature_status(status: &str) -> WebglAcceleration {
+    match status {
+        // `_on` means the feature is on; `_force` means a blocklist entry was
+        // overridden (`--ignore-gpu-blocklist`). Both still render on the GPU.
+        "enabled" | "enabled_on" | "enabled_force" | "enabled_force_on" => {
+            WebglAcceleration::Hardware
+        }
+        "enabled_readback"
+        | "software"
+        | "software_only"
+        | "disabled_software"
+        | "disabled_off"
+        | "disabled_off_ok"
+        | "unavailable_software"
+        | "unavailable_off"
+        | "unavailable_off_ok" => WebglAcceleration::NotHardware,
+        _ => WebglAcceleration::Unrecognized,
+    }
+}
+
+/// Ask a freshly-launched Chrome whether it really got hardware WebGL.
+///
+/// `SystemInfo.getInfo` is a **browser-level** CDP domain, so this needs no
+/// page and no navigation — one round-trip on the connection the handshake
+/// just established.
+///
+/// Returns `false` **only** when Chrome positively reports a non-hardware
+/// WebGL pipeline. Every other outcome — the call erroring, the domain being
+/// unavailable, the key missing, a status string this build does not
+/// recognize — warns and returns `true`.
+///
+/// **That leniency is deliberate; do not "tighten" it.** A missing or
+/// unanswered diagnostic domain is not evidence of a missing GPU, and refusing
+/// to launch over an unavailable introspection API would be a worse failure
+/// than the one this check exists to prevent.
+async fn native_webgl_is_hardware_accelerated(conn: &Connection) -> bool {
+    let info = match conn.call_raw("SystemInfo.getInfo", json!({}), None).await {
+        Ok(info) => info,
+        Err(e) => {
+            warn!(
+                error = %e,
+                "SystemInfo.getInfo failed; cannot verify GpuBackend::Native got a GPU, proceeding",
+            );
+            return true;
+        }
+    };
+
+    let Some(status) = info
+        .pointer("/gpu/featureStatus/webgl")
+        .and_then(serde_json::Value::as_str)
+    else {
+        let feature_status = info.pointer("/gpu/featureStatus");
+        warn!(
+            ?feature_status,
+            "SystemInfo.getInfo reported no gpu.featureStatus.webgl; \
+             cannot verify GpuBackend::Native got a GPU, proceeding",
+        );
+        return true;
+    };
+
+    match classify_webgl_feature_status(status) {
+        WebglAcceleration::Hardware => true,
+        WebglAcceleration::NotHardware => false,
+        WebglAcceleration::Unrecognized => {
+            warn!(
+                status,
+                "unrecognized chrome WebGL feature status; \
+                 cannot verify GpuBackend::Native got a GPU, proceeding",
+            );
+            true
+        }
+    }
+}
+
 /// Merge the stealth profile's `extra_flags` onto `base_flags` (the output of
 /// [`BrowserBuilder::build_flags`]).
 ///
@@ -715,6 +824,13 @@ impl BrowserBuilder {
     /// backend set via
     /// [`StealthProfile::gpu_backend`](zendriver_stealth::StealthProfile::gpu_backend)
     /// on the attached profile is honoured instead.
+    ///
+    /// A [`GpuBackend::Native`] launch is verified before it returns: Chrome
+    /// is asked what GPU pipeline it initialized, and a host without
+    /// hardware-accelerated WebGL fails with
+    /// [`BrowserError::GpuBackendUnavailable`] instead of yielding a browser
+    /// whose `canvas.getContext('webgl')` returns `null`. See
+    /// [`GpuBackend::Native`] for the measurement behind that check.
     ///
     /// # Examples
     ///
@@ -3203,6 +3319,36 @@ impl BrowserBuilder {
         })
         .await?;
 
+        // 12b. `GpuBackend::Native` promises a hardware-accelerated surface,
+        // so confirm Chrome actually built one before handing the caller a
+        // browser. Chrome starting is NOT that confirmation: on a GPU-less
+        // Ubuntu 24 VM, Chrome 150 launched fine under `Native` and then
+        // returned `null` from both `canvas.getContext('webgl')` and
+        // `getContext('webgl2')` — a browser strictly *more* detectable than
+        // the default, and one the stealth WebGL patch cannot repair (it
+        // patches prototypes; there is no context to patch).
+        //
+        // Only `Native` is checked: it is the one backend that claims
+        // hardware. `Disabled`/`SwiftShader` promise software and deliver it.
+        if self.effective_gpu_backend() == GpuBackend::Native
+            && !native_webgl_is_hardware_accelerated(&inner.conn).await
+        {
+            warn!(
+                "chrome came up without hardware-accelerated WebGL despite \
+                 gpu_backend(GpuBackend::Native); failing the launch",
+            );
+            // Terminate the Chrome we spawned — a failed launch must not leak
+            // a process. `Browser::close` is the same orchestrated shutdown a
+            // caller performs (`Browser.close` round-trip, then kill the child
+            // and, on Windows, its job tree).
+            let _ = Browser { inner }.close().await;
+            // No fallback to SwiftShader: switching backends silently would
+            // serve a software rasterizer's values under a "native" label,
+            // exactly the incoherent fingerprint that naming a backend exists
+            // to avoid. The caller decides.
+            return Err(BrowserError::GpuBackendUnavailable.into());
+        }
+
         // 13. If a custom downloads_dir was set, configure browser-scoped
         // download behavior so all tabs (current + future) save into it.
         // See cdpdriver/zendriver#88.
@@ -5274,6 +5420,59 @@ mod tests {
             super::launch_timeout_error(GpuBackend::SwiftShader),
             BrowserError::WsTimeout
         ));
+    }
+
+    /// The status a real `GpuBackend::Native` launch produced on the darwin
+    /// dev host (Chrome 150.0.7871.186, Apple M4 Pro) must pass, alongside the
+    /// other stems Chrome builds for an accelerated feature.
+    #[test]
+    fn hardware_webgl_statuses_pass_the_native_check() {
+        for status in ["enabled", "enabled_on", "enabled_force", "enabled_force_on"] {
+            assert_eq!(
+                super::classify_webgl_feature_status(status),
+                super::WebglAcceleration::Hardware,
+                "{status} reports hardware WebGL and must not fail a Native launch",
+            );
+        }
+    }
+
+    /// Software and unavailable statuses must fail. `enabled_readback` is the
+    /// measured `GpuBackend::SwiftShader` status on the same host — a `Native`
+    /// launch reporting it landed on the software rasterizer, which is the
+    /// whole point of the check.
+    #[test]
+    fn software_and_unavailable_webgl_statuses_fail_the_native_check() {
+        for status in [
+            "enabled_readback",
+            "software",
+            "software_only",
+            "disabled_software",
+            "disabled_off",
+            "disabled_off_ok",
+            "unavailable_software",
+            "unavailable_off",
+            "unavailable_off_ok",
+        ] {
+            assert_eq!(
+                super::classify_webgl_feature_status(status),
+                super::WebglAcceleration::NotHardware,
+                "{status} is not hardware WebGL and must fail a Native launch",
+            );
+        }
+    }
+
+    /// A status string this build has never seen means "cannot verify", never
+    /// "no GPU". Chrome is free to add stems; inventing a failure out of an
+    /// unknown one would reject working GPUs.
+    #[test]
+    fn an_unrecognized_webgl_status_is_unverifiable_not_a_failure() {
+        for status in ["", "enabled_quantum", "who_knows", "ENABLED"] {
+            assert_eq!(
+                super::classify_webgl_feature_status(status),
+                super::WebglAcceleration::Unrecognized,
+                "{status:?} is unknown, so it must be unverifiable rather than a failure",
+            );
+        }
     }
 
     #[test]

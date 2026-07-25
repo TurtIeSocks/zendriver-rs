@@ -57,17 +57,37 @@ identities across a fleet, `Native` is not that tool; look at
 for caller-supplied adapter values instead. `Native` makes the GPU surface
 *coherent*; it does not give you *control* over what it says.
 
-## No automatic fallback
+## The launch is validated, and there is no automatic fallback
 
-If `Native` is selected and Chrome's GPU process cannot start — no GPU
-present, a crashed GPU process, a missing sandbox — the launch fails with
-[`BrowserError::GpuBackendUnavailable`] rather than silently retrying with a
-software rasterizer. That's deliberate: falling back automatically would
-restore the same incoherent, mixed software/hardware fingerprint that
-choosing a backend explicitly exists to avoid. If a launch might land on a
-GPU-less host, catch `GpuBackendUnavailable` (along with `DevtoolsParse` and
-`EarlyExit`, the other failure shapes a missing GPU process produces) and
-retry with `GpuBackend::SwiftShader` or `GpuBackend::Disabled` yourself.
+Chrome *starting* is not evidence that it got a GPU. On a GPU-less Ubuntu 24
+VM, Chrome 150 launched successfully under `Native` and then returned `null`
+from both `canvas.getContext('webgl')` and `getContext('webgl2')`. That is a
+browser strictly **more** detectable than the default — a missing WebGL
+context is one of the oldest and cheapest headless tells, and the stealth
+WebGL patch cannot repair it, because it patches prototypes and there is no
+context to patch.
+
+So `Native` verifies the launch. After the CDP handshake, zendriver asks
+Chrome what it actually initialized (`SystemInfo.getInfo`, a browser-level
+domain — no page, no navigation, one round-trip) and reads
+`gpu.featureStatus.webgl`. Measured on Chrome 150.0.7871.186 on the darwin
+dev host: `Native` reports `enabled`, `SwiftShader` reports
+`enabled_readback`, `Disabled` reports `disabled_off`. Anything but a
+hardware status terminates the Chrome that was just spawned and fails the
+launch with [`BrowserError::GpuBackendUnavailable`].
+
+If the GPU cannot be *verified* — `SystemInfo.getInfo` unavailable, or
+answering with a status string zendriver does not recognize — the launch logs
+a warning and proceeds. A missing diagnostic API is not evidence of a missing
+GPU, and refusing to launch over one would be worse than the problem the
+check addresses.
+
+There is no fallback. Failing rather than retrying on SwiftShader is
+deliberate: falling back automatically would serve a software rasterizer's
+values under a "native" label — the same incoherent, mixed software/hardware
+fingerprint that choosing a backend explicitly exists to avoid. If a launch
+might land on a GPU-less host, catch `GpuBackendUnavailable` and retry with
+`GpuBackend::SwiftShader` or `GpuBackend::Disabled` yourself.
 
 [`BrowserError::GpuBackendUnavailable`]: https://docs.rs/zendriver/latest/zendriver/enum.BrowserError.html
 
