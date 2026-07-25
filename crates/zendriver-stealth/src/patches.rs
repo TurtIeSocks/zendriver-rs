@@ -90,9 +90,10 @@ pub fn bootstrap_script_native_webgl(persona: &Persona, identity: &Fingerprint) 
 
 /// Shared implementation for [`bootstrap_script`] /
 /// [`bootstrap_script_native_webgl`]. `spoof_webgl` gates the `push_webgl`
-/// call and the WebGPU *value* spoof (which is skipped when WebGL is left
-/// real, so the two APIs stay coherent — see [`push_webgpu`]); every other
-/// patch is identical between the two public entry points.
+/// call and, together with the persona's own WebGL strategy, the WebGPU
+/// *value* spoof (which is skipped whenever WebGL is left real, so the two
+/// APIs stay coherent — see [`push_webgpu`]); every other patch is identical
+/// between the two public entry points.
 fn bootstrap_script_impl(persona: &Persona, identity: &Fingerprint, spoof_webgl: bool) -> String {
     // Prelude first: installs the toString override + closure-local helpers
     // that every patch below routes through.
@@ -138,7 +139,18 @@ fn bootstrap_script_impl(persona: &Persona, identity: &Fingerprint, spoof_webgl:
         seed,
     );
 
-    if spoof_webgl {
+    // Whether the WebGL value patch actually runs: the profile-level opt-in has
+    // to allow it AND the surface strategy must not be `Native`. Both leave the
+    // host's real renderer in place, so both must equally suppress the WebGPU
+    // value spoof below — a `Native` WebGL surface beside a spoofed
+    // `navigator.gpu` adapter reports two different GPUs, the cross-API
+    // contradiction the coupling exists to prevent. Resolved once here so the
+    // two calls cannot drift.
+    let webgl_spoofed = spoof_webgl
+        && Surface::Webgl.resolve_strategy(persona.webgl.as_ref().and_then(|s| s.strategy))
+            != Strategy::Native;
+
+    if webgl_spoofed {
         push_webgl(
             &mut body,
             persona.webgl.as_ref(),
@@ -151,7 +163,7 @@ fn bootstrap_script_impl(persona: &Persona, identity: &Fingerprint, spoof_webgl:
         persona.webgpu.as_ref(),
         persona.webgl.as_ref(),
         persona.gpu.as_ref(),
-        spoof_webgl,
+        webgl_spoofed,
     );
     push_fonts(&mut body, persona.fonts.as_ref(), seed);
     push_hardware(&mut body, persona.hardware.as_ref());
@@ -337,21 +349,22 @@ fn push_webgl(
 /// `navigator.gpu` agrees with WebGL — unless the caller's [`WebgpuSpec`]
 /// explicitly overrides `vendor`/`architecture`. Omitted under `Native`.
 ///
-/// `spoof_webgl` reflects whether the WebGL value patch ran. When it is
-/// `false` (the native-WebGL opt-in — [`bootstrap_script_native_webgl`]) the
-/// real WebGL renderer passes through unpatched, so a spoofed WebGPU *value*
-/// adapter — derived from the renderer we did NOT apply — would disagree with
-/// the real GPU. That cross-API mismatch is the exact coherence tell the
-/// opt-in exists to avoid, so the value spoof (and any fabrication) is skipped
-/// too and the real `navigator.gpu` adapter passes through. An explicit
-/// `Block` (hide `navigator.gpu`) is renderer-neutral and stays honored
-/// regardless.
+/// `webgl_spoofed` reflects whether the WebGL value patch ran. When it is
+/// `false` — either the native-WebGL opt-in
+/// ([`bootstrap_script_native_webgl`]) or a `Strategy::Native` WebGL surface —
+/// the real WebGL renderer passes through unpatched, so a spoofed WebGPU
+/// *value* adapter — derived from the renderer we did NOT apply — would
+/// disagree with the real GPU. That cross-API mismatch is the exact coherence
+/// tell the opt-in exists to avoid, so the value spoof (and any fabrication)
+/// is skipped too and the real `navigator.gpu` adapter passes through. An
+/// explicit `Block` (hide `navigator.gpu`) is renderer-neutral and stays
+/// honored regardless.
 fn push_webgpu(
     out: &mut String,
     spec: Option<&WebgpuSpec>,
     webgl: Option<&WebglSpec>,
     gpu: Option<&GpuProfile>,
-    spoof_webgl: bool,
+    webgl_spoofed: bool,
 ) {
     use crate::gpu::devices::adapter_for_renderer;
     let strat = Surface::Webgpu.resolve_strategy(spec.and_then(|s| s.strategy));
@@ -362,7 +375,7 @@ fn push_webgpu(
     // fabrication) when the real WebGL renderer is left unpatched (see the
     // doc comment above). A `Block` is renderer-neutral, so it is still
     // emitted.
-    if !spoof_webgl && strat != Strategy::Block {
+    if !webgl_spoofed && strat != Strategy::Block {
         return;
     }
 
@@ -1061,6 +1074,56 @@ mod tests {
         assert!(
             s.contains("navigator, 'gpu'"),
             "explicit webgpu Block should still shadow navigator.gpu under native-webgl"
+        );
+    }
+
+    #[test]
+    fn a_native_webgl_surface_also_omits_the_webgpu_value_spoof() {
+        // Same reasoning as the profile-level opt-in above, reached the other
+        // way: `Strategy::Native` on the WebGL surface leaves the host's real
+        // renderer in place, so a default (`Value`) WebGPU adapter would report
+        // an Apple GPU beside whatever the host really has — a Linux/Intel box
+        // would answer `getParameter(UNMASKED_RENDERER_WEBGL)` honestly while
+        // `navigator.gpu` claimed `apple`/`metal-3`.
+        let p = Persona {
+            webgl: Some(WebglSpec {
+                strategy: Some(Strategy::Native),
+                ..Default::default()
+            }),
+            ..Persona::default()
+        };
+        let s = bootstrap_script(&p, &mock_identity());
+        assert!(
+            !s.contains("getSupportedExtensions"),
+            "a Native WebGL surface must emit no WebGL patch"
+        );
+        assert!(
+            !s.contains("GPUAdapter.prototype"),
+            "a Native WebGL surface must also omit the WebGPU value spoof, else \
+             navigator.gpu names a GPU WebGL never claimed"
+        );
+    }
+
+    #[test]
+    fn a_native_webgl_surface_still_honors_an_explicit_webgpu_block() {
+        // Blocking `navigator.gpu` names no GPU at all, so it cannot contradict
+        // the real WebGL renderer and stays honored.
+        let p = Persona {
+            webgl: Some(WebglSpec {
+                strategy: Some(Strategy::Native),
+                ..Default::default()
+            }),
+            webgpu: Some(WebgpuSpec {
+                strategy: Some(Strategy::Block),
+                ..Default::default()
+            }),
+            ..Persona::default()
+        };
+        let s = bootstrap_script(&p, &mock_identity());
+        assert!(
+            s.contains("navigator, 'gpu'"),
+            "an explicit webgpu Block is renderer-neutral and must survive a \
+             Native WebGL surface"
         );
     }
 
