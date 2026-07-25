@@ -23,6 +23,7 @@ use zendriver::{Browser, GpuBackend};
 const PROBE_JS: &str = r#"
 (async () => {
   const out = {};
+  out.isSecureContext = window.isSecureContext;
   out.gpuInNavigator = ('gpu' in navigator);
   try {
     const a = navigator.gpu ? await navigator.gpu.requestAdapter() : null;
@@ -93,7 +94,15 @@ async fn main() -> zendriver::Result<()> {
 
     let browser = Browser::builder().gpu_backend(backend).launch().await?;
     let tab = browser.main_tab();
-    tab.goto("about:blank").await?;
+    // MUST be a secure context. `navigator.gpu` is `[SecureContext]`-gated,
+    // and `about:blank` is an opaque origin where `isSecureContext` is false —
+    // WebGPU is then invisible no matter which backend Chrome is running, so
+    // the probe would silently report `adapter: null` on a machine with a
+    // perfectly good GPU. WebGL is not gated this way, which is why it reports
+    // correctly either way and masks the problem.
+    let page = std::env::temp_dir().join("zendriver-probe-gpu.html");
+    std::fs::write(&page, "<!doctype html><title>probe</title>")?;
+    tab.goto(&format!("file://{}", page.display())).await?;
     tab.wait_for_load().await?;
     // `Tab::evaluate` already sends `awaitPromise: true` (tab.rs:1096), so the
     // async IIFE above resolves before the value comes back.
