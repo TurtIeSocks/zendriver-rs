@@ -160,17 +160,21 @@ pub struct WebglSpec {
 ///
 /// [`fabricate_when_absent`](Self::fabricate_when_absent) covers **both**
 /// GPU-less shapes:
-/// - **`navigator.gpu` entirely absent** (`'gpu' in navigator === false` —
-///   the common case, e.g. Chrome launched with `--disable-gpu`, which is
-///   zendriver's default under headless): a synthetic `navigator.gpu` is
+/// - **`navigator.gpu` entirely absent** (`'gpu' in navigator === false`):
+///   `navigator.gpu` is `[SecureContext]`-gated, so this is what an
+///   opaque-origin page (`about:blank`, `data:`) reports no matter which GPU
+///   backend Chrome is running — not a consequence of `--disable-gpu` or any
+///   other launch flag. On such a page, a synthetic `navigator.gpu` is
 ///   defined on `Navigator.prototype` whose `requestAdapter()` resolves the
 ///   synthetic adapter. This flips `'gpu' in navigator` to **true**, which is
 ///   coherent for a modern-Chrome persona — real modern Chrome always exposes
 ///   `navigator.gpu` even with no usable GPU (there `requestAdapter()` merely
 ///   resolves `null`). Restoring that presence is your explicit opt-in.
-/// - **`navigator.gpu` present but `requestAdapter()` resolves `null`**: the
-///   real `requestAdapter` is wrapped so a `null`/rejected result falls back
-///   to the synthetic adapter (a real adapter passes through untouched).
+/// - **`navigator.gpu` present but `requestAdapter()` resolves `null`**: what
+///   a secure-context page reports when Chrome has no usable GPU (e.g. under
+///   zendriver's default `--disable-gpu` headless launch) — the real
+///   `requestAdapter` is wrapped so a `null`/rejected result falls back to
+///   the synthetic adapter (a real adapter passes through untouched).
 ///
 /// # v1 limitations
 ///

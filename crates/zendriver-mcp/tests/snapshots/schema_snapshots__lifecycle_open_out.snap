@@ -10,6 +10,9 @@ properties:
   chrome_version:
     description: "Detected Chrome product string (e.g. `\"Chrome/148.0.7778.181\"`), from\nCDP `Browser.getVersion` via [`zendriver::Browser::version`].\nBest-effort: empty if the query fails (a debug log is emitted, but\n`browser_open` itself never fails because of it)."
     type: string
+  gpu_backend:
+    description: Effective GPU backend for the launched browser.
+    $ref: "#/$defs/GpuBackendSchema"
   headless:
     description: Effective headless flag for the launched browser.
     type: boolean
@@ -22,9 +25,17 @@ properties:
 required:
   - chrome_version
   - headless
+  - gpu_backend
   - profile
   - input_profile
 $defs:
+  GpuBackendSchema:
+    description: GPU backend Chrome renders WebGL / WebGPU with.
+    type: string
+    enum:
+      - disabled
+      - swift_shader
+      - native
   InputProfileChoice:
     description: "Input-timing profile choice carried over the MCP wire.\n\nWire mirror of `zendriver::stealth::InputProfile`'s two presets.\nDecoupled from [`StealthProfileChoice`] — an explicit choice here always\nwins over anything stealth would otherwise imply. When `browser_open`'s\n`input_profile` field is left unset, the *effective* profile instead\nfollows the resolved stealth profile (spoofed stealth implies\n`Coherent`, `auto`/`native` stealth implies `Native`) — see\n`crate::tools::lifecycle::input_profile_choice_for`. This type's own\n`#[default]` (`Native`) is not consulted on that unset path; nothing in\nthis crate currently calls `InputProfileChoice::default()`."
     oneOf:

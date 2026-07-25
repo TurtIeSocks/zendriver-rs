@@ -30,6 +30,16 @@ pub struct OpenInput {
     /// Run Chrome with `--headless=new` (default: `true`).
     #[serde(default = "default_true")]
     pub headless: bool,
+    /// GPU backend Chrome renders WebGL / WebGPU with (default: `disabled`).
+    ///
+    /// `disabled` keeps zendriver's historical flags. `swift_shader` forces a
+    /// software rasterizer. `native` uses the host GPU through the platform's
+    /// ANGLE backend, giving a fully coherent GPU fingerprint — but it
+    /// requires a real GPU and reports **the host's** device, not a spoofed
+    /// one. There is no automatic fallback.
+    #[serde(default)]
+    #[schemars(with = "GpuBackendSchema")]
+    pub gpu_backend: zendriver::GpuBackend,
     /// Override the session's default stealth profile for this launch.
     /// When `None`, the session-wide default (set via CLI / construct time)
     /// is used.
@@ -114,6 +124,56 @@ const fn default_true() -> bool {
     true
 }
 
+/// GPU backend Chrome renders WebGL / WebGPU with.
+//
+// Schema-only mirror of [`zendriver::GpuBackend`], which lives in
+// `zendriver-stealth` and doesn't derive `schemars::JsonSchema` (a
+// dependency that crate has no other reason to take on). Never constructed
+// in non-test code — referenced only via
+// `#[schemars(with = "GpuBackendSchema")]` so the generator can describe the
+// field's shape without requiring the real type to implement the trait.
+// Kept in sync with `zendriver::GpuBackend` by `schema_variant_for`
+// (compile-time exhaustiveness) and a serde-name equality test, not by
+// convention — see that function's doc comment.
+//
+// NOTE: the `///` line above this block is the ONLY doc comment on this
+// type — it becomes `$defs.GpuBackendSchema.description` in the published
+// MCP JSON Schema, so every client reads it. Everything else here is a
+// plain `//` comment (implementation rationale for this crate's
+// maintainers) precisely so it does NOT leak onto the wire.
+#[derive(Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[allow(dead_code)] // constructed only by schema_variant_for, which itself
+// is only called from the #[cfg(test)] module below — the plain `--lib`
+// target (compiled without `cfg(test)`) never calls it. `allow(dead_code)`
+// silences only the unused-code *lint*; it has no effect on match
+// exhaustiveness, which is a hard compiler error (E0004) checked
+// independently of any lint attribute, so the guard below stays fully live.
+enum GpuBackendSchema {
+    Disabled,
+    SwiftShader,
+    Native,
+}
+
+/// Compile-time guard tying [`GpuBackendSchema`] to the real
+/// [`zendriver::GpuBackend`].
+///
+/// This match is deliberately exhaustive with no wildcard arm: adding a
+/// variant to `GpuBackend` fails to compile here, which is the only thing
+/// forcing whoever adds it to also extend the advertised MCP schema. Without
+/// this, the schema would silently keep advertising the old variant set while
+/// the server accepted the new one. Only called from the test module below
+/// (hence `#[allow(dead_code)]`), but exhaustiveness is checked at the match
+/// site regardless of whether the function is ever called.
+#[allow(dead_code)]
+fn schema_variant_for(backend: zendriver::GpuBackend) -> GpuBackendSchema {
+    match backend {
+        zendriver::GpuBackend::Disabled => GpuBackendSchema::Disabled,
+        zendriver::GpuBackend::SwiftShader => GpuBackendSchema::SwiftShader,
+        zendriver::GpuBackend::Native => GpuBackendSchema::Native,
+    }
+}
+
 /// Output of `browser_open`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct OpenOutput {
@@ -124,6 +184,9 @@ pub struct OpenOutput {
     pub chrome_version: String,
     /// Effective headless flag for the launched browser.
     pub headless: bool,
+    /// Effective GPU backend for the launched browser.
+    #[schemars(with = "GpuBackendSchema")]
+    pub gpu_backend: zendriver::GpuBackend,
     /// Effective stealth profile for the launched browser.
     pub profile: StealthProfileChoice,
     /// Effective input-timing profile for the launched browser — the
@@ -149,7 +212,10 @@ pub async fn open(
     }
     let profile = input.stealth_profile.unwrap_or(s.stealth_profile_choice);
     let stealth = apply_overrides(stealth_profile_for(profile), &s.stealth_overrides);
-    let mut builder = Browser::builder().headless(input.headless).stealth(stealth);
+    let mut builder = Browser::builder()
+        .headless(input.headless)
+        .gpu_backend(input.gpu_backend)
+        .stealth(stealth);
     if let Some(choice) = input.input_profile {
         builder = builder.input_profile(input_profile_for(choice));
     }
@@ -244,6 +310,7 @@ pub async fn open(
     Ok(OpenOutput {
         chrome_version,
         headless: input.headless,
+        gpu_backend: input.gpu_backend,
         profile,
         input_profile: input_profile_choice,
     })
@@ -548,6 +615,42 @@ pub async fn status(
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_open_input_defaults_gpu_backend_to_disabled() {
+        let input: OpenInput = serde_json::from_str("{}").unwrap();
+        assert_eq!(input.gpu_backend, zendriver::GpuBackend::Disabled);
+    }
+
+    #[test]
+    fn browser_open_input_parses_native_gpu_backend() {
+        let input: OpenInput = serde_json::from_str(r#"{"gpu_backend":"native"}"#).unwrap();
+        assert_eq!(input.gpu_backend, zendriver::GpuBackend::Native);
+    }
+
+    #[test]
+    fn browser_open_input_parses_swift_shader_gpu_backend() {
+        let input: OpenInput = serde_json::from_str(r#"{"gpu_backend":"swift_shader"}"#).unwrap();
+        assert_eq!(input.gpu_backend, zendriver::GpuBackend::SwiftShader);
+    }
+
+    #[test]
+    fn schema_shadow_enum_serializes_identically_to_the_real_gpu_backend() {
+        // The shadow enum only earns its keep if its wire names match the real
+        // type's exactly — that string is what MCP clients validate against.
+        for backend in [
+            zendriver::GpuBackend::Disabled,
+            zendriver::GpuBackend::SwiftShader,
+            zendriver::GpuBackend::Native,
+        ] {
+            let real = serde_json::to_string(&backend).unwrap();
+            let shadow = serde_json::to_string(&schema_variant_for(backend)).unwrap();
+            assert_eq!(
+                real, shadow,
+                "shadow schema name drifted from the real GpuBackend for {backend:?}"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn close_with_no_browser_is_noop() {

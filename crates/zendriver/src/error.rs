@@ -351,6 +351,23 @@ pub enum BrowserError {
     #[error("timed out waiting for chrome WS endpoint")]
     WsTimeout,
 
+    /// Chrome never advertised its WS endpoint on a launch that requested
+    /// [`GpuBackend::Native`](crate::GpuBackend::Native).
+    ///
+    /// Distinct from [`BrowserError::WsTimeout`] so callers can retry with a
+    /// software backend programmatically. zendriver deliberately does **not**
+    /// perform that fallback itself: silently switching to a software
+    /// rasterizer would restore exactly the incoherent GPU fingerprint that
+    /// selecting a backend was meant to avoid.
+    #[error(
+        "timed out waiting for chrome WS endpoint; this launch used \
+         gpu_backend(GpuBackend::Native), which requires a usable GPU. \
+         zendriver does not fall back automatically — pass \
+         GpuBackend::SwiftShader for a software context, or \
+         GpuBackend::Disabled for the historical default"
+    )]
+    GpuBackendUnavailable,
+
     /// Chrome printed its WS endpoint (or wrote `DevToolsActivePort`) but the
     /// post-endpoint handshake — the WebSocket dial plus the initial
     /// `Target.setAutoAttach` / `Target.getTargets` / `Target.attachToTarget`

@@ -203,13 +203,16 @@ fabricated) — the same behavior it always had. `WebgpuSpec` (mirroring
 2. **Synthetic adapter fabrication** (`fabricate_when_absent: true`) — when
    the host has no real WebGPU adapter, resolve a synthetic one built from
    your supplied values. This covers **both** GPU-less shapes:
-   - `navigator.gpu` **entirely absent** (`'gpu' in navigator === false` —
-     the common case, since zendriver's default headless launch adds
-     `--disable-gpu`): a synthetic `navigator.gpu` is *created* on
-     `Navigator.prototype`, flipping `'gpu' in navigator` to **true**. That's
-     coherent for a modern-Chrome persona — real modern Chrome always exposes
-     `navigator.gpu` even GPU-less (there `requestAdapter()` just returns
-     `null`).
+   - `navigator.gpu` **entirely absent** (`'gpu' in navigator === false`).
+     This is governed by the **page**, not by launch flags: `navigator.gpu` is
+     `[SecureContext]`-gated, so it is absent on an opaque origin such as
+     `about:blank` or a `data:` URL no matter what hardware or flags are in
+     play. On a secure page under zendriver's default flags, `'gpu' in
+     navigator` is `true` and `requestAdapter()` merely resolves `null`
+     (measured on Chrome 150). Where it is absent, a synthetic `navigator.gpu`
+     is *created* on `Navigator.prototype`, flipping `'gpu' in navigator` to
+     **true** — coherent for a modern-Chrome persona, since real modern Chrome
+     exposes `navigator.gpu` even with no usable GPU.
    - `navigator.gpu` present but `requestAdapter()` returns `null`: the real
      `requestAdapter` is wrapped so a `null` result falls back to the
      synthetic adapter (a real adapter passes through untouched).
@@ -265,6 +268,17 @@ adapter for detection scripts that stop there; it does not unlock actual
 WebGPU rendering on a GPU-less host. The synthetic adapter and (when created)
 the synthetic `navigator.gpu` are plain objects, so `adapter instanceof
 GPUAdapter` and `navigator.gpu instanceof GPU` are `false`.
+
+**On a GPU-equipped host, [`GpuBackend::Native`](gpu-backend.md) sidesteps
+`WebgpuSpec` fabrication entirely.** Instead of faking an adapter and
+accepting the `requestDevice()`-rejects / no-real-rendering limitations
+above, `Native` has Chrome render on the host's real GPU: a real adapter, a
+real working `requestDevice()`, real limits and features — no patch
+involved. The trade-off moves in the other direction: `Native` reports
+whatever GPU the host actually has, with no caller-supplied identity, so it
+doesn't help when you need a *specific* (rather than *coherent*) GPU
+identity. See the [GPU backend](gpu-backend.md) chapter for the full
+comparison.
 
 ## Country → locale + timezone overlay (`geo_locale`)
 

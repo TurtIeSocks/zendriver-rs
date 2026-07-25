@@ -1113,8 +1113,10 @@ mod tests {
         // The fabricate patch must carry BOTH runtime branches: (a) wrap
         // GPU.prototype.requestAdapter when navigator.gpu exists, and (b)
         // DEFINE a synthetic navigator.gpu on Navigator.prototype when it's
-        // entirely absent (the `--disable-gpu` GPU-less case this feature
-        // exists for). Guards against either branch being dropped.
+        // entirely absent (the opaque-origin-page case this feature exists
+        // for — `navigator.gpu` is `[SecureContext]`-gated, so it's absent on
+        // `about:blank`/`data:` regardless of launch flags or GPU hardware).
+        // Guards against either branch being dropped.
         assert!(
             s.contains("GPU.prototype, 'requestAdapter'"),
             "case (a): wraps requestAdapter when navigator.gpu is present: {s}"

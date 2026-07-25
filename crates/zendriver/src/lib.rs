@@ -136,7 +136,9 @@ pub use window::{WindowBounds, WindowState};
 // stealth crate directly. `WebgpuSpec` is included explicitly (unlike the
 // other per-surface value specs, still lib-internal-only) because it's a new
 // opt-in knob whose whole point is caller discoverability — see its rustdoc.
-pub use zendriver_stealth::{Persona, PersonaBuilder, Seed, Strategy, Surface, WebgpuSpec};
+pub use zendriver_stealth::{
+    GpuBackend, Persona, PersonaBuilder, Seed, Strategy, Surface, WebgpuSpec,
+};
 
 // Re-export selected transport types for advanced users. Includes the observer
 // surface (TargetObserver + supporting types) so a consumer can implement a
@@ -262,8 +264,8 @@ pub use geo_resolver::IpApiResolver;
 /// Stealth profile + fingerprint configuration re-exported from `zendriver-stealth`.
 pub mod stealth {
     pub use zendriver_stealth::{
-        Fingerprint, InputProfile, Persona, PersonaBuilder, Platform, Seed, StealthProfile,
-        Strategy, Surface, UserAgentMetadata, WebgpuSpec,
+        Fingerprint, GpuBackend, InputProfile, Persona, PersonaBuilder, Platform, Seed,
+        StealthProfile, Strategy, Surface, UserAgentMetadata, WebgpuSpec,
     };
 }
 

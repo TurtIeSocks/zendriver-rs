@@ -47,7 +47,7 @@ More working examples in [`crates/zendriver/examples/`](crates/zendriver/example
 
 | Feature        | Default? | Use case                                                      | Extra deps                            |
 | -------------- | -------- | ------------------------------------------------------------- | ------------------------------------- |
-| `stealth`      | yes      | Anti-detection: spoofed UA/platform, isolated worlds, JS shim | (built-in to `zendriver`)             |
+| `stealth`      | yes      | Anti-detection: spoofed UA/platform, isolated worlds, JS shim, opt-in `gpu_backend` for real-GPU WebGL/WebGPU rendering | (built-in to `zendriver`)             |
 | `interception` | no       | Block/modify requests via CDP `Fetch.*`; rule-based + streams | `zendriver-interception`              |
 | `expect`       | no       | Playwright-style `expect_response()` / `expect_request()`     | (in-tree, no extra crate)             |
 | `cloudflare`   | no       | Solve Cloudflare Turnstile challenges                         | `zendriver-cloudflare`                |
@@ -125,7 +125,7 @@ No manual MCP config — the plugin bundles the server plus scraping skills, the
 
 **What agents get out of the box:**
 
-- **Stealth navigation** — `browser_open`, `browser_goto`, `browser_back/forward/reload`, `browser_wait_for_idle`, plus a runtime-swappable `browser_set_stealth_profile` (auto / native / spoof_macos / spoof_linux / spoof_windows) and an `input_profile` (native / coherent) opt-in for humanized keyboard/mouse timing, decoupled from the stealth profile
+- **Stealth navigation** — `browser_open`, `browser_goto`, `browser_back/forward/reload`, `browser_wait_for_idle`, plus a runtime-swappable `browser_set_stealth_profile` (auto / native / spoof_macos / spoof_linux / spoof_windows), an `input_profile` (native / coherent) opt-in for humanized keyboard/mouse timing decoupled from the stealth profile, and a `gpu_backend` (disabled / swift_shader / native) opt-in to render WebGL/WebGPU on the host's real GPU instead of the software fallback
 - **Selector-based find + actions** — one `Selector` arg works across `browser_find`, `browser_click`, `browser_type`, `browser_press`, `browser_set_value`, `browser_upload`, etc., with CSS / XPath / visible-text / ARIA-role lookups and per-frame scoping
 - **Three ways to "see" the page** — `browser_html` (trimmed DOM), `browser_screenshot` (PNG / JPEG / WebP as inline image content), `browser_element_state` (visibility / geometry / attrs)
 - **Stateful primitives** agents need for real work — `browser_cookies_persist` for save/load auth, full `browser_storage_*`, multi-tab management, frame traversal; `browser_monitor_*` passive network monitor (HTTP / WS / SSE); `browser_request` for HTTP from the page's own session

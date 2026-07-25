@@ -862,3 +862,30 @@ excluded = "argument of TargetObserver::on_target_attached; advanced transport s
 [[entry]]
 api = "zendriver::TargetInfo"
 excluded = "target metadata passed to the observer surface; advanced transport type, no distinct MCP tool"
+
+# ── GPU backend selection (2026-07-24 GPU spoofing, phase 1) ────────────────
+[[entry]]
+api = "zendriver::browser::BrowserBuilder::gpu_backend"
+covered = "browser_open.gpu_backend"
+
+[[entry]]
+api = "zendriver::GpuBackend"
+covered = "browser_open.gpu_backend"
+
+[[entry]]
+api = "zendriver::stealth::GpuBackend"
+covered = "browser_open.gpu_backend"
+
+# ── Task 3: profile-side backend getter ─────────────────────────────────────
+[[entry]]
+api = "zendriver_stealth::StealthProfile::selected_gpu_backend"
+excluded = "reader for a caller-supplied stealth-profile field; the setter is reachable via browser_open.gpu_backend"
+
+# ── Task 4: launch-failure variant for the Native backend ───────────────────
+[[entry]]
+api = "zendriver::error::BrowserError::GpuBackendUnavailable"
+excluded = "error variant, not an operation; a Native-backend launch whose GPU process never came up, surfaced as a browser_open failure"
+
+[[entry]]
+api = "zendriver::BrowserError::GpuBackendUnavailable"
+excluded = "crate-root re-export of the above variant; same browser_open failure surface"
