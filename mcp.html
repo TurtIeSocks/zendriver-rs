@@ -317,6 +317,16 @@ implies <code>"native"</code> (zero-overhead, deterministic timing) — mirrorin
 setting. Wraps <code>zendriver::stealth::InputProfile</code> via
 <code>BrowserBuilder::input_profile</code>; the output <code>input_profile</code> field always
 echoes the <em>resolved</em> value, not the raw request.</li>
+<li><code>gpu_backend: "disabled" | "swift_shader" | "native"</code> — select the GPU
+backend Chrome renders WebGL/WebGPU with (default: <code>"disabled"</code>, today's
+historical flags). <code>"swift_shader"</code> forces ANGLE's software rasterizer
+explicitly. <code>"native"</code> drops <code>--disable-gpu</code> and renders on the host's real
+GPU — a fully coherent WebGL/WebGPU surface, but it reports <strong>the host's</strong>
+GPU (no identity control) and requires a usable GPU with no automatic
+fallback: a launch that can't start the GPU process fails outright rather
+than silently falling back to software rendering. See the
+<a href="gpu-backend.html">GPU backend chapter</a> for the measured comparison and the
+<code>--disable-gpu</code>-alone hang this option exists to avoid.</li>
 </ul>
 <h2 id="browser_monitor_-options"><a class="header" href="#browser_monitor_-options"><code>browser_monitor_*</code> options</a></h2>
 <p><code>browser_monitor_start</code> accepts <code>capture_body_max_bytes: integer</code> (default

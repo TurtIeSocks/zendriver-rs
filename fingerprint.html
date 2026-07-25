@@ -362,13 +362,15 @@ letting <code>vendor</code>/<code>architecture</code> derive from the WebGL rend
 the host has no real WebGPU adapter, resolve a synthetic one built from
 your supplied values. This covers <strong>both</strong> GPU-less shapes:</p>
 <ul>
-<li><code>navigator.gpu</code> <strong>entirely absent</strong> (<code>'gpu' in navigator === false</code> —
-the common case, since zendriver's default headless launch adds
-<code>--disable-gpu</code>): a synthetic <code>navigator.gpu</code> is <em>created</em> on
-<code>Navigator.prototype</code>, flipping <code>'gpu' in navigator</code> to <strong>true</strong>. That's
-coherent for a modern-Chrome persona — real modern Chrome always exposes
-<code>navigator.gpu</code> even GPU-less (there <code>requestAdapter()</code> just returns
-<code>null</code>).</li>
+<li><code>navigator.gpu</code> <strong>entirely absent</strong> (<code>'gpu' in navigator === false</code>).
+This is governed by the <strong>page</strong>, not by launch flags: <code>navigator.gpu</code> is
+<code>[SecureContext]</code>-gated, so it is absent on an opaque origin such as
+<code>about:blank</code> or a <code>data:</code> URL no matter what hardware or flags are in
+play. On a secure page under zendriver's default flags, <code>'gpu' in navigator</code> is <code>true</code> and <code>requestAdapter()</code> merely resolves <code>null</code>
+(measured on Chrome 150). Where it is absent, a synthetic <code>navigator.gpu</code>
+is <em>created</em> on <code>Navigator.prototype</code>, flipping <code>'gpu' in navigator</code> to
+<strong>true</strong> — coherent for a modern-Chrome persona, since real modern Chrome
+exposes <code>navigator.gpu</code> even with no usable GPU.</li>
 <li><code>navigator.gpu</code> present but <code>requestAdapter()</code> returns <code>null</code>: the real
 <code>requestAdapter</code> is wrapped so a <code>null</code> result falls back to the
 synthetic adapter (a real adapter passes through untouched).</li>
@@ -422,6 +424,16 @@ GPU behind it. Fabrication only makes <code>requestAdapter()</code> resolve a co
 adapter for detection scripts that stop there; it does not unlock actual
 WebGPU rendering on a GPU-less host. The synthetic adapter and (when created)
 the synthetic <code>navigator.gpu</code> are plain objects, so <code>adapter instanceof GPUAdapter</code> and <code>navigator.gpu instanceof GPU</code> are <code>false</code>.</p>
+<p><strong>On a GPU-equipped host, <a href="gpu-backend.html"><code>GpuBackend::Native</code></a> sidesteps
+<code>WebgpuSpec</code> fabrication entirely.</strong> Instead of faking an adapter and
+accepting the <code>requestDevice()</code>-rejects / no-real-rendering limitations
+above, <code>Native</code> has Chrome render on the host's real GPU: a real adapter, a
+real working <code>requestDevice()</code>, real limits and features — no patch
+involved. The trade-off moves in the other direction: <code>Native</code> reports
+whatever GPU the host actually has, with no caller-supplied identity, so it
+doesn't help when you need a <em>specific</em> (rather than <em>coherent</em>) GPU
+identity. See the <a href="gpu-backend.html">GPU backend</a> chapter for the full
+comparison.</p>
 <h2 id="country--locale--timezone-overlay-geo_locale"><a class="header" href="#country--locale--timezone-overlay-geo_locale">Country → locale + timezone overlay (<code>geo_locale</code>)</a></h2>
 <p>The optional <code>geo</code> feature adds <a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.geo_locale"><code>BrowserBuilder::geo_locale</code></a>, which maps an
 ISO 3166-1 alpha-2 country code (e.g. <code>"US"</code>, <code>"de"</code>) to a coherent <code>locale</code> +
@@ -564,7 +576,7 @@ let persona: Persona = r#"{"seed": 99, "timezone": "UTC"}"#.parse().unwrap();
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
-                            <a rel="next prefetch" href="multi-tab.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="gpu-backend.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <i class="fa fa-angle-right"></i>
                             </a>
 
@@ -578,7 +590,7 @@ let persona: Persona = r#"{"seed": 99, "timezone": "UTC"}"#.parse().unwrap();
                         <i class="fa fa-angle-left"></i>
                     </a>
 
-                    <a rel="next prefetch" href="multi-tab.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="gpu-backend.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <i class="fa fa-angle-right"></i>
                     </a>
             </nav>

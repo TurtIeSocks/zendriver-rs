@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["flags_for_profile"]};
+window.SIDEBAR_ITEMS = {"enum":["GpuBackend"],"fn":["flags_for_profile"]};

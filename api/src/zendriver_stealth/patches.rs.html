@@ -1113,207 +1113,209 @@
 <a href=#1113 id=1113 data-nosnippet>1113</a>        <span class="comment">// The fabricate patch must carry BOTH runtime branches: (a) wrap
 <a href=#1114 id=1114 data-nosnippet>1114</a>        // GPU.prototype.requestAdapter when navigator.gpu exists, and (b)
 <a href=#1115 id=1115 data-nosnippet>1115</a>        // DEFINE a synthetic navigator.gpu on Navigator.prototype when it's
-<a href=#1116 id=1116 data-nosnippet>1116</a>        // entirely absent (the `--disable-gpu` GPU-less case this feature
-<a href=#1117 id=1117 data-nosnippet>1117</a>        // exists for). Guards against either branch being dropped.
-<a href=#1118 id=1118 data-nosnippet>1118</a>        </span><span class="macro">assert!</span>(
-<a href=#1119 id=1119 data-nosnippet>1119</a>            s.contains(<span class="string">"GPU.prototype, 'requestAdapter'"</span>),
-<a href=#1120 id=1120 data-nosnippet>1120</a>            <span class="string">"case (a): wraps requestAdapter when navigator.gpu is present: {s}"
-<a href=#1121 id=1121 data-nosnippet>1121</a>        </span>);
-<a href=#1122 id=1122 data-nosnippet>1122</a>        <span class="macro">assert!</span>(
-<a href=#1123 id=1123 data-nosnippet>1123</a>            s.contains(<span class="string">"Navigator.prototype, 'gpu'"</span>),
-<a href=#1124 id=1124 data-nosnippet>1124</a>            <span class="string">"case (b): defines synthetic navigator.gpu when entirely absent: {s}"
-<a href=#1125 id=1125 data-nosnippet>1125</a>        </span>);
-<a href=#1126 id=1126 data-nosnippet>1126</a>        <span class="macro">assert!</span>(
-<a href=#1127 id=1127 data-nosnippet>1127</a>            s.contains(<span class="string">"getPreferredCanvasFormat"</span>),
-<a href=#1128 id=1128 data-nosnippet>1128</a>            <span class="string">"synthetic navigator.gpu exposes getPreferredCanvasFormat for coherence: {s}"
-<a href=#1129 id=1129 data-nosnippet>1129</a>        </span>);
-<a href=#1130 id=1130 data-nosnippet>1130</a>    }
-<a href=#1131 id=1131 data-nosnippet>1131</a>
-<a href=#1132 id=1132 data-nosnippet>1132</a>    <span class="attr">#[test]
-<a href=#1133 id=1133 data-nosnippet>1133</a>    </span><span class="kw">fn </span>webgpu_block_deletes_navigator_gpu() {
-<a href=#1134 id=1134 data-nosnippet>1134</a>        <span class="kw">let </span>p = Persona {
-<a href=#1135 id=1135 data-nosnippet>1135</a>            webgpu: <span class="prelude-val">Some</span>(WebgpuSpec {
-<a href=#1136 id=1136 data-nosnippet>1136</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Block),
-<a href=#1137 id=1137 data-nosnippet>1137</a>                ..Default::default()
-<a href=#1138 id=1138 data-nosnippet>1138</a>            }),
-<a href=#1139 id=1139 data-nosnippet>1139</a>            ..Persona::default()
-<a href=#1140 id=1140 data-nosnippet>1140</a>        };
-<a href=#1141 id=1141 data-nosnippet>1141</a>        <span class="kw">let </span>s = bootstrap_script(<span class="kw-2">&amp;</span>p, <span class="kw-2">&amp;</span>mock_identity());
-<a href=#1142 id=1142 data-nosnippet>1142</a>        <span class="macro">assert!</span>(s.contains(<span class="string">"\"block\""</span>), <span class="string">"block mode token substituted"</span>);
-<a href=#1143 id=1143 data-nosnippet>1143</a>        <span class="macro">assert!</span>(
-<a href=#1144 id=1144 data-nosnippet>1144</a>            s.contains(<span class="string">"navigator, 'gpu'"</span>),
-<a href=#1145 id=1145 data-nosnippet>1145</a>            <span class="string">"block mode shadows navigator.gpu"
-<a href=#1146 id=1146 data-nosnippet>1146</a>        </span>);
-<a href=#1147 id=1147 data-nosnippet>1147</a>    }
-<a href=#1148 id=1148 data-nosnippet>1148</a>
-<a href=#1149 id=1149 data-nosnippet>1149</a>    <span class="attr">#[test]
-<a href=#1150 id=1150 data-nosnippet>1150</a>    </span><span class="kw">fn </span>webgpu_native_passes_null_vendor() {
-<a href=#1151 id=1151 data-nosnippet>1151</a>        <span class="kw">let </span>p = Persona {
-<a href=#1152 id=1152 data-nosnippet>1152</a>            webgpu: <span class="prelude-val">Some</span>(WebgpuSpec {
-<a href=#1153 id=1153 data-nosnippet>1153</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Native),
-<a href=#1154 id=1154 data-nosnippet>1154</a>                ..Default::default()
-<a href=#1155 id=1155 data-nosnippet>1155</a>            }),
-<a href=#1156 id=1156 data-nosnippet>1156</a>            ..Persona::default()
-<a href=#1157 id=1157 data-nosnippet>1157</a>        };
-<a href=#1158 id=1158 data-nosnippet>1158</a>        <span class="kw">let </span>s = bootstrap_script(<span class="kw-2">&amp;</span>p, <span class="kw-2">&amp;</span>mock_identity());
-<a href=#1159 id=1159 data-nosnippet>1159</a>        <span class="comment">// Native → no webgpu patch emitted at all.
-<a href=#1160 id=1160 data-nosnippet>1160</a>        </span><span class="macro">assert!</span>(!s.contains(<span class="string">"WEBGPU_VENDOR"</span>), <span class="string">"no unsubstituted token"</span>);
-<a href=#1161 id=1161 data-nosnippet>1161</a>        <span class="macro">assert!</span>(
-<a href=#1162 id=1162 data-nosnippet>1162</a>            !s.contains(<span class="string">"GPUAdapter.prototype"</span>),
-<a href=#1163 id=1163 data-nosnippet>1163</a>            <span class="string">"Native webgpu omits the patch"
-<a href=#1164 id=1164 data-nosnippet>1164</a>        </span>);
-<a href=#1165 id=1165 data-nosnippet>1165</a>    }
-<a href=#1166 id=1166 data-nosnippet>1166</a>
-<a href=#1167 id=1167 data-nosnippet>1167</a>    <span class="attr">#[test]
-<a href=#1168 id=1168 data-nosnippet>1168</a>    </span><span class="kw">fn </span>navigator_languages_derives_base_lang_not_en() {
-<a href=#1169 id=1169 data-nosnippet>1169</a>        <span class="kw">let </span>persona = Persona {
-<a href=#1170 id=1170 data-nosnippet>1170</a>            locale: <span class="prelude-val">Some</span>(<span class="string">"fr-FR"</span>.into()),
-<a href=#1171 id=1171 data-nosnippet>1171</a>            ..Default::default()
-<a href=#1172 id=1172 data-nosnippet>1172</a>        };
-<a href=#1173 id=1173 data-nosnippet>1173</a>        <span class="kw">let </span>identity = mock_identity(); <span class="comment">// existing helper in this test module
-<a href=#1174 id=1174 data-nosnippet>1174</a>        </span><span class="kw">let </span>script = bootstrap_script(<span class="kw-2">&amp;</span>persona, <span class="kw-2">&amp;</span>identity);
-<a href=#1175 id=1175 data-nosnippet>1175</a>        <span class="macro">assert!</span>(
-<a href=#1176 id=1176 data-nosnippet>1176</a>            script.contains(<span class="string">r#"["fr-FR","fr"]"#</span>) || script.contains(<span class="string">r#"["fr-FR", "fr"]"#</span>),
-<a href=#1177 id=1177 data-nosnippet>1177</a>            <span class="string">"languages should derive base lang, not hardcode en: {script}"
-<a href=#1178 id=1178 data-nosnippet>1178</a>        </span>);
-<a href=#1179 id=1179 data-nosnippet>1179</a>        <span class="macro">assert!</span>(
-<a href=#1180 id=1180 data-nosnippet>1180</a>            !script.contains(<span class="string">r#"["fr-FR","en"]"#</span>),
-<a href=#1181 id=1181 data-nosnippet>1181</a>            <span class="string">"must not hardcode en"
-<a href=#1182 id=1182 data-nosnippet>1182</a>        </span>);
-<a href=#1183 id=1183 data-nosnippet>1183</a>    }
-<a href=#1184 id=1184 data-nosnippet>1184</a>
-<a href=#1185 id=1185 data-nosnippet>1185</a>    <span class="attr">#[test]
-<a href=#1186 id=1186 data-nosnippet>1186</a>    </span><span class="kw">fn </span>identity_patches_route_through_masking_helpers() {
-<a href=#1187 id=1187 data-nosnippet>1187</a>        <span class="kw">let </span>s = bootstrap_script(<span class="kw-2">&amp;</span>Persona::default(), <span class="kw-2">&amp;</span>mock_identity());
-<a href=#1188 id=1188 data-nosnippet>1188</a>        <span class="macro">assert!</span>(
-<a href=#1189 id=1189 data-nosnippet>1189</a>            s.contains(<span class="string">"__zdGetter(Navigator.prototype, 'webdriver'"</span>),
-<a href=#1190 id=1190 data-nosnippet>1190</a>            <span class="string">"webdriver"
-<a href=#1191 id=1191 data-nosnippet>1191</a>        </span>);
-<a href=#1192 id=1192 data-nosnippet>1192</a>        <span class="macro">assert!</span>(
-<a href=#1193 id=1193 data-nosnippet>1193</a>            s.contains(<span class="string">"__zdGetter(Navigator.prototype, 'plugins'"</span>),
-<a href=#1194 id=1194 data-nosnippet>1194</a>            <span class="string">"plugins getter"
-<a href=#1195 id=1195 data-nosnippet>1195</a>        </span>);
-<a href=#1196 id=1196 data-nosnippet>1196</a>        <span class="macro">assert!</span>(
-<a href=#1197 id=1197 data-nosnippet>1197</a>            s.contains(<span class="string">"__zdReplace"</span>),
-<a href=#1198 id=1198 data-nosnippet>1198</a>            <span class="string">"permissions/codecs methods routed"
-<a href=#1199 id=1199 data-nosnippet>1199</a>        </span>);
-<a href=#1200 id=1200 data-nosnippet>1200</a>        <span class="macro">assert!</span>(s.contains(<span class="string">"__zdMark"</span>), <span class="string">"value-fn members marked"</span>);
-<a href=#1201 id=1201 data-nosnippet>1201</a>        <span class="comment">// No raw defineProperty getter on Navigator.prototype.webdriver remains.
-<a href=#1202 id=1202 data-nosnippet>1202</a>        </span><span class="macro">assert!</span>(
-<a href=#1203 id=1203 data-nosnippet>1203</a>            !s.contains(<span class="string">"Object.defineProperty(Navigator.prototype, 'webdriver'"</span>),
-<a href=#1204 id=1204 data-nosnippet>1204</a>            <span class="string">"webdriver should go through __zdGetter, not raw defineProperty"
-<a href=#1205 id=1205 data-nosnippet>1205</a>        </span>);
-<a href=#1206 id=1206 data-nosnippet>1206</a>    }
-<a href=#1207 id=1207 data-nosnippet>1207</a>
-<a href=#1208 id=1208 data-nosnippet>1208</a>    <span class="attr">#[test]
-<a href=#1209 id=1209 data-nosnippet>1209</a>    </span><span class="kw">fn </span>surface_patches_route_through_masking_helpers() {
-<a href=#1210 id=1210 data-nosnippet>1210</a>        <span class="kw">let </span>p = Persona {
-<a href=#1211 id=1211 data-nosnippet>1211</a>            webgl: <span class="prelude-val">Some</span>(WebglSpec {
-<a href=#1212 id=1212 data-nosnippet>1212</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Value),
-<a href=#1213 id=1213 data-nosnippet>1213</a>                unmasked_vendor: <span class="prelude-val">Some</span>(<span class="string">"Google Inc. (NVIDIA)"</span>.into()),
-<a href=#1214 id=1214 data-nosnippet>1214</a>                unmasked_renderer: <span class="prelude-val">Some</span>(<span class="string">"ANGLE (NVIDIA GeForce RTX 4090)"</span>.into()),
-<a href=#1215 id=1215 data-nosnippet>1215</a>            }),
-<a href=#1216 id=1216 data-nosnippet>1216</a>            canvas: <span class="prelude-val">Some</span>(SurfaceCfg {
-<a href=#1217 id=1217 data-nosnippet>1217</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Seeded),
-<a href=#1218 id=1218 data-nosnippet>1218</a>            }),
-<a href=#1219 id=1219 data-nosnippet>1219</a>            webgpu: <span class="prelude-val">Some</span>(WebgpuSpec {
-<a href=#1220 id=1220 data-nosnippet>1220</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Value),
-<a href=#1221 id=1221 data-nosnippet>1221</a>                ..Default::default()
-<a href=#1222 id=1222 data-nosnippet>1222</a>            }),
-<a href=#1223 id=1223 data-nosnippet>1223</a>            seed: <span class="prelude-val">Some</span>(Seed::from_u64(<span class="number">1</span>)),
-<a href=#1224 id=1224 data-nosnippet>1224</a>            ..Persona::default()
-<a href=#1225 id=1225 data-nosnippet>1225</a>        };
-<a href=#1226 id=1226 data-nosnippet>1226</a>        <span class="kw">let </span>s = bootstrap_script(<span class="kw-2">&amp;</span>p, <span class="kw-2">&amp;</span>mock_identity());
-<a href=#1227 id=1227 data-nosnippet>1227</a>        <span class="macro">assert!</span>(
-<a href=#1228 id=1228 data-nosnippet>1228</a>            s.contains(<span class="string">"__zdReplace(WebGLRenderingContext.prototype, 'getParameter'"</span>)
-<a href=#1229 id=1229 data-nosnippet>1229</a>                || s.contains(<span class="string">"__zdReplace(proto, 'getParameter'"</span>),
-<a href=#1230 id=1230 data-nosnippet>1230</a>            <span class="string">"webgl routed"
-<a href=#1231 id=1231 data-nosnippet>1231</a>        </span>);
-<a href=#1232 id=1232 data-nosnippet>1232</a>        <span class="macro">assert!</span>(s.contains(<span class="string">"__zdReplace"</span>), <span class="string">"canvas/getImageData routed"</span>);
-<a href=#1233 id=1233 data-nosnippet>1233</a>        <span class="macro">assert!</span>(
-<a href=#1234 id=1234 data-nosnippet>1234</a>            s.contains(<span class="string">"__zdGetter(GPUAdapter.prototype, 'info'"</span>),
-<a href=#1235 id=1235 data-nosnippet>1235</a>            <span class="string">"webgpu info getter routed"
-<a href=#1236 id=1236 data-nosnippet>1236</a>        </span>);
-<a href=#1237 id=1237 data-nosnippet>1237</a>        <span class="comment">// tokens still substituted, not left raw:
-<a href=#1238 id=1238 data-nosnippet>1238</a>        </span><span class="macro">assert!</span>(
-<a href=#1239 id=1239 data-nosnippet>1239</a>            !s.contains(<span class="string">"SEED"</span>) &amp;&amp; !s.contains(<span class="string">"WEBGL_VENDOR"</span>),
-<a href=#1240 id=1240 data-nosnippet>1240</a>            <span class="string">"tokens substituted"
-<a href=#1241 id=1241 data-nosnippet>1241</a>        </span>);
-<a href=#1242 id=1242 data-nosnippet>1242</a>    }
-<a href=#1243 id=1243 data-nosnippet>1243</a>
-<a href=#1244 id=1244 data-nosnippet>1244</a>    <span class="attr">#[test]
-<a href=#1245 id=1245 data-nosnippet>1245</a>    </span><span class="kw">fn </span>no_unsubstituted_tokens_remain() {
-<a href=#1246 id=1246 data-nosnippet>1246</a>        <span class="comment">// Exercise every surface so all token-bearing patches are emitted.
-<a href=#1247 id=1247 data-nosnippet>1247</a>        </span><span class="kw">let </span>p = Persona {
-<a href=#1248 id=1248 data-nosnippet>1248</a>            canvas: <span class="prelude-val">Some</span>(SurfaceCfg {
-<a href=#1249 id=1249 data-nosnippet>1249</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Seeded),
-<a href=#1250 id=1250 data-nosnippet>1250</a>            }),
-<a href=#1251 id=1251 data-nosnippet>1251</a>            audio: <span class="prelude-val">Some</span>(SurfaceCfg {
-<a href=#1252 id=1252 data-nosnippet>1252</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Random),
-<a href=#1253 id=1253 data-nosnippet>1253</a>            }),
-<a href=#1254 id=1254 data-nosnippet>1254</a>            client_rects: <span class="prelude-val">Some</span>(SurfaceCfg {
-<a href=#1255 id=1255 data-nosnippet>1255</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Block),
-<a href=#1256 id=1256 data-nosnippet>1256</a>            }),
-<a href=#1257 id=1257 data-nosnippet>1257</a>            webgl: <span class="prelude-val">Some</span>(WebglSpec {
-<a href=#1258 id=1258 data-nosnippet>1258</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Value),
-<a href=#1259 id=1259 data-nosnippet>1259</a>                unmasked_vendor: <span class="prelude-val">Some</span>(<span class="string">"V"</span>.into()),
-<a href=#1260 id=1260 data-nosnippet>1260</a>                unmasked_renderer: <span class="prelude-val">Some</span>(<span class="string">"R"</span>.into()),
-<a href=#1261 id=1261 data-nosnippet>1261</a>            }),
-<a href=#1262 id=1262 data-nosnippet>1262</a>            fonts: <span class="prelude-val">Some</span>(FontSpec {
-<a href=#1263 id=1263 data-nosnippet>1263</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Value),
-<a href=#1264 id=1264 data-nosnippet>1264</a>                available: <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="string">"Arial"</span>.into()]),
-<a href=#1265 id=1265 data-nosnippet>1265</a>            }),
-<a href=#1266 id=1266 data-nosnippet>1266</a>            webrtc: <span class="prelude-val">Some</span>(WebrtcSpec {
-<a href=#1267 id=1267 data-nosnippet>1267</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Value),
-<a href=#1268 id=1268 data-nosnippet>1268</a>                fake_ip: <span class="prelude-val">Some</span>(<span class="string">"1.2.3.4"</span>.into()),
-<a href=#1269 id=1269 data-nosnippet>1269</a>            }),
-<a href=#1270 id=1270 data-nosnippet>1270</a>            hardware: <span class="prelude-val">Some</span>(HardwareSpec {
-<a href=#1271 id=1271 data-nosnippet>1271</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Value),
-<a href=#1272 id=1272 data-nosnippet>1272</a>                battery_level: <span class="prelude-val">Some</span>(<span class="number">0.9</span>),
-<a href=#1273 id=1273 data-nosnippet>1273</a>                media_devices: <span class="prelude-val">Some</span>(<span class="number">2</span>),
-<a href=#1274 id=1274 data-nosnippet>1274</a>                speech_voices: <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="string">"A"</span>.into()]),
-<a href=#1275 id=1275 data-nosnippet>1275</a>            }),
-<a href=#1276 id=1276 data-nosnippet>1276</a>            webgpu: <span class="prelude-val">Some</span>(WebgpuSpec {
-<a href=#1277 id=1277 data-nosnippet>1277</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Value),
-<a href=#1278 id=1278 data-nosnippet>1278</a>                vendor: <span class="prelude-val">Some</span>(<span class="string">"nvidia"</span>.into()),
-<a href=#1279 id=1279 data-nosnippet>1279</a>                architecture: <span class="prelude-val">Some</span>(<span class="string">"ada"</span>.into()),
-<a href=#1280 id=1280 data-nosnippet>1280</a>                device: <span class="prelude-val">Some</span>(<span class="string">"RTX 4090"</span>.into()),
-<a href=#1281 id=1281 data-nosnippet>1281</a>                description: <span class="prelude-val">Some</span>(<span class="string">"test adapter"</span>.into()),
-<a href=#1282 id=1282 data-nosnippet>1282</a>                limits: <span class="prelude-val">Some</span>(std::collections::BTreeMap::from([(
-<a href=#1283 id=1283 data-nosnippet>1283</a>                    <span class="string">"maxTextureDimension2D"</span>.to_string(),
-<a href=#1284 id=1284 data-nosnippet>1284</a>                    <span class="number">16384u64</span>,
-<a href=#1285 id=1285 data-nosnippet>1285</a>                )])),
-<a href=#1286 id=1286 data-nosnippet>1286</a>                features: <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="string">"texture-compression-bc"</span>.into()]),
-<a href=#1287 id=1287 data-nosnippet>1287</a>                fabricate_when_absent: <span class="prelude-val">Some</span>(<span class="bool-val">true</span>),
-<a href=#1288 id=1288 data-nosnippet>1288</a>            }),
-<a href=#1289 id=1289 data-nosnippet>1289</a>            seed: <span class="prelude-val">Some</span>(Seed::from_u64(<span class="number">9</span>)),
-<a href=#1290 id=1290 data-nosnippet>1290</a>            ..Persona::default()
-<a href=#1291 id=1291 data-nosnippet>1291</a>        };
-<a href=#1292 id=1292 data-nosnippet>1292</a>        <span class="kw">let </span>script = bootstrap_script(<span class="kw-2">&amp;</span>p, <span class="kw-2">&amp;</span>mock_identity());
-<a href=#1293 id=1293 data-nosnippet>1293</a>        <span class="kw">for </span>tok <span class="kw">in </span>[
-<a href=#1294 id=1294 data-nosnippet>1294</a>            <span class="string">"SEED"</span>,
-<a href=#1295 id=1295 data-nosnippet>1295</a>            <span class="string">"WEBGL_VENDOR"</span>,
-<a href=#1296 id=1296 data-nosnippet>1296</a>            <span class="string">"WEBGL_RENDERER"</span>,
-<a href=#1297 id=1297 data-nosnippet>1297</a>            <span class="string">"FONT_ALLOW"</span>,
-<a href=#1298 id=1298 data-nosnippet>1298</a>            <span class="string">"WEBRTC_POLICY"</span>,
-<a href=#1299 id=1299 data-nosnippet>1299</a>            <span class="string">"WEBRTC_FAKE_IP"</span>,
-<a href=#1300 id=1300 data-nosnippet>1300</a>            <span class="string">"HW_BATTERY"</span>,
-<a href=#1301 id=1301 data-nosnippet>1301</a>            <span class="string">"HW_MEDIA_DEVICES"</span>,
-<a href=#1302 id=1302 data-nosnippet>1302</a>            <span class="string">"HW_VOICES"</span>,
-<a href=#1303 id=1303 data-nosnippet>1303</a>            <span class="string">"WEBGPU_VENDOR"</span>,
-<a href=#1304 id=1304 data-nosnippet>1304</a>            <span class="string">"WEBGPU_ARCHITECTURE"</span>,
-<a href=#1305 id=1305 data-nosnippet>1305</a>            <span class="string">"WEBGPU_DEVICE"</span>,
-<a href=#1306 id=1306 data-nosnippet>1306</a>            <span class="string">"WEBGPU_DESCRIPTION"</span>,
-<a href=#1307 id=1307 data-nosnippet>1307</a>            <span class="string">"WEBGPU_LIMITS"</span>,
-<a href=#1308 id=1308 data-nosnippet>1308</a>            <span class="string">"WEBGPU_FEATURES"</span>,
-<a href=#1309 id=1309 data-nosnippet>1309</a>            <span class="string">"WEBGPU_MODE"</span>,
-<a href=#1310 id=1310 data-nosnippet>1310</a>            <span class="string">"WEBGPU_FABRICATE"</span>,
-<a href=#1311 id=1311 data-nosnippet>1311</a>        ] {
-<a href=#1312 id=1312 data-nosnippet>1312</a>            <span class="macro">assert!</span>(
-<a href=#1313 id=1313 data-nosnippet>1313</a>                !script.contains(tok),
-<a href=#1314 id=1314 data-nosnippet>1314</a>                <span class="string">"unsubstituted token `{tok}` left in bootstrap"
-<a href=#1315 id=1315 data-nosnippet>1315</a>            </span>);
-<a href=#1316 id=1316 data-nosnippet>1316</a>        }
-<a href=#1317 id=1317 data-nosnippet>1317</a>    }
-<a href=#1318 id=1318 data-nosnippet>1318</a>}
+<a href=#1116 id=1116 data-nosnippet>1116</a>        // entirely absent (the opaque-origin-page case this feature exists
+<a href=#1117 id=1117 data-nosnippet>1117</a>        // for — `navigator.gpu` is `[SecureContext]`-gated, so it's absent on
+<a href=#1118 id=1118 data-nosnippet>1118</a>        // `about:blank`/`data:` regardless of launch flags or GPU hardware).
+<a href=#1119 id=1119 data-nosnippet>1119</a>        // Guards against either branch being dropped.
+<a href=#1120 id=1120 data-nosnippet>1120</a>        </span><span class="macro">assert!</span>(
+<a href=#1121 id=1121 data-nosnippet>1121</a>            s.contains(<span class="string">"GPU.prototype, 'requestAdapter'"</span>),
+<a href=#1122 id=1122 data-nosnippet>1122</a>            <span class="string">"case (a): wraps requestAdapter when navigator.gpu is present: {s}"
+<a href=#1123 id=1123 data-nosnippet>1123</a>        </span>);
+<a href=#1124 id=1124 data-nosnippet>1124</a>        <span class="macro">assert!</span>(
+<a href=#1125 id=1125 data-nosnippet>1125</a>            s.contains(<span class="string">"Navigator.prototype, 'gpu'"</span>),
+<a href=#1126 id=1126 data-nosnippet>1126</a>            <span class="string">"case (b): defines synthetic navigator.gpu when entirely absent: {s}"
+<a href=#1127 id=1127 data-nosnippet>1127</a>        </span>);
+<a href=#1128 id=1128 data-nosnippet>1128</a>        <span class="macro">assert!</span>(
+<a href=#1129 id=1129 data-nosnippet>1129</a>            s.contains(<span class="string">"getPreferredCanvasFormat"</span>),
+<a href=#1130 id=1130 data-nosnippet>1130</a>            <span class="string">"synthetic navigator.gpu exposes getPreferredCanvasFormat for coherence: {s}"
+<a href=#1131 id=1131 data-nosnippet>1131</a>        </span>);
+<a href=#1132 id=1132 data-nosnippet>1132</a>    }
+<a href=#1133 id=1133 data-nosnippet>1133</a>
+<a href=#1134 id=1134 data-nosnippet>1134</a>    <span class="attr">#[test]
+<a href=#1135 id=1135 data-nosnippet>1135</a>    </span><span class="kw">fn </span>webgpu_block_deletes_navigator_gpu() {
+<a href=#1136 id=1136 data-nosnippet>1136</a>        <span class="kw">let </span>p = Persona {
+<a href=#1137 id=1137 data-nosnippet>1137</a>            webgpu: <span class="prelude-val">Some</span>(WebgpuSpec {
+<a href=#1138 id=1138 data-nosnippet>1138</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Block),
+<a href=#1139 id=1139 data-nosnippet>1139</a>                ..Default::default()
+<a href=#1140 id=1140 data-nosnippet>1140</a>            }),
+<a href=#1141 id=1141 data-nosnippet>1141</a>            ..Persona::default()
+<a href=#1142 id=1142 data-nosnippet>1142</a>        };
+<a href=#1143 id=1143 data-nosnippet>1143</a>        <span class="kw">let </span>s = bootstrap_script(<span class="kw-2">&amp;</span>p, <span class="kw-2">&amp;</span>mock_identity());
+<a href=#1144 id=1144 data-nosnippet>1144</a>        <span class="macro">assert!</span>(s.contains(<span class="string">"\"block\""</span>), <span class="string">"block mode token substituted"</span>);
+<a href=#1145 id=1145 data-nosnippet>1145</a>        <span class="macro">assert!</span>(
+<a href=#1146 id=1146 data-nosnippet>1146</a>            s.contains(<span class="string">"navigator, 'gpu'"</span>),
+<a href=#1147 id=1147 data-nosnippet>1147</a>            <span class="string">"block mode shadows navigator.gpu"
+<a href=#1148 id=1148 data-nosnippet>1148</a>        </span>);
+<a href=#1149 id=1149 data-nosnippet>1149</a>    }
+<a href=#1150 id=1150 data-nosnippet>1150</a>
+<a href=#1151 id=1151 data-nosnippet>1151</a>    <span class="attr">#[test]
+<a href=#1152 id=1152 data-nosnippet>1152</a>    </span><span class="kw">fn </span>webgpu_native_passes_null_vendor() {
+<a href=#1153 id=1153 data-nosnippet>1153</a>        <span class="kw">let </span>p = Persona {
+<a href=#1154 id=1154 data-nosnippet>1154</a>            webgpu: <span class="prelude-val">Some</span>(WebgpuSpec {
+<a href=#1155 id=1155 data-nosnippet>1155</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Native),
+<a href=#1156 id=1156 data-nosnippet>1156</a>                ..Default::default()
+<a href=#1157 id=1157 data-nosnippet>1157</a>            }),
+<a href=#1158 id=1158 data-nosnippet>1158</a>            ..Persona::default()
+<a href=#1159 id=1159 data-nosnippet>1159</a>        };
+<a href=#1160 id=1160 data-nosnippet>1160</a>        <span class="kw">let </span>s = bootstrap_script(<span class="kw-2">&amp;</span>p, <span class="kw-2">&amp;</span>mock_identity());
+<a href=#1161 id=1161 data-nosnippet>1161</a>        <span class="comment">// Native → no webgpu patch emitted at all.
+<a href=#1162 id=1162 data-nosnippet>1162</a>        </span><span class="macro">assert!</span>(!s.contains(<span class="string">"WEBGPU_VENDOR"</span>), <span class="string">"no unsubstituted token"</span>);
+<a href=#1163 id=1163 data-nosnippet>1163</a>        <span class="macro">assert!</span>(
+<a href=#1164 id=1164 data-nosnippet>1164</a>            !s.contains(<span class="string">"GPUAdapter.prototype"</span>),
+<a href=#1165 id=1165 data-nosnippet>1165</a>            <span class="string">"Native webgpu omits the patch"
+<a href=#1166 id=1166 data-nosnippet>1166</a>        </span>);
+<a href=#1167 id=1167 data-nosnippet>1167</a>    }
+<a href=#1168 id=1168 data-nosnippet>1168</a>
+<a href=#1169 id=1169 data-nosnippet>1169</a>    <span class="attr">#[test]
+<a href=#1170 id=1170 data-nosnippet>1170</a>    </span><span class="kw">fn </span>navigator_languages_derives_base_lang_not_en() {
+<a href=#1171 id=1171 data-nosnippet>1171</a>        <span class="kw">let </span>persona = Persona {
+<a href=#1172 id=1172 data-nosnippet>1172</a>            locale: <span class="prelude-val">Some</span>(<span class="string">"fr-FR"</span>.into()),
+<a href=#1173 id=1173 data-nosnippet>1173</a>            ..Default::default()
+<a href=#1174 id=1174 data-nosnippet>1174</a>        };
+<a href=#1175 id=1175 data-nosnippet>1175</a>        <span class="kw">let </span>identity = mock_identity(); <span class="comment">// existing helper in this test module
+<a href=#1176 id=1176 data-nosnippet>1176</a>        </span><span class="kw">let </span>script = bootstrap_script(<span class="kw-2">&amp;</span>persona, <span class="kw-2">&amp;</span>identity);
+<a href=#1177 id=1177 data-nosnippet>1177</a>        <span class="macro">assert!</span>(
+<a href=#1178 id=1178 data-nosnippet>1178</a>            script.contains(<span class="string">r#"["fr-FR","fr"]"#</span>) || script.contains(<span class="string">r#"["fr-FR", "fr"]"#</span>),
+<a href=#1179 id=1179 data-nosnippet>1179</a>            <span class="string">"languages should derive base lang, not hardcode en: {script}"
+<a href=#1180 id=1180 data-nosnippet>1180</a>        </span>);
+<a href=#1181 id=1181 data-nosnippet>1181</a>        <span class="macro">assert!</span>(
+<a href=#1182 id=1182 data-nosnippet>1182</a>            !script.contains(<span class="string">r#"["fr-FR","en"]"#</span>),
+<a href=#1183 id=1183 data-nosnippet>1183</a>            <span class="string">"must not hardcode en"
+<a href=#1184 id=1184 data-nosnippet>1184</a>        </span>);
+<a href=#1185 id=1185 data-nosnippet>1185</a>    }
+<a href=#1186 id=1186 data-nosnippet>1186</a>
+<a href=#1187 id=1187 data-nosnippet>1187</a>    <span class="attr">#[test]
+<a href=#1188 id=1188 data-nosnippet>1188</a>    </span><span class="kw">fn </span>identity_patches_route_through_masking_helpers() {
+<a href=#1189 id=1189 data-nosnippet>1189</a>        <span class="kw">let </span>s = bootstrap_script(<span class="kw-2">&amp;</span>Persona::default(), <span class="kw-2">&amp;</span>mock_identity());
+<a href=#1190 id=1190 data-nosnippet>1190</a>        <span class="macro">assert!</span>(
+<a href=#1191 id=1191 data-nosnippet>1191</a>            s.contains(<span class="string">"__zdGetter(Navigator.prototype, 'webdriver'"</span>),
+<a href=#1192 id=1192 data-nosnippet>1192</a>            <span class="string">"webdriver"
+<a href=#1193 id=1193 data-nosnippet>1193</a>        </span>);
+<a href=#1194 id=1194 data-nosnippet>1194</a>        <span class="macro">assert!</span>(
+<a href=#1195 id=1195 data-nosnippet>1195</a>            s.contains(<span class="string">"__zdGetter(Navigator.prototype, 'plugins'"</span>),
+<a href=#1196 id=1196 data-nosnippet>1196</a>            <span class="string">"plugins getter"
+<a href=#1197 id=1197 data-nosnippet>1197</a>        </span>);
+<a href=#1198 id=1198 data-nosnippet>1198</a>        <span class="macro">assert!</span>(
+<a href=#1199 id=1199 data-nosnippet>1199</a>            s.contains(<span class="string">"__zdReplace"</span>),
+<a href=#1200 id=1200 data-nosnippet>1200</a>            <span class="string">"permissions/codecs methods routed"
+<a href=#1201 id=1201 data-nosnippet>1201</a>        </span>);
+<a href=#1202 id=1202 data-nosnippet>1202</a>        <span class="macro">assert!</span>(s.contains(<span class="string">"__zdMark"</span>), <span class="string">"value-fn members marked"</span>);
+<a href=#1203 id=1203 data-nosnippet>1203</a>        <span class="comment">// No raw defineProperty getter on Navigator.prototype.webdriver remains.
+<a href=#1204 id=1204 data-nosnippet>1204</a>        </span><span class="macro">assert!</span>(
+<a href=#1205 id=1205 data-nosnippet>1205</a>            !s.contains(<span class="string">"Object.defineProperty(Navigator.prototype, 'webdriver'"</span>),
+<a href=#1206 id=1206 data-nosnippet>1206</a>            <span class="string">"webdriver should go through __zdGetter, not raw defineProperty"
+<a href=#1207 id=1207 data-nosnippet>1207</a>        </span>);
+<a href=#1208 id=1208 data-nosnippet>1208</a>    }
+<a href=#1209 id=1209 data-nosnippet>1209</a>
+<a href=#1210 id=1210 data-nosnippet>1210</a>    <span class="attr">#[test]
+<a href=#1211 id=1211 data-nosnippet>1211</a>    </span><span class="kw">fn </span>surface_patches_route_through_masking_helpers() {
+<a href=#1212 id=1212 data-nosnippet>1212</a>        <span class="kw">let </span>p = Persona {
+<a href=#1213 id=1213 data-nosnippet>1213</a>            webgl: <span class="prelude-val">Some</span>(WebglSpec {
+<a href=#1214 id=1214 data-nosnippet>1214</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Value),
+<a href=#1215 id=1215 data-nosnippet>1215</a>                unmasked_vendor: <span class="prelude-val">Some</span>(<span class="string">"Google Inc. (NVIDIA)"</span>.into()),
+<a href=#1216 id=1216 data-nosnippet>1216</a>                unmasked_renderer: <span class="prelude-val">Some</span>(<span class="string">"ANGLE (NVIDIA GeForce RTX 4090)"</span>.into()),
+<a href=#1217 id=1217 data-nosnippet>1217</a>            }),
+<a href=#1218 id=1218 data-nosnippet>1218</a>            canvas: <span class="prelude-val">Some</span>(SurfaceCfg {
+<a href=#1219 id=1219 data-nosnippet>1219</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Seeded),
+<a href=#1220 id=1220 data-nosnippet>1220</a>            }),
+<a href=#1221 id=1221 data-nosnippet>1221</a>            webgpu: <span class="prelude-val">Some</span>(WebgpuSpec {
+<a href=#1222 id=1222 data-nosnippet>1222</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Value),
+<a href=#1223 id=1223 data-nosnippet>1223</a>                ..Default::default()
+<a href=#1224 id=1224 data-nosnippet>1224</a>            }),
+<a href=#1225 id=1225 data-nosnippet>1225</a>            seed: <span class="prelude-val">Some</span>(Seed::from_u64(<span class="number">1</span>)),
+<a href=#1226 id=1226 data-nosnippet>1226</a>            ..Persona::default()
+<a href=#1227 id=1227 data-nosnippet>1227</a>        };
+<a href=#1228 id=1228 data-nosnippet>1228</a>        <span class="kw">let </span>s = bootstrap_script(<span class="kw-2">&amp;</span>p, <span class="kw-2">&amp;</span>mock_identity());
+<a href=#1229 id=1229 data-nosnippet>1229</a>        <span class="macro">assert!</span>(
+<a href=#1230 id=1230 data-nosnippet>1230</a>            s.contains(<span class="string">"__zdReplace(WebGLRenderingContext.prototype, 'getParameter'"</span>)
+<a href=#1231 id=1231 data-nosnippet>1231</a>                || s.contains(<span class="string">"__zdReplace(proto, 'getParameter'"</span>),
+<a href=#1232 id=1232 data-nosnippet>1232</a>            <span class="string">"webgl routed"
+<a href=#1233 id=1233 data-nosnippet>1233</a>        </span>);
+<a href=#1234 id=1234 data-nosnippet>1234</a>        <span class="macro">assert!</span>(s.contains(<span class="string">"__zdReplace"</span>), <span class="string">"canvas/getImageData routed"</span>);
+<a href=#1235 id=1235 data-nosnippet>1235</a>        <span class="macro">assert!</span>(
+<a href=#1236 id=1236 data-nosnippet>1236</a>            s.contains(<span class="string">"__zdGetter(GPUAdapter.prototype, 'info'"</span>),
+<a href=#1237 id=1237 data-nosnippet>1237</a>            <span class="string">"webgpu info getter routed"
+<a href=#1238 id=1238 data-nosnippet>1238</a>        </span>);
+<a href=#1239 id=1239 data-nosnippet>1239</a>        <span class="comment">// tokens still substituted, not left raw:
+<a href=#1240 id=1240 data-nosnippet>1240</a>        </span><span class="macro">assert!</span>(
+<a href=#1241 id=1241 data-nosnippet>1241</a>            !s.contains(<span class="string">"SEED"</span>) &amp;&amp; !s.contains(<span class="string">"WEBGL_VENDOR"</span>),
+<a href=#1242 id=1242 data-nosnippet>1242</a>            <span class="string">"tokens substituted"
+<a href=#1243 id=1243 data-nosnippet>1243</a>        </span>);
+<a href=#1244 id=1244 data-nosnippet>1244</a>    }
+<a href=#1245 id=1245 data-nosnippet>1245</a>
+<a href=#1246 id=1246 data-nosnippet>1246</a>    <span class="attr">#[test]
+<a href=#1247 id=1247 data-nosnippet>1247</a>    </span><span class="kw">fn </span>no_unsubstituted_tokens_remain() {
+<a href=#1248 id=1248 data-nosnippet>1248</a>        <span class="comment">// Exercise every surface so all token-bearing patches are emitted.
+<a href=#1249 id=1249 data-nosnippet>1249</a>        </span><span class="kw">let </span>p = Persona {
+<a href=#1250 id=1250 data-nosnippet>1250</a>            canvas: <span class="prelude-val">Some</span>(SurfaceCfg {
+<a href=#1251 id=1251 data-nosnippet>1251</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Seeded),
+<a href=#1252 id=1252 data-nosnippet>1252</a>            }),
+<a href=#1253 id=1253 data-nosnippet>1253</a>            audio: <span class="prelude-val">Some</span>(SurfaceCfg {
+<a href=#1254 id=1254 data-nosnippet>1254</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Random),
+<a href=#1255 id=1255 data-nosnippet>1255</a>            }),
+<a href=#1256 id=1256 data-nosnippet>1256</a>            client_rects: <span class="prelude-val">Some</span>(SurfaceCfg {
+<a href=#1257 id=1257 data-nosnippet>1257</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Block),
+<a href=#1258 id=1258 data-nosnippet>1258</a>            }),
+<a href=#1259 id=1259 data-nosnippet>1259</a>            webgl: <span class="prelude-val">Some</span>(WebglSpec {
+<a href=#1260 id=1260 data-nosnippet>1260</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Value),
+<a href=#1261 id=1261 data-nosnippet>1261</a>                unmasked_vendor: <span class="prelude-val">Some</span>(<span class="string">"V"</span>.into()),
+<a href=#1262 id=1262 data-nosnippet>1262</a>                unmasked_renderer: <span class="prelude-val">Some</span>(<span class="string">"R"</span>.into()),
+<a href=#1263 id=1263 data-nosnippet>1263</a>            }),
+<a href=#1264 id=1264 data-nosnippet>1264</a>            fonts: <span class="prelude-val">Some</span>(FontSpec {
+<a href=#1265 id=1265 data-nosnippet>1265</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Value),
+<a href=#1266 id=1266 data-nosnippet>1266</a>                available: <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="string">"Arial"</span>.into()]),
+<a href=#1267 id=1267 data-nosnippet>1267</a>            }),
+<a href=#1268 id=1268 data-nosnippet>1268</a>            webrtc: <span class="prelude-val">Some</span>(WebrtcSpec {
+<a href=#1269 id=1269 data-nosnippet>1269</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Value),
+<a href=#1270 id=1270 data-nosnippet>1270</a>                fake_ip: <span class="prelude-val">Some</span>(<span class="string">"1.2.3.4"</span>.into()),
+<a href=#1271 id=1271 data-nosnippet>1271</a>            }),
+<a href=#1272 id=1272 data-nosnippet>1272</a>            hardware: <span class="prelude-val">Some</span>(HardwareSpec {
+<a href=#1273 id=1273 data-nosnippet>1273</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Value),
+<a href=#1274 id=1274 data-nosnippet>1274</a>                battery_level: <span class="prelude-val">Some</span>(<span class="number">0.9</span>),
+<a href=#1275 id=1275 data-nosnippet>1275</a>                media_devices: <span class="prelude-val">Some</span>(<span class="number">2</span>),
+<a href=#1276 id=1276 data-nosnippet>1276</a>                speech_voices: <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="string">"A"</span>.into()]),
+<a href=#1277 id=1277 data-nosnippet>1277</a>            }),
+<a href=#1278 id=1278 data-nosnippet>1278</a>            webgpu: <span class="prelude-val">Some</span>(WebgpuSpec {
+<a href=#1279 id=1279 data-nosnippet>1279</a>                strategy: <span class="prelude-val">Some</span>(Strategy::Value),
+<a href=#1280 id=1280 data-nosnippet>1280</a>                vendor: <span class="prelude-val">Some</span>(<span class="string">"nvidia"</span>.into()),
+<a href=#1281 id=1281 data-nosnippet>1281</a>                architecture: <span class="prelude-val">Some</span>(<span class="string">"ada"</span>.into()),
+<a href=#1282 id=1282 data-nosnippet>1282</a>                device: <span class="prelude-val">Some</span>(<span class="string">"RTX 4090"</span>.into()),
+<a href=#1283 id=1283 data-nosnippet>1283</a>                description: <span class="prelude-val">Some</span>(<span class="string">"test adapter"</span>.into()),
+<a href=#1284 id=1284 data-nosnippet>1284</a>                limits: <span class="prelude-val">Some</span>(std::collections::BTreeMap::from([(
+<a href=#1285 id=1285 data-nosnippet>1285</a>                    <span class="string">"maxTextureDimension2D"</span>.to_string(),
+<a href=#1286 id=1286 data-nosnippet>1286</a>                    <span class="number">16384u64</span>,
+<a href=#1287 id=1287 data-nosnippet>1287</a>                )])),
+<a href=#1288 id=1288 data-nosnippet>1288</a>                features: <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="string">"texture-compression-bc"</span>.into()]),
+<a href=#1289 id=1289 data-nosnippet>1289</a>                fabricate_when_absent: <span class="prelude-val">Some</span>(<span class="bool-val">true</span>),
+<a href=#1290 id=1290 data-nosnippet>1290</a>            }),
+<a href=#1291 id=1291 data-nosnippet>1291</a>            seed: <span class="prelude-val">Some</span>(Seed::from_u64(<span class="number">9</span>)),
+<a href=#1292 id=1292 data-nosnippet>1292</a>            ..Persona::default()
+<a href=#1293 id=1293 data-nosnippet>1293</a>        };
+<a href=#1294 id=1294 data-nosnippet>1294</a>        <span class="kw">let </span>script = bootstrap_script(<span class="kw-2">&amp;</span>p, <span class="kw-2">&amp;</span>mock_identity());
+<a href=#1295 id=1295 data-nosnippet>1295</a>        <span class="kw">for </span>tok <span class="kw">in </span>[
+<a href=#1296 id=1296 data-nosnippet>1296</a>            <span class="string">"SEED"</span>,
+<a href=#1297 id=1297 data-nosnippet>1297</a>            <span class="string">"WEBGL_VENDOR"</span>,
+<a href=#1298 id=1298 data-nosnippet>1298</a>            <span class="string">"WEBGL_RENDERER"</span>,
+<a href=#1299 id=1299 data-nosnippet>1299</a>            <span class="string">"FONT_ALLOW"</span>,
+<a href=#1300 id=1300 data-nosnippet>1300</a>            <span class="string">"WEBRTC_POLICY"</span>,
+<a href=#1301 id=1301 data-nosnippet>1301</a>            <span class="string">"WEBRTC_FAKE_IP"</span>,
+<a href=#1302 id=1302 data-nosnippet>1302</a>            <span class="string">"HW_BATTERY"</span>,
+<a href=#1303 id=1303 data-nosnippet>1303</a>            <span class="string">"HW_MEDIA_DEVICES"</span>,
+<a href=#1304 id=1304 data-nosnippet>1304</a>            <span class="string">"HW_VOICES"</span>,
+<a href=#1305 id=1305 data-nosnippet>1305</a>            <span class="string">"WEBGPU_VENDOR"</span>,
+<a href=#1306 id=1306 data-nosnippet>1306</a>            <span class="string">"WEBGPU_ARCHITECTURE"</span>,
+<a href=#1307 id=1307 data-nosnippet>1307</a>            <span class="string">"WEBGPU_DEVICE"</span>,
+<a href=#1308 id=1308 data-nosnippet>1308</a>            <span class="string">"WEBGPU_DESCRIPTION"</span>,
+<a href=#1309 id=1309 data-nosnippet>1309</a>            <span class="string">"WEBGPU_LIMITS"</span>,
+<a href=#1310 id=1310 data-nosnippet>1310</a>            <span class="string">"WEBGPU_FEATURES"</span>,
+<a href=#1311 id=1311 data-nosnippet>1311</a>            <span class="string">"WEBGPU_MODE"</span>,
+<a href=#1312 id=1312 data-nosnippet>1312</a>            <span class="string">"WEBGPU_FABRICATE"</span>,
+<a href=#1313 id=1313 data-nosnippet>1313</a>        ] {
+<a href=#1314 id=1314 data-nosnippet>1314</a>            <span class="macro">assert!</span>(
+<a href=#1315 id=1315 data-nosnippet>1315</a>                !script.contains(tok),
+<a href=#1316 id=1316 data-nosnippet>1316</a>                <span class="string">"unsubstituted token `{tok}` left in bootstrap"
+<a href=#1317 id=1317 data-nosnippet>1317</a>            </span>);
+<a href=#1318 id=1318 data-nosnippet>1318</a>        }
+<a href=#1319 id=1319 data-nosnippet>1319</a>    }
+<a href=#1320 id=1320 data-nosnippet>1320</a>}
 </code></pre></div></section></main></body></html>

@@ -965,13 +965,15 @@ letting <code>vendor</code>/<code>architecture</code> derive from the WebGL rend
 the host has no real WebGPU adapter, resolve a synthetic one built from
 your supplied values. This covers <strong>both</strong> GPU-less shapes:</p>
 <ul>
-<li><code>navigator.gpu</code> <strong>entirely absent</strong> (<code>'gpu' in navigator === false</code> —
-the common case, since zendriver's default headless launch adds
-<code>--disable-gpu</code>): a synthetic <code>navigator.gpu</code> is <em>created</em> on
-<code>Navigator.prototype</code>, flipping <code>'gpu' in navigator</code> to <strong>true</strong>. That's
-coherent for a modern-Chrome persona — real modern Chrome always exposes
-<code>navigator.gpu</code> even GPU-less (there <code>requestAdapter()</code> just returns
-<code>null</code>).</li>
+<li><code>navigator.gpu</code> <strong>entirely absent</strong> (<code>'gpu' in navigator === false</code>).
+This is governed by the <strong>page</strong>, not by launch flags: <code>navigator.gpu</code> is
+<code>[SecureContext]</code>-gated, so it is absent on an opaque origin such as
+<code>about:blank</code> or a <code>data:</code> URL no matter what hardware or flags are in
+play. On a secure page under zendriver's default flags, <code>'gpu' in navigator</code> is <code>true</code> and <code>requestAdapter()</code> merely resolves <code>null</code>
+(measured on Chrome 150). Where it is absent, a synthetic <code>navigator.gpu</code>
+is <em>created</em> on <code>Navigator.prototype</code>, flipping <code>'gpu' in navigator</code> to
+<strong>true</strong> — coherent for a modern-Chrome persona, since real modern Chrome
+exposes <code>navigator.gpu</code> even with no usable GPU.</li>
 <li><code>navigator.gpu</code> present but <code>requestAdapter()</code> returns <code>null</code>: the real
 <code>requestAdapter</code> is wrapped so a <code>null</code> result falls back to the
 synthetic adapter (a real adapter passes through untouched).</li>
@@ -1025,6 +1027,16 @@ GPU behind it. Fabrication only makes <code>requestAdapter()</code> resolve a co
 adapter for detection scripts that stop there; it does not unlock actual
 WebGPU rendering on a GPU-less host. The synthetic adapter and (when created)
 the synthetic <code>navigator.gpu</code> are plain objects, so <code>adapter instanceof GPUAdapter</code> and <code>navigator.gpu instanceof GPU</code> are <code>false</code>.</p>
+<p><strong>On a GPU-equipped host, <a href="gpu-backend.html"><code>GpuBackend::Native</code></a> sidesteps
+<code>WebgpuSpec</code> fabrication entirely.</strong> Instead of faking an adapter and
+accepting the <code>requestDevice()</code>-rejects / no-real-rendering limitations
+above, <code>Native</code> has Chrome render on the host's real GPU: a real adapter, a
+real working <code>requestDevice()</code>, real limits and features — no patch
+involved. The trade-off moves in the other direction: <code>Native</code> reports
+whatever GPU the host actually has, with no caller-supplied identity, so it
+doesn't help when you need a <em>specific</em> (rather than <em>coherent</em>) GPU
+identity. See the <a href="gpu-backend.html">GPU backend</a> chapter for the full
+comparison.</p>
 <h2 id="country--locale--timezone-overlay-geo_locale"><a class="header" href="#country--locale--timezone-overlay-geo_locale">Country → locale + timezone overlay (<code>geo_locale</code>)</a></h2>
 <p>The optional <code>geo</code> feature adds <a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.geo_locale"><code>BrowserBuilder::geo_locale</code></a>, which maps an
 ISO 3166-1 alpha-2 country code (e.g. <code>"US"</code>, <code>"de"</code>) to a coherent <code>locale</code> +
@@ -1158,6 +1170,109 @@ let persona: Persona = Persona::try_from_json(r#"{
 
 let persona: Persona = r#"{"seed": 99, "timezone": "UTC"}"#.parse().unwrap();
 <span class="boring">}</span></code></pre></pre>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="gpu-backend"><a class="header" href="#gpu-backend">GPU backend</a></h1>
+<p>By default zendriver launches Chrome with <code>--disable-gpu</code> and no ANGLE
+backend named. Bare <code>--disable-gpu</code> does not by itself guarantee a working
+WebGL context — Chrome ≥116 returns <code>null</code> from <code>canvas.getContext('webgl')</code>
+without <code>--enable-unsafe-swiftshader</code>. It's the <strong>spoofed</strong> stealth profile
+that forces a working software fallback, by unconditionally adding
+<code>--use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader</code> so a
+WebGL context exists at all under headless. That is a safe default for
+headless CI, but it produces a GPU surface no real device ever produces:
+numeric WebGL capability limits and the SwiftShader renderer string that no
+laptop or workstation reports.</p>
+<p><code>GpuBackend</code> is an opt-in <code>BrowserBuilder</code> option that lets Chrome use the
+host's real GPU instead.</p>
+<pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use zendriver::{Browser, GpuBackend};
+
+<span class="boring">async fn demo() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+</span>let browser = Browser::builder()
+    .gpu_backend(GpuBackend::Native)
+    .launch()
+    .await?;
+<span class="boring">Ok(())
+</span><span class="boring">}
+</span><span class="boring">}</span></code></pre></pre>
+<h2 id="the-three-variants"><a class="header" href="#the-three-variants">The three variants</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Variant</th><th>What it does</th><th>When to reach for it</th></tr></thead><tbody>
+<tr><td><code>GpuBackend::Disabled</code> (default)</td><td><code>--disable-gpu</code> under headless, no ANGLE backend forced — Chrome picks its own fallback. Byte-for-byte today's behavior.</td><td>The historical default; nothing changes if you never touch this option.</td></tr>
+<tr><td><code>GpuBackend::SwiftShader</code></td><td>Forces ANGLE's SwiftShader software rasterizer explicitly (<code>--use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader</code>).</td><td>You want a guaranteed-working WebGL context on a host with no GPU, and are fine with a software-rasterizer fingerprint.</td></tr>
+<tr><td><code>GpuBackend::Native</code></td><td>Drops <code>--disable-gpu</code> and names the platform's ANGLE backend (<code>metal</code> on macOS, <code>d3d11</code> on Windows, <code>vulkan</code> elsewhere), so Chrome renders on the host's real GPU.</td><td>You have real GPU hardware available and want a coherent, non-software GPU surface — WebGL capability values, WebGPU adapter, and pixel output that all match what a real device reports.</td></tr>
+</tbody></table>
+</div>
+<p><code>Disabled</code> and <code>SwiftShader</code> both still emit <code>--disable-gpu</code> under headless;
+only <code>Native</code> omits it.</p>
+<h2 id="why-one-enum-owns-both-decisions"><a class="header" href="#why-one-enum-owns-both-decisions">Why one enum owns both decisions</a></h2>
+<p>Dropping <code>--disable-gpu</code> without also naming an ANGLE backend hangs headless
+Chrome — measured directly on this project's dev host, twice, killed at the
+30-second mark both times. The two decisions (suppress <code>--disable-gpu</code>, name
+a backend) are coupled, so <code>GpuBackend</code> owns both together rather than
+leaving it to the caller to combine two separate flags correctly.</p>
+<h2 id="native-reports-the-hosts-gpu-not-a-chosen-one"><a class="header" href="#native-reports-the-hosts-gpu-not-a-chosen-one"><code>Native</code> reports the host's GPU, not a chosen one</a></h2>
+<p><code>GpuBackend::Native</code> gives a fully coherent GPU surface, but it does <strong>not</strong>
+give identity control. Chrome reports whatever GPU is physically present.
+Every browser launched with <code>Native</code> on the same host reports the same
+adapter, the same WebGL renderer string, the same capability limits — a
+fleet sharing one host shares one GPU fingerprint. If you need distinct GPU
+identities across a fleet, <code>Native</code> is not that tool; look at
+<a href="fingerprint.html#webgpu-opt-in-adapter-override--fabrication"><code>WebgpuSpec</code></a>
+for caller-supplied adapter values instead. <code>Native</code> makes the GPU surface
+<em>coherent</em>; it does not give you <em>control</em> over what it says.</p>
+<h2 id="no-automatic-fallback"><a class="header" href="#no-automatic-fallback">No automatic fallback</a></h2>
+<p>If <code>Native</code> is selected and Chrome's GPU process cannot start — no GPU
+present, a crashed GPU process, a missing sandbox — the launch fails with
+<a href="https://docs.rs/zendriver/latest/zendriver/enum.BrowserError.html"><code>BrowserError::GpuBackendUnavailable</code></a> rather than silently retrying with a
+software rasterizer. That's deliberate: falling back automatically would
+restore the same incoherent, mixed software/hardware fingerprint that
+choosing a backend explicitly exists to avoid. If a launch might land on a
+GPU-less host, catch <code>GpuBackendUnavailable</code> (along with <code>DevtoolsParse</code> and
+<code>EarlyExit</code>, the other failure shapes a missing GPU process produces) and
+retry with <code>GpuBackend::SwiftShader</code> or <code>GpuBackend::Disabled</code> yourself.</p>
+<h2 id="measured-comparison"><a class="header" href="#measured-comparison">Measured comparison</a></h2>
+<p>All figures below are from real Chrome (150.0.7871.186) on this project's
+darwin dev host (Apple M4 Pro), probed with the
+<a href="gpu-backend.html#probing-your-own-host"><code>probe_gpu</code> example</a>. WebGL figures are from a
+secure-context (<code>file://</code>) page — see the note on <code>navigator.gpu</code> below for
+why that matters. The <code>SwiftShader</code> column is <code>GpuBackend::SwiftShader</code>
+(equivalently: <code>GpuBackend::Disabled</code> with a spoofed stealth profile
+attached, since that profile forces the same flags — see the intro above).
+Bare <code>GpuBackend::Disabled</code> with no spoofed profile was not measured here and
+is not shown — it emits no ANGLE flags, so nothing above the "does a WebGL
+context exist at all" question applies to it.</p>
+<div class="table-wrapper"><table><thead><tr><th></th><th><code>SwiftShader</code></th><th><code>Native</code></th></tr></thead><tbody>
+<tr><td>WebGPU adapter</td><td>none (<code>requestAdapter()</code> resolves <code>null</code>)</td><td>real: <code>vendor: "apple"</code>, <code>architecture: "metal-3"</code></td></tr>
+<tr><td><code>requestDevice()</code></td><td>n/a (no adapter)</td><td>succeeds</td></tr>
+<tr><td>WebGPU adapter limits</td><td>n/a</td><td>~36 limits</td></tr>
+<tr><td>WebGL renderer string</td><td><code>ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (LLVM 10.0.0) (0x0000C0DE)), SwiftShader driver)</code></td><td><code>ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)</code></td></tr>
+<tr><td>WebGL <code>MAX_TEXTURE_SIZE</code></td><td>8192</td><td>16384</td></tr>
+<tr><td>WebGL extension count</td><td>30</td><td>36</td></tr>
+</tbody></table>
+</div>
+<p><code>MAX_TEXTURE_SIZE</code> and the other numeric WebGL caps are not read from the
+GPU — ANGLE computes them from constants branched on backend and feature
+tier, not from device queries. That's why the SwiftShader row above is
+identical regardless of what real GPU sits underneath: it's a software
+rasterizer, so there's no real device to query.</p>
+<h2 id="navigatorgpu-visibility-is-governed-by-the-page-not-by-this-option"><a class="header" href="#navigatorgpu-visibility-is-governed-by-the-page-not-by-this-option"><code>navigator.gpu</code> visibility is governed by the page, not by this option</a></h2>
+<p><code>navigator.gpu</code> is <code>[SecureContext]</code>-gated. On an opaque-origin page —
+<code>about:blank</code>, a bare <code>data:</code> URL — <code>navigator.gpu</code> is absent no matter which
+<code>GpuBackend</code> you pick, headless or headful. This is easy to misread as a
+launch-flag effect because <code>about:blank</code> is also zendriver's typical first
+page; it isn't one. Load a secure-context page (<code>https://</code>, or <code>file://</code> for
+local probing) before checking <code>'gpu' in navigator</code>.</p>
+<h2 id="probing-your-own-host"><a class="header" href="#probing-your-own-host">Probing your own host</a></h2>
+<p>The <a href="https://github.com/TurtIeSocks/zendriver-rs/blob/main/crates/zendriver/examples/probe_gpu.rs"><code>probe_gpu</code> example</a>
+dumps the full WebGPU + WebGL surface as JSON for any backend:</p>
+<pre><code class="language-sh">cargo run -p zendriver --example probe_gpu -- native
+cargo run -p zendriver --example probe_gpu -- swiftshader
+cargo run -p zendriver --example probe_gpu -- disabled
+</code></pre>
+<h2 id="mcp"><a class="header" href="#mcp">MCP</a></h2>
+<p><code>browser_open</code> exposes this as the <code>gpu_backend</code> option (<code>"disabled"</code> |
+<code>"swift_shader"</code> | <code>"native"</code>, default <code>"disabled"</code>). See the
+<a href="mcp.html#browser_open-options">MCP chapter</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="multi-tab"><a class="header" href="#multi-tab">Multi-tab</a></h1>
 <p>Chrome opens with one tab. zendriver-rs treats every additional tab as a
 first-class <a href="https://docs.rs/zendriver/latest/zendriver/struct.Tab.html"><code>Tab</code></a> handle — the same type as the main tab, with the
@@ -3797,6 +3912,16 @@ implies <code>"native"</code> (zero-overhead, deterministic timing) — mirrorin
 setting. Wraps <code>zendriver::stealth::InputProfile</code> via
 <code>BrowserBuilder::input_profile</code>; the output <code>input_profile</code> field always
 echoes the <em>resolved</em> value, not the raw request.</li>
+<li><code>gpu_backend: "disabled" | "swift_shader" | "native"</code> — select the GPU
+backend Chrome renders WebGL/WebGPU with (default: <code>"disabled"</code>, today's
+historical flags). <code>"swift_shader"</code> forces ANGLE's software rasterizer
+explicitly. <code>"native"</code> drops <code>--disable-gpu</code> and renders on the host's real
+GPU — a fully coherent WebGL/WebGPU surface, but it reports <strong>the host's</strong>
+GPU (no identity control) and requires a usable GPU with no automatic
+fallback: a launch that can't start the GPU process fails outright rather
+than silently falling back to software rendering. See the
+<a href="gpu-backend.html">GPU backend chapter</a> for the measured comparison and the
+<code>--disable-gpu</code>-alone hang this option exists to avoid.</li>
 </ul>
 <h2 id="browser_monitor_-options"><a class="header" href="#browser_monitor_-options"><code>browser_monitor_*</code> options</a></h2>
 <p><code>browser_monitor_start</code> accepts <code>capture_body_max_bytes: integer</code> (default
@@ -4892,6 +5017,7 @@ new variants may land in minor releases.</p>
 <tr><td><code>SpawnFailed(io::Error)</code></td><td>OS refused to spawn the binary (permissions, missing libs).</td><td>Check the wrapped <code>io::Error</code>; <code>Permission denied</code> → chmod, <code>No such file</code> → bad path.</td></tr>
 <tr><td><code>EarlyExit(ExitStatus)</code></td><td>Chrome exited before printing <code>DevTools listening on</code>. Typical: <code>user_data_dir</code> locked by another Chrome, missing GPU sandbox on Linux.</td><td>Free the user-data-dir (kill stale Chrome processes), or pass <code>.arg("--no-sandbox")</code> if running in a container.</td></tr>
 <tr><td><code>WsTimeout</code></td><td>Chrome printed nothing within the WS-endpoint wait window.</td><td>Try headed mode (<code>headless(false)</code>) to see Chrome's window — usually reveals a missing dependency.</td></tr>
+<tr><td><code>GpuBackendUnavailable</code></td><td>Chrome never advertised its WS endpoint on a launch that requested <a href="https://docs.rs/zendriver/latest/zendriver/enum.GpuBackend.html"><code>GpuBackend::Native</code></a> — typically no GPU present, a crashed GPU process, or a missing GPU sandbox.</td><td>See <a href="./gpu-backend.html#no-automatic-fallback">GPU backend</a>. Catch this error and retry with <code>GpuBackend::SwiftShader</code> or <code>GpuBackend::Disabled</code>; zendriver does not fall back automatically.</td></tr>
 <tr><td><code>DevtoolsParse</code></td><td>Stderr line matched expected pattern but URL didn't parse.</td><td>Should not happen with stable Chrome; file a bug.</td></tr>
 <tr><td><code>Cleanup(io::Error)</code></td><td><code>tempfile</code> cleanup of the <code>user_data_dir</code> failed.</td><td>Usually harmless; check filesystem permissions if persistent.</td></tr>
 </tbody></table>
