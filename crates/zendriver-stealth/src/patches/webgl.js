@@ -1,7 +1,8 @@
 // Coherent WebGL surface driven by one substituted profile object.
 //
 // Every value a fingerprinter can read comes from the table: the two
-// DEBUG_renderer_info UNMASKED strings, the plain VENDOR/RENDERER, every
+// DEBUG_renderer_info UNMASKED strings (only once that extension has been
+// fetched, exactly as Chrome gates them), the plain VENDOR/RENDERER, every
 // spec-defined getParameter enum, getShaderPrecisionFormat, and a
 // per-context-version extension list. Enums outside the table fall through to
 // the real backend, which is correct for vendor-specific enums we do not model.
@@ -20,6 +21,14 @@
   if (!profile) return;
 
   var INERT_STUBS = profile.inertStubs || {};
+
+  // Real Chrome gates UNMASKED_VENDOR_WEBGL / UNMASKED_RENDERER_WEBGL on
+  // WEBGL_debug_renderer_info having been fetched: before that call
+  // getParameter(37445) answers null and raises INVALID_ENUM. Enablement is
+  // per context, never per page — two contexts on one document have
+  // independent extension state — so the set is keyed by the context object.
+  var DEBUG_RENDERER_INFO = 'WEBGL_debug_renderer_info';
+  var debugInfoEnabled = new WeakSet();
 
   function paramsFor(isV2) {
     return isV2 ? profile.params2 : profile.params1;
@@ -84,6 +93,15 @@
       return function (param) {
         if (lost(this)) return orig.call(this, param);
         var name = profile.enumNames[param];
+        if (
+          (name === 'UNMASKED_VENDOR_WEBGL' || name === 'UNMASKED_RENDERER_WEBGL') &&
+          !debugInfoEnabled.has(this)
+        ) {
+          // WEBGL_debug_renderer_info has not been fetched on this context, so
+          // these two enums do not exist for it yet — delegating gets the
+          // null + INVALID_ENUM the real backend answers with.
+          return orig.call(this, param);
+        }
         if (name && Object.prototype.hasOwnProperty.call(table, name)) {
           return decode(table[name]);
         }
@@ -126,19 +144,26 @@
         if (lost(this)) return orig.call(this, name);
         var canonical = claimable[String(name).toLowerCase()];
         if (!canonical) return null; // never hand over what we did not claim
+        var ext;
         var stub = INERT_STUBS[canonical];
         if (stub) {
           // Inert extension: pure constants, nothing to break. Synthesize it
           // so the claimed list and getExtension agree.
-          var real = orig.call(this, canonical);
-          if (real) return real;
-          var o = {};
-          for (var k in stub) o[k] = stub[k];
-          return o;
+          ext = orig.call(this, canonical);
+          if (!ext) {
+            ext = {};
+            for (var k in stub) ext[k] = stub[k];
+          }
+        } else {
+          // Functional extension: the list above only claims it when the
+          // backend really has it, so both answers agree either way.
+          ext = orig.call(this, canonical);
         }
-        // Functional extension: the list above only claims it when the backend
-        // really has it, so both answers agree either way.
-        return orig.call(this, canonical);
+        // Handing over WEBGL_debug_renderer_info is what brings its two enums
+        // into existence for this context; getParameter above stays silent
+        // about them until then.
+        if (ext && canonical === DEBUG_RENDERER_INFO) debugInfoEnabled.add(this);
+        return ext;
       };
     });
   }
