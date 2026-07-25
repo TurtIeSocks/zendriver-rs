@@ -250,6 +250,14 @@
 
     __zdReplace(proto, 'getExtension', function (orig) {
       return function (name) {
+        // `name` is a required WebIDL argument, so a bare getExtension()
+        // raises TypeError in Chrome. Coercing a missing argument to the
+        // string "undefined" instead answers null, and arity/throw-shape
+        // probing is standard fingerprinting — getParameter and
+        // getShaderPrecisionFormat both keep the throw by delegating on a
+        // miss, so this one must too. Delegating rather than throwing our own
+        // leaves the message (which names the interface) to the browser.
+        if (arguments.length < 1) return orig.apply(this, arguments);
         if (lost(this)) return orig.call(this, name);
         var canonical = claimable[String(name).toLowerCase()];
         if (!canonical) return null; // never hand over what we did not claim
