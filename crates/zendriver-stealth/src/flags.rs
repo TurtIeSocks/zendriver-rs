@@ -4,6 +4,92 @@
 //! chaser-oxide additions.
 
 use crate::ProfileKind;
+use serde::{Deserialize, Serialize};
+
+/// Which GPU backend Chrome should render WebGL / WebGPU with.
+///
+/// Defaults to [`Disabled`](Self::Disabled), which reproduces zendriver's
+/// historical launch flags exactly. This is an explicit opt-in: zendriver
+/// never probes the host for a GPU and never switches backends on its own.
+///
+/// # Why the backend must be named explicitly
+///
+/// Removing `--disable-gpu` without also naming an ANGLE backend **hangs**
+/// headless Chrome (measured on darwin; see the design spec's Measurements
+/// section). The two decisions are therefore coupled and owned together here,
+/// rather than left to the caller to combine correctly.
+///
+/// ```ignore
+/// use zendriver::GpuBackend;
+/// // Use the host's real GPU instead of a software rasterizer.
+/// let builder = zendriver::Browser::builder().gpu_backend(GpuBackend::Native);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GpuBackend {
+    /// Today's behavior: `--disable-gpu` under headless and no ANGLE backend
+    /// forced. Chrome picks its own fallback.
+    #[default]
+    Disabled,
+    /// Force SwiftShader's CPU rasterizer. Guarantees a working WebGL context
+    /// on a host with no GPU, at the cost of a software-rasterizer
+    /// fingerprint that no real device produces.
+    SwiftShader,
+    /// Render on the host GPU through the platform's ANGLE backend (macOS →
+    /// Metal, Windows → D3D11, otherwise Vulkan).
+    ///
+    /// Gives a fully coherent GPU surface — real capabilities, real pixels,
+    /// real timings, a working `requestDevice()` — but reports **the host's**
+    /// GPU, not a chosen one. A fleet sharing one host shares one fingerprint.
+    ///
+    /// Requires a usable GPU. There is no automatic fallback: if the GPU
+    /// process cannot start, the launch fails with an actionable error rather
+    /// than silently degrading to software rendering.
+    Native,
+}
+
+/// ANGLE backend token for an OS name as reported by [`std::env::consts::OS`].
+///
+/// Unknown platforms take the Vulkan path rather than returning nothing —
+/// an absent backend is what causes the launch hang described on
+/// [`GpuBackend`].
+fn angle_backend_for_os(os: &str) -> &'static str {
+    match os {
+        "macos" => "metal",
+        "windows" => "d3d11",
+        _ => "vulkan",
+    }
+}
+
+impl GpuBackend {
+    /// Launch flags selecting this backend. Empty for
+    /// [`Disabled`](Self::Disabled).
+    #[must_use]
+    pub fn angle_flags(self) -> Vec<String> {
+        match self {
+            Self::Disabled => Vec::new(),
+            Self::SwiftShader => vec![
+                "--use-gl=angle".into(),
+                "--use-angle=swiftshader".into(),
+                // Chrome >= 116 refuses the SwiftShader fallback without this.
+                "--enable-unsafe-swiftshader".into(),
+            ],
+            Self::Native => vec![
+                "--use-gl=angle".into(),
+                format!("--use-angle={}", angle_backend_for_os(std::env::consts::OS)),
+            ],
+        }
+    }
+
+    /// Whether `--disable-gpu` may still be emitted under headless.
+    ///
+    /// False only for [`Native`](Self::Native), where the flag would defeat
+    /// the entire point of selecting a hardware backend.
+    #[must_use]
+    pub fn allows_disable_gpu(self) -> bool {
+        !matches!(self, Self::Native)
+    }
+}
 
 /// Flags ALL stealth profiles share (Native + Spoofed + Off-when-not-Off).
 /// Off profile uses an empty list (truly stock launch).
@@ -191,5 +277,72 @@ mod tests {
     fn shared_flags_snapshot_native_isolation_spoofed() {
         let flags = flags_for_profile(ProfileKind::Spoofed, true);
         insta::assert_yaml_snapshot!("native_isolation_spoofed_profile_flags", flags);
+    }
+
+    // --- GpuBackend ---------------------------------------------------------
+
+    #[test]
+    fn gpu_backend_default_is_disabled() {
+        assert_eq!(GpuBackend::default(), GpuBackend::Disabled);
+    }
+
+    #[test]
+    fn disabled_backend_emits_no_angle_flags() {
+        assert!(GpuBackend::Disabled.angle_flags().is_empty());
+    }
+
+    #[test]
+    fn swiftshader_backend_emits_todays_three_flags() {
+        assert_eq!(
+            GpuBackend::SwiftShader.angle_flags(),
+            vec![
+                "--use-gl=angle".to_string(),
+                "--use-angle=swiftshader".to_string(),
+                "--enable-unsafe-swiftshader".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn native_backend_maps_os_to_angle_backend() {
+        assert_eq!(angle_backend_for_os("macos"), "metal");
+        assert_eq!(angle_backend_for_os("windows"), "d3d11");
+        assert_eq!(angle_backend_for_os("linux"), "vulkan");
+        // Unknown platforms take the Linux path rather than emitting nothing —
+        // an empty backend would silently fall back to Chrome's default pick.
+        assert_eq!(angle_backend_for_os("freebsd"), "vulkan");
+    }
+
+    #[test]
+    fn native_backend_emits_angle_flags_for_current_os() {
+        let flags = GpuBackend::Native.angle_flags();
+        assert_eq!(flags[0], "--use-gl=angle");
+        assert!(
+            flags[1].starts_with("--use-angle="),
+            "expected an explicit backend, got: {flags:?}"
+        );
+        // Never SwiftShader under Native — that is the whole point.
+        assert!(
+            !flags.iter().any(|f| f.contains("swiftshader")),
+            "got: {flags:?}"
+        );
+    }
+
+    #[test]
+    fn only_native_forbids_disable_gpu() {
+        // Measured: dropping --disable-gpu without naming a backend hangs
+        // Chrome, and keeping it with a backend suppresses the GPU entirely.
+        // So the two decisions are coupled and Native owns both.
+        assert!(GpuBackend::Disabled.allows_disable_gpu());
+        assert!(GpuBackend::SwiftShader.allows_disable_gpu());
+        assert!(!GpuBackend::Native.allows_disable_gpu());
+    }
+
+    #[test]
+    fn gpu_backend_round_trips_json_as_snake_case() {
+        let json = serde_json::to_string(&GpuBackend::SwiftShader).unwrap();
+        assert_eq!(json, "\"swift_shader\"");
+        let back: GpuBackend = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, GpuBackend::SwiftShader);
     }
 }
