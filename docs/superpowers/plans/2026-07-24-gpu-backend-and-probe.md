@@ -1189,7 +1189,16 @@ async fn swiftshader_tier_matches_recorded_baseline() {
         .await
         .expect("launch");
     let tab = browser.main_tab();
-    tab.goto("about:blank").await.expect("goto");
+    // Probe from the same kind of page the recorded constants were measured
+    // on. WebGL is not secure-context gated, so `about:blank` would mostly
+    // work — but the extension list is what this canary counts, and matching
+    // the original measurement conditions removes a whole class of
+    // "why is this off by one" investigation when it eventually fires.
+    let page = std::env::temp_dir().join("zendriver-swiftshader-canary.html");
+    std::fs::write(&page, "<!doctype html><title>probe</title>").expect("write probe page");
+    tab.goto(&format!("file:///{}", page.display().to_string().replace('\\', "/")))
+        .await
+        .expect("goto");
     tab.wait_for_load().await.expect("load");
     let raw: String = tab.evaluate(CAPS_JS).await.expect("evaluate");
     browser.close().await.ok();
