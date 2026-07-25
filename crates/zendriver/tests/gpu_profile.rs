@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 use zendriver::stealth::StealthProfile;
-use zendriver::{Browser, Tab};
+use zendriver::{Browser, BrowserError, GpuBackend, Tab, ZendriverError};
 
 /// Reads the pairs a fingerprinter cross-checks, plus the two reads that prove
 /// per-context state still reaches the real backend.
@@ -496,6 +496,219 @@ async fn delegated_state_comes_from_the_real_context_not_the_table() {
         "STENCIL_BITS must differ between a {{stencil: true}} context and a default one; both \
          reporting {stencil_bits} means the value is served, not delegated: {got:#}"
     );
+}
+
+/// The capture behind the tier a `Win32` persona resolves — see
+/// [`webgpu_limits_come_from_the_tier_not_the_host`] for why that persona and
+/// not the `MacIntel` one the rest of this file uses.
+const D3D11_TIER_CAPTURE: &str =
+    include_str!("../../zendriver-stealth/data/gpu-tiers/d3d11-fl11.json");
+
+/// Reads the WebGPU adapter the way a fingerprinter does — twice over.
+///
+/// The `_shape` block is the cheaper half of that: before reading a single
+/// limit, a script can ask what kind of object it is holding. Serving the
+/// tier's values by handing back a plain object and a `Set` answered `"Object"`
+/// / `"Set"`, failed both `instanceof` checks, and put 36 own properties on
+/// something a real Chrome gives none — four one-line tells traded for the
+/// coherence gain, which is no trade at all. `webgpu.js` overrides the
+/// `GPUSupportedLimits` / `GPUSupportedFeatures` prototypes instead, so these
+/// fields must come back **identical to the host's** while the values beside
+/// them do not.
+const ADAPTER_JS: &str = r#"(async () => {
+  if (!('gpu' in navigator) || !navigator.gpu) return {error: 'no navigator.gpu'};
+  const a = await navigator.gpu.requestAdapter();
+  if (!a) return {error: 'requestAdapter resolved null'};
+  return {
+    vendor: a.info ? a.info.vendor : null,
+    maxBufferSize: a.limits ? a.limits.maxBufferSize : null,
+    maxStorageBuffersPerShaderStage: a.limits ? a.limits.maxStorageBuffersPerShaderStage : null,
+    hasAstc: a.features ? a.features.has('texture-compression-astc') : null,
+    featureCount: a.features ? a.features.size : null,
+    shape: {
+      limitsCtor: a.limits ? a.limits.constructor.name : null,
+      limitsOwnProps: a.limits ? Object.getOwnPropertyNames(a.limits).length : null,
+      limitsIsInstance: (typeof GPUSupportedLimits !== 'undefined' && a.limits)
+        ? (a.limits instanceof GPUSupportedLimits) : null,
+      featuresCtor: a.features ? a.features.constructor.name : null,
+      featuresIsInstance: (typeof GPUSupportedFeatures !== 'undefined' && a.features)
+        ? (a.features instanceof GPUSupportedFeatures) : null,
+      featuresTag: a.features ? Object.prototype.toString.call(a.features) : null,
+      // A setlike interface's default iterator IS its `values` method.
+      featuresIterIsValues: a.features ? (a.features[Symbol.iterator] === a.features.values) : null,
+    },
+    // The setlike members must all agree with `size`, or one read contradicts
+    // another on the same object.
+    spreadCount: a.features ? [...a.features].length : null,
+    forEachCount: a.features ? (() => { let n = 0; a.features.forEach(() => n++); return n; })() : null,
+    firstEntry: a.features ? [...a.features.entries()][0] : null,
+  };
+})()"#;
+
+/// `navigator.gpu` must describe the device the persona claims, not the one
+/// running the page.
+///
+/// The adapter's `info` has named the claimed GPU since well before this
+/// branch, but `.limits` and `.features` came from the host — so an adapter
+/// could report `vendor: "nvidia"` above a 4 GiB Metal buffer limit. That is
+/// the same shape of gap the tier tables closed for WebGL, and this is the
+/// browser-side proof it is closed for WebGPU too.
+///
+/// **Why `Win32` here when every other test in this file pins `MacIntel`.**
+/// This test needs a real adapter to decorate, so it launches
+/// `GpuBackend::Native` — and the host that can supply one is, for the machine
+/// these captures were taken on, a Mac with a Metal adapter. A `MacIntel`
+/// persona would then serve the Metal tier's limits over a Metal host and
+/// prove nothing: the claimed and observed values would agree whether or not
+/// the patch ran. `Win32` resolves the D3D11 tier, whose `maxBufferSize` is
+/// exactly 2 GiB against Metal's 4 GiB - 4, so the two disagree by
+/// construction. The test asserts that disagreement rather than assuming it,
+/// and skips if it ever fails to hold (a Windows host running this would have
+/// nothing to tell apart either).
+#[tokio::test]
+#[ignore = "launches real Chrome and requires a usable GPU"]
+async fn webgpu_limits_come_from_the_tier_not_the_host() {
+    let browser = match Browser::builder()
+        .stealth(StealthProfile::spoofed())
+        // A GPU-less host has no adapter to decorate, so there is nothing for
+        // this test to observe. `Native` has no fallback and fails the launch
+        // there, which is the skip signal — same handling as
+        // `gpu_backend.rs::native_backend_yields_a_real_adapter_and_device`.
+        .gpu_backend(GpuBackend::Native)
+        .persona(zendriver::stealth::Persona {
+            platform: Some(zendriver::stealth::Platform::Win32),
+            ..Default::default()
+        })
+        .launch()
+        .await
+    {
+        Ok(b) => b,
+        Err(e) => {
+            assert!(
+                matches!(
+                    e,
+                    ZendriverError::Browser(BrowserError::GpuBackendUnavailable)
+                ),
+                "a host without a usable GPU must fail with GpuBackendUnavailable; any other \
+                 launch error is a real failure, not a no-GPU skip: {e:?}"
+            );
+            eprintln!("skipping: Native backend unavailable on this host: {e}");
+            return;
+        }
+    };
+    let tab = browser.main_tab();
+    // Secure context required: `navigator.gpu` is `[SecureContext]`-gated, so
+    // on `about:blank` this would take the no-adapter skip on a machine that
+    // has one. Distinct filename per test, like the others here.
+    tab.goto(&file_url("zendriver-gpu-webgpu.html"))
+        .await
+        .expect("goto");
+    tab.wait_for_load().await.expect("load");
+
+    // The isolated world holds its own copy of GPUAdapter.prototype, so it
+    // reads the host's real adapter — the same free in-tab baseline
+    // `spoofed_surface` uses for WebGL.
+    let native: Value = tab
+        .evaluate(ADAPTER_JS)
+        .await
+        .expect("isolated-world probe");
+    if let Some(err) = native["error"].as_str() {
+        browser.close().await.ok();
+        eprintln!("skipping: no WebGPU adapter on this host ({err})");
+        return;
+    }
+    let capture: Value = serde_json::from_str(D3D11_TIER_CAPTURE).expect("capture json");
+    let expected = &capture["capture"]["adapter"]["limits"];
+    let expect_buffer = expected["maxBufferSize"].as_u64().expect("capture limit");
+    let host_buffer = native["maxBufferSize"].as_u64().expect("host limit");
+    if host_buffer == expect_buffer {
+        browser.close().await.ok();
+        eprintln!(
+            "skipping: this host's own maxBufferSize is {host_buffer}, the same value the \
+             claimed tier serves, so the read cannot tell them apart"
+        );
+        return;
+    }
+
+    // Same install race as the WebGL probe — see `MAX_POLL_TRIES`.
+    let mut got = Value::Null;
+    for attempt in 0..MAX_POLL_TRIES {
+        got = tab
+            .evaluate_main(ADAPTER_JS)
+            .await
+            .expect("main-world probe");
+        if got["maxBufferSize"].as_u64() == Some(expect_buffer) {
+            break;
+        }
+        if attempt + 1 < MAX_POLL_TRIES {
+            tokio::time::sleep(POLL_DELAY).await;
+        }
+    }
+    browser.close().await.ok();
+
+    assert_eq!(
+        got["maxBufferSize"].as_u64(),
+        Some(expect_buffer),
+        "the adapter must report the resolved tier's maxBufferSize ({expect_buffer}), not this \
+         host's ({host_buffer}): {got:#}"
+    );
+    assert_eq!(
+        got["maxStorageBuffersPerShaderStage"].as_u64(),
+        expected["maxStorageBuffersPerShaderStage"].as_u64(),
+        "a second limit, so the first cannot pass on a coincidence: {got:#}"
+    );
+    // Features travel with the limits. The D3D11 tier measured no ASTC, and the
+    // Metal host this most often runs on measured it — so a `true` here is the
+    // host's list surviving.
+    assert_eq!(
+        got["hasAstc"], false,
+        "the D3D11 tier claims no ASTC support; a true here is the host's feature set: {got:#}"
+    );
+    assert_ne!(
+        native["hasAstc"], got["hasAstc"],
+        "if the host and the claimed tier agree about ASTC this assertion proves nothing — \
+         host {native:#} vs main world {got:#}"
+    );
+    assert_eq!(
+        got["featureCount"].as_u64(),
+        capture["capture"]["adapter"]["features"]
+            .as_array()
+            .map(|f| f.len() as u64),
+        "`features.size` must count the tier's list, not the host's: {got:#}"
+    );
+
+    // The other half: the values are the claimed device's, the OBJECTS are the
+    // host's own. Handing back a plain object and a `Set` would answer every
+    // value correctly and still be caught by `constructor.name` alone.
+    assert_eq!(
+        got["shape"], native["shape"],
+        "the adapter's limits/features objects must be indistinguishable from the host's real \
+         ones — brand, constructor name, own-property count and setlike identity all included. \
+         host {native:#} vs main world {got:#}"
+    );
+    assert_eq!(
+        got["shape"]["limitsOwnProps"].as_u64(),
+        Some(0),
+        "a real GPUSupportedLimits carries every limit on its prototype and nothing of its own; \
+         own properties here mean the object was replaced rather than decorated: {got:#}"
+    );
+    // Every setlike read must agree with `size`, or the object contradicts
+    // itself in two adjacent expressions.
+    let count = got["featureCount"].as_u64();
+    assert_eq!(
+        got["spreadCount"].as_u64(),
+        count,
+        "spread disagrees: {got:#}"
+    );
+    assert_eq!(
+        got["forEachCount"].as_u64(),
+        count,
+        "forEach disagrees: {got:#}"
+    );
+    // `entries()` on a setlike yields [value, value] pairs.
+    let first = got["firstEntry"].as_array().expect("firstEntry pair");
+    assert_eq!(first.len(), 2, "entries() must yield pairs: {got:#}");
+    assert_eq!(first[0], first[1], "a setlike pairs a value with itself");
 }
 
 /// `getSupportedExtensions` and `getExtension` must agree: an extension the

@@ -282,6 +282,23 @@ fn resolved_renderer<'a>(
         .unwrap_or_else(|| crate::gpu::devices::default_renderer(platform))
 }
 
+/// The device row whose tier supplies a renderer's capability values.
+///
+/// Shared by both GPU surfaces so they cannot land on different tiers: WebGL
+/// serves the tier's `getParameter` values and WebGPU the same tier's measured
+/// adapter limits and features, and a page reads the two against each other.
+///
+/// [`device_for_renderer`](crate::gpu::devices::device_for_renderer) answers
+/// `None` for a backend no shipped tier covers, and falling back then serves
+/// that renderer's *name* above another backend's *numbers*. [`push_webgl`]
+/// warns about it; this does not warn again, because the WebGPU value path only
+/// runs when the WebGL patch ran, so warning in both would log one fact twice
+/// per launch.
+fn tier_device(renderer: &str, platform: Platform) -> crate::gpu::devices::DeviceRow {
+    crate::gpu::devices::device_for_renderer(renderer)
+        .unwrap_or_else(|| crate::gpu::devices::default_device(platform))
+}
+
 /// Append the WebGL surface patch, substituting one resolved profile.
 ///
 /// Three layers, coarsest first, each overlaying the last — the precedence
@@ -321,14 +338,14 @@ fn push_webgl(
     // rather than done silently — the real fix is capturing that tier.
     // The default renderer never reaches this path: it is drawn from a shipped
     // row by construction.
-    let device = crate::gpu::devices::device_for_renderer(renderer).unwrap_or_else(|| {
+    if crate::gpu::devices::device_for_renderer(renderer).is_none() {
         tracing::warn!(
             renderer,
             "no captured GPU tier matches this renderer; using the platform's \
              default device, whose capability values come from a different backend"
         );
-        crate::gpu::devices::default_device(platform)
-    });
+    }
+    let device = tier_device(renderer, platform);
     let mut profile = crate::gpu::profile_for_tier(device.tier);
     if let Some(pinned) = gpu {
         profile = profile.overlay(pinned.clone());
@@ -375,6 +392,19 @@ fn push_webgl(
 /// from [`resolved_renderer`] — the same string the WebGL patch serves, so
 /// `navigator.gpu` agrees with WebGL — unless the caller's [`WebgpuSpec`]
 /// explicitly overrides `vendor`/`architecture`. Omitted under `Native`.
+///
+/// `.limits` and `.features` default to the **measured** values of the same
+/// tier [`push_webgl`] draws its parameters from, resolved through
+/// [`webgpu_for_tier`](crate::gpu::webgpu_for_tier). Before that they came from
+/// the host: the adapter named the claimed GPU while its capabilities described
+/// the real one, the same shape of gap the tier tables closed for WebGL. A
+/// [`WebgpuSpec`] still overlays on top — limits key-wise, features wholesale —
+/// exactly as [`WebglSpec`] overlays the WebGL tier's values.
+///
+/// A tier with **no adapter** (SwiftShader, whose Chrome resolves
+/// `requestAdapter()` to null) serves neither, leaving the host adapter's own
+/// untouched. Substituting another tier's numbers there would claim a GPU the
+/// persona just told WebGL it does not have.
 ///
 /// `webgl_spoofed` reflects whether the WebGL value patch ran. When it is
 /// `false` — either the native-WebGL opt-in
@@ -427,7 +457,11 @@ fn push_webgpu(
     // used to fall back to a local Intel string while the WebGL side fell back
     // to the Apple device row, so a persona that pinned no renderer reported
     // an Apple GPU to WebGL and an Intel one to WebGPU.
-    let derived = adapter_for_renderer(resolved_renderer(webgl, gpu, platform));
+    let renderer = resolved_renderer(webgl, gpu, platform);
+    let derived = adapter_for_renderer(renderer);
+    // ...and the same tier, so the adapter's capabilities describe the device
+    // its info names. `None` is the no-adapter tier — see this function's doc.
+    let measured = crate::gpu::webgpu_for_tier(tier_device(renderer, platform).tier);
 
     let vendor = spec
         .and_then(|s| s.vendor.clone())
@@ -437,13 +471,29 @@ fn push_webgpu(
         .unwrap_or(derived.architecture);
     let device = spec.and_then(|s| s.device.clone()).unwrap_or_default();
     let description = spec.and_then(|s| s.description.clone()).unwrap_or_default();
-    let limits = spec.and_then(|s| s.limits.as_ref());
-    let features = spec.and_then(|s| s.features.as_ref());
-    // Fabrication is only wired up when the caller opted in AND supplied
-    // enough to fabricate coherently (vendor + limits) — a bare
-    // `fabricate_when_absent: true` with nothing else is refused (no-op):
-    // this project never auto-invents fingerprint values (see `WebgpuSpec`
-    // rustdoc).
+    // Limits merge key-wise, the same shape `GpuProfile::overlay` gives the
+    // WebGL parameter maps: a caller pinning one limit overrides that one and
+    // keeps the tier's other thirty-five, rather than silently dropping them
+    // back to the host's. Features replace wholesale — a feature list is a set
+    // the caller either states in full or leaves alone, and the same wholesale
+    // rule already governs the WebGL extension lists.
+    let limits = match (&measured, spec.and_then(|s| s.limits.as_ref())) {
+        (None, None) => None,
+        (tier, pinned) => {
+            let mut merged = tier.as_ref().map(|m| m.limits.clone()).unwrap_or_default();
+            merged.extend(pinned.into_iter().flatten().map(|(k, v)| (k.clone(), *v)));
+            Some(merged)
+        }
+    };
+    let features = spec
+        .and_then(|s| s.features.clone())
+        .or_else(|| measured.map(|m| m.features));
+    // Fabrication stays gated on the caller's OWN vendor + limits. The tier's
+    // measured limits deliberately do not satisfy that half: fabrication
+    // invents an adapter on a host that has none, which is an explicit opt-in
+    // per surface, and letting table data unlock it would turn a bare
+    // `fabricate_when_absent: true` into exactly the auto behavior this project
+    // refuses (see the `WebgpuSpec` rustdoc).
     let fabricate = spec.is_some_and(|s| {
         s.fabricate_when_absent == Some(true) && s.vendor.is_some() && s.limits.is_some()
     });
@@ -471,14 +521,14 @@ fn push_webgpu(
                 "WEBGPU_LIMITS",
                 &limits.map_or_else(
                     || "null".to_string(),
-                    |l| serde_json::to_string(l).unwrap_or_else(|_| "null".into()),
+                    |l| serde_json::to_string(&l).unwrap_or_else(|_| "null".into()),
                 ),
             )
             .replace(
                 "WEBGPU_FEATURES",
                 &features.map_or_else(
                     || "null".to_string(),
-                    |f| serde_json::to_string(f).unwrap_or_else(|_| "null".into()),
+                    |f| serde_json::to_string(&f).unwrap_or_else(|_| "null".into()),
                 ),
             )
             .replace("WEBGPU_MODE", "\"value\"")
@@ -1620,7 +1670,9 @@ mod tests {
     #[test]
     fn webgpu_limits_and_features_decorate_when_supplied() {
         let mut limits = std::collections::BTreeMap::new();
-        limits.insert("maxTextureDimension2D".to_string(), 16384u64);
+        // Deliberately not the Metal tier's own 16384, so the assertion below
+        // distinguishes "the caller won" from "the tier happened to agree".
+        limits.insert("maxTextureDimension2D".to_string(), 999u64);
         let p = Persona {
             webgpu: Some(WebgpuSpec {
                 limits: Some(limits),
@@ -1638,19 +1690,68 @@ mod tests {
         // "absent". What Rust actually varies is the substituted argument
         // values passed into the IIFE; assert those instead.
         assert!(
-            s.contains(
-                r#"{"maxTextureDimension2D":16384}, ["texture-compression-bc"], "value", false);"#
-            ),
-            "limits + features substituted into the invocation args: {s}"
+            s.contains(r#""maxTextureDimension2D":999"#),
+            "a caller-pinned limit must beat the tier's measured one: {s}"
+        );
+        // ...and pinning one limit must not drop the other thirty-five back to
+        // the host's. `maxBufferSize` is the Metal tier's, which this persona
+        // (a MacIntel identity, no renderer pinned) resolves.
+        assert!(
+            s.contains(r#""maxBufferSize":4294967292"#),
+            "limits merge key-wise, so an unpinned limit keeps the tier's value: {s}"
+        );
+        // Features replace wholesale — a feature list is a set the caller
+        // either states in full or leaves alone.
+        assert!(
+            s.contains(r#"["texture-compression-bc"], "value", false);"#),
+            "caller-supplied features replace the tier's list entirely: {s}"
+        );
+        assert!(
+            !s.contains("texture-compression-astc"),
+            "the tier's own features must not survive beside a caller's list: {s}"
         );
     }
 
     #[test]
-    fn webgpu_limits_and_features_absent_pass_null() {
+    fn webgpu_limits_and_features_default_to_the_tiers_measured_values() {
+        // The gap this closes: with nothing supplied these were `null`, so the
+        // adapter named the claimed GPU (vendor/architecture derived from the
+        // spoofed renderer) while `.limits` and `.features` still described the
+        // host's real one.
         let s = bootstrap_script(&Persona::default(), &mock_identity());
         assert!(
+            s.contains(r#""maxBufferSize":4294967292"#),
+            "a MacIntel persona must serve the Metal tier's measured limits: {s}"
+        );
+        assert!(
+            s.contains("\"texture-compression-astc\""),
+            "...and its measured features: {s}"
+        );
+        assert!(
+            !s.contains(", null, null, \"value\""),
+            "neither argument may still be null on a tier that has an adapter: {s}"
+        );
+    }
+
+    #[test]
+    fn a_tier_with_no_webgpu_adapter_serves_neither_limits_nor_features() {
+        // A `LinuxX86_64` persona resolves the SwiftShader row, whose Chrome
+        // resolves `requestAdapter()` to null — so there is nothing measured to
+        // serve, and `webgpu.js` leaves the host adapter's own values alone.
+        // Substituting another tier's numbers would claim a GPU the persona
+        // just told WebGL it does not have.
+        let p = Persona {
+            platform: Some(Platform::LinuxX86_64),
+            ..Persona::default()
+        };
+        let s = bootstrap_script(&p, &mock_identity());
+        assert!(
             s.contains(r#", null, null, "value", false);"#),
-            "limits/features args are JS null when unset: {s}"
+            "a tier with no adapter must pass JS null for both: {s}"
+        );
+        assert!(
+            !s.contains("maxBufferSize"),
+            "no other tier's limits may leak in where the tier measured none: {s}"
         );
     }
 
@@ -1708,8 +1809,9 @@ mod tests {
         };
         let s = bootstrap_script(&p, &mock_identity());
         assert!(
-            s.contains(r#"{"maxBufferSize":1073741824}, null, "value", true);"#),
-            "fabricate arg substituted true when vendor+limits both set: {s}"
+            s.contains(r#""maxBufferSize":1073741824"#) && s.contains(r#""value", true);"#),
+            "fabricate arg substituted true when vendor+limits both set, with the caller's \
+             limit beating the tier's: {s}"
         );
         assert!(
             s.contains("NotSupportedError"),
@@ -1920,5 +2022,43 @@ mod tests {
                 "unsubstituted token `{tok}` left in bootstrap"
             );
         }
+    }
+
+    #[test]
+    fn webgpu_serves_its_values_through_the_real_classes_not_substitutes() {
+        // Measured on Chrome 150: a real `adapter.limits` is a
+        // GPUSupportedLimits instance with zero own properties, and
+        // `adapter.features` a GPUSupportedFeatures whose members live on its
+        // prototype. Handing back a plain object and a `Set` answers every
+        // value correctly and is still caught by `constructor.name` alone — so
+        // serving the tier's measured values that way would trade a subtle
+        // mismatch for four blatant ones. The patch overrides those two
+        // prototypes in place instead; this pins that it still does.
+        let s = bootstrap_script(&Persona::default(), &mock_identity());
+        assert!(
+            s.contains("GPUSupportedLimits.prototype")
+                && s.contains("GPUSupportedFeatures.prototype"),
+            "the values must be served by overriding the real classes' prototypes: {s}"
+        );
+        for setlike in [
+            "'has'",
+            "'keys'",
+            "'values'",
+            "'entries'",
+            "'forEach'",
+            "'size'",
+        ] {
+            assert!(
+                s.contains(setlike),
+                "every setlike member has to be overridden, or `features.{setlike}` contradicts \
+                 the ones that were: {s}"
+            );
+        }
+        // The substitutes survive only as the fallback for a page with no
+        // WebGPU IDL at all, which is where there is no real class to imitate.
+        assert!(
+            s.contains("featuresServed") && s.contains("limitsServed"),
+            "the plain-object/Set path must stay gated on the real classes being absent: {s}"
+        );
     }
 }

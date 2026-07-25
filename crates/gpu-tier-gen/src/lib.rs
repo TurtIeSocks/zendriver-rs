@@ -299,6 +299,21 @@ pub enum ParamValue {
     Str(String),
 }
 
+/// One tier's measured WebGPU adapter capabilities.
+///
+/// Both fields come from the same probe run as that tier's WebGL blocks, on
+/// the same machine, so what a page cross-checks between the two APIs is a
+/// pairing Chrome really produced rather than one assembled here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebgpuAdapter {
+    /// `GPUSupportedLimits`, every one a non-negative integer per the WebGPU
+    /// IDL (`GPUSize64` / `GPUSize32`).
+    pub limits: BTreeMap<String, u64>,
+    /// `GPUSupportedFeatures`, in the capture's order — see [`strings_of`] for
+    /// why an order is preserved rather than sorted.
+    pub features: Vec<String>,
+}
+
 /// Everything one tier contributes.
 #[derive(Debug, Clone)]
 pub struct TierData {
@@ -313,6 +328,13 @@ pub struct TierData {
     /// `enums` block. GL enum numbers are spec-fixed constants, not
     /// context-dependent, so one context's block covers both.
     pub enums: BTreeMap<String, u32>,
+    /// The tier's WebGPU adapter, or `None` when the probed machine had none.
+    ///
+    /// `None` is a measurement, not a hole: Chrome on SwiftShader resolves
+    /// `requestAdapter()` to null, and the `swiftshader` capture records
+    /// exactly that. Keeping the two apart in the type is what stops the
+    /// emitter from papering over an absent adapter with an empty one.
+    pub webgpu: Option<WebgpuAdapter>,
 }
 
 /// Read exactly `count` numbers out of a JSON array, or explain why the
@@ -493,6 +515,40 @@ fn enums_of(ctx: &Value) -> BTreeMap<String, u32> {
         .collect()
 }
 
+/// Parse one `limits` entry. Every WebGPU limit is a `GPUSize64`/`GPUSize32`
+/// in the IDL, so a negative or fractional value means a malformed capture
+/// rather than a limit worth serving.
+fn limit_num(name: &str, v: &Value) -> Result<u64, String> {
+    v.as_u64()
+        .ok_or_else(|| format!("{name}: expected a non-negative integer WebGPU limit, got {v}"))
+}
+
+/// Parse the capture's `adapter` block into the tier's WebGPU capabilities.
+///
+/// An explicit `null` is a valid, meaningful answer — the machine had no
+/// WebGPU adapter, which is what Chrome on SwiftShader reports — and yields
+/// `None`. A *missing* key is not: it means the probe never wrote the field,
+/// so it fails loudly like every other absent block, rather than silently
+/// downgrading a hardware tier to "no adapter".
+fn webgpu_of(capture: &Value) -> Option<WebgpuAdapter> {
+    let adapter = fail_loud(capture.get("adapter").ok_or_else(|| {
+        "capture block `adapter` is missing; a tier with no WebGPU adapter must record an \
+         explicit null"
+            .to_string()
+    }));
+    if adapter.is_null() {
+        return None;
+    }
+    let limits = object_of(adapter, "limits")
+        .iter()
+        .map(|(k, v)| (k.clone(), fail_loud(limit_num(k, v))))
+        .collect();
+    Some(WebgpuAdapter {
+        limits,
+        features: strings_of(adapter, "features"),
+    })
+}
+
 /// Read a capture's string array **in capture order**.
 ///
 /// Deliberately not sorted. This reads the extension lists, and
@@ -579,6 +635,7 @@ pub fn tier_from_capture(name: &str, provenance: &str, capture: &Value) -> TierD
         extensions_webgl1: strings_of(w1, "extensions"),
         extensions_webgl2: strings_of(w2, "extensions"),
         enums: enums_of(w2),
+        webgpu: webgpu_of(capture),
     }
 }
 
@@ -683,7 +740,7 @@ pub fn emit_rust(tiers: &[TierData]) -> String {
     // and not worth a named type alias.
     s.push_str("#![allow(dead_code)]\n");
     s.push_str("#![allow(clippy::type_complexity)]\n");
-    s.push_str("\nuse super::types::GlParamRef as GlParam;\n\n");
+    s.push_str("\nuse super::types::{GlParamRef as GlParam, WebgpuAdapterRef};\n\n");
 
     // Both context versions get their own tables. Of the captured parameters
     // a WebGL1 context exposes 82 and a WebGL2 context up to 132, of which 18
@@ -795,6 +852,53 @@ pub fn emit_rust(tiers: &[TierData]) -> String {
     for (num, name) in &pairs {
         s.push_str(&format!("    ({num}, {name:?}),\n"));
     }
+    s.push_str("];\n\n");
+
+    // Rows sorted by tier name, and the limits within each row sorted by their
+    // own (they arrive in a BTreeMap). The feature list is the one thing here
+    // that keeps the capture's order — see the emitted doc comment.
+    let webgpu: BTreeMap<&str, &Option<WebgpuAdapter>> =
+        tiers.iter().map(|t| (t.name.as_str(), &t.webgpu)).collect();
+    s.push_str("/// Measured WebGPU adapter capabilities per tier.\n");
+    s.push_str("///\n");
+    s.push_str("/// `None` is a measurement, not a missing row: that tier's Chrome resolves\n");
+    s.push_str("/// `navigator.gpu.requestAdapter()` to null, so it has no adapter to describe.\n");
+    s.push_str(
+        "/// Filling it from a neighbouring tier would hand a persona claiming a software\n",
+    );
+    s.push_str(
+        "/// rasterizer a hardware adapter's limits — the cross-API contradiction the tier\n",
+    );
+    s.push_str("/// resolution exists to prevent.\n");
+    s.push_str("///\n");
+    s.push_str(
+        "/// Each row's values were probed in the same run as that tier's WebGL blocks, on\n",
+    );
+    s.push_str("/// one machine, so the two APIs' answers are a pairing Chrome really produced.\n");
+    s.push_str("///\n");
+    s.push_str("/// Limits are sorted by name. The feature list keeps the capture's own order,\n");
+    s.push_str(
+        "/// because `GPUSupportedFeatures` is setlike and iterates in Chrome's insertion\n",
+    );
+    s.push_str("/// order — the same order-sensitive fingerprint input the extension lists are.\n");
+    s.push_str("pub(crate) static WEBGPU_ADAPTERS: &[(&str, Option<WebgpuAdapterRef>)] = &[\n");
+    for (name, adapter) in &webgpu {
+        match adapter {
+            None => s.push_str(&format!("    ({name:?}, None),\n")),
+            Some(a) => {
+                s.push_str(&format!("    ({name:?}, Some(WebgpuAdapterRef {{\n"));
+                s.push_str("        limits: &[\n");
+                for (k, v) in &a.limits {
+                    s.push_str(&format!("            ({k:?}, {v}),\n"));
+                }
+                s.push_str("        ],\n        features: &[\n");
+                for f in &a.features {
+                    s.push_str(&format!("            {f:?},\n"));
+                }
+                s.push_str("        ],\n    })),\n");
+            }
+        }
+    }
     s.push_str("];\n");
     s
 }
@@ -851,7 +955,8 @@ mod tests {
                 "precision": {"VERTEX_SHADER/MEDIUM_FLOAT": [15, 15, 10]},
                 "extensions": [],
                 "enums": {}
-            }
+            },
+            "adapter": null
         });
         let t = tier_from_capture("swiftshader", "probed: test", &capture);
         assert_eq!(t.name, "swiftshader");
@@ -1120,7 +1225,8 @@ mod tests {
                     "IMPLEMENTATION_COLOR_READ_FORMAT": 6408
                 },
                 "precision": {}, "extensions": [], "enums": {}
-            }
+            },
+            "adapter": null
         });
         let out = emit_rust(&[tier_from_capture("swiftshader", "probed: test", &capture)]);
         assert!(
@@ -1280,7 +1386,8 @@ mod tests {
             "webgl2": {
                 "params": {}, "precision": {}, "extensions": [],
                 "enums": {"ACTIVE_TEXTURE": 34016, "BLEND": 3042}
-            }
+            },
+            "adapter": null
         });
         let t = tier_from_capture("swiftshader", "probed: test", &capture);
         assert_eq!(t.enums["ACTIVE_TEXTURE"], 34016);
@@ -1306,6 +1413,9 @@ mod tests {
             extensions_webgl1: vec![],
             extensions_webgl2: vec![],
             enums: BTreeMap::new(),
+            // The WebGL-shaped tests below say nothing about WebGPU; the
+            // adapter tables get their own tests further down.
+            webgpu: None,
         }
     }
 
@@ -1491,7 +1601,11 @@ mod tests {
             // cover whichever side reads it.
             w1.as_object_mut().expect("object").remove(block);
             w2.as_object_mut().expect("object").remove(block);
-            let capture = serde_json::json!({"webgl1": w1, "webgl2": w2});
+            // `adapter` is present and explicitly null so this test keeps
+            // failing for the reason it names: without it every iteration would
+            // panic on the missing adapter instead, and would pass even if the
+            // block being dropped were tolerated.
+            let capture = serde_json::json!({"webgl1": w1, "webgl2": w2, "adapter": null});
             let err = std::panic::catch_unwind(|| {
                 tier_from_capture("swiftshader", "probed: test", &capture)
             });
@@ -1503,6 +1617,117 @@ mod tests {
         }
     }
 
+    /// A tier with no WebGPU adapter and a tier whose adapter block never got
+    /// written look identical once both are read as "no adapter" — so they must
+    /// not be read the same way. An explicit `null` is the measurement (Chrome
+    /// on SwiftShader really does resolve `requestAdapter()` to null); a
+    /// missing key is a truncated capture, and silently accepting it would
+    /// downgrade a hardware tier to serving nothing.
+    #[test]
+    fn an_absent_adapter_and_an_absent_adapter_block_are_not_the_same() {
+        let blocks = || {
+            serde_json::json!({
+                "params": {"MAX_TEXTURE_SIZE": 8192},
+                "precision": {}, "extensions": [], "enums": {}
+            })
+        };
+        let probed_no_adapter =
+            serde_json::json!({"webgl1": blocks(), "webgl2": blocks(), "adapter": null});
+        assert_eq!(
+            tier_from_capture("swiftshader", "probed: test", &probed_no_adapter).webgpu,
+            None,
+            "an explicit null is a measured absence and must parse"
+        );
+
+        let truncated = serde_json::json!({"webgl1": blocks(), "webgl2": blocks()});
+        let err = std::panic::catch_unwind(|| {
+            tier_from_capture("swiftshader", "probed: test", &truncated)
+        });
+        assert!(
+            err.is_err(),
+            "a capture with no `adapter` key at all must fail loudly rather than be read as a \
+             tier with no adapter"
+        );
+    }
+
+    #[test]
+    fn adapter_limits_and_features_parse_into_tier_data() {
+        let blocks = || {
+            serde_json::json!({
+                "params": {"MAX_TEXTURE_SIZE": 16384},
+                "precision": {}, "extensions": [], "enums": {}
+            })
+        };
+        let capture = serde_json::json!({
+            "webgl1": blocks(),
+            "webgl2": blocks(),
+            "adapter": {
+                "vendor": "apple", "architecture": "metal-3",
+                "device": "", "description": "",
+                "limits": {"maxTextureDimension2D": 16384, "maxBufferSize": 4294967292u64},
+                // Deliberately not alphabetical: Chrome's own order must survive.
+                "features": ["texture-compression-bc", "depth-clip-control"]
+            }
+        });
+        let t = tier_from_capture("metal-macos", "probed: test", &capture);
+        let a = t.webgpu.expect("the adapter block must parse");
+        assert_eq!(a.limits["maxTextureDimension2D"], 16384);
+        // Larger than u32::MAX — a limit narrowed to 32 bits would wrap here.
+        assert_eq!(a.limits["maxBufferSize"], 4_294_967_292);
+        assert_eq!(
+            a.features,
+            vec!["texture-compression-bc", "depth-clip-control"]
+        );
+    }
+
+    #[test]
+    fn a_malformed_adapter_limit_fails_loudly() {
+        let blocks = || {
+            serde_json::json!({
+                "params": {}, "precision": {}, "extensions": [], "enums": {}
+            })
+        };
+        let capture = serde_json::json!({
+            "webgl1": blocks(), "webgl2": blocks(),
+            "adapter": {"limits": {"maxBufferSize": -1}, "features": []}
+        });
+        let err =
+            std::panic::catch_unwind(|| tier_from_capture("metal-macos", "probed: test", &capture));
+        assert!(
+            err.is_err(),
+            "every WebGPU limit is a GPUSize64/32 in the IDL, so a negative one is a malformed \
+             capture and must not be silently dropped from the table"
+        );
+    }
+
+    /// The emitted table must keep "no adapter" and "an adapter" apart, and
+    /// must not let one tier's numbers stand in for another's.
+    #[test]
+    fn the_webgpu_table_distinguishes_no_adapter_from_an_empty_one() {
+        let blocks = || {
+            serde_json::json!({
+                "params": {}, "precision": {}, "extensions": [], "enums": {}
+            })
+        };
+        let with_adapter = serde_json::json!({
+            "webgl1": blocks(), "webgl2": blocks(),
+            "adapter": {"limits": {"maxBufferSize": 4294967292u64}, "features": ["shader-f16"]}
+        });
+        let without = serde_json::json!({"webgl1": blocks(), "webgl2": blocks(), "adapter": null});
+        let out = emit_rust(&[
+            tier_from_capture("metal-macos", "probed: test", &with_adapter),
+            tier_from_capture("swiftshader", "probed: test", &without),
+        ]);
+        assert!(
+            out.contains("(\"swiftshader\", None)"),
+            "a tier with no adapter must emit None, not an empty adapter: {out}"
+        );
+        assert!(
+            out.contains("(\"maxBufferSize\", 4294967292)") && out.contains("\"shader-f16\""),
+            "the measured adapter's values must reach the table: {out}"
+        );
+    }
+
     #[test]
     fn an_unconvertible_capture_value_fails_loudly() {
         let capture = serde_json::json!({
@@ -1510,7 +1735,8 @@ mod tests {
                 "params": {"MAX_VIEWPORT_DIMS": "not-an-array"},
                 "precision": {}, "extensions": [], "enums": {}
             },
-            "webgl2": {"params": {}, "precision": {}, "extensions": [], "enums": {}}
+            "webgl2": {"params": {}, "precision": {}, "extensions": [], "enums": {}},
+            "adapter": null
         });
         let err =
             std::panic::catch_unwind(|| tier_from_capture("swiftshader", "probed: test", &capture));

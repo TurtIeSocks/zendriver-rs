@@ -342,12 +342,39 @@ cannot classify. A software rasterizer has no vendor, and naming one beside a
 SwiftShader WebGL renderer would be the cross-API contradiction this derivation
 exists to prevent.
 
+**`.limits` and `.features` come from the same measured tier the WebGL surface
+serves.** The probe captures each tier's `navigator.gpu` adapter alongside its
+WebGL blocks, in one run on one machine, so the two APIs answer for one device:
+a `Win32` persona reports the D3D11 tier's 2 GiB `maxBufferSize` and its 19
+features, a `MacIntel` persona the Metal tier's 4 GiB - 4 and its 22. Before
+this they were left at the host's, so an adapter could name an NVIDIA card
+above a Metal buffer limit — the same gap the tier tables closed for WebGL.
+
+The `SwiftShader` tier serves **neither**, and that is the measurement rather
+than a hole: Chrome on SwiftShader resolves `requestAdapter()` to `null`, so
+there is no adapter to describe, and the host's own values are left untouched.
+Substituting a neighbouring tier's numbers would hand a persona that just told
+WebGL it has a software rasterizer a hardware adapter's capabilities.
+
+One honest caveat, the mirror of the D3D11 tier's WebGL story. The WebGL values
+generalize across every FL11+ card because ANGLE derives them from `D3D11_REQ_*`
+constants; the *limits* generalize the same way (Dawn's D3D12 backend derives
+them from binding-tier constants), but a few *features* are genuinely
+hardware-gated — `shader-f16`, `subgroups`, `clip-distances`, `primitive-index`.
+The tier's list was measured on an RTX 4090, so pinning an old Intel iGPU's
+renderer under that tier can claim a feature that card would not have. Nothing
+in the tables can tell the two apart without a capture from such a card; if that
+fidelity matters, pin `features` yourself through `WebgpuSpec`.
+
 `WebgpuSpec` (mirroring `WebglSpec`'s strategy+values shape) adds two OPT-IN
 capabilities on top:
 
 1. **Caller-supplied adapter identity.** Set `vendor` / `architecture` /
    `device` / `description` / `limits` / `features` explicitly instead of
-   letting `vendor`/`architecture` derive from the WebGL renderer.
+   letting `vendor`/`architecture` derive from the WebGL renderer and
+   `limits`/`features` come from its tier. `limits` overlays key-wise, so
+   pinning one limit keeps the tier's value for every other; `features`
+   replaces the tier's list wholesale.
 2. **Synthetic adapter fabrication** (`fabricate_when_absent: true`) — when
    the host has no real WebGPU adapter, resolve a synthetic one built from
    your supplied values. This covers **both** GPU-less shapes:
@@ -413,9 +440,19 @@ against a real device.
 REJECTS — there is no way to fabricate a working `GPUDevice` without a real
 GPU behind it. Fabrication only makes `requestAdapter()` resolve a coherent
 adapter for detection scripts that stop there; it does not unlock actual
-WebGPU rendering on a GPU-less host. The synthetic adapter and (when created)
-the synthetic `navigator.gpu` are plain objects, so `adapter instanceof
-GPUAdapter` and `navigator.gpu instanceof GPU` are `false`.
+WebGPU rendering on a GPU-less host.
+
+`adapter.limits` and `adapter.features` are the **real** `GPUSupportedLimits`
+and `GPUSupportedFeatures` objects wherever those classes exist: the patch
+overrides their prototypes' accessors and setlike members rather than handing
+back a plain object and a `Set`, so `constructor.name`, `instanceof`,
+`Object.prototype.toString` and own-property count all read as a genuine
+adapter's while the values are the claimed device's (verified against real
+Chrome in `crates/zendriver/tests/gpu_profile.rs`). What still differs: the
+iterators `features.keys()` / `values()` / `entries()` return are ordinary
+`Array Iterator`s rather than `GPUSupportedFeatures Iterator`s — `has`, `size`,
+spread and `for...of` all read correctly, only the iterator's own type tag
+differs.
 
 **On a GPU-equipped host, [`GpuBackend::Native`](gpu-backend.md) sidesteps
 `WebgpuSpec` fabrication entirely.** Instead of faking an adapter and

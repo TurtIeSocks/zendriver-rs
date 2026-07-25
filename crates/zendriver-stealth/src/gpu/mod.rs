@@ -179,6 +179,47 @@ pub(crate) fn profile_for_tier(tier: Tier) -> GpuProfile {
     }
 }
 
+/// One tier's measured WebGPU adapter capabilities, owned so a caller's
+/// [`WebgpuSpec`](crate::WebgpuSpec) can overlay onto them.
+///
+/// Deliberately **not** a field on [`GpuProfile`]. That type is public with
+/// public fields, and `WebgpuSpec` already owns the caller-facing WebGPU
+/// override path — a second one would give the same value two places to be set
+/// from, and would make the shape of an internal table part of the public API.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WebgpuAdapter {
+    /// `GPUSupportedLimits`, keyed as the WebGPU IDL spells them
+    /// (`maxTextureDimension2D`, `maxBufferSize`, ...).
+    pub limits: BTreeMap<String, u64>,
+    /// `GPUSupportedFeatures`, in Chrome's own iteration order.
+    pub features: Vec<String>,
+}
+
+/// The WebGPU adapter capabilities a tier measured, or `None` when that tier's
+/// machine has no adapter at all.
+///
+/// The sibling of [`profile_for_tier`] for the other GPU API: both read one
+/// tier key out of the generated tables, so a renderer that resolves a tier
+/// gets that tier's answer on both surfaces and cannot describe two devices.
+///
+/// **`None` is data, not a gap.** Real SwiftShader Chrome resolves
+/// `requestAdapter()` to null, so that tier has no adapter to describe, and the
+/// capture records exactly that. Callers must leave the host's adapter alone
+/// rather than substituting a neighbouring tier's numbers — a persona claiming
+/// a software rasterizer to WebGL while reporting a hardware adapter's limits
+/// to WebGPU is the cross-API contradiction this resolution exists to prevent.
+pub(crate) fn webgpu_for_tier(tier: Tier) -> Option<WebgpuAdapter> {
+    let measured = lookup(tiers::WEBGPU_ADAPTERS, tier_key(tier))?.as_ref()?;
+    Some(WebgpuAdapter {
+        limits: measured
+            .limits
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), *v))
+            .collect(),
+        features: measured.features.iter().map(|f| (*f).to_string()).collect(),
+    })
+}
+
 /// Enums the patch must resolve that the generated [`tiers::ENUM_NAMES`] table
 /// does not carry, because the probe only walks the *core* `getParameter`
 /// enums:
@@ -576,6 +617,68 @@ mod tests {
                 "{name} ({num}) is now in the generated table; drop it from EXTRA_ENUMS"
             );
         }
+    }
+
+    #[test]
+    fn each_hardware_tier_resolves_its_own_measured_webgpu_adapter() {
+        let metal = webgpu_for_tier(types::Tier::MetalMacos).expect("Metal has an adapter");
+        let d3d11 = webgpu_for_tier(types::Tier::D3d11Fl11).expect("D3D11 has an adapter");
+
+        // Both captures enumerate the same 36 limits; what identifies the
+        // device is the values, so the assertion is that they differ rather
+        // than that the maps do.
+        assert_eq!(metal.limits.len(), 36);
+        assert_eq!(d3d11.limits.len(), 36);
+        assert_ne!(
+            metal.limits, d3d11.limits,
+            "two tiers resolving identical limits would mean one is being served the other's"
+        );
+        // The pair a script reads first, and the widest gap between the two: a
+        // Metal buffer caps at 4 GiB - 4, D3D12's at exactly 2 GiB.
+        assert_eq!(metal.limits["maxBufferSize"], 4_294_967_292);
+        assert_eq!(d3d11.limits["maxBufferSize"], 2_147_483_648);
+        // Backend-shaped rather than card-shaped, like the WebGL values:
+        // Metal's argument-buffer tier allows 10 storage buffers per stage
+        // where D3D12's binding tier allows 16.
+        assert_eq!(metal.limits["maxStorageBuffersPerShaderStage"], 10);
+        assert_eq!(d3d11.limits["maxStorageBuffersPerShaderStage"], 16);
+
+        assert_eq!(metal.features.len(), 22);
+        assert_eq!(d3d11.features.len(), 19);
+        // The three Metal has and D3D11 does not — Apple GPUs support the
+        // mobile-lineage compressed formats, desktop D3D12 does not.
+        for only_metal in [
+            "texture-compression-astc",
+            "texture-compression-astc-sliced-3d",
+            "texture-compression-etc2",
+        ] {
+            assert!(metal.features.iter().any(|f| f == only_metal));
+            assert!(!d3d11.features.iter().any(|f| f == only_metal));
+        }
+    }
+
+    #[test]
+    fn the_swiftshader_tier_resolves_no_adapter_at_all() {
+        // Not an oversight in the capture: Chrome on SwiftShader resolves
+        // `requestAdapter()` to null, so there is nothing to describe. Serving
+        // a neighbour's limits here would hand a persona that just told WebGL
+        // it has a software rasterizer a hardware adapter's capabilities.
+        assert_eq!(webgpu_for_tier(types::Tier::SwiftShader), None);
+    }
+
+    #[test]
+    fn webgpu_features_keep_chromes_order_rather_than_being_sorted() {
+        // `GPUSupportedFeatures` is setlike, so `Array.from(adapter.features)`
+        // iterates in Chrome's insertion order — an order-sensitive
+        // fingerprint input exactly like `getSupportedExtensions()`. A sorted
+        // list is a different fingerprint from the one that was measured.
+        let metal = webgpu_for_tier(types::Tier::MetalMacos).expect("Metal has an adapter");
+        let mut sorted = metal.features.clone();
+        sorted.sort();
+        assert_ne!(
+            metal.features, sorted,
+            "the committed capture is genuinely unsorted, so this guard is not vacuous"
+        );
     }
 
     #[test]

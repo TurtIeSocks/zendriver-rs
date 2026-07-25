@@ -272,6 +272,80 @@ mod tests {
         }
     }
 
+    // --- cross-API coherence (WebGL beside WebGPU) --------------------------
+
+    /// A page reads both GPU APIs and compares them, so the two halves of one
+    /// tier have to describe one device.
+    ///
+    /// They do structurally — a tier's WebGL blocks and its adapter block come
+    /// from the same probe run on the same machine — but that only holds while
+    /// nobody hand-edits a capture or pastes an adapter block from elsewhere.
+    /// These are the reads a fingerprinter can actually put side by side, so
+    /// they are pinned against the committed data rather than trusted.
+    ///
+    /// Not a runtime [`check_coherence`] rule: that one guards
+    /// caller-supplied profiles, where equality here would be wrong to demand
+    /// (a caller may legitimately pin a WebGL renderer and a WebGPU adapter
+    /// from different devices). What must never drift silently is the
+    /// *shipped* pairing.
+    #[test]
+    fn each_tiers_webgpu_limits_agree_with_the_webgl_values_beside_them() {
+        for &tier in Tier::ALL {
+            let Some(webgpu) = crate::gpu::webgpu_for_tier(tier) else {
+                continue; // No adapter — nothing is served, so nothing can disagree.
+            };
+            let webgl = profile_for_tier(tier);
+            let gl = |k: &str| match webgl.params_webgl2.get(k) {
+                Some(GlParam::Int(i)) => u64::try_from(*i).ok(),
+                _ => None,
+            };
+            // Both APIs read the same backend cap for these three, so a real
+            // machine never reports them differently. `maxTextureDimension2D`
+            // is the one a script is most likely to pair with
+            // `MAX_TEXTURE_SIZE`.
+            for (gl_name, gpu_name) in [
+                ("MAX_TEXTURE_SIZE", "maxTextureDimension2D"),
+                ("MAX_3D_TEXTURE_SIZE", "maxTextureDimension3D"),
+                ("MAX_ARRAY_TEXTURE_LAYERS", "maxTextureArrayLayers"),
+            ] {
+                assert_eq!(
+                    gl(gl_name),
+                    webgpu.limits.get(gpu_name).copied(),
+                    "{tier:?} serves WebGL {gl_name} and WebGPU {gpu_name} as different \
+                     numbers; both come from one backend cap, so a page reading them side by \
+                     side sees two devices"
+                );
+            }
+        }
+    }
+
+    /// The same check on the compressed-texture formats, which is the one
+    /// place the two APIs' *feature* lists overlap: each WebGPU
+    /// `texture-compression-*` feature has a WebGL extension that exposes the
+    /// same hardware format family. Claiming one without the other is a
+    /// contradiction a page reaches in two lines.
+    #[test]
+    fn each_tiers_webgpu_compressed_formats_agree_with_its_webgl_extensions() {
+        for &tier in Tier::ALL {
+            let Some(webgpu) = crate::gpu::webgpu_for_tier(tier) else {
+                continue;
+            };
+            let exts = profile_for_tier(tier).extensions_webgl2;
+            for (feature, extension) in [
+                ("texture-compression-bc", "WEBGL_compressed_texture_s3tc"),
+                ("texture-compression-astc", "WEBGL_compressed_texture_astc"),
+                ("texture-compression-etc2", "WEBGL_compressed_texture_etc"),
+            ] {
+                assert_eq!(
+                    webgpu.features.iter().any(|f| f == feature),
+                    exts.iter().any(|e| e == extension),
+                    "{tier:?} claims {feature} to WebGPU and {extension} to WebGL \
+                     inconsistently; they expose the same hardware format family"
+                );
+            }
+        }
+    }
+
     // --- platform coherence (spec invariant 3) ------------------------------
 
     #[test]

@@ -6,7 +6,7 @@
 #![allow(dead_code)]
 #![allow(clippy::type_complexity)]
 
-use super::types::GlParamRef as GlParam;
+use super::types::{GlParamRef as GlParam, WebgpuAdapterRef};
 
 /// WEBGL1 values every tier agrees on. Sorted, binary-searchable.
 pub(crate) static BASE_PARAMS_WEBGL1: &[(&str, GlParam)] = &[
@@ -692,4 +692,153 @@ pub(crate) static ENUM_NAMES: &[(u32, &str)] = &[
     (37441, "UNPACK_PREMULTIPLY_ALPHA_WEBGL"),
     (37443, "UNPACK_COLORSPACE_CONVERSION_WEBGL"),
     (37447, "MAX_CLIENT_WAIT_TIMEOUT_WEBGL"),
+];
+
+/// Measured WebGPU adapter capabilities per tier.
+///
+/// `None` is a measurement, not a missing row: that tier's Chrome resolves
+/// `navigator.gpu.requestAdapter()` to null, so it has no adapter to describe.
+/// Filling it from a neighbouring tier would hand a persona claiming a software
+/// rasterizer a hardware adapter's limits — the cross-API contradiction the tier
+/// resolution exists to prevent.
+///
+/// Each row's values were probed in the same run as that tier's WebGL blocks, on
+/// one machine, so the two APIs' answers are a pairing Chrome really produced.
+///
+/// Limits are sorted by name. The feature list keeps the capture's own order,
+/// because `GPUSupportedFeatures` is setlike and iterates in Chrome's insertion
+/// order — the same order-sensitive fingerprint input the extension lists are.
+pub(crate) static WEBGPU_ADAPTERS: &[(&str, Option<WebgpuAdapterRef>)] = &[
+    (
+        "d3d11-fl11",
+        Some(WebgpuAdapterRef {
+            limits: &[
+                ("maxBindGroups", 4),
+                ("maxBindGroupsPlusVertexBuffers", 24),
+                ("maxBindingsPerBindGroup", 1000),
+                ("maxBufferSize", 2147483648),
+                ("maxColorAttachmentBytesPerSample", 128),
+                ("maxColorAttachments", 8),
+                ("maxComputeInvocationsPerWorkgroup", 1024),
+                ("maxComputeWorkgroupSizeX", 1024),
+                ("maxComputeWorkgroupSizeY", 1024),
+                ("maxComputeWorkgroupSizeZ", 64),
+                ("maxComputeWorkgroupStorageSize", 32768),
+                ("maxComputeWorkgroupsPerDimension", 65535),
+                ("maxDynamicStorageBuffersPerPipelineLayout", 8),
+                ("maxDynamicUniformBuffersPerPipelineLayout", 10),
+                ("maxImmediateSize", 64),
+                ("maxInterStageShaderVariables", 28),
+                ("maxSampledTexturesPerShaderStage", 48),
+                ("maxSamplersPerShaderStage", 16),
+                ("maxStorageBufferBindingSize", 2147483644),
+                ("maxStorageBuffersInFragmentStage", 16),
+                ("maxStorageBuffersInVertexStage", 16),
+                ("maxStorageBuffersPerShaderStage", 16),
+                ("maxStorageTexturesInFragmentStage", 8),
+                ("maxStorageTexturesInVertexStage", 8),
+                ("maxStorageTexturesPerShaderStage", 8),
+                ("maxTextureArrayLayers", 2048),
+                ("maxTextureDimension1D", 16384),
+                ("maxTextureDimension2D", 16384),
+                ("maxTextureDimension3D", 2048),
+                ("maxUniformBufferBindingSize", 65536),
+                ("maxUniformBuffersPerShaderStage", 12),
+                ("maxVertexAttributes", 30),
+                ("maxVertexBufferArrayStride", 2048),
+                ("maxVertexBuffers", 8),
+                ("minStorageBufferOffsetAlignment", 256),
+                ("minUniformBufferOffsetAlignment", 256),
+            ],
+            features: &[
+                "depth32float-stencil8",
+                "rg11b10ufloat-renderable",
+                "bgra8unorm-storage",
+                "texture-formats-tier1",
+                "texture-compression-bc",
+                "dual-source-blending",
+                "core-features-and-limits",
+                "float32-filterable",
+                "indirect-first-instance",
+                "float32-blendable",
+                "depth-clip-control",
+                "texture-compression-bc-sliced-3d",
+                "shader-f16",
+                "timestamp-query",
+                "texture-formats-tier2",
+                "clip-distances",
+                "primitive-index",
+                "texture-component-swizzle",
+                "subgroups",
+            ],
+        }),
+    ),
+    (
+        "metal-macos",
+        Some(WebgpuAdapterRef {
+            limits: &[
+                ("maxBindGroups", 4),
+                ("maxBindGroupsPlusVertexBuffers", 24),
+                ("maxBindingsPerBindGroup", 1000),
+                ("maxBufferSize", 4294967292),
+                ("maxColorAttachmentBytesPerSample", 128),
+                ("maxColorAttachments", 8),
+                ("maxComputeInvocationsPerWorkgroup", 1024),
+                ("maxComputeWorkgroupSizeX", 1024),
+                ("maxComputeWorkgroupSizeY", 1024),
+                ("maxComputeWorkgroupSizeZ", 64),
+                ("maxComputeWorkgroupStorageSize", 32768),
+                ("maxComputeWorkgroupsPerDimension", 65535),
+                ("maxDynamicStorageBuffersPerPipelineLayout", 8),
+                ("maxDynamicUniformBuffersPerPipelineLayout", 10),
+                ("maxImmediateSize", 64),
+                ("maxInterStageShaderVariables", 28),
+                ("maxSampledTexturesPerShaderStage", 48),
+                ("maxSamplersPerShaderStage", 16),
+                ("maxStorageBufferBindingSize", 4294967292),
+                ("maxStorageBuffersInFragmentStage", 10),
+                ("maxStorageBuffersInVertexStage", 10),
+                ("maxStorageBuffersPerShaderStage", 10),
+                ("maxStorageTexturesInFragmentStage", 8),
+                ("maxStorageTexturesInVertexStage", 8),
+                ("maxStorageTexturesPerShaderStage", 8),
+                ("maxTextureArrayLayers", 2048),
+                ("maxTextureDimension1D", 16384),
+                ("maxTextureDimension2D", 16384),
+                ("maxTextureDimension3D", 2048),
+                ("maxUniformBufferBindingSize", 65536),
+                ("maxUniformBuffersPerShaderStage", 12),
+                ("maxVertexAttributes", 30),
+                ("maxVertexBufferArrayStride", 2048),
+                ("maxVertexBuffers", 8),
+                ("minStorageBufferOffsetAlignment", 256),
+                ("minUniformBufferOffsetAlignment", 256),
+            ],
+            features: &[
+                "depth32float-stencil8",
+                "rg11b10ufloat-renderable",
+                "texture-formats-tier1",
+                "bgra8unorm-storage",
+                "texture-compression-bc",
+                "dual-source-blending",
+                "core-features-and-limits",
+                "float32-filterable",
+                "indirect-first-instance",
+                "texture-compression-astc-sliced-3d",
+                "float32-blendable",
+                "texture-compression-astc",
+                "texture-compression-etc2",
+                "depth-clip-control",
+                "texture-compression-bc-sliced-3d",
+                "shader-f16",
+                "texture-formats-tier2",
+                "clip-distances",
+                "timestamp-query",
+                "primitive-index",
+                "texture-component-swizzle",
+                "subgroups",
+            ],
+        }),
+    ),
+    ("swiftshader", None),
 ];

@@ -75,6 +75,19 @@ impl GlParamRef {
     }
 }
 
+/// One tier's measured WebGPU adapter capabilities, in the `'static` form the
+/// generated tables store — the same split [`GlParamRef`] makes against
+/// [`GlParam`], and for the same reason: a `static` cannot own its `String`s.
+/// Widens to [`WebgpuAdapter`](crate::gpu::WebgpuAdapter) through
+/// [`webgpu_for_tier`](crate::gpu::webgpu_for_tier).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WebgpuAdapterRef {
+    /// `GPUSupportedLimits` entries, sorted by name.
+    pub limits: &'static [(&'static str, u64)],
+    /// `GPUSupportedFeatures` names, in the order Chrome itself iterates them.
+    pub features: &'static [&'static str],
+}
+
 /// One `getShaderPrecisionFormat` result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShaderPrecision {
