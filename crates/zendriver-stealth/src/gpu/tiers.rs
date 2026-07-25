@@ -543,6 +543,12 @@ pub(crate) static EXTENSIONS_WEBGL2: &[(&str, &[&str])] = &[
 ];
 
 /// Numeric GL enum -> parameter name. Fixed by the WebGL spec.
+///
+/// A single enum number can legitimately answer to more than one name (e.g.
+/// `BLEND_EQUATION` and `BLEND_EQUATION_RGB` are both 0x8009 per spec), so this
+/// is a flat pair-list rather than a map keyed by number. Do not collapse it
+/// into a map (e.g. a JS object keyed by enum number) without first checking
+/// that every pair of aliased names holds an equal value.
 pub(crate) static ENUM_NAMES: &[(u32, &str)] = &[
     (2849, "LINE_WIDTH"),
     (2884, "CULL_FACE"),

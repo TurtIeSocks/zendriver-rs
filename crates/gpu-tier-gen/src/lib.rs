@@ -452,6 +452,20 @@ pub fn emit_rust(tiers: &[TierData]) -> String {
     // `BLEND_EQUATION_RGB` are both 0x8009 per spec), so the table keeps
     // every distinct (number, name) pair rather than deduplicating by number.
     s.push_str("/// Numeric GL enum -> parameter name. Fixed by the WebGL spec.\n");
+    s.push_str("///\n");
+    s.push_str(
+        "/// A single enum number can legitimately answer to more than one name (e.g.\n",
+    );
+    s.push_str(
+        "/// `BLEND_EQUATION` and `BLEND_EQUATION_RGB` are both 0x8009 per spec), so this\n",
+    );
+    s.push_str(
+        "/// is a flat pair-list rather than a map keyed by number. Do not collapse it\n",
+    );
+    s.push_str(
+        "/// into a map (e.g. a JS object keyed by enum number) without first checking\n",
+    );
+    s.push_str("/// that every pair of aliased names holds an equal value.\n");
     s.push_str("pub(crate) static ENUM_NAMES: &[(u32, &str)] = &[\n");
     let mut seen: BTreeMap<&str, u32> = BTreeMap::new();
     let mut pairs: std::collections::BTreeSet<(u32, &str)> = std::collections::BTreeSet::new();
