@@ -2,6 +2,8 @@
 
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
+
 pub(crate) mod devices;
 pub(crate) mod invariants;
 pub(crate) mod tiers;
@@ -16,7 +18,13 @@ use types::{GlParamRef, Tier};
 /// device row, and any caller-supplied spec. Callers only ever see this
 /// flattened form, so the internal base/override split can change without
 /// breaking anyone.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// Derives `Serialize`/`Deserialize` because [`Persona`](crate::Persona) does
+/// (it round-trips through JSON as `browser_fingerprint_generate`'s return
+/// value and in `Persona::overlay`'s own tests) — every field type here
+/// already supported serde before this field existed, so this is just wiring
+/// the derive through, not adding new capability.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GpuProfile {
     pub provenance: Provenance,
     pub params_webgl1: BTreeMap<String, GlParam>,

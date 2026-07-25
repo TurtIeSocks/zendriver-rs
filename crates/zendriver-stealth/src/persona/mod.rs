@@ -14,7 +14,7 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-use crate::Platform;
+use crate::{GpuProfile, Platform};
 
 static SYSTEM: OnceLock<Persona> = OnceLock::new();
 
@@ -61,6 +61,14 @@ pub struct Persona {
     /// host. **Opt-in only** — see [`WebgpuSpec`] for the full accuracy
     /// warning and v1 limitations before setting `limits`/`features`.
     pub webgpu: Option<WebgpuSpec>,
+    /// One coherent GPU identity: every readable WebGL value plus the WebGPU
+    /// adapter, resolved from the tier tables.
+    ///
+    /// `None` resolves from the persona's WebGL renderer via the device table.
+    /// The finer-grained [`WebglSpec`](specs::WebglSpec) and
+    /// [`WebgpuSpec`](specs::WebgpuSpec) still overlay on top of whatever this
+    /// produces, so a caller can pin one value without restating a whole device.
+    pub gpu: Option<GpuProfile>,
     pub canvas: Option<SurfaceCfg>,
     pub audio: Option<SurfaceCfg>,
     pub fonts: Option<FontSpec>,
@@ -147,6 +155,12 @@ impl Persona {
             screen: over.screen.or(self.screen),
             webgl: over.webgl.or(self.webgl),
             webgpu: over.webgpu.or(self.webgpu),
+            // Whole-value, not field-wise: a GPU is one coherent artifact
+            // (same rule as `screen`). Merging two personas' GPUs field-wise
+            // could compose a device that exists nowhere — Metal's texture
+            // limits beside D3D11's viewport bound is exactly the
+            // incoherence this branch exists to eliminate.
+            gpu: over.gpu.or(self.gpu),
             canvas: over.canvas.or(self.canvas),
             audio: over.audio.or(self.audio),
             fonts: over.fonts.or(self.fonts),
@@ -689,5 +703,45 @@ mod persona_tests {
                 accuracy: None,
             })
         ); // none inherits
+    }
+
+    #[test]
+    fn persona_gpu_defaults_to_none() {
+        assert!(Persona::default().gpu.is_none());
+    }
+
+    #[test]
+    fn persona_overlay_takes_the_higher_priority_gpu_whole() {
+        // One device is one coherent artifact, like ScreenSpec: the winning
+        // persona's GPU wins outright rather than merging field-wise, which
+        // could compose two devices into one that exists nowhere.
+        let base = Persona {
+            gpu: Some(crate::GpuProfile::empty()),
+            ..Persona::default()
+        };
+        let mut over = Persona::default();
+        let mut p = crate::GpuProfile::empty();
+        p.unmasked_renderer = "ANGLE (NVIDIA, ...)".into();
+        over.gpu = Some(p);
+
+        let merged = base.overlay(over);
+        assert_eq!(
+            merged.gpu.expect("gpu survives overlay").unmasked_renderer,
+            "ANGLE (NVIDIA, ...)"
+        );
+    }
+
+    #[test]
+    fn persona_overlay_keeps_the_base_gpu_when_the_overlay_has_none() {
+        let mut base = Persona::default();
+        let mut p = crate::GpuProfile::empty();
+        p.unmasked_renderer = "base-renderer".into();
+        base.gpu = Some(p);
+
+        let merged = base.overlay(Persona::default());
+        assert_eq!(
+            merged.gpu.expect("gpu survives").unmasked_renderer,
+            "base-renderer"
+        );
     }
 }

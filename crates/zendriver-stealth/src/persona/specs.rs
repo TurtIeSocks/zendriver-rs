@@ -126,6 +126,13 @@ pub struct ScreenSpec {
 }
 
 /// WebGL value substitution.
+///
+/// Finer-grained than [`Persona::gpu`](super::Persona::gpu): this patches the
+/// two masked identity strings, while `gpu` carries a whole coherent device
+/// (every readable WebGL parameter plus the WebGPU adapter) resolved from the
+/// tier tables. Both can be set together — `gpu` supplies the full device,
+/// and this still overlays on top to pin just the vendor/renderer strings
+/// without restating the rest of the device.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct WebglSpec {
     pub strategy: Option<Strategy>,
