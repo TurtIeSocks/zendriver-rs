@@ -447,15 +447,27 @@ fn fail_loud<T>(result: Result<T, String>) -> T {
     result.unwrap_or_else(|e| panic!("gpu-tier-gen: {e}"))
 }
 
+/// Borrow a required object block out of a capture, failing loudly when it is
+/// absent.
+///
+/// Every block the capture format defines is mandatory. A missing one used to
+/// yield an empty map and a silently hollow tier — the exact failure mode the
+/// rest of this file is written to avoid, and one that would ship a tier
+/// serving nothing rather than stopping the build. Two more captures are
+/// planned, so a truncated or hand-edited one must stop the generator.
+fn object_of<'a>(ctx: &'a Value, key: &str) -> &'a serde_json::Map<String, Value> {
+    fail_loud(
+        ctx[key]
+            .as_object()
+            .ok_or_else(|| format!("capture block `{key}` is missing or not an object")),
+    )
+}
+
 fn params_of(ctx: &Value) -> BTreeMap<String, ParamValue> {
-    ctx["params"]
-        .as_object()
-        .map(|m| {
-            m.iter()
-                .map(|(k, v)| (k.clone(), fail_loud(param_from_json(k, v))))
-                .collect()
-        })
-        .unwrap_or_default()
+    object_of(ctx, "params")
+        .iter()
+        .map(|(k, v)| (k.clone(), fail_loud(param_from_json(k, v))))
+        .collect()
 }
 
 /// Parse one `enums` entry: a GL enum number, always representable as `u32`.
@@ -466,14 +478,10 @@ fn enum_num(name: &str, v: &Value) -> Result<u32, String> {
 }
 
 fn enums_of(ctx: &Value) -> BTreeMap<String, u32> {
-    ctx["enums"]
-        .as_object()
-        .map(|m| {
-            m.iter()
-                .map(|(k, v)| (k.clone(), fail_loud(enum_num(k, v))))
-                .collect()
-        })
-        .unwrap_or_default()
+    object_of(ctx, "enums")
+        .iter()
+        .map(|(k, v)| (k.clone(), fail_loud(enum_num(k, v))))
+        .collect()
 }
 
 /// Read a capture's string array **in capture order**.
@@ -487,35 +495,31 @@ fn enums_of(ctx: &Value) -> BTreeMap<String, u32> {
 /// meaning — the parameter and enum tables, which are `BTreeMap`s keyed for
 /// lookup.
 fn strings_of(ctx: &Value, key: &str) -> Vec<String> {
-    ctx[key]
-        .as_array()
-        .map(|a| {
-            fail_loud(
-                a.iter()
-                    .enumerate()
-                    .map(|(i, s)| {
-                        s.as_str()
-                            .map(String::from)
-                            .ok_or_else(|| format!("{key}[{i}]: expected a string, got {s}"))
-                    })
-                    .collect(),
-            )
-        })
-        .unwrap_or_default()
+    let arr = fail_loud(
+        ctx[key]
+            .as_array()
+            .ok_or_else(|| format!("capture block `{key}` is missing or not an array")),
+    );
+    fail_loud(
+        arr.iter()
+            .enumerate()
+            .map(|(i, s)| {
+                s.as_str()
+                    .map(String::from)
+                    .ok_or_else(|| format!("{key}[{i}]: expected a string, got {s}"))
+            })
+            .collect(),
+    )
 }
 
 /// Parse one probe capture into the emitter's input.
 pub fn tier_from_capture(name: &str, provenance: &str, capture: &Value) -> TierData {
     let w1 = &capture["webgl1"];
     let w2 = &capture["webgl2"];
-    let precision = w2["precision"]
-        .as_object()
-        .map(|m| {
-            m.iter()
-                .map(|(k, v)| (k.clone(), fail_loud(precision_triple(k, v))))
-                .collect()
-        })
-        .unwrap_or_default();
+    let precision = object_of(w2, "precision")
+        .iter()
+        .map(|(k, v)| (k.clone(), fail_loud(precision_triple(k, v))))
+        .collect();
     TierData {
         name: name.to_string(),
         provenance: provenance.to_string(),
@@ -1346,6 +1350,39 @@ mod tests {
         let out = emit_rust(&[a]);
         assert!(out.contains("(32777, \"BLEND_EQUATION\")"));
         assert!(out.contains("(32777, \"BLEND_EQUATION_RGB\")"));
+    }
+
+    /// A capture missing any block must stop the generator, not silently
+    /// produce an empty tier that serves nothing and falls through to the real
+    /// backend for everything.
+    #[test]
+    fn a_capture_missing_a_block_fails_loudly() {
+        let full = || {
+            serde_json::json!({
+                "params": {"MAX_TEXTURE_SIZE": 8192},
+                "precision": {"VERTEX_SHADER/MEDIUM_FLOAT": [15, 15, 10]},
+                "extensions": ["OES_texture_float"],
+                "enums": {"MAX_TEXTURE_SIZE": 3379}
+            })
+        };
+        for block in ["params", "precision", "extensions", "enums"] {
+            let mut w1 = full();
+            let mut w2 = full();
+            // `precision` and `enums` are only read off the WebGL2 block, and
+            // `params`/`extensions` off both, so drop the block from both to
+            // cover whichever side reads it.
+            w1.as_object_mut().expect("object").remove(block);
+            w2.as_object_mut().expect("object").remove(block);
+            let capture = serde_json::json!({"webgl1": w1, "webgl2": w2});
+            let err = std::panic::catch_unwind(|| {
+                tier_from_capture("swiftshader", "probed: test", &capture)
+            });
+            assert!(
+                err.is_err(),
+                "a capture missing its `{block}` block must fail loudly rather than yield an \
+                 empty tier"
+            );
+        }
     }
 
     #[test]
