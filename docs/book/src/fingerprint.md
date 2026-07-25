@@ -454,6 +454,26 @@ iterators `features.keys()` / `values()` / `entries()` return are ordinary
 spread and `for...of` all read correctly, only the iterator's own type tag
 differs.
 
+**`requestDevice()` is held to the same claim.** A served limit that only
+survives being *read* is a fingerprint of its own: the adapter advertises the
+tier's numbers, so a page can ask for exactly what it was just told, and the
+request would go straight to hardware that never had it (a `Win32` persona
+advertises 16 storage buffers per shader stage; a Metal host supports 10). On
+the decorate path the patch wraps `requestDevice` so both directions agree with
+the advertisement — a `requiredLimits` / `requiredFeatures` request beyond it
+rejects with Chrome's own error and message, and one within it is translated
+down to what the hardware can actually give so the call succeeds. The resulting
+`GPUDevice` reports the **requested** values on its `.limits` (and the spec
+defaults for everything it did not request, exactly as a real device does), on a
+genuine `GPUSupportedLimits`. Its `adapterInfo` names the same adapter too —
+before this it answered the host's, so `adapter.info.vendor` read `nvidia` and
+`device.adapterInfo.vendor` read `apple` one line later.
+
+That closes the *interrogation* divergence, not the capability gap. A page that
+goes on to **allocate** at the claimed capability still fails, because no patch
+can conjure hardware — the same honest limit as SwiftShader's pixels not being
+an NVIDIA GPU's pixels.
+
 **On a GPU-equipped host, [`GpuBackend::Native`](gpu-backend.md) sidesteps
 `WebgpuSpec` fabrication entirely.** Instead of faking an adapter and
 accepting the `requestDevice()`-rejects / no-real-rendering limitations

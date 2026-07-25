@@ -1749,8 +1749,11 @@ mod tests {
             s.contains(r#", null, null, "value", false);"#),
             "a tier with no adapter must pass JS null for both: {s}"
         );
+        // Matched with the quote and colon so this reads only SERIALIZED limits
+        // — `webgpu.js` names limits in its own comments, and a substring match
+        // on the bare key would be tripped by prose rather than by data.
         assert!(
-            !s.contains("maxBufferSize"),
+            !s.contains("\"maxBufferSize\":"),
             "no other tier's limits may leak in where the tier measured none: {s}"
         );
     }

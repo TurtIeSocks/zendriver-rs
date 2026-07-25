@@ -711,6 +711,258 @@ async fn webgpu_limits_come_from_the_tier_not_the_host() {
     assert_eq!(first[0], first[1], "a setlike pairs a value with itself");
 }
 
+/// Asks the adapter for exactly what it just advertised, then for one step
+/// past it, and reports what came back.
+///
+/// Every block takes a FRESH adapter on purpose: a GPUAdapter is consumed by
+/// its first successful `requestDevice`, and every later call on it rejects
+/// with `adapter is "consumed"` regardless of what was asked for (measured).
+/// Reusing one adapter would make every case after the first pass for the
+/// wrong reason.
+const REQUEST_DEVICE_JS: &str = r#"(async () => {
+  if (!('gpu' in navigator) || !navigator.gpu) return {error: 'no navigator.gpu'};
+  const fresh = () => navigator.gpu.requestAdapter();
+  const shape = e => ({name: e.name, ctor: e.constructor.name, message: e.message});
+  const out = {};
+  {
+    const a = await fresh();
+    if (!a) return {error: 'requestAdapter resolved null'};
+    out.served = a.limits.maxStorageBuffersPerShaderStage;
+    out.hasAstc = a.features.has('texture-compression-astc');
+    out.adapterVendor = a.info ? a.info.vendor : null;
+  }
+  {
+    // Exactly the advertised value. Real Chrome on an adapter advertising this
+    // resolves; before the wrapper this rejected, because the value came from
+    // the tier table and the hardware underneath it is someone else's.
+    const a = await fresh();
+    const want = a.limits.maxStorageBuffersPerShaderStage;
+    try {
+      const d = await a.requestDevice({requiredLimits: {maxStorageBuffersPerShaderStage: want}});
+      out.atServed = {
+        limit: d.limits.maxStorageBuffersPerShaderStage,
+        // NOT requested, so it must read the spec default — a device that
+        // answered the adapter's 16384 here would be leaking the advertisement.
+        unrequested: d.limits.maxTextureDimension2D,
+        featSize: d.features.size,
+        // A device carries its adapter's identity as well, and it must be the
+        // same one the adapter just gave.
+        adapterInfoVendor: d.adapterInfo ? d.adapterInfo.vendor : null,
+        shape: {
+          ctor: d.limits.constructor.name,
+          own: Object.getOwnPropertyNames(d.limits).length,
+          keys: Object.keys(d.limits).length,
+          isInstance: d.limits instanceof GPUSupportedLimits,
+          featCtor: d.features.constructor.name,
+          featIsInstance: d.features instanceof GPUSupportedFeatures,
+        },
+      };
+    } catch (e) { out.atServed = shape(e); }
+  }
+  {
+    const a = await fresh();
+    const want = a.limits.maxStorageBuffersPerShaderStage + 1;
+    try { await a.requestDevice({requiredLimits: {maxStorageBuffersPerShaderStage: want}}); out.aboveServed = 'resolved'; }
+    catch (e) { out.aboveServed = shape(e); }
+  }
+  {
+    // A feature the HOST has and the claim does not. Granting it would
+    // contradict the `features.has(...)` answer one line above.
+    const a = await fresh();
+    try { await a.requestDevice({requiredFeatures: ['texture-compression-astc']}); out.unclaimedFeature = 'resolved'; }
+    catch (e) { out.unclaimedFeature = shape(e); }
+  }
+  return out;
+})()"#;
+
+/// A served limit has to survive being **acted on**, not merely read.
+///
+/// [`webgpu_limits_come_from_the_tier_not_the_host`] proves the adapter reports
+/// the claimed device's capabilities. That alone is a fingerprint in the other
+/// direction: `requestDevice({requiredLimits: {...}})` went straight to the real
+/// adapter, so asking for exactly what the adapter had just advertised was
+/// refused by hardware that never had it. Two lines, no corpus, and it bites on
+/// precisely the five limits that differ between tiers.
+///
+/// Same `Win32`-on-Metal setup as that test and for the same reason: the D3D11
+/// tier advertises `maxStorageBuffersPerShaderStage` 16 where this host's Metal
+/// adapter supports 10, so the divergence is live rather than assumed. The
+/// error shape is not hand-written either — the isolated world runs the same
+/// probe against the undecorated adapter, and the main world's rejection must
+/// match that genuine Chrome message with only the two numbers moved.
+#[tokio::test]
+#[ignore = "launches real Chrome and requires a usable GPU"]
+async fn request_device_honors_the_served_limits() {
+    let browser = match Browser::builder()
+        .stealth(StealthProfile::spoofed())
+        .gpu_backend(GpuBackend::Native)
+        .persona(zendriver::stealth::Persona {
+            platform: Some(zendriver::stealth::Platform::Win32),
+            ..Default::default()
+        })
+        .launch()
+        .await
+    {
+        Ok(b) => b,
+        Err(e) => {
+            assert!(
+                matches!(
+                    e,
+                    ZendriverError::Browser(BrowserError::GpuBackendUnavailable)
+                ),
+                "a host without a usable GPU must fail with GpuBackendUnavailable; any other \
+                 launch error is a real failure, not a no-GPU skip: {e:?}"
+            );
+            eprintln!("skipping: Native backend unavailable on this host: {e}");
+            return;
+        }
+    };
+    let tab = browser.main_tab();
+    tab.goto(&file_url("zendriver-gpu-reqdev.html"))
+        .await
+        .expect("goto");
+    tab.wait_for_load().await.expect("load");
+
+    let native: Value = tab
+        .evaluate(REQUEST_DEVICE_JS)
+        .await
+        .expect("isolated-world probe");
+    if let Some(err) = native["error"].as_str() {
+        browser.close().await.ok();
+        eprintln!("skipping: no WebGPU adapter on this host ({err})");
+        return;
+    }
+    let capture: Value = serde_json::from_str(D3D11_TIER_CAPTURE).expect("capture json");
+    let served = capture["capture"]["adapter"]["limits"]["maxStorageBuffersPerShaderStage"]
+        .as_u64()
+        .expect("capture limit");
+    let host = native["served"].as_u64().expect("host limit");
+    if host >= served {
+        browser.close().await.ok();
+        eprintln!(
+            "skipping: this host supports {host} storage buffers per shader stage, at or above \
+             the {served} the claimed tier advertises, so the real adapter would satisfy the \
+             request either way"
+        );
+        return;
+    }
+
+    // Same install race as every other main-world read here — see MAX_POLL_TRIES.
+    let mut got = Value::Null;
+    for attempt in 0..MAX_POLL_TRIES {
+        got = tab
+            .evaluate_main(REQUEST_DEVICE_JS)
+            .await
+            .expect("main-world probe");
+        if got["served"].as_u64() == Some(served) {
+            break;
+        }
+        if attempt + 1 < MAX_POLL_TRIES {
+            tokio::time::sleep(POLL_DELAY).await;
+        }
+    }
+    browser.close().await.ok();
+
+    assert_eq!(
+        got["served"].as_u64(),
+        Some(served),
+        "the adapter must advertise the tier's storage-buffer limit before any of this means \
+         anything: {got:#}"
+    );
+
+    // 1. The request the advertisement invites must succeed.
+    assert_eq!(
+        got["atServed"]["limit"].as_u64(),
+        Some(served),
+        "requiredLimits at exactly the advertised {served} must resolve, and the device must \
+         report the value it was asked for — the host only has {host}: {got:#}"
+    );
+    // 2. ...without the device inheriting the ADAPTER's advertisement for
+    //    everything else. A device reports the spec default for any limit it did
+    //    not require, which is what the undecorated one does here too.
+    assert_eq!(
+        got["atServed"]["unrequested"], native["atServed"]["unrequested"],
+        "an unrequested limit must read the spec default on a device, exactly as it does on the \
+         undecorated one — host {native:#} vs main world {got:#}"
+    );
+    assert_eq!(
+        got["atServed"]["featSize"], native["atServed"]["featSize"],
+        "a device's feature set is the one it was created with, not the adapter's: {got:#}"
+    );
+    // ...and the identity it carries is the adapter's, not the host's. Measured
+    // before this held: `adapter.info.vendor` read "nvidia" and
+    // `device.adapterInfo.vendor` read "apple" one line later.
+    assert_eq!(
+        got["atServed"]["adapterInfoVendor"], got["adapterVendor"],
+        "a device's adapterInfo must name the adapter that made it: {got:#}"
+    );
+    assert_ne!(
+        got["atServed"]["adapterInfoVendor"], native["atServed"]["adapterInfoVendor"],
+        "if the claimed and real vendors agree this proves nothing — host {native:#} vs main \
+         world {got:#}"
+    );
+    // 3. ...and the object it comes on is still a genuine GPUSupportedLimits.
+    assert_eq!(
+        got["atServed"]["shape"], native["atServed"]["shape"],
+        "the device's limits/features must be indistinguishable from an undecorated device's — \
+         brand, constructor name and own-property count included. host {native:#} vs main world \
+         {got:#}"
+    );
+    assert_eq!(
+        got["atServed"]["shape"]["own"].as_u64(),
+        Some(0),
+        "a real GPUSupportedLimits carries nothing of its own; own properties mean the object \
+         was replaced rather than decorated: {got:#}"
+    );
+
+    // 4. One past the advertisement must reject the way Chrome does. The
+    //    expected message is not written here — it is the one this same Chrome
+    //    produced in the isolated world, with the two numbers moved.
+    let native_msg = native["aboveServed"]["message"]
+        .as_str()
+        .expect("the undecorated adapter must reject a request past its own limit");
+    let expected_msg = native_msg
+        .replace(&format!("({})", host + 1), "{REQUIRED}")
+        .replace(&format!("({host})"), "{SUPPORTED}")
+        .replace("{REQUIRED}", &format!("({})", served + 1))
+        .replace("{SUPPORTED}", &format!("({served})"));
+    assert_eq!(
+        got["aboveServed"]["message"].as_str(),
+        Some(expected_msg.as_str()),
+        "a request past the advertisement must reject with Chrome's own message: {got:#}"
+    );
+    assert_eq!(
+        got["aboveServed"]["name"], native["aboveServed"]["name"],
+        "same error name as Chrome's: {got:#}"
+    );
+    assert_eq!(
+        got["aboveServed"]["ctor"], native["aboveServed"]["ctor"],
+        "same error type as Chrome's: {got:#}"
+    );
+
+    // 5. The feature set is held to the same bargain. This host has ASTC and the
+    //    D3D11 tier does not claim it, so granting a device that requires it
+    //    would contradict `features.has('texture-compression-astc')`.
+    assert_eq!(
+        got["hasAstc"], false,
+        "the D3D11 tier claims no ASTC; a true here means the host's set survived: {got:#}"
+    );
+    if native["hasAstc"] == true {
+        assert_eq!(
+            got["unclaimedFeature"]["name"].as_str(),
+            Some("TypeError"),
+            "requiring a feature the adapter says it lacks must reject with a TypeError, as \
+             Chrome does for any unsupported feature: {got:#}"
+        );
+        assert!(
+            got["unclaimedFeature"]["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("Unsupported feature: texture-compression-astc")),
+            "and name the feature the way Chrome does: {got:#}"
+        );
+    }
+}
+
 /// `getSupportedExtensions` and `getExtension` must agree: an extension the
 /// list claims but `getExtension` returns `null` for is a contradiction no
 /// real context produces.
