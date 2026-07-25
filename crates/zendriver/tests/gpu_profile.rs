@@ -52,11 +52,24 @@ const CHECK_JS: &str = r#"
   const stencilGl = document.createElement('canvas').getContext('webgl2', {stencil: true});
   // MAX_DRAW_BUFFERS is table-served but the DRAW_BUFFERn enums are not, and
   // whether one answers at all is a property of the real backend. Read every
-  // index the served cap claims, plus the first index past it.
+  // index the served cap claims, plus the first index past it. The correct
+  // answer depends on what is bound, so the sweep runs twice.
   const maxDraw = gl.getParameter(gl.MAX_DRAW_BUFFERS);
-  const drawBuffers = [];
-  for (let i = 0; i < maxDraw; i++) drawBuffers.push(gl.getParameter(gl['DRAW_BUFFER' + i]));
+  const sweep = () => {
+    const out = [];
+    for (let i = 0; i < maxDraw; i++) out.push(gl.getParameter(gl['DRAW_BUFFER' + i]));
+    return out;
+  };
+  const drawBuffers = sweep();
   const drawBufferPastCap = gl.getParameter(gl['DRAW_BUFFER' + maxDraw]);
+  // Again with a framebuffer object bound, where BACK is an illegal value and
+  // ES 3.0 specifies COLOR_ATTACHMENT0 at index 0 and NONE at every other.
+  gl.bindFramebuffer(gl.FRAMEBUFFER, gl.createFramebuffer());
+  const drawBuffersFbo = sweep();
+  const drawBufferPastCapFbo = gl.getParameter(gl['DRAW_BUFFER' + maxDraw]);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  const drawBuffersRebound = sweep();
+  const GL_BACK = gl.BACK, GL_NONE = gl.NONE, GL_COLOR_ATTACHMENT0 = gl.COLOR_ATTACHMENT0;
   return JSON.stringify({
     renderer: dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : null,
     maxTexture: gl.getParameter(gl.MAX_TEXTURE_SIZE),
@@ -74,6 +87,12 @@ const CHECK_JS: &str = r#"
     maxDraw,
     drawBuffers,
     drawBufferPastCap,
+    drawBuffersFbo,
+    drawBufferPastCapFbo,
+    drawBuffersRebound,
+    GL_BACK,
+    GL_NONE,
+    GL_COLOR_ATTACHMENT0,
   });
 })()
 "#;
@@ -345,6 +364,54 @@ async fn spoofed_profile_is_internally_coherent() {
     assert!(
         got["drawBufferPastCap"].is_null(),
         "DRAW_BUFFER{max_draw} is at the served cap and must stay delegated (null): {got:#}"
+    );
+    assert!(
+        got["drawBufferPastCapFbo"].is_null(),
+        "DRAW_BUFFER{max_draw} must stay delegated with an FBO bound too: {got:#}"
+    );
+
+    // Not answering null is only half of it. The value has to be the one a real
+    // device of the claimed size reports, and that differs by what is bound:
+    // BACK at every in-range index on the default framebuffer (which is what
+    // all three committed captures record), and NONE on a bound framebuffer
+    // object, where BACK is an outright illegal value.
+    let enum_of = |k: &str| got[k].as_i64().unwrap_or_else(|| panic!("{k}: {got:#}"));
+    let (back, none, attach0) = (
+        enum_of("GL_BACK"),
+        enum_of("GL_NONE"),
+        enum_of("GL_COLOR_ATTACHMENT0"),
+    );
+    let sweep = |k: &str| -> Vec<Option<i64>> {
+        got[k]
+            .as_array()
+            .unwrap_or_else(|| panic!("{k} array: {got:#}"))
+            .iter()
+            .map(|v| v.as_i64())
+            .collect()
+    };
+    assert_eq!(
+        sweep("drawBuffers"),
+        vec![Some(back); max_draw as usize],
+        "with the default framebuffer bound a real device answers BACK at every index below \
+         MAX_DRAW_BUFFERS, so a filled index reading anything else is still distinguishable \
+         from the device being claimed: {got:#}"
+    );
+    // A bound FBO starts at COLOR_ATTACHMENT0 for index 0 and NONE for the
+    // rest. The indices the backend has deliver that by delegation; the filled
+    // ones have to agree rather than contradict them.
+    let mut want_fbo = vec![Some(none); max_draw as usize];
+    want_fbo[0] = Some(attach0);
+    assert_eq!(
+        sweep("drawBuffersFbo"),
+        want_fbo,
+        "with a framebuffer object bound only NONE and COLOR_ATTACHMENTi are legal, so no \
+         index may answer BACK: {got:#}"
+    );
+    // And the choice tracks the binding rather than latching on first read.
+    assert_eq!(
+        sweep("drawBuffersRebound"),
+        vec![Some(back); max_draw as usize],
+        "unbinding the FBO must put every in-range index back to BACK: {got:#}"
     );
 }
 

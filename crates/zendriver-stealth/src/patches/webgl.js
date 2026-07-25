@@ -242,38 +242,50 @@
     // configuration rather than a corner case: `StealthProfile::spoofed()`
     // runs on SwiftShader (6) while a Win32 or MacIntel persona serves 8.
     //
-    // The gap is filled with the ES 3.0 initial value — BACK for index 0, NONE
-    // for every other index. Filling it cannot freeze state a page wrote:
-    // drawBuffers() rejects an index the backend does not have, so any index
-    // this case reaches is one the page could never have assigned. Every index
-    // the backend does know keeps delegating, so a page that calls
-    // drawBuffers() still reads back exactly what it set — including on a
-    // bound framebuffer, where NONE is also what a real device of the claimed
-    // size reports for an index the page left unassigned.
+    // The gap is filled with what a real device of the claimed size answers,
+    // which is not one value — it depends on what is bound:
+    //
+    //   * Default framebuffer: BACK, at *every* in-range index. Measured, not
+    //     assumed: all three committed captures record BACK (1029) for
+    //     DRAW_BUFFER0 through MAX_DRAW_BUFFERS-1, on the 6-buffer SwiftShader
+    //     and on both 8-buffer devices alike.
+    //   * A framebuffer object: NONE. BACK is an outright illegal value on a
+    //     bound FBO, where ES 3.0 admits only NONE and COLOR_ATTACHMENTi, and
+    //     NONE is the initial value it specifies for every index past 0.
+    //
+    // Answering one of those everywhere would leave the other distinguishable
+    // from the device being claimed, so the fill reads the binding instead.
+    // That read goes through the captured original `getParameter`, never the
+    // patched one, so it can neither recurse nor be perturbed by the table.
+    //
+    // Filling cannot freeze state a page wrote: drawBuffers() rejects an index
+    // the backend does not have, so any index this case reaches is one the page
+    // could never have assigned. Every index the backend does know keeps
+    // delegating, so a page that calls drawBuffers() still reads back exactly
+    // what it set.
     //
     // Indices come from the profile's own enum table rather than from
     // arithmetic on DRAW_BUFFER0, so the numbering stays whatever the captures
-    // measured.
+    // measured. The three constants below cannot come from there: the captures'
+    // `enums` blocks carry only the core enums the probe passed to
+    // getParameter, and FRAMEBUFFER_BINDING and NONE are never among them. Both
+    // are fixed by the spec rather than measured, the same category (and for
+    // the same reason) as the ten `gpu::EXTRA_ENUMS` spells out in Rust.
     //
-    // Two residues this does not claim to close. Chrome answers BACK at
-    // *every* in-range index while the default framebuffer is bound (measured:
-    // all three captures record BACK for DRAW_BUFFER0 through
-    // MAX_DRAW_BUFFERS-1), so in that pristine state a filled index reads NONE
-    // where the claimed device would read BACK. Serving BACK instead would
-    // trade that for an illegal value once a framebuffer object is bound,
-    // where only NONE and COLOR_ATTACHMENTi are legal, so NONE is the safer
-    // half. And the delegated read below has already synthesized the backend's
-    // own INVALID_ENUM by the time we answer; swallowing it would mean
-    // consuming an error the page may not have read yet.
+    // One residue this does not close: the delegated read below has already
+    // synthesized the backend's own INVALID_ENUM by the time we answer, and
+    // swallowing it would mean consuming an error the page may not have read
+    // yet.
+    var FRAMEBUFFER_BINDING = 0x8ca6;
+    var BACK = 0x0405;
+    var NONE = 0;
     var drawBufferGap = Object.create(null);
     var servedMaxDraw = decode(table['MAX_DRAW_BUFFERS']);
     if (typeof servedMaxDraw === 'number') {
       for (var num in profile.enumNames) {
         var m = /^DRAW_BUFFER(\d+)$/.exec(profile.enumNames[num]);
         if (!m) continue;
-        var index = Number(m[1]);
-        // 0x0405 is BACK; 0 is NONE.
-        if (index < servedMaxDraw) drawBufferGap[num] = index === 0 ? 0x0405 : 0;
+        if (Number(m[1]) < servedMaxDraw) drawBufferGap[num] = true;
       }
     }
 
@@ -296,9 +308,10 @@
         var real = orig.call(this, param);
         // A DRAW_BUFFERn the served cap claims but this backend does not have
         // answers null here; see `drawBufferGap` above for why that pair
-        // cannot stand and why filling it is safe.
-        if (real === null && Object.prototype.hasOwnProperty.call(drawBufferGap, param)) {
-          return drawBufferGap[param];
+        // cannot stand, why filling it is safe, and why the value follows the
+        // bound framebuffer rather than being fixed.
+        if (real === null && drawBufferGap[param]) {
+          return orig.call(this, FRAMEBUFFER_BINDING) === null ? BACK : NONE;
         }
         return real;
       };

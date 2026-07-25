@@ -80,8 +80,9 @@ pub fn gl_type_for(name: &str) -> GlType {
 /// in *presence* — and presence is a property of the **host backend**, not of
 /// the number this table serves, so delegating them does cost something the
 /// served `MAX_DRAW_BUFFERS` cannot buy back. `webgl.js` closes that one gap
-/// itself (see `drawBufferGap` there), answering the ES 3.0 default for any
-/// index below the served cap that the backend has no constant for. Everything
+/// itself (see `drawBufferGap` there), answering what a real device of the
+/// claimed size reports — which follows the bound framebuffer — for any index
+/// below the served cap that the backend has no constant for. Everything
 /// else delegated is byte-identical across every measured backend, so the
 /// entropy cost of delegating it is zero.
 pub const SERVED_CAPS: &[&str] = &[
