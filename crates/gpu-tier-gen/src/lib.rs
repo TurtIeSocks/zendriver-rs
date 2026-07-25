@@ -38,6 +38,7 @@ pub fn gl_type_for(name: &str) -> GlType {
         | "POLYGON_OFFSET_FACTOR"
         | "POLYGON_OFFSET_UNITS"
         | "SAMPLE_COVERAGE_VALUE"
+        | "MAX_TEXTURE_LOD_BIAS"
         | "MAX_TEXTURE_MAX_ANISOTROPY_EXT" => GlType::Float,
         "MAX_VIEWPORT_DIMS" => GlType::IntPair,
         "VIEWPORT" | "SCISSOR_BOX" => GlType::IntQuad,
@@ -175,6 +176,10 @@ mod tests {
         assert_eq!(gl_type_for("COLOR_CLEAR_VALUE"), GlType::FloatQuad);
         assert_eq!(gl_type_for("LINE_WIDTH"), GlType::Float);
         assert_eq!(gl_type_for("MAX_TEXTURE_MAX_ANISOTROPY_EXT"), GlType::Float);
+        // WebGL2 / OpenGL ES 3.0 spec: glGetFloatv(GL_MAX_TEXTURE_LOD_BIAS),
+        // enum 0x84FD. Present in both committed captures as the integer 15,
+        // which is exactly the JSON-collapse case gl_type_for exists to catch.
+        assert_eq!(gl_type_for("MAX_TEXTURE_LOD_BIAS"), GlType::Float);
     }
 
     #[test]
@@ -217,5 +222,49 @@ mod tests {
         );
         assert_eq!(t.precision["VERTEX_SHADER/MEDIUM_FLOAT"], [15, 15, 10]);
         assert_eq!(t.extensions_webgl1, vec!["OES_texture_float".to_string()]);
+    }
+
+    /// Every distinct parameter name found across both committed captures
+    /// (`crates/zendriver-stealth/data/gpu-tiers/{metal-apple-family3,swiftshader}.json`,
+    /// union of the `webgl1` and `webgl2` `params` blocks — 132 distinct
+    /// names total) whose spec-declared `getParameter` return type is a
+    /// float scalar or float array: `GLfloat`, `Float32Array` (2 or 4
+    /// elements). Cross-checked against the WebGL1 / WebGL2 spec tables via
+    /// MDN's `getParameter()` reference. Every other name in the union is
+    /// GLenum/GLint/GLuint/GLint64/GLboolean/DOMString/an integer array, all
+    /// of which JSON already represents faithfully.
+    const FLOAT_TYPED_PARAMS: &[&str] = &[
+        // Float32Array(2)
+        "ALIASED_LINE_WIDTH_RANGE",
+        "ALIASED_POINT_SIZE_RANGE",
+        "DEPTH_RANGE",
+        // Float32Array(4)
+        "BLEND_COLOR",
+        "COLOR_CLEAR_VALUE",
+        // GLfloat
+        "DEPTH_CLEAR_VALUE",
+        "LINE_WIDTH",
+        "POLYGON_OFFSET_FACTOR",
+        "POLYGON_OFFSET_UNITS",
+        "SAMPLE_COVERAGE_VALUE",
+        "MAX_TEXTURE_LOD_BIAS",
+    ];
+
+    #[test]
+    fn every_float_typed_param_in_the_captures_is_overridden() {
+        // The override table is only as good as its coverage: a GLfloat param
+        // missing from it is silently emitted as an integer, which is the exact
+        // failure gl_type_for exists to prevent. Enumerate the captures rather
+        // than spot-checking a handful of names.
+        for name in FLOAT_TYPED_PARAMS {
+            assert!(
+                matches!(
+                    gl_type_for(name),
+                    GlType::Float | GlType::FloatPair | GlType::FloatQuad
+                ),
+                "{name} is float-typed per the WebGL spec but gl_type_for returns {:?}",
+                gl_type_for(name)
+            );
+        }
     }
 }
