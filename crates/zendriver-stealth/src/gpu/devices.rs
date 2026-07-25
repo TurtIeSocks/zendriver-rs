@@ -229,8 +229,16 @@ pub(crate) fn device_for_renderer(renderer: &str) -> Option<DeviceRow> {
 /// fall back to the device row — which is right for the default renderers,
 /// since each row's own string derives that row's own declared vendor (asserted
 /// in `every_row_derives_its_own_declared_vendor`).
+///
+/// The token ends at the first comma **or** closing paren, whichever comes
+/// first. ANGLE's usual string has both — `ANGLE (Apple, ANGLE Metal ...,
+/// Version ...)` — but the one-field form `ANGLE (Google)` has no comma, and
+/// splitting on the comma alone carried the paren into the token and answered
+/// `Google Inc. (Google))`.
 pub(crate) fn vendor_for_renderer(renderer: &str) -> Option<String> {
-    let vendor = renderer.strip_prefix("ANGLE (")?.split(',').next()?.trim();
+    let inner = renderer.strip_prefix("ANGLE (")?;
+    let end = inner.find([',', ')']).unwrap_or(inner.len());
+    let vendor = inner[..end].trim();
     (!vendor.is_empty()).then(|| format!("Google Inc. ({vendor})"))
 }
 
@@ -546,6 +554,29 @@ mod tests {
         // than inventing one from a string that is not in ANGLE's format.
         assert_eq!(vendor_for_renderer("Mesa OffScreen"), None);
         assert_eq!(vendor_for_renderer("ANGLE ("), None);
+    }
+
+    #[test]
+    fn a_comma_less_renderer_stops_the_vendor_at_the_paren() {
+        // ANGLE's usual string is three comma-separated fields, but the
+        // one-field form has none — splitting on the comma alone swallowed the
+        // closing paren and answered `Google Inc. (Google))`, an unbalanced
+        // string no Chrome reports.
+        assert_eq!(
+            vendor_for_renderer("ANGLE (Google)").as_deref(),
+            Some("Google Inc. (Google)")
+        );
+        assert_eq!(
+            vendor_for_renderer("ANGLE (Apple)").as_deref(),
+            Some("Google Inc. (Apple)")
+        );
+        // A paren after the comma is still the comma's job to stop at.
+        assert_eq!(
+            vendor_for_renderer("ANGLE (Intel, Intel(R) Iris)").as_deref(),
+            Some("Google Inc. (Intel)")
+        );
+        // Nothing before the paren is as empty as nothing at all.
+        assert_eq!(vendor_for_renderer("ANGLE ()"), None);
     }
 
     #[test]
