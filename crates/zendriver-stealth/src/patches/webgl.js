@@ -26,7 +26,8 @@
   // WEBGL_debug_renderer_info having been fetched: before that call
   // getParameter(37445) answers null and raises INVALID_ENUM. Enablement is
   // per context, never per page — two contexts on one document have
-  // independent extension state — so the set is keyed by the context object.
+  // independent extension state — so the set is keyed by the context object,
+  // and it does not survive a context loss (see `lost` below).
   var DEBUG_RENDERER_INFO = 'WEBGL_debug_renderer_info';
   var debugInfoEnabled = new WeakSet();
 
@@ -186,11 +187,24 @@
     var isContextLost = proto.isContextLost;
     function lost(ctx) {
       if (typeof isContextLost !== 'function') return false;
+      var isLost;
       try {
-        return isContextLost.call(ctx);
+        isLost = isContextLost.call(ctx);
       } catch (e) {
         return true; // not a real context; let the original raise its own error
       }
+      // Blink drops extension enablement when the context is lost: after a
+      // restore the page must call getExtension again before the two UNMASKED
+      // enums exist. Forgetting it here keeps the patch honest across
+      // loseContext()/restoreContext(), where it otherwise answered from the
+      // table while Chrome answered null. Restoration is asynchronous, so a
+      // context is observably lost for at least one turn — any read in that
+      // window lands here. (A page that touches nothing at all between the
+      // loss and the restore keeps the stale enablement; closing that too
+      // would mean registering a 'webglcontextlost' listener, which a page can
+      // see by hooking addEventListener — a louder tell than the one it fixes.)
+      if (isLost) debugInfoEnabled.delete(ctx);
+      return isLost;
     }
     // Extension names match case-insensitively per the WebGL spec, so index
     // the claimable list by lower-case name and keep the table's canonical
