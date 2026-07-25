@@ -89,6 +89,10 @@ pub struct StealthProfile {
     /// render-process site-isolation launch flags. See
     /// [`native_webgl`](Self::native_webgl) for the caller-facing setter.
     pub(crate) native_webgl: bool,
+    /// GPU backend for the launch flags. Defaults to
+    /// [`GpuBackend::Disabled`] — today's behavior. `BrowserBuilder` overrides
+    /// this at launch when its own `gpu_backend` was set.
+    pub(crate) gpu_backend: crate::GpuBackend,
     // Wired by `BrowserBuilder::stealth` in Task 17.
     #[allow(dead_code)]
     pub(crate) user_data_dir: Option<PathBuf>,
@@ -116,6 +120,7 @@ impl StealthProfile {
             bypass_csp: false,
             native_isolation: false,
             native_webgl: false,
+            gpu_backend: crate::GpuBackend::Disabled,
             user_data_dir: None,
         }
     }
@@ -140,6 +145,7 @@ impl StealthProfile {
             bypass_csp: false,
             native_isolation: false,
             native_webgl: false,
+            gpu_backend: crate::GpuBackend::Disabled,
             user_data_dir: None,
         }
     }
@@ -165,6 +171,7 @@ impl StealthProfile {
             bypass_csp: true, // default ON for spoofed; see spec assumption #2
             native_isolation: false,
             native_webgl: false,
+            gpu_backend: crate::GpuBackend::Disabled,
             user_data_dir: None,
         }
     }
@@ -378,6 +385,23 @@ impl StealthProfile {
         self.native_webgl = on;
         self
     }
+
+    /// Select the GPU backend Chrome renders WebGL / WebGPU with.
+    ///
+    /// Defaults to [`GpuBackend::Disabled`](crate::GpuBackend::Disabled),
+    /// which reproduces zendriver's historical flags exactly. See
+    /// [`GpuBackend`](crate::GpuBackend) for what each variant costs.
+    ///
+    /// ```
+    /// use zendriver_stealth::{GpuBackend, StealthProfile};
+    /// let flags = StealthProfile::spoofed().gpu_backend(GpuBackend::Native).build_flags();
+    /// assert!(flags.iter().any(|f| f.starts_with("--use-angle=")));
+    /// ```
+    #[must_use]
+    pub fn gpu_backend(mut self, backend: crate::GpuBackend) -> Self {
+        self.gpu_backend = backend;
+        self
+    }
     /// Add a single extra Chrome launch flag (e.g. `"--proxy-server=..."`).
     #[must_use]
     pub fn arg(mut self, flag: impl Into<String>) -> Self {
@@ -513,7 +537,8 @@ impl StealthProfile {
     /// assert!(flags.iter().any(|f| f == "--lang=fr-FR"));
     /// ```
     pub fn build_flags(&self) -> Vec<String> {
-        let mut flags = crate::flags::flags_for_profile(self.kind, self.native_isolation);
+        let mut flags =
+            crate::flags::flags_for_profile(self.kind, self.native_isolation, self.gpu_backend);
         if let Some(ref locale) = self.per_field.locale {
             flags.push(format!("--lang={locale}"));
         }
@@ -664,6 +689,31 @@ mod profile_tests {
             .build_flags();
         assert!(!flags.iter().any(|f| f.contains("IsolateOrigins")));
         assert!(!flags.iter().any(|f| f.contains("site-per-process")));
+    }
+
+    // --- gpu_backend opt-in (Task 2) ----------------------------------------
+
+    #[test]
+    fn stealth_profile_gpu_backend_defaults_to_disabled() {
+        assert_eq!(
+            StealthProfile::spoofed().build_flags(),
+            StealthProfile::spoofed()
+                .gpu_backend(crate::GpuBackend::Disabled)
+                .build_flags(),
+            "Disabled must be indistinguishable from not setting a backend"
+        );
+    }
+
+    #[test]
+    fn stealth_profile_gpu_backend_reaches_build_flags() {
+        let flags = StealthProfile::spoofed()
+            .gpu_backend(crate::GpuBackend::Native)
+            .build_flags();
+        assert!(flags.iter().any(|f| f.starts_with("--use-angle=")));
+        assert!(
+            !flags.iter().any(|f| f.contains("swiftshader")),
+            "got: {flags:?}"
+        );
     }
 
     #[test]
