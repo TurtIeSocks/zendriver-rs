@@ -1245,8 +1245,11 @@ mod tests {
 
     #[test]
     fn viewport_smaller_than_texture_is_rejected() {
-        // This is exactly the shipped bug this whole effort exists to fix:
-        // the old patch reported a 32767 viewport beside an 8192 texture max.
+        // Covers the relation itself. NOTE: this is NOT the historical
+        // [32767,32767]-with-8192 bug — real D3D11 reports a viewport twice
+        // its texture max, so that pair is arithmetically fine and was
+        // incoherent only because the two values came from different
+        // backends. Single-tier resolution prevents that, not this check.
         let mut p = profile_for_tier(Tier::SwiftShader);
         p.params_webgl2
             .insert("MAX_TEXTURE_SIZE".into(), GlParam::Int(16384));

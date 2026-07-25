@@ -14,10 +14,21 @@ incomplete, it is **impossible**: measured on real Chrome (see
 - `MAX_VIEWPORT_DIMS` = `[32767, 32767]` (spoofed), and
 - `MAX_TEXTURE_SIZE` = `8192` (SwiftShader's, unpatched).
 
-No real GPU has a viewport four times its maximum texture dimension. A single
-`getParameter` pair identifies the browser as patched. The unmasked renderer
-string claims `ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 …)` while the
-capability surface underneath describes a CPU rasterizer.
+**Correction (2026-07-25):** an earlier revision of this paragraph claimed no
+real GPU has a viewport four times its maximum texture dimension. That is
+false, and checking ANGLE rather than reasoning about it is what settled it:
+`renderer11_utils.cpp:422` returns `D3D11_VIEWPORT_BOUNDS_MAX` (32767) for
+feature level 11_0 and above, alongside a texture max of 16384 — so real D3D11
+hardware reports a viewport twice its texture dimension, and a viewport
+exceeding the texture max is ordinary.
+
+The defect is **provenance, not arithmetic**. Both numbers above are real:
+32767 is D3D11's viewport bound, 8192 is SwiftShader's texture max. They are
+incoherent only because they come from two different backends at once, which
+is also why no numeric relation can detect the pair — resolving every value
+from a single tier is what prevents it. The unmasked renderer string claims
+`ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 …)` while the capability
+surface underneath describes a CPU rasterizer, and that mismatch is the tell.
 
 Three further gaps compound it:
 
