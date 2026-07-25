@@ -453,18 +453,12 @@ pub fn emit_rust(tiers: &[TierData]) -> String {
     // every distinct (number, name) pair rather than deduplicating by number.
     s.push_str("/// Numeric GL enum -> parameter name. Fixed by the WebGL spec.\n");
     s.push_str("///\n");
-    s.push_str(
-        "/// A single enum number can legitimately answer to more than one name (e.g.\n",
-    );
+    s.push_str("/// A single enum number can legitimately answer to more than one name (e.g.\n");
     s.push_str(
         "/// `BLEND_EQUATION` and `BLEND_EQUATION_RGB` are both 0x8009 per spec), so this\n",
     );
-    s.push_str(
-        "/// is a flat pair-list rather than a map keyed by number. Do not collapse it\n",
-    );
-    s.push_str(
-        "/// into a map (e.g. a JS object keyed by enum number) without first checking\n",
-    );
+    s.push_str("/// is a flat pair-list rather than a map keyed by number. Do not collapse it\n");
+    s.push_str("/// into a map (e.g. a JS object keyed by enum number) without first checking\n");
     s.push_str("/// that every pair of aliased names holds an equal value.\n");
     s.push_str("pub(crate) static ENUM_NAMES: &[(u32, &str)] = &[\n");
     let mut seen: BTreeMap<&str, u32> = BTreeMap::new();
@@ -756,20 +750,33 @@ mod tests {
         assert_eq!(t.enums["BLEND"], 3042);
     }
 
-    fn tier(name: &str, params: &[(&str, i64)]) -> TierData {
+    /// Build a `TierData` with independent WebGL1 and WebGL2 param sets, so a
+    /// test can give a tier content that genuinely differs by context version
+    /// (mirroring the real 82-vs-132 param gap between the two).
+    fn tier_with_versions(name: &str, webgl1: &[(&str, i64)], webgl2: &[(&str, i64)]) -> TierData {
+        let to_map = |params: &[(&str, i64)]| {
+            params
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), ParamValue::Int(*v)))
+                .collect()
+        };
         TierData {
             name: name.into(),
             provenance: "probed: test".into(),
-            params_webgl1: BTreeMap::new(),
-            params_webgl2: params
-                .iter()
-                .map(|(k, v)| ((*k).to_string(), ParamValue::Int(*v)))
-                .collect(),
+            params_webgl1: to_map(webgl1),
+            params_webgl2: to_map(webgl2),
             precision: BTreeMap::new(),
             extensions_webgl1: vec![],
             extensions_webgl2: vec![],
             enums: BTreeMap::new(),
         }
+    }
+
+    /// Most tests only care about one context version's params; leave WebGL1
+    /// empty for those and use `tier_with_versions` where the distinction
+    /// between the two matters.
+    fn tier(name: &str, params: &[(&str, i64)]) -> TierData {
+        tier_with_versions(name, &[], params)
     }
 
     #[test]
@@ -817,6 +824,70 @@ mod tests {
         assert!(
             a.contains("probed: test"),
             "provenance must survive into the source"
+        );
+    }
+
+    #[test]
+    fn webgl1_and_webgl2_tables_stay_separate_per_context() {
+        // SHARED_NAME is reported by both contexts but with different
+        // values, and WEBGL2_ONLY is reported only by WebGL2 — the same
+        // shape as the real 82-vs-132 param gap. If the WebGL1 and WebGL2
+        // tables were ever merged or crossed, either a WebGL1 context would
+        // gain an enum it has no constant for, or it would report the
+        // WebGL2 capture's value instead of its own.
+        let a = tier_with_versions(
+            "swiftshader",
+            &[("SHARED_NAME", 111)],
+            &[("SHARED_NAME", 222), ("WEBGL2_ONLY", 999)],
+        );
+        let b = tier_with_versions(
+            "metal",
+            &[("SHARED_NAME", 111)],
+            &[("SHARED_NAME", 222), ("WEBGL2_ONLY", 999)],
+        );
+        let out = emit_rust(&[a, b]);
+
+        // Slice the emitted source into its WebGL1 and WebGL2 table regions
+        // so the assertions below check what actually ships in each, not
+        // just that a substring appears somewhere in the whole file.
+        let webgl1_start = out
+            .find("BASE_PARAMS_WEBGL1")
+            .expect("WebGL1 base table must be emitted");
+        let webgl2_start = out
+            .find("BASE_PARAMS_WEBGL2")
+            .expect("WebGL2 base table must be emitted");
+        let precision_start = out
+            .find("static PRECISION")
+            .expect("precision table must be emitted");
+        assert!(webgl1_start < webgl2_start && webgl2_start < precision_start);
+        let webgl1_section = &out[webgl1_start..webgl2_start];
+        let webgl2_section = &out[webgl2_start..precision_start];
+
+        // A WebGL2-only param must land in the WebGL2 section and nowhere in
+        // the WebGL1 section — a WebGL1 context has no constant for it, and
+        // real Chrome returns null + INVALID_ENUM if asked.
+        assert!(
+            webgl2_section.contains("\"WEBGL2_ONLY\""),
+            "a WebGL2-only param must appear in the WebGL2 tables"
+        );
+        assert!(
+            !webgl1_section.contains("WEBGL2_ONLY"),
+            "a WebGL2-only param must never leak into the WebGL1 tables"
+        );
+
+        // A param reported by both contexts must keep each context's own
+        // value rather than the two getting crossed.
+        assert!(
+            webgl1_section.contains("(\"SHARED_NAME\", GlParam::Int(111))"),
+            "the WebGL1 table must use the WebGL1 input's value"
+        );
+        assert!(
+            !webgl1_section.contains("GlParam::Int(222)"),
+            "the WebGL1 table must not pick up the WebGL2 input's value"
+        );
+        assert!(
+            webgl2_section.contains("(\"SHARED_NAME\", GlParam::Int(222))"),
+            "the WebGL2 table must use the WebGL2 input's value"
         );
     }
 
