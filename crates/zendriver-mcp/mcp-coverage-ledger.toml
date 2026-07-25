@@ -929,3 +929,41 @@ excluded = "value type inside GpuProfile; not independently reachable; not a zen
 [[entry]]
 api = "zendriver_stealth::Provenance"
 excluded = "value type inside GpuProfile; not independently reachable; not a zendriver-crate-rooted item"
+
+# ── GPU profile tier tables: crate-root re-exports (2026-07-25) ─────────────
+# Re-exported from `zendriver` because `Persona.gpu` is `Option<GpuProfile>`;
+# without them a caller cannot name the type needed to populate the field.
+# Not independently MCP-reachable: they travel inside the opaque Persona JSON
+# that `browser_open.persona` / `browser_fingerprint_generate` already carry,
+# the same treatment WebglSpec and WebgpuSpec get.
+[[entry]]
+api = "zendriver::GpuProfile"
+excluded = "caller-supplied fingerprint spec carried inside the opaque Persona JSON"
+
+[[entry]]
+api = "zendriver::stealth::GpuProfile"
+excluded = "crate-root re-export of the above; same opaque-Persona surface"
+
+[[entry]]
+api = "zendriver::GlParam"
+excluded = "value type inside GpuProfile; not independently reachable"
+
+[[entry]]
+api = "zendriver::stealth::GlParam"
+excluded = "crate-root re-export of the above value type"
+
+[[entry]]
+api = "zendriver::ShaderPrecision"
+excluded = "value type inside GpuProfile; not independently reachable"
+
+[[entry]]
+api = "zendriver::stealth::ShaderPrecision"
+excluded = "crate-root re-export of the above value type"
+
+[[entry]]
+api = "zendriver::Provenance"
+excluded = "records whether a GpuProfile's values were probed or derived; metadata inside the opaque Persona JSON"
+
+[[entry]]
+api = "zendriver::stealth::Provenance"
+excluded = "crate-root re-export of the above metadata type"
