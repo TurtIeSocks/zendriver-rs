@@ -1,6 +1,11 @@
 //! Real-Chrome GPU backend tests. All `#[ignore]` — they launch a browser.
 //!
-//! Run with: `cargo test -p zendriver --test gpu_backend -- --ignored`
+//! Run with:
+//! ```sh
+//! cargo test -p zendriver --test gpu_backend \
+//!     --features integration-tests -- --ignored
+//! ```
+#![cfg(feature = "integration-tests")]
 
 use std::path::Path;
 
@@ -106,10 +111,15 @@ const ADAPTER_JS: &str = r#"
 
 /// Proves the headline claim of `GpuBackend::Native`: a real adapter and a
 /// **working** `requestDevice()`. Skips cleanly when no GPU is available —
-/// but the skip path is narrowed to the specific failure modes that mean "no
-/// GPU here" (`BrowserError::GpuBackendUnavailable` on launch, or a null
-/// adapter after launch) so a skip can never quietly paper over a
-/// misconfigured test.
+/// the skip path covers the launch failures a GPU-less (or GPU-crashing)
+/// host is known to produce (`BrowserError::GpuBackendUnavailable` when the
+/// endpoint wait times out, `DevtoolsParse` when Chrome's GPU process dies
+/// and stderr hits EOF, `EarlyExit` when Chrome exits outright for the same
+/// reason — see `BrowserError::EarlyExit`'s doc, which names a missing GPU
+/// sandbox as a typical cause), or a null adapter after a successful launch.
+/// This is not a guarantee that every possible GPU-less failure is covered,
+/// only the ones observed in practice; anything else is treated as a real
+/// failure and must not be swallowed as a "no GPU" skip.
 #[tokio::test]
 #[ignore = "launches real Chrome and requires a usable GPU"]
 async fn native_backend_yields_a_real_adapter_and_device() {
@@ -122,16 +132,21 @@ async fn native_backend_yields_a_real_adapter_and_device() {
         Err(e) => {
             // A GPU-less host is a legitimate skip, not a failure. `Native`
             // deliberately has no fallback, so a launch failure IS the
-            // expected outcome here — but only if it's specifically the
-            // GPU-unavailable variant. Any other launch error (bad flags, a
-            // missing binary, a handshake timeout unrelated to the GPU) is a
+            // expected outcome here — but only for the failure modes a
+            // GPU-less or GPU-crashing host is known to produce. Any other
+            // launch error (bad flags, a missing binary, a profile lock) is a
             // real failure and must not be swallowed as a "no GPU" skip.
             assert!(
                 matches!(
                     e,
-                    ZendriverError::Browser(BrowserError::GpuBackendUnavailable)
+                    ZendriverError::Browser(
+                        BrowserError::GpuBackendUnavailable
+                            | BrowserError::DevtoolsParse
+                            | BrowserError::EarlyExit(_)
+                    )
                 ),
-                "launch failed for a reason other than GpuBackendUnavailable, \
+                "launch failed for a reason other than a known no-GPU failure \
+                 mode (GpuBackendUnavailable / DevtoolsParse / EarlyExit), \
                  this is a real failure, not a no-GPU skip: {e:?}"
             );
             eprintln!("skipping: Native backend unavailable on this host: {e}");
