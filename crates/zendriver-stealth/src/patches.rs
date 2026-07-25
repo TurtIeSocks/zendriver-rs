@@ -810,14 +810,28 @@ mod tests {
     fn webgl_patch_serves_different_extension_lists_per_context_version() {
         let mut out = String::new();
         push_webgl(&mut out, None, None, Platform::MacIntel);
-        let profile = out
-            .split_once("\"extensions1\":")
-            .and_then(|(_, r)| r.split_once("\"extensions2\":"))
-            .map(|(a, _)| a.to_string())
-            .expect("both lists present");
+        let profile = emitted_profile(&out);
+        let list = |k: &str| -> Vec<String> {
+            profile[k]
+                .as_array()
+                .unwrap_or_else(|| panic!("{k} must be a list"))
+                .iter()
+                .map(|v| v.as_str().expect("extension names are strings").to_string())
+                .collect()
+        };
+        let (e1, e2) = (list("extensions1"), list("extensions2"));
+        assert_ne!(
+            e1, e2,
+            "one list served to both prototypes claims extensions a real \
+             WebGL2 context cannot have"
+        );
         assert!(
-            profile.contains("OES_texture_float"),
-            "WebGL1 list should carry the core-promoted entries"
+            e1.iter().any(|e| e == "OES_texture_float"),
+            "the WebGL1 list must carry the core-promoted entries, got: {e1:?}"
+        );
+        assert!(
+            !e2.iter().any(|e| e == "OES_texture_float"),
+            "OES_texture_float is core in WebGL2; claiming it is a tell"
         );
     }
 
