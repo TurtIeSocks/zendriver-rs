@@ -60,6 +60,10 @@ const PROBE_JS: &str = r#"
 (async () => {
   const out = {};
   out.isSecureContext = window.isSecureContext;
+  // Provenance: which browser produced these numbers. ANGLE's constants can
+  // move between Chrome versions, so a capture without a version is a capture
+  // nobody can date.
+  out.userAgent = navigator.userAgent;
   out.gpuInNavigator = ('gpu' in navigator);
   out.adapter = null;
   out.deviceOk = null;
