@@ -5,6 +5,22 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-07-25
+
+### Added
+
+- Add BrowserBuilder::gpu_backend with coupled --disable-gpu suppression
+- Name the GPU backend in launch-timeout errors
+- Add probe_gpu example dumping the GPU surface as JSON
+
+### Fixed
+
+- Resolve the GPU backend from the stealth profile too
+- Probe from a secure context so WebGPU is visible
+- Always emit adapter and deviceOk in the probe output
+- Scope the ANGLE-flag dedup to the ANGLE pair only
+
+
 ## [0.4.3] - 2026-07-23
 
 ### Added

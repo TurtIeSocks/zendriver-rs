@@ -3,6 +3,18 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.16.0] - 2026-07-25
+
+### Added
+
+- Expose gpu_backend on browser_open
+
+### Fixed
+
+- Make the gpu_backend shadow schema fail closed on drift
+- Stop leaking schemars implementation rationale onto the wire
+
+
 ## [0.15.0] - 2026-07-23
 
 ### Added
