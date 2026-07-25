@@ -59,7 +59,6 @@ fn pair_min(p: &GpuProfile, k: &str) -> Option<i64> {
 ///   spec only defines `DRAW_BUFFER0` through `DRAW_BUFFER{MAX_DRAW_BUFFERS -
 ///   1}`; a driver has no backing constant for the rest, so a real
 ///   `getParameter` call for one throws `INVALID_ENUM` rather than answering.
-#[allow(dead_code)] // called from push_webgl (Task 8), alongside platform_skew
 pub(crate) fn check_coherence(p: &GpuProfile) -> Result<(), String> {
     if let (Some(tex), Some(vp)) = (int(p, "MAX_TEXTURE_SIZE"), pair_min(p, "MAX_VIEWPORT_DIMS")) {
         if vp < tex {
@@ -100,7 +99,12 @@ pub(crate) fn check_coherence(p: &GpuProfile) -> Result<(), String> {
 /// purpose, and refusing to launch over a fingerprint detail is a worse
 /// failure than reporting one. Same stance as the header-coherence check
 /// (#43).
-#[allow(dead_code)] // called from push_webgl (Task 8), alongside check_coherence
+// Not wired into a patch yet: `push_webgl` resolves a tier from the renderer
+// string alone and never sees the persona's claimed platform, so calling this
+// means threading that platform down to it. Until then the skew this reports
+// — most notably a Win32 persona served the default Apple Metal tier — goes
+// unreported.
+#[allow(dead_code)]
 pub(crate) fn platform_skew(platform: Platform, tier: Tier) -> Option<String> {
     // SwiftShader is a software rasterizer, available on every platform, so it
     // never conflicts with a claimed OS.

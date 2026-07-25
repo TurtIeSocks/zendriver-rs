@@ -343,8 +343,9 @@ impl StealthProfile {
     /// [`spoofed`](Self::spoofed) profile — the host's real
     /// `WebGLRenderingContext.getParameter`/`getSupportedExtensions` (and
     /// `navigator.gpu`) values pass through unpatched instead of reporting the
-    /// coherent ANGLE/Direct3D11 Intel identity `patches/webgl.js` spoofs by
-    /// default.
+    /// coherent GPU identity `patches/webgl.js` spoofs by default (every
+    /// readable parameter resolved from one capability tier, defaulting to an
+    /// Apple Metal device).
     ///
     /// # This is a trade-off, not a strict improvement
     ///

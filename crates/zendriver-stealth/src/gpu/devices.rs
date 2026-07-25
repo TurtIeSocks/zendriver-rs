@@ -19,10 +19,10 @@ use crate::gpu::types::Tier;
 /// One device's identity. Only what genuinely varies per device lives here;
 /// the capability values come from the device's [`Tier`].
 ///
-/// `device_for_renderer` / `DEFAULT_RENDERER` are not wired into a patch yet
-/// (that starts with the persona/fingerprint wiring, a later task), so the
-/// struct and its lookup are currently reachable only from this module's own
-/// tests.
+/// `unmasked_renderer` and the two `webgpu_*` fields are reference data that
+/// only this module's tests read today: `push_webgl` serves the caller's own
+/// renderer string (falling back to [`DEFAULT_RENDERER`]), and `push_webgpu`
+/// derives its adapter through [`adapter_for_renderer`] rather than from a row.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DeviceRow {
@@ -62,7 +62,6 @@ const DEVICES: &[DeviceRow] = &[
 /// The Apple Metal row rather than the software one: a persona that says
 /// nothing should look like ordinary hardware, and SwiftShader's renderer
 /// string is itself a bot signal.
-#[allow(dead_code)] // consumed starting with the persona/fingerprint wiring (a later task)
 pub(crate) const DEFAULT_RENDERER: &str =
     "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)";
 
@@ -75,7 +74,6 @@ pub(crate) const DEFAULT_RENDERER: &str =
 /// vendor means serving that vendor's name above Apple's capability
 /// values — incoherent, and only acceptable until that vendor's tier is
 /// actually captured.
-#[allow(dead_code)] // consumed starting with the persona/fingerprint wiring (a later task)
 pub(crate) const FALLBACK_DEVICE: DeviceRow = DEVICES[1];
 
 /// Pick the device row a renderer string belongs to, by explicit
@@ -88,10 +86,26 @@ pub(crate) const FALLBACK_DEVICE: DeviceRow = DEVICES[1];
 /// reach for [`FALLBACK_DEVICE`] explicitly rather than have one guessed
 /// here. Adding a tier means capturing it on that hardware, not inventing
 /// values for an existing row.
-#[allow(dead_code)] // consumed starting with the persona/fingerprint wiring (a later task)
 pub(crate) fn device_for_renderer(renderer: &str) -> Option<DeviceRow> {
     let r = renderer.to_ascii_lowercase();
     DEVICES.iter().copied().find(|d| r.contains(d.match_token))
+}
+
+/// Extensions whose objects carry nothing but constants, so a synthesized
+/// stub is indistinguishable from the real thing. Functional extensions are
+/// deliberately absent: those are only ever claimed when the backend really
+/// provides them, so a stub would be a lie the page can catch by calling it.
+pub(crate) fn inert_stubs() -> serde_json::Value {
+    serde_json::json!({
+        "WEBGL_debug_renderer_info": {
+            "UNMASKED_VENDOR_WEBGL": 37445,
+            "UNMASKED_RENDERER_WEBGL": 37446
+        },
+        "EXT_texture_filter_anisotropic": {
+            "TEXTURE_MAX_ANISOTROPY_EXT": 34046,
+            "MAX_TEXTURE_MAX_ANISOTROPY_EXT": 34047
+        }
+    })
 }
 
 /// vendor + architecture for the spoofed WebGPU adapter. `device` and

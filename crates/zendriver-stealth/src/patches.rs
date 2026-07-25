@@ -29,14 +29,10 @@ const BROKEN_IMAGE: &str = include_str!("patches/broken_image.js");
 
 // --- Persona surface patches (appended after the identity IIFE) ----------
 //
-// `webgl.js` carries BOTH the hardcoded vendor/renderer fallback block and a
-// persona-driven value-substitution IIFE, so it is emitted exactly ONCE here
-// (not in the identity IIFE) to avoid a duplicate block + unsubstituted
-// `WEBGL_VENDOR`/`WEBGL_RENDERER` tokens. It references no `fp` fields, so
-// running it at the bootstrap's top level (rather than inside the fp IIFE) is
-// behavior-preserving; its top-level `const VENDOR`/`RENDERER` are script-
-// scoped and the nested IIFE's `const VENDOR` is function-scoped — no
-// redeclaration.
+// `webgl.js` is one IIFE taking a single `WEBGL_PROFILE` object resolved from
+// the GPU tier tables, so it is emitted here (not in the identity IIFE) —
+// it references no `fp` fields, and running it at the bootstrap's top level
+// keeps the substituted profile out of the identity JSON.
 const PRNG: &str = include_str!("patches/_prng.js");
 const WEBGL: &str = include_str!("patches/webgl.js");
 const CANVAS: &str = include_str!("patches/canvas.js");
@@ -70,11 +66,12 @@ pub fn bootstrap_script(persona: &Persona, identity: &Fingerprint) -> String {
     bootstrap_script_impl(persona, identity, true)
 }
 
-/// Like [`bootstrap_script`], but omits the WebGL vendor/renderer
-/// value-substitution patch (`patches/webgl.js`) entirely — the host's real
+/// Like [`bootstrap_script`], but omits the WebGL value-substitution patch
+/// (`patches/webgl.js`) entirely — the host's real
 /// `WebGLRenderingContext.getParameter`/`getSupportedExtensions` values pass
-/// through unpatched instead of the coherent ANGLE/Direct3D11 Intel identity
-/// the patch spoofs by default.
+/// through unpatched instead of the coherent GPU identity the patch spoofs by
+/// default (every readable parameter resolved from one capability tier,
+/// defaulting to an Apple Metal device).
 ///
 /// To keep WebGL and WebGPU reporting the *same* (real) GPU, the WebGPU
 /// **value** adapter spoof is omitted here too — otherwise a spoofed
@@ -227,27 +224,48 @@ fn json_or_null(v: Option<&String>) -> String {
     )
 }
 
-/// Append the webgl value-substitution patch. The existing hardcoded webgl
-/// block (the first half of `webgl.js`) always runs; the appended IIFE's
-/// `WEBGL_VENDOR` / `WEBGL_RENDERER` args carry the persona values (or JS
-/// `null` when absent / `Native`, leaving the hardcoded block in charge).
+/// Append the WebGL surface patch, substituting one resolved profile.
+///
+/// Under [`Strategy::Native`] nothing is emitted at all: the caller asked for
+/// the real backend, and a partial patch is what produces incoherent pairs
+/// like a spoofed viewport beside a real texture limit.
 fn push_webgl(out: &mut String, spec: Option<&WebglSpec>) {
     let strat = Surface::Webgl.resolve_strategy(spec.and_then(|s| s.strategy));
-    let (vendor, renderer) = match strat {
-        // Under Native the persona contributes nothing — pass null so the new
-        // IIFE delegates entirely to the hardcoded block (which still runs).
-        Strategy::Native => ("null".to_string(), "null".to_string()),
-        _ => (
-            json_or_null(spec.and_then(|s| s.unmasked_vendor.as_ref())),
-            json_or_null(spec.and_then(|s| s.unmasked_renderer.as_ref())),
-        ),
-    };
+    if strat == Strategy::Native {
+        return;
+    }
+    let renderer = spec
+        .and_then(|s| s.unmasked_renderer.as_deref())
+        .unwrap_or(crate::gpu::devices::DEFAULT_RENDERER);
+    // `device_for_renderer` returns None when no shipped tier matches. Only
+    // SwiftShader and Apple Metal tiers exist today, so a D3D11-family
+    // renderer lands here routinely. Falling back means serving that
+    // renderer's name above another backend's numbers, so it is warned about
+    // rather than done silently — the real fix is capturing that tier.
+    let device = crate::gpu::devices::device_for_renderer(renderer).unwrap_or_else(|| {
+        tracing::warn!(
+            renderer,
+            "no captured GPU tier matches this renderer; using the fallback \
+             device, whose capability values come from a different backend"
+        );
+        crate::gpu::devices::FALLBACK_DEVICE
+    });
+    let mut profile = crate::gpu::profile_for_tier(device.tier);
+    profile.unmasked_vendor = spec
+        .and_then(|s| s.unmasked_vendor.clone())
+        .unwrap_or_else(|| device.unmasked_vendor.to_string());
+    profile.unmasked_renderer = renderer.to_string();
+
+    if let Err(why) = crate::gpu::invariants::check_coherence(&profile) {
+        // Warn rather than fail: the caller may have pinned an odd value
+        // deliberately, and refusing to launch over a fingerprint detail is a
+        // worse failure than reporting one. Matches the header-coherence
+        // warn-on-skew precedent.
+        tracing::warn!(reason = %why, "GPU profile is internally incoherent");
+    }
+
     out.push('\n');
-    out.push_str(
-        &WEBGL
-            .replace("WEBGL_VENDOR", &vendor)
-            .replace("WEBGL_RENDERER", &renderer),
-    );
+    out.push_str(&WEBGL.replace("WEBGL_PROFILE", &crate::gpu::profile_to_js(&profile)));
 }
 
 /// Append the WebGPU coherence patch. Adapter info defaults to values derived
@@ -661,23 +679,60 @@ mod tests {
     }
 
     #[test]
-    fn webgl_native_passes_null_and_keeps_hardcoded_block() {
-        // No webgl spec → Native resolution → IIFE args null, but the
-        // hardcoded fallback block (37445/37446) still present.
-        let script = bootstrap_script(&Persona::default(), &mock_identity());
+    fn webgl_patch_substitutes_a_complete_profile() {
+        let mut out = String::new();
+        push_webgl(&mut out, None);
+        // The profile arrives as one JSON object, not a ladder of literals.
+        assert!(out.contains("\"params2\""), "got: {out}");
+        assert!(out.contains("\"precision\""), "got: {out}");
+        assert!(out.contains("\"extensions1\""), "got: {out}");
+        assert!(out.contains("\"extensions2\""), "got: {out}");
         assert!(
-            s_has_webgl_iife_null(&script),
-            "webgl IIFE args should be null"
-        );
-        assert!(
-            script.contains("37445"),
-            "hardcoded webgl fallback block must remain"
+            !out.contains("WEBGL_PROFILE"),
+            "placeholder was not replaced"
         );
     }
 
-    fn s_has_webgl_iife_null(s: &str) -> bool {
-        // The appended webgl IIFE ends with its args; null both => `})(null, null);`
-        s.contains("})(null, null);")
+    #[test]
+    fn webgl_patch_no_longer_hardcodes_the_impossible_viewport() {
+        // The shipped bug: a 32767 viewport beside an unpatched 8192 texture
+        // max. The value may legitimately appear if a tier measures it, but
+        // never as a bare literal in the JS source.
+        assert!(
+            !WEBGL.contains("32767"),
+            "webgl.js must not hardcode viewport dimensions"
+        );
+    }
+
+    #[test]
+    fn webgl_patch_serves_different_extension_lists_per_context_version() {
+        let mut out = String::new();
+        push_webgl(&mut out, None);
+        let profile = out
+            .split_once("\"extensions1\":")
+            .and_then(|(_, r)| r.split_once("\"extensions2\":"))
+            .map(|(a, _)| a.to_string())
+            .expect("both lists present");
+        assert!(
+            profile.contains("OES_texture_float"),
+            "WebGL1 list should carry the core-promoted entries"
+        );
+    }
+
+    #[test]
+    fn webgl_patch_under_native_strategy_emits_nothing() {
+        let mut out = String::new();
+        push_webgl(
+            &mut out,
+            Some(&WebglSpec {
+                strategy: Some(Strategy::Native),
+                ..Default::default()
+            }),
+        );
+        assert!(
+            out.is_empty(),
+            "Native must leave the real backend alone, got: {out}"
+        );
     }
 
     // --- opt-in native-WebGL bootstrap (Task 10) ----------------------------
@@ -1238,7 +1293,7 @@ mod tests {
         );
         // tokens still substituted, not left raw:
         assert!(
-            !s.contains("SEED") && !s.contains("WEBGL_VENDOR"),
+            !s.contains("SEED") && !s.contains("WEBGL_PROFILE"),
             "tokens substituted"
         );
     }
@@ -1294,8 +1349,7 @@ mod tests {
         let script = bootstrap_script(&p, &mock_identity());
         for tok in [
             "SEED",
-            "WEBGL_VENDOR",
-            "WEBGL_RENDERER",
+            "WEBGL_PROFILE",
             "FONT_ALLOW",
             "WEBRTC_POLICY",
             "WEBRTC_FAKE_IP",

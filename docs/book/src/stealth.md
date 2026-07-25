@@ -167,8 +167,9 @@ specific UA.
 isolation (`--disable-features=IsolateOrigins,...,site-per-process`),
 and `spoofed()` additionally patches
 `WebGLRenderingContext.getParameter()` /`getSupportedExtensions()` to
-report a coherent ANGLE/Direct3D11 Intel identity regardless of the
-host's actual GPU. `.native_isolation(true)` opts a profile **out** of
+report a coherent GPU identity — every readable parameter resolved from
+one capability tier, defaulting to an Apple Metal device — regardless of
+the host's actual GPU. `.native_isolation(true)` opts a profile **out** of
 both:
 
 ```rust,no_run

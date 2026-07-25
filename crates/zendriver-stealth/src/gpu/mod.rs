@@ -119,7 +119,6 @@ fn flatten(
 }
 
 /// Flatten the base tables plus one tier's overrides into a profile.
-#[allow(dead_code)] // consumed starting with the persona/fingerprint wiring (a later task)
 pub(crate) fn profile_for_tier(tier: Tier) -> GpuProfile {
     let key = tier_key(tier);
     let params = flatten(
@@ -165,6 +164,120 @@ pub(crate) fn profile_for_tier(tier: Tier) -> GpuProfile {
         unmasked_vendor: String::new(),
         unmasked_renderer: String::new(),
     }
+}
+
+/// Enums the patch must resolve that the generated [`tiers::ENUM_NAMES`] table
+/// does not carry, because the probe only walks the *core* `getParameter`
+/// enums:
+///
+/// - the two `WEBGL_debug_renderer_info` names, which exist only once that
+///   extension has been fetched, and
+/// - the shader-type and precision-type arguments `getShaderPrecisionFormat`
+///   takes, which are never passed to `getParameter` at all.
+///
+/// Both reach the page through the same number-to-name lookup as every other
+/// value, so leaving them out does not merely omit them — it makes the JS fall
+/// through to the real backend, serving the host's own unmasked pair and its
+/// own shader precision. All ten are fixed by the WebGL spec, so they are
+/// constants here rather than measurements.
+const EXTRA_ENUMS: &[(u32, &str)] = &[
+    (35632, "FRAGMENT_SHADER"),
+    (35633, "VERTEX_SHADER"),
+    (36336, "LOW_FLOAT"),
+    (36337, "MEDIUM_FLOAT"),
+    (36338, "HIGH_FLOAT"),
+    (36339, "LOW_INT"),
+    (36340, "MEDIUM_INT"),
+    (36341, "HIGH_INT"),
+    (37445, "UNMASKED_VENDOR_WEBGL"),
+    (37446, "UNMASKED_RENDERER_WEBGL"),
+];
+
+/// Serialize a profile into the JSON object `webgl.js` consumes.
+///
+/// Each value carries a `t` tag naming its GL type so the JS side builds the
+/// right typed array; JSON alone cannot distinguish `Int32Array` from
+/// `Float32Array`.
+///
+/// The unmasked vendor/renderer strings are folded into both parameter maps
+/// (and their enums into `enumNames`, via [`EXTRA_ENUMS`]) rather than shipped
+/// as their own fields: a page reads them through `getParameter` exactly like
+/// every other value, so giving them a second path through the JS would buy
+/// nothing.
+pub(crate) fn profile_to_js(p: &GpuProfile) -> String {
+    use serde_json::{Map, Value, json};
+
+    fn val(v: &GlParam) -> Value {
+        match v {
+            GlParam::Int(i) => json!({"t": "i", "v": i}),
+            GlParam::Float(f) => json!({"t": "f", "v": f}),
+            GlParam::Bool(b) => json!({"t": "b", "v": b}),
+            GlParam::Str(s) => json!({"t": "s", "v": s}),
+            GlParam::IntPair(a) => json!({"t": "i32pair", "v": a}),
+            GlParam::IntQuad(a) => json!({"t": "i32quad", "v": a}),
+            GlParam::FloatPair(a) => json!({"t": "f32pair", "v": a}),
+            GlParam::FloatQuad(a) => json!({"t": "f32quad", "v": a}),
+            GlParam::IntList(a) => json!({"t": "u32list", "v": a}),
+        }
+    }
+    let conv = |m: &BTreeMap<String, GlParam>| -> Map<String, Value> {
+        let mut out: Map<String, Value> = m.iter().map(|(k, v)| (k.clone(), val(v))).collect();
+        out.insert(
+            "UNMASKED_VENDOR_WEBGL".to_string(),
+            json!({"t": "s", "v": p.unmasked_vendor}),
+        );
+        out.insert(
+            "UNMASKED_RENDERER_WEBGL".to_string(),
+            json!({"t": "s", "v": p.unmasked_renderer}),
+        );
+        out
+    };
+
+    let mut enums = enum_names();
+    for (num, name) in EXTRA_ENUMS {
+        enums.insert(num.to_string(), Value::from(*name));
+    }
+
+    json!({
+        "params1": conv(&p.params_webgl1),
+        "params2": conv(&p.params_webgl2),
+        "precision": p.precision.iter().map(|(k, v)| {
+            (k.clone(), json!([v.range_min, v.range_max, v.precision]))
+        }).collect::<Map<_, _>>(),
+        "extensions1": p.extensions_webgl1,
+        "extensions2": p.extensions_webgl2,
+        "enumNames": enums,
+        "inertStubs": devices::inert_stubs(),
+    })
+    .to_string()
+}
+
+/// Numeric GL enum to parameter name, as the JS side indexes it.
+///
+/// A JS object is keyed by number, so aliases collapse: `BLEND_EQUATION` and
+/// `BLEND_EQUATION_RGB` are both enum `32777`, and only one name survives into
+/// the emitted object. That is safe **only while aliased names carry equal
+/// values**, which is asserted below rather than assumed — if a future capture
+/// ever gives an aliased pair different values, silently keeping one would
+/// serve the wrong number for the other.
+fn enum_names() -> serde_json::Map<String, serde_json::Value> {
+    let mut out = serde_json::Map::new();
+    let mut chosen: BTreeMap<u32, &str> = BTreeMap::new();
+    for (num, name) in tiers::ENUM_NAMES {
+        if let Some(prev) = chosen.insert(*num, *name) {
+            // Both spellings must resolve to the same value, or collapsing
+            // them changes what the page reads.
+            assert_eq!(
+                lookup(tiers::BASE_PARAMS_WEBGL2, prev),
+                lookup(tiers::BASE_PARAMS_WEBGL2, name),
+                "GL enum {num} aliases {prev} and {name}, which hold different \
+                 values; collapsing them would serve the wrong one"
+            );
+            continue;
+        }
+        out.insert(num.to_string(), serde_json::Value::from(*name));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -242,6 +355,86 @@ mod tests {
             !p.extensions_webgl2.iter().any(|e| e == "OES_texture_float"),
             "OES_texture_float is core in WebGL2; claiming it is a tell"
         );
+    }
+
+    #[test]
+    fn serialized_profile_tags_every_value_with_its_gl_type() {
+        // JSON cannot tell an Int32Array from a Float32Array, so the tag is
+        // what stops the page from seeing the wrong typed array — one
+        // instanceof check away from a tell.
+        let p = profile_for_tier(types::Tier::MetalAppleFamily3);
+        let js: serde_json::Value = serde_json::from_str(&profile_to_js(&p)).unwrap();
+        assert_eq!(js["params2"]["MAX_VIEWPORT_DIMS"]["t"], "i32pair");
+        assert_eq!(js["params2"]["ALIASED_POINT_SIZE_RANGE"]["t"], "f32pair");
+        assert_eq!(js["params2"]["COMPRESSED_TEXTURE_FORMATS"]["t"], "u32list");
+        assert_eq!(js["params2"]["MAX_TEXTURE_SIZE"]["t"], "i");
+        assert_eq!(js["params2"]["VERSION"]["t"], "s");
+        assert_eq!(js["params2"]["BLEND"]["t"], "b");
+    }
+
+    #[test]
+    fn serialized_profile_answers_the_unmasked_pair_through_get_parameter() {
+        // The two strings a fingerprinter reads first are served like any
+        // other parameter, so both halves have to be there: the value in the
+        // params map, and 37445/37446 in enumNames to reach it.
+        let mut p = profile_for_tier(types::Tier::MetalAppleFamily3);
+        p.unmasked_vendor = "Google Inc. (Apple)".into();
+        p.unmasked_renderer = "ANGLE (Apple, ...)".into();
+        let js: serde_json::Value = serde_json::from_str(&profile_to_js(&p)).unwrap();
+        assert_eq!(js["enumNames"]["37445"], "UNMASKED_VENDOR_WEBGL");
+        assert_eq!(js["enumNames"]["37446"], "UNMASKED_RENDERER_WEBGL");
+        for ctx in ["params1", "params2"] {
+            assert_eq!(
+                js[ctx]["UNMASKED_VENDOR_WEBGL"]["v"], "Google Inc. (Apple)",
+                "{ctx} must carry the vendor"
+            );
+            assert_eq!(
+                js[ctx]["UNMASKED_RENDERER_WEBGL"]["v"], "ANGLE (Apple, ...)",
+                "{ctx} must carry the renderer"
+            );
+        }
+    }
+
+    #[test]
+    fn serialized_profile_can_name_both_halves_of_every_precision_key() {
+        // The JS builds its precision key as
+        // `enumNames[shaderType] + '/' + enumNames[precisionType]`, and none of
+        // those eight enums is a getParameter enum, so the generated table does
+        // not carry them. Without EXTRA_ENUMS the key is "undefined/undefined",
+        // every lookup misses, and getShaderPrecisionFormat quietly serves the
+        // real backend's precision instead of the tier's.
+        let p = profile_for_tier(types::Tier::MetalAppleFamily3);
+        let js: serde_json::Value = serde_json::from_str(&profile_to_js(&p)).unwrap();
+        let named: std::collections::BTreeSet<&str> = js["enumNames"]
+            .as_object()
+            .unwrap()
+            .values()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        for key in p.precision.keys() {
+            let (shader, precision) = key.split_once('/').expect("precision keys are A/B");
+            assert!(named.contains(shader), "no enum number names {shader}");
+            assert!(
+                named.contains(precision),
+                "no enum number names {precision}"
+            );
+        }
+    }
+
+    #[test]
+    fn extra_enums_do_not_shadow_the_generated_table() {
+        // EXTRA_ENUMS is inserted after the generated names, so a number
+        // appearing in both would silently win here. That can only happen if a
+        // regenerated table started carrying one of these — at which point the
+        // hand-written entry is the one to delete.
+        let generated: std::collections::BTreeSet<u32> =
+            tiers::ENUM_NAMES.iter().map(|(n, _)| *n).collect();
+        for (num, name) in EXTRA_ENUMS {
+            assert!(
+                !generated.contains(num),
+                "{name} ({num}) is now in the generated table; drop it from EXTRA_ENUMS"
+            );
+        }
     }
 
     #[test]

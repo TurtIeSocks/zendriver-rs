@@ -1,66 +1,129 @@
-// Coherent WebGL fingerprint (defeats bot.sannysoft.com WebGL rows AND the
-// advanced-WAF cross-checks that a partial spoof fails).
+// Coherent WebGL surface driven by one substituted profile object.
 //
-// A single getParameter / getSupportedExtensions override that spoofs EVERY
-// value a fingerprinter reads — the two DEBUG_renderer_info UNMASKED strings
-// (37445/37446) PLUS the plain VENDOR/RENDERER, the supported-extension list,
-// and the MAX_* caps — so no native backend value ever leaks alongside the
-// spoofed pair. Spoofing only the unmasked pair (the old behaviour) left
-// getParameter(RENDERER)/getSupportedExtensions()/MAX_* reporting the real
-// backend — e.g. "Google SwiftShader" under `--use-angle=swiftshader`, or the
-// host GPU otherwise — a three-way incoherence Imperva/Incapsula flag as bot.
+// Every value a fingerprinter can read comes from the table: the two
+// DEBUG_renderer_info UNMASKED strings, the plain VENDOR/RENDERER, every
+// spec-defined getParameter enum, getShaderPrecisionFormat, and a
+// per-context-version extension list. Enums outside the table fall through to
+// the real backend, which is correct for vendor-specific enums we do not model.
 //
-// Defaults to a coherent ANGLE / Direct3D11 Intel profile; the persona's
-// WEBGL_VENDOR / WEBGL_RENDERER (JS string literals, or `null` under the Native
-// strategy → the defaults) override the UNMASKED pair.
-(function (personaVendor, personaRenderer) {
-  const UNMASKED_VENDOR_WEBGL = 37445; // 0x9245
-  const UNMASKED_RENDERER_WEBGL = 37446; // 0x9246
-  const VENDOR = 0x1f00; // 7936  → "WebKit"      (Chrome's masked vendor)
-  const RENDERER = 0x1f01; // 3415 → "WebKit WebGL" (Chrome's masked renderer)
-  const MAX_VERTEX_UNIFORM_VECTORS = 0x8dfb;
-  const MAX_VIEWPORT_DIMS = 0x0d3a;
+// Why per-context extension lists: about sixteen WebGL1 extensions are core in
+// WebGL2 and a real WebGL2 context does not list them. Serving one array to
+// both prototypes claims extensions that cannot exist, which is its own tell.
+//
+// Why getExtension is patched too: getSupportedExtensions and getExtension must
+// agree in both directions. Claiming an extension whose getExtension returns
+// null is a one-line detection, and so is handing over an extension the list
+// never claimed. Keeping that promise is why the claimed list is the table's
+// intersected with what the backend really supports (plus the inert ones,
+// which have no behavior to get wrong) rather than the table verbatim.
+(function (profile) {
+  if (!profile) return;
 
-  const unmaskedVendor = personaVendor || 'Google Inc. (Intel)';
-  const unmaskedRenderer =
-    personaRenderer ||
-    'ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)';
+  var INERT_STUBS = profile.inertStubs || {};
 
-  // The supported-extension list a real ANGLE / Direct3D11 backend reports —
-  // coherent with the spoofed D3D11 renderer above (a software backend reports
-  // a shorter, distinctive list).
-  const EXTENSIONS = [
-    'ANGLE_instanced_arrays', 'EXT_blend_minmax', 'EXT_clip_control',
-    'EXT_color_buffer_half_float', 'EXT_depth_clamp', 'EXT_disjoint_timer_query',
-    'EXT_float_blend', 'EXT_frag_depth', 'EXT_polygon_offset_clamp',
-    'EXT_shader_texture_lod', 'EXT_texture_compression_bptc',
-    'EXT_texture_compression_rgtc', 'EXT_texture_filter_anisotropic',
-    'EXT_texture_mirror_clamp_to_edge', 'EXT_sRGB', 'KHR_parallel_shader_compile',
-    'OES_element_index_uint', 'OES_fbo_render_mipmap', 'OES_standard_derivatives',
-    'OES_texture_float', 'OES_texture_float_linear', 'OES_texture_half_float',
-    'OES_texture_half_float_linear', 'OES_vertex_array_object',
-    'WEBGL_blend_func_extended', 'WEBGL_color_buffer_float',
-    'WEBGL_compressed_texture_s3tc', 'WEBGL_compressed_texture_s3tc_srgb',
-    'WEBGL_debug_renderer_info', 'WEBGL_debug_shaders', 'WEBGL_depth_texture',
-    'WEBGL_draw_buffers', 'WEBGL_lose_context', 'WEBGL_multi_draw',
-    'WEBGL_polygon_mode',
-  ];
+  function paramsFor(isV2) {
+    return isV2 ? profile.params2 : profile.params1;
+  }
 
-  function patch(proto) {
-    __zdReplace(proto, 'getParameter', (orig) => function (param) {
-      if (param === UNMASKED_VENDOR_WEBGL) return unmaskedVendor;
-      if (param === UNMASKED_RENDERER_WEBGL) return unmaskedRenderer;
-      if (param === VENDOR) return 'WebKit';
-      if (param === RENDERER) return 'WebKit WebGL';
-      if (param === MAX_VERTEX_UNIFORM_VECTORS) return 4096;
-      if (param === MAX_VIEWPORT_DIMS) return new Int32Array([32767, 32767]);
-      return orig.call(this, param);
+  function decode(v) {
+    // The Rust side tags each value with its GL type so the right typed array
+    // reaches the page. An Int32Array where Chrome returns a Float32Array is
+    // caught by one instanceof check.
+    if (v === null || typeof v !== 'object') return v;
+    switch (v.t) {
+      case 'i32pair': return new Int32Array(v.v);
+      case 'i32quad': return new Int32Array(v.v);
+      case 'f32pair': return new Float32Array(v.v);
+      case 'f32quad': return new Float32Array(v.v);
+      case 'u32list': return new Uint32Array(v.v);
+      default: return v.v;
+    }
+  }
+
+  // Real Chrome answers with a WebGLShaderPrecisionFormat, so a plain object
+  // literal fails both `instanceof` and Object.prototype.toString — the same
+  // one-line tell the WebGPU patch builds its objects through a prototype to
+  // avoid. Accessors rather than data properties so the members report the
+  // native `function get rangeMin() { [native code] }` shape, and enumerable
+  // so `for (k in fmt)` still yields the three names a real instance inherits.
+  function precisionFormat(p) {
+    var Ctor = window.WebGLShaderPrecisionFormat;
+    var o = Ctor && Ctor.prototype ? Object.create(Ctor.prototype) : {};
+    __zdGetter(o, 'rangeMin', function () { return p[0]; }, { enumerable: true });
+    __zdGetter(o, 'rangeMax', function () { return p[1]; }, { enumerable: true });
+    __zdGetter(o, 'precision', function () { return p[2]; }, { enumerable: true });
+    return o;
+  }
+
+  function patch(proto, isV2) {
+    var table = paramsFor(isV2);
+    var exts = isV2 ? profile.extensions2 : profile.extensions1;
+    // Extension names match case-insensitively per the WebGL spec, so index
+    // the claimable list by lower-case name and keep the table's canonical
+    // spelling as the value.
+    var claimable = Object.create(null);
+    for (var i = 0; i < exts.length; i++) claimable[exts[i].toLowerCase()] = exts[i];
+
+    __zdReplace(proto, 'getParameter', function (orig) {
+      return function (param) {
+        var name = profile.enumNames[param];
+        if (name && Object.prototype.hasOwnProperty.call(table, name)) {
+          return decode(table[name]);
+        }
+        return orig.call(this, param);
+      };
     });
-    __zdReplace(proto, 'getSupportedExtensions', () => function () {
-      return EXTENSIONS.slice();
+
+    __zdReplace(proto, 'getShaderPrecisionFormat', function (orig) {
+      return function (shaderType, precisionType) {
+        var key =
+          profile.enumNames[shaderType] + '/' + profile.enumNames[precisionType];
+        var p = profile.precision[key];
+        if (!p) return orig.call(this, shaderType, precisionType);
+        return precisionFormat(p);
+      };
+    });
+
+    __zdReplace(proto, 'getSupportedExtensions', function (orig) {
+      return function () {
+        var real = orig.call(this);
+        if (!real) return real; // a lost context answers null; so do we
+        var realSet = Object.create(null);
+        for (var i = 0; i < real.length; i++) realSet[real[i].toLowerCase()] = true;
+        // A functional extension is claimed only where the backend really
+        // provides it, so every claimed method actually works — a stub that
+        // lies about a capability the page then CALLS is worse than not
+        // claiming it. Inert extensions carry nothing but constants, so there
+        // is nothing to break and they are claimed unconditionally.
+        var out = [];
+        for (var j = 0; j < exts.length; j++) {
+          if (realSet[exts[j].toLowerCase()] || INERT_STUBS[exts[j]]) out.push(exts[j]);
+        }
+        return out;
+      };
+    });
+
+    __zdReplace(proto, 'getExtension', function (orig) {
+      return function (name) {
+        var canonical = claimable[String(name).toLowerCase()];
+        if (!canonical) return null; // never hand over what we did not claim
+        var stub = INERT_STUBS[canonical];
+        if (stub) {
+          // Inert extension: pure constants, nothing to break. Synthesize it
+          // so the claimed list and getExtension agree.
+          var real = orig.call(this, canonical);
+          if (real) return real;
+          var o = {};
+          for (var k in stub) o[k] = stub[k];
+          return o;
+        }
+        // Functional extension: the list above only claims it when the backend
+        // really has it, so both answers agree either way.
+        return orig.call(this, canonical);
+      };
     });
   }
 
-  if (window.WebGLRenderingContext) patch(WebGLRenderingContext.prototype);
-  if (window.WebGL2RenderingContext) patch(WebGL2RenderingContext.prototype);
-})(WEBGL_VENDOR, WEBGL_RENDERER);
+  if (window.WebGLRenderingContext) patch(WebGLRenderingContext.prototype, false);
+  if (window.WebGL2RenderingContext) patch(WebGL2RenderingContext.prototype, true);
+})(WEBGL_PROFILE);
