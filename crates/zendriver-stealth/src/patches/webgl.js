@@ -58,6 +58,22 @@
   function patch(proto, isV2) {
     var table = paramsFor(isV2);
     var exts = isV2 ? profile.extensions2 : profile.extensions1;
+    // Blink short-circuits getParameter, getShaderPrecisionFormat and
+    // getExtension once the context is lost — all three answer null — and
+    // getSupportedExtensions below already honors that. Answering the other
+    // three from the table lets one loseContext() call catch the patch
+    // contradicting itself in two adjacent expressions. Delegating rather
+    // than hardcoding null leaves the semantics to the browser, including
+    // the TypeError an illegal receiver earns.
+    var isContextLost = proto.isContextLost;
+    function lost(ctx) {
+      if (typeof isContextLost !== 'function') return false;
+      try {
+        return isContextLost.call(ctx);
+      } catch (e) {
+        return true; // not a real context; let the original raise its own error
+      }
+    }
     // Extension names match case-insensitively per the WebGL spec, so index
     // the claimable list by lower-case name and keep the table's canonical
     // spelling as the value.
@@ -66,6 +82,7 @@
 
     __zdReplace(proto, 'getParameter', function (orig) {
       return function (param) {
+        if (lost(this)) return orig.call(this, param);
         var name = profile.enumNames[param];
         if (name && Object.prototype.hasOwnProperty.call(table, name)) {
           return decode(table[name]);
@@ -76,6 +93,7 @@
 
     __zdReplace(proto, 'getShaderPrecisionFormat', function (orig) {
       return function (shaderType, precisionType) {
+        if (lost(this)) return orig.call(this, shaderType, precisionType);
         var key =
           profile.enumNames[shaderType] + '/' + profile.enumNames[precisionType];
         var p = profile.precision[key];
@@ -105,6 +123,7 @@
 
     __zdReplace(proto, 'getExtension', function (orig) {
       return function (name) {
+        if (lost(this)) return orig.call(this, name);
         var canonical = claimable[String(name).toLowerCase()];
         if (!canonical) return null; // never hand over what we did not claim
         var stub = INERT_STUBS[canonical];
