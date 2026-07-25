@@ -938,7 +938,25 @@ covered = "browser_open.gpu_backend"
 [[entry]]
 api = "zendriver::stealth::GpuBackend"
 covered = "browser_open.gpu_backend"
+
+# ── Task 3: profile-side backend getter ─────────────────────────────────────
+[[entry]]
+api = "zendriver_stealth::StealthProfile::selected_gpu_backend"
+excluded = "reader for a caller-supplied stealth-profile field; the setter is reachable via browser_open.gpu_backend"
+
+# ── Task 4: launch-failure variant for the Native backend ───────────────────
+[[entry]]
+api = "zendriver::error::BrowserError::GpuBackendUnavailable"
+excluded = "error variant, not an operation; a Native-backend launch whose GPU process never came up, surfaced as a browser_open failure"
+
+[[entry]]
+api = "zendriver::BrowserError::GpuBackendUnavailable"
+excluded = "crate-root re-export of the above variant; same browser_open failure surface"
 ```
+
+The last three entries cover public items added by **earlier** tasks, which had no ledger step of their own. Every `BrowserError` variant appears twice in `public-api-baseline.txt` (module path plus crate-root re-export), so both forms need an entry — this mirrors the `HandshakeTimeout` precedent at `mcp-coverage-ledger.toml:492-498`. Without them, Task 10's baseline regeneration fails the `public-api-check` gate.
+
+Verify the exact API paths against the regenerated baseline rather than trusting the strings above — if `cargo +nightly public-api` spells an item differently, the ledger must match its spelling, not this plan's.
 
 - [ ] **Step 8: Commit**
 
