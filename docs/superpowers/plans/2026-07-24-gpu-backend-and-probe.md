@@ -738,7 +738,7 @@ Add to `mod tests` in `crates/zendriver/src/browser.rs`:
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cargo test -p zendriver --lib launch_timeout_error 2>&1 | tail -20
+cargo test -p zendriver --lib ws_timeout 2>&1 | tail -20
 ```
 
 Expected: FAIL — `cannot find function launch_timeout_error`.
@@ -802,7 +802,7 @@ Use `effective_gpu_backend()` (added in Task 3), **not** `self.gpu_backend` — 
 - [ ] **Step 6: Run tests to verify they pass**
 
 ```bash
-cargo test -p zendriver --lib launch_timeout_error 2>&1 | tail -20
+cargo test -p zendriver --lib ws_timeout 2>&1 | tail -20
 ```
 
 Expected: PASS.
