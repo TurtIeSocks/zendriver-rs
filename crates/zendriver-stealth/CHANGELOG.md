@@ -3,6 +3,20 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.10.0] - 2026-07-25
+
+### Added
+
+- Add GpuBackend with per-OS ANGLE flag mapping
+- Thread GpuBackend through flags_for_profile and StealthProfile **(BREAKING)**
+
+### Fixed
+
+- Resolve the GPU backend from the stealth profile too
+- Correct retracted --disable-gpu claim in WebGPU patch comments
+- Scope the Off-profile GPU-backend no-op comment
+
+
 ## [0.9.0] - 2026-07-23
 
 ### Added
