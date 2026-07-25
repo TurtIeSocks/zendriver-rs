@@ -358,7 +358,7 @@ mod tests {
 
     #[test]
     fn base_values_reach_every_tier() {
-        // A capability both tiers agreed on lives only in base; resolution
+        // A capability every tier agrees on lives only in base; resolution
         // must still surface it, or the ~19 shared WebGL2 capabilities would
         // silently vanish and fall through to the real backend.
         for tier in types::Tier::ALL {

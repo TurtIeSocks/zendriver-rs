@@ -894,9 +894,9 @@ excluded = "crate-root re-export of the above variant; same browser_open failure
 # `GpuProfile`/`GlParam`/`ShaderPrecision`/`Provenance`
 # (crates/zendriver-stealth/src/gpu/{mod,types}.rs) and the new
 # `Persona::gpu: Option<GpuProfile>` field replace the old six-value WebGL
-# spoof with one resolved from measured capability tiers (SwiftShader + Apple
-# Metal), covering every readable WebGL1/WebGL2 parameter, both extension
-# lists, and getShaderPrecisionFormat.
+# spoof with one resolved from measured capability tiers (SwiftShader, Apple
+# Metal, and D3D11 feature level 11_0+), covering every readable WebGL1/WebGL2
+# parameter, both extension lists, and getShaderPrecisionFormat.
 #
 # None of the four gpu types are new `zendriver`-crate-rooted items: they are
 # re-exported from `zendriver_stealth`'s own crate root

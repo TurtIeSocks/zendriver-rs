@@ -1439,7 +1439,7 @@ mod tests {
         let out = emit_rust(&[a, b]);
         assert!(out.contains("(3042, \"BLEND\")"));
         assert!(out.contains("(34016, \"ACTIVE_TEXTURE\")"));
-        // Same enum reported by both tiers must appear exactly once.
+        // An enum more than one tier reports must appear exactly once.
         assert_eq!(out.matches("34016").count(), 1);
     }
 
