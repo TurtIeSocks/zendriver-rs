@@ -1059,22 +1059,13 @@ cargo run -p zendriver --example probe_gpu -- native 2>/dev/null | head -c 600
 
 Expected on a GPU-equipped host: `adapter` is non-null and `deviceOk` is `true`. On a GPU-less host this may hang or error — that is the documented `Native` failure mode, and Task 4's message should appear.
 
-- [ ] **Step 5: Save the SwiftShader baseline for Task 7**
+- [ ] **Step 5: Commit**
 
-```bash
-mkdir -p crates/zendriver/tests/fixtures
-cargo run -p zendriver --example probe_gpu -- swiftshader 2>/dev/null \
-  > crates/zendriver/tests/fixtures/swiftshader_probe.json
-head -c 200 crates/zendriver/tests/fixtures/swiftshader_probe.json
-```
-
-Expected: a non-empty JSON file.
-
-- [ ] **Step 6: Commit**
+Do **not** commit a captured probe output. The example prints to stdout, and Plan 2 regenerates its dataset input when it needs one — a checked-in JSON blob that no test reads goes stale the moment Chrome updates.
 
 ```bash
 cargo fmt --all
-git add crates/zendriver/examples/probe_gpu.rs crates/zendriver/tests/fixtures/swiftshader_probe.json
+git add crates/zendriver/examples/probe_gpu.rs
 git commit -m "feat(zendriver): add probe_gpu example dumping the GPU surface as JSON"
 ```
 
@@ -1087,7 +1078,7 @@ The one tier verifiable on any host, including GPU-less CI. When Chrome's ANGLE 
 **Files:**
 - Create: `crates/zendriver/tests/gpu_backend.rs`
 
-The canary asserts against constants inlined in the test, not against `fixtures/swiftshader_probe.json`. A fixture the test loads would drift silently with the code that writes it; a literal in the assertion has to be edited by a human who sees the failure. The fixture from Task 6 exists as Plan 2's dataset input, not as this test's oracle.
+The canary asserts against constants inlined in the test, not against a captured fixture file. A fixture the test loads would drift silently with the code that writes it; a literal in the assertion has to be edited by a human who sees the failure and decides whether Chrome moved or the code broke.
 
 **Interfaces:**
 - Consumes: `GpuBackend::SwiftShader`, the probe JS from Task 6.
