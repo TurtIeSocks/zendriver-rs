@@ -1951,12 +1951,33 @@ pub(crate) fn profile_to_js(p: &GpuProfile) -> String {
 
 ```rust
 /// Numeric GL enum to parameter name, as the JS side indexes it.
+///
+/// A JS object is keyed by number, so aliases collapse: `BLEND_EQUATION` and
+/// `BLEND_EQUATION_RGB` are both enum `32777`, and only one name survives into
+/// the emitted object. That is safe **only while aliased names carry equal
+/// values**, which is asserted below rather than assumed — if a future capture
+/// ever gives an aliased pair different values, silently keeping one would
+/// serve the wrong number for the other.
 fn enum_names() -> serde_json::Value {
-    tiers::ENUM_NAMES
-        .iter()
-        .map(|(num, name)| (num.to_string(), serde_json::Value::from(*name)))
-        .collect::<serde_json::Map<_, _>>()
-        .into()
+    let mut out = serde_json::Map::new();
+    let mut chosen: std::collections::BTreeMap<u32, &str> = std::collections::BTreeMap::new();
+    for (num, name) in tiers::ENUM_NAMES {
+        if let Some(prev) = chosen.insert(*num, name) {
+            // Both spellings must resolve to the same value, or collapsing
+            // them changes what the page reads.
+            let a = tiers::BASE_PARAMS_WEBGL2.iter().find(|(k, _)| *k == prev);
+            let b = tiers::BASE_PARAMS_WEBGL2.iter().find(|(k, _)| *k == *name);
+            assert_eq!(
+                a.map(|(_, v)| v),
+                b.map(|(_, v)| v),
+                "GL enum {num} aliases {prev} and {name}, which hold different \
+                 values; collapsing them would serve the wrong one"
+            );
+            continue;
+        }
+        out.insert(num.to_string(), serde_json::Value::from(*name));
+    }
+    out.into()
 }
 ```
 
