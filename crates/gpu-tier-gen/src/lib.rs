@@ -229,9 +229,16 @@ fn strings_of(ctx: &Value, key: &str) -> Vec<String> {
     let mut v: Vec<String> = ctx[key]
         .as_array()
         .map(|a| {
-            a.iter()
-                .filter_map(|s| s.as_str().map(String::from))
-                .collect()
+            fail_loud(
+                a.iter()
+                    .enumerate()
+                    .map(|(i, s)| {
+                        s.as_str()
+                            .map(String::from)
+                            .ok_or_else(|| format!("{key}[{i}]: expected a string, got {s}"))
+                    })
+                    .collect(),
+            )
         })
         .unwrap_or_default();
     v.sort();
@@ -324,46 +331,192 @@ mod tests {
         assert_eq!(t.extensions_webgl1, vec!["OES_texture_float".to_string()]);
     }
 
-    /// Every distinct parameter name found across both committed captures
-    /// (`crates/zendriver-stealth/data/gpu-tiers/{metal-apple-family3,swiftshader}.json`,
-    /// union of the `webgl1` and `webgl2` `params` blocks — 132 distinct
-    /// names total) whose spec-declared `getParameter` return type is a
-    /// float scalar or float array: `GLfloat`, `Float32Array` (2 or 4
-    /// elements). Cross-checked against the WebGL1 / WebGL2 spec tables via
-    /// MDN's `getParameter()` reference. Every other name in the union is
-    /// GLenum/GLint/GLuint/GLint64/GLboolean/DOMString/an integer array, all
-    /// of which JSON already represents faithfully.
-    const FLOAT_TYPED_PARAMS: &[&str] = &[
-        // Float32Array(2)
-        "ALIASED_LINE_WIDTH_RANGE",
-        "ALIASED_POINT_SIZE_RANGE",
-        "DEPTH_RANGE",
-        // Float32Array(4)
-        "BLEND_COLOR",
-        "COLOR_CLEAR_VALUE",
-        // GLfloat
-        "DEPTH_CLEAR_VALUE",
-        "LINE_WIDTH",
-        "POLYGON_OFFSET_FACTOR",
-        "POLYGON_OFFSET_UNITS",
-        "SAMPLE_COVERAGE_VALUE",
-        "MAX_TEXTURE_LOD_BIAS",
+    /// Params confirmed against the WebGL 1.0 / 2.0 spec's `getParameter`
+    /// table (cross-checked via MDN's `getParameter()` reference) to return a
+    /// plain `GLenum`/`GLint`/`GLuint`/`GLint64`/`GLboolean`/`DOMString` —
+    /// i.e. a shape JSON already represents faithfully, so `gl_type_for`'s
+    /// `FromJson` default is correct for them.
+    ///
+    /// Derived mechanically from the committed captures, not hand-guessed:
+    /// this is every name in the two captures' `params` union minus every
+    /// name `gl_type_for` already classifies with a non-`FromJson` override
+    /// arm. See `every_captured_param_is_classified` below, which is what
+    /// actually enforces that this list (plus the override arms) stays
+    /// exhaustive as captures change.
+    const VERIFIED_PLAIN_PARAMS: &[&str] = &[
+        "ACTIVE_TEXTURE",
+        "ALPHA_BITS",
+        "BLEND",
+        "BLEND_DST_ALPHA",
+        "BLEND_DST_RGB",
+        "BLEND_EQUATION",
+        "BLEND_EQUATION_ALPHA",
+        "BLEND_EQUATION_RGB",
+        "BLEND_SRC_ALPHA",
+        "BLEND_SRC_RGB",
+        "BLUE_BITS",
+        "CULL_FACE",
+        "CULL_FACE_MODE",
+        "DEPTH_BITS",
+        "DEPTH_FUNC",
+        "DEPTH_TEST",
+        "DEPTH_WRITEMASK",
+        "DITHER",
+        "DRAW_BUFFER0",
+        "DRAW_BUFFER1",
+        "DRAW_BUFFER2",
+        "DRAW_BUFFER3",
+        "DRAW_BUFFER4",
+        "DRAW_BUFFER5",
+        "DRAW_BUFFER6",
+        "DRAW_BUFFER7",
+        "FRAGMENT_SHADER_DERIVATIVE_HINT",
+        "FRONT_FACE",
+        "GENERATE_MIPMAP_HINT",
+        "GREEN_BITS",
+        "IMPLEMENTATION_COLOR_READ_FORMAT",
+        "IMPLEMENTATION_COLOR_READ_TYPE",
+        "MAX_3D_TEXTURE_SIZE",
+        "MAX_ARRAY_TEXTURE_LAYERS",
+        "MAX_CLIENT_WAIT_TIMEOUT_WEBGL",
+        "MAX_COLOR_ATTACHMENTS",
+        "MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS",
+        "MAX_COMBINED_TEXTURE_IMAGE_UNITS",
+        "MAX_COMBINED_UNIFORM_BLOCKS",
+        "MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS",
+        "MAX_CUBE_MAP_TEXTURE_SIZE",
+        "MAX_DRAW_BUFFERS",
+        "MAX_ELEMENTS_INDICES",
+        "MAX_ELEMENTS_VERTICES",
+        "MAX_ELEMENT_INDEX",
+        "MAX_FRAGMENT_INPUT_COMPONENTS",
+        "MAX_FRAGMENT_UNIFORM_BLOCKS",
+        "MAX_FRAGMENT_UNIFORM_COMPONENTS",
+        "MAX_FRAGMENT_UNIFORM_VECTORS",
+        "MAX_PROGRAM_TEXEL_OFFSET",
+        "MAX_RENDERBUFFER_SIZE",
+        "MAX_SAMPLES",
+        "MAX_SERVER_WAIT_TIMEOUT",
+        "MAX_TEXTURE_IMAGE_UNITS",
+        "MAX_TEXTURE_SIZE",
+        "MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS",
+        "MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS",
+        "MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS",
+        "MAX_UNIFORM_BLOCK_SIZE",
+        "MAX_UNIFORM_BUFFER_BINDINGS",
+        "MAX_VARYING_COMPONENTS",
+        "MAX_VARYING_VECTORS",
+        "MAX_VERTEX_ATTRIBS",
+        "MAX_VERTEX_OUTPUT_COMPONENTS",
+        "MAX_VERTEX_TEXTURE_IMAGE_UNITS",
+        "MAX_VERTEX_UNIFORM_BLOCKS",
+        "MAX_VERTEX_UNIFORM_COMPONENTS",
+        "MAX_VERTEX_UNIFORM_VECTORS",
+        "MIN_PROGRAM_TEXEL_OFFSET",
+        "PACK_ALIGNMENT",
+        "PACK_ROW_LENGTH",
+        "PACK_SKIP_PIXELS",
+        "PACK_SKIP_ROWS",
+        "POLYGON_OFFSET_FILL",
+        "RASTERIZER_DISCARD",
+        "READ_BUFFER",
+        "RED_BITS",
+        "RENDERER",
+        "SAMPLES",
+        "SAMPLE_ALPHA_TO_COVERAGE",
+        "SAMPLE_BUFFERS",
+        "SAMPLE_COVERAGE",
+        "SAMPLE_COVERAGE_INVERT",
+        "SCISSOR_TEST",
+        "SHADING_LANGUAGE_VERSION",
+        "STENCIL_BACK_FAIL",
+        "STENCIL_BACK_FUNC",
+        "STENCIL_BACK_PASS_DEPTH_FAIL",
+        "STENCIL_BACK_PASS_DEPTH_PASS",
+        "STENCIL_BACK_REF",
+        "STENCIL_BACK_VALUE_MASK",
+        "STENCIL_BACK_WRITEMASK",
+        "STENCIL_BITS",
+        "STENCIL_CLEAR_VALUE",
+        "STENCIL_FAIL",
+        "STENCIL_FUNC",
+        "STENCIL_PASS_DEPTH_FAIL",
+        "STENCIL_PASS_DEPTH_PASS",
+        "STENCIL_REF",
+        "STENCIL_TEST",
+        "STENCIL_VALUE_MASK",
+        "STENCIL_WRITEMASK",
+        "SUBPIXEL_BITS",
+        "TRANSFORM_FEEDBACK_ACTIVE",
+        "TRANSFORM_FEEDBACK_PAUSED",
+        "UNIFORM_BUFFER_OFFSET_ALIGNMENT",
+        "UNPACK_ALIGNMENT",
+        "UNPACK_COLORSPACE_CONVERSION_WEBGL",
+        "UNPACK_FLIP_Y_WEBGL",
+        "UNPACK_IMAGE_HEIGHT",
+        "UNPACK_PREMULTIPLY_ALPHA_WEBGL",
+        "UNPACK_ROW_LENGTH",
+        "UNPACK_SKIP_IMAGES",
+        "UNPACK_SKIP_PIXELS",
+        "UNPACK_SKIP_ROWS",
+        "VENDOR",
+        "VERSION",
     ];
 
+    /// Non-circular replacement for a prior version of this guard that
+    /// hand-copied `gl_type_for`'s own float arms into a list and checked the
+    /// list against itself — which can never catch a capture containing a
+    /// spec-float parameter nobody classified, precisely the failure
+    /// `gl_type_for` exists to prevent.
+    ///
+    /// This test instead reads the *committed captures* (the ground truth
+    /// that changes independently of this file) and requires every parameter
+    /// name found in them to be accounted for by one of two
+    /// independently-maintained, human-authored sources: `gl_type_for`'s
+    /// override arms, or `VERIFIED_PLAIN_PARAMS`. A capture introducing an
+    /// unclassified parameter now fails the build until a human looks up its
+    /// spec type — it cannot be silently absorbed by either list because
+    /// neither list is derived from "whatever the capture happens to
+    /// contain."
     #[test]
-    fn every_float_typed_param_in_the_captures_is_overridden() {
-        // The override table is only as good as its coverage: a GLfloat param
-        // missing from it is silently emitted as an integer, which is the exact
-        // failure gl_type_for exists to prevent. Enumerate the captures rather
-        // than spot-checking a handful of names.
-        for name in FLOAT_TYPED_PARAMS {
+    fn every_captured_param_is_classified() {
+        const SWIFTSHADER: &str =
+            include_str!("../../zendriver-stealth/data/gpu-tiers/swiftshader.json");
+        const METAL_APPLE_FAMILY3: &str =
+            include_str!("../../zendriver-stealth/data/gpu-tiers/metal-apple-family3.json");
+
+        let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for raw in [SWIFTSHADER, METAL_APPLE_FAMILY3] {
+            let doc: Value =
+                serde_json::from_str(raw).expect("committed capture must be valid JSON");
+            for ctx in ["webgl1", "webgl2"] {
+                if let Some(params) = doc["capture"][ctx]["params"].as_object() {
+                    names.extend(params.keys().cloned());
+                }
+            }
+        }
+        assert!(
+            !names.is_empty(),
+            "no parameter names found in the committed captures — the include_str! path or \
+             the capture's JSON shape probably changed out from under this test"
+        );
+
+        for name in names {
+            let overridden = gl_type_for(&name) != GlType::FromJson;
+            let verified_plain = VERIFIED_PLAIN_PARAMS.contains(&name.as_str());
             assert!(
-                matches!(
-                    gl_type_for(name),
-                    GlType::Float | GlType::FloatPair | GlType::FloatQuad
-                ),
-                "{name} is float-typed per the WebGL spec but gl_type_for returns {:?}",
-                gl_type_for(name)
+                overridden || verified_plain,
+                "parameter `{name}` appears in a committed capture but is classified by \
+                 neither gl_type_for nor VERIFIED_PLAIN_PARAMS. Look up its return type in the \
+                 WebGL spec's getParameter table and add it to the override arms (if it is a \
+                 float or an array JSON cannot round-trip) or to VERIFIED_PLAIN_PARAMS (if it \
+                 is a plain GLint/GLboolean/DOMString)."
+            );
+            assert!(
+                !(overridden && verified_plain),
+                "parameter `{name}` is listed in both gl_type_for's override arms and \
+                 VERIFIED_PLAIN_PARAMS — it can only be one or the other, pick the correct one \
+                 and remove it from the other list"
             );
         }
     }
