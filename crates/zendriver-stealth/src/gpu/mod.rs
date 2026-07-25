@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+pub(crate) mod devices;
 pub(crate) mod invariants;
 pub(crate) mod tiers;
 pub(crate) mod types;

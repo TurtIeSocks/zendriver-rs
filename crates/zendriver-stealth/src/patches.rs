@@ -271,7 +271,7 @@ fn push_webgpu(
     webgl: Option<&WebglSpec>,
     spoof_webgl: bool,
 ) {
-    use crate::persona::webgpu_adapter::adapter_for_renderer;
+    use crate::gpu::devices::adapter_for_renderer;
     let strat = Surface::Webgpu.resolve_strategy(spec.and_then(|s| s.strategy));
     if strat == Strategy::Native {
         return;

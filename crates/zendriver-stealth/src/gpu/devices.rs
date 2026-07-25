@@ -1,6 +1,10 @@
-//! Derive a coherent WebGPU adapter (vendor + architecture) from the spoofed
-//! WebGL renderer string. Dataset-mapped, deterministic — NEVER randomized
-//! (WAFs hash the WebGPU fingerprint; a random/unknown value reads as a bot).
+//! Device rows: tie a WebGL renderer string to a capability [`Tier`] and to a
+//! coherent WebGPU adapter, so one renderer drives both surfaces.
+//!
+//! `adapter_for_renderer` derives a WebGPU adapter (vendor + architecture)
+//! from the spoofed WebGL renderer string. Dataset-mapped, deterministic —
+//! NEVER randomized (WAFs hash the WebGPU fingerprint; a random/unknown value
+//! reads as a bot).
 //!
 //! Architecture tokens come from Dawn's `gpu_info.json`, normalized
 //! (lowercase, spaces→hyphens) — the scheme Chrome's WebGPU backend uses for
@@ -9,6 +13,73 @@
 //! token; unrecognized models get "" — Chrome legitimately returns "" for
 //! unclassified GPUs, so empty is coherent and safe. A WRONG token reads as an
 //! unknown device to a fingerprinting WAF.
+
+use crate::gpu::types::Tier;
+
+/// One device's identity. Only what genuinely varies per device lives here;
+/// the capability values come from the device's [`Tier`].
+///
+/// `device_for_renderer` / `DEFAULT_RENDERER` are not wired into a patch yet
+/// (that starts with the persona/fingerprint wiring, a later task), so the
+/// struct and its lookup are currently reachable only from this module's own
+/// tests.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DeviceRow {
+    pub unmasked_vendor: &'static str,
+    pub unmasked_renderer: &'static str,
+    pub tier: Tier,
+    pub webgpu_vendor: &'static str,
+    pub webgpu_architecture: &'static str,
+}
+
+/// Known devices, keyed by a substring of the unmasked renderer string.
+static DEVICES: &[DeviceRow] = &[
+    DeviceRow {
+        unmasked_vendor: "Google Inc. (Google)",
+        unmasked_renderer: "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (LLVM 10.0.0) (0x0000C0DE)), SwiftShader driver)",
+        tier: Tier::SwiftShader,
+        webgpu_vendor: "",
+        webgpu_architecture: "",
+    },
+    DeviceRow {
+        unmasked_vendor: "Google Inc. (Apple)",
+        unmasked_renderer: "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
+        tier: Tier::MetalAppleFamily3,
+        webgpu_vendor: "apple",
+        webgpu_architecture: "metal-3",
+    },
+];
+
+/// Renderer assumed when a persona pins no WebGL renderer of its own.
+///
+/// The Apple Metal row rather than the software one: a persona that says
+/// nothing should look like ordinary hardware, and SwiftShader's renderer
+/// string is itself a bot signal.
+#[allow(dead_code)] // consumed starting with the persona/fingerprint wiring (a later task)
+pub(crate) const DEFAULT_RENDERER: &str =
+    "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)";
+
+/// Pick the device row a renderer string belongs to.
+///
+/// Falls back to the first non-software row rather than inventing a tier:
+/// reporting a plausible real desktop GPU beats reporting a tier that matches
+/// no device.
+#[allow(dead_code)] // consumed starting with the persona/fingerprint wiring (a later task)
+pub(crate) fn device_for_renderer(renderer: &str) -> DeviceRow {
+    let r = renderer.to_ascii_lowercase();
+    if r.contains("swiftshader") {
+        return DEVICES[0];
+    }
+    DEVICES
+        .iter()
+        .copied()
+        .find(|d| {
+            let vendor = adapter_for_renderer(d.unmasked_renderer).vendor;
+            !vendor.is_empty() && r.contains(&vendor)
+        })
+        .unwrap_or(DEVICES[1])
+}
 
 /// vendor + architecture for the spoofed WebGPU adapter. `device` and
 /// `description` are always emitted empty by the patch (Chrome masks them).
@@ -185,5 +256,30 @@ mod tests {
         let a = adapter_for_renderer("Mesa OffScreen");
         assert_eq!(a.vendor, "intel");
         assert_eq!(a.architecture, "");
+    }
+
+    #[test]
+    fn a_known_renderer_selects_its_tier() {
+        let d = device_for_renderer(
+            "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
+        );
+        assert_eq!(d.tier, Tier::MetalAppleFamily3);
+        assert_eq!(d.webgpu_vendor, "apple");
+    }
+
+    #[test]
+    fn a_software_renderer_selects_the_swiftshader_tier() {
+        let d = device_for_renderer(
+            "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (LLVM 10.0.0) (0x0000C0DE)), SwiftShader driver)",
+        );
+        assert_eq!(d.tier, Tier::SwiftShader);
+    }
+
+    #[test]
+    fn an_unknown_renderer_falls_back_without_inventing_a_tier() {
+        // Unknown hardware takes the default desktop tier rather than
+        // guessing; a wrong tier is more detectable than a generic one.
+        let d = device_for_renderer("Some Unreleased GPU");
+        assert_eq!(d.tier, Tier::MetalAppleFamily3);
     }
 }
