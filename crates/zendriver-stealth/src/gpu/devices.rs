@@ -24,7 +24,9 @@ use crate::gpu::types::Tier;
 /// [`default_renderer`], which is what `push_webgl` falls back to when the
 /// caller pins no renderer of its own. The two `webgpu_*` fields are reference
 /// data only: `push_webgpu` derives its adapter through
-/// [`adapter_for_renderer`] rather than from a row.
+/// [`adapter_for_renderer`] rather than from a row. They are still the row's
+/// declaration of what that device's adapter *is*, so the tests assert the
+/// derivation agrees with them — the two must never describe different GPUs.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DeviceRow {
@@ -173,8 +175,30 @@ pub(crate) struct GpuAdapterInfo {
 /// returns "" for unclassified GPUs, so empty is coherent and safe — a WRONG
 /// token reads as an unknown device to a fingerprinting WAF). Add families
 /// here as they're confirmed.
+///
+/// A software rasterizer answers empty for *both* fields, and is matched before
+/// any hardware family so it cannot fall through to the Intel catch-all — see
+/// the arm's own comment.
 pub(crate) fn adapter_for_renderer(renderer: &str) -> GpuAdapterInfo {
     let r = renderer.to_ascii_lowercase();
+
+    // Software rasterizer: no vendor to report, and it must be answered before
+    // the hardware branches so it cannot reach the Intel catch-all below. It
+    // did reach it, which is the split this arm closes: the non-Mac default is
+    // the SwiftShader row (see `default_device`), so a Win32 or Linux persona
+    // served SwiftShader's renderer to WebGL and an *Intel* adapter to WebGPU.
+    // Empty matches what [`SWIFTSHADER`] itself declares, and is what Chrome
+    // answers for an adapter it cannot classify — the honest value for a
+    // rasterizer that has no hardware behind it at all. (On a real SwiftShader
+    // Chrome `requestAdapter()` resolves null and there is no adapter to read;
+    // the patch cannot synthesize that, so it decorates whatever adapter the
+    // host does resolve with a vendor that claims nothing.)
+    if r.contains("swiftshader") {
+        return GpuAdapterInfo {
+            vendor: String::new(),
+            architecture: String::new(),
+        };
+    }
 
     if r.contains("nvidia") || r.contains("geforce") || r.contains("rtx") || r.contains("gtx") {
         let arch = if r.contains("rtx 50") || r.contains("rtx50") {
@@ -323,6 +347,24 @@ mod tests {
         assert_eq!(
             adapter_for_renderer("Intel(R) UHD Graphics 630").vendor,
             "intel"
+        );
+    }
+
+    #[test]
+    fn the_software_rasterizer_reports_no_vendor() {
+        // SwiftShader is the non-Mac default row, so this is the adapter a
+        // default Win32/Linux persona serves. It used to reach the Intel
+        // catch-all: an Intel WebGPU adapter beside a SwiftShader WebGL
+        // renderer, a pairing Chrome does not produce.
+        let a = adapter_for_renderer(SWIFTSHADER.unmasked_renderer);
+        assert_eq!(
+            (a.vendor.as_str(), a.architecture.as_str()),
+            (SWIFTSHADER.webgpu_vendor, SWIFTSHADER.webgpu_architecture),
+            "the derived adapter must match the device row's own declaration"
+        );
+        assert_eq!(
+            a.vendor, "",
+            "a software rasterizer has no vendor to report"
         );
     }
 

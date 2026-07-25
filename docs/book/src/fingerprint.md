@@ -284,8 +284,16 @@ its source captures.
 By default (`Persona.webgpu = None`, or `Some(WebgpuSpec::default())`), the
 `Webgpu` surface only DECORATES a real `navigator.gpu` adapter's `.info` with
 a vendor/architecture DERIVED from the `Webgl` surface's renderer (never
-fabricated) — the same behavior it always had. `WebgpuSpec` (mirroring
-`WebglSpec`'s strategy+values shape) adds two OPT-IN capabilities on top:
+fabricated) — the same behavior it always had. Only a renderer naming a GPU
+family zendriver recognizes yields a vendor and architecture; anything else —
+including the SwiftShader row a `Win32` or `LinuxX86_64` persona defaults to —
+derives both as `""`, which is what Chrome itself reports for an adapter it
+cannot classify. A software rasterizer has no vendor, and naming one beside a
+SwiftShader WebGL renderer would be the cross-API contradiction this derivation
+exists to prevent.
+
+`WebgpuSpec` (mirroring `WebglSpec`'s strategy+values shape) adds two OPT-IN
+capabilities on top:
 
 1. **Caller-supplied adapter identity.** Set `vendor` / `architecture` /
    `device` / `description` / `limits` / `features` explicitly instead of

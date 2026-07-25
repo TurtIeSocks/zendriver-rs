@@ -1378,19 +1378,65 @@ mod tests {
         // block to the Apple device row, the WebGPU block to a local Intel
         // string. A page reading both saw an Apple GPU and an Intel adapter in
         // the same document — a cross-API tell in the *default* configuration.
-        let s = bootstrap_script(&Persona::default(), &mock_identity());
-        assert!(
-            s.contains("ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro"),
-            "the default WebGL renderer is the Apple device row"
-        );
-        assert!(
-            s.contains("\"apple\"") && s.contains("\"metal-3\""),
-            "the WebGPU adapter must derive from that same renderer"
-        );
-        assert!(
-            !s.contains("\"intel\""),
-            "no Intel adapter beside an Apple WebGL renderer"
-        );
+        //
+        // Every platform, not just the mock identity's: the default renderer is
+        // platform-derived, so pinning only the mock's `MacIntel` exercised the
+        // Apple branch alone. The second split this caught: `Win32` and
+        // `LinuxX86_64` default to the SwiftShader row, whose renderer matched
+        // none of `adapter_for_renderer`'s branches and fell through to the
+        // Intel catch-all — an Intel WebGPU adapter beside a SwiftShader WebGL
+        // renderer, which is the same cross-API contradiction one layer down.
+        const VENDOR_TOKENS: [&str; 4] = ["intel", "nvidia", "amd", "apple"];
+        for platform in [Platform::MacIntel, Platform::Win32, Platform::LinuxX86_64] {
+            let persona = Persona {
+                platform: Some(platform),
+                ..Persona::default()
+            };
+            let s = bootstrap_script(&persona, &mock_identity());
+            let row = crate::gpu::devices::default_device(platform);
+            assert!(
+                s.contains(row.unmasked_renderer),
+                "{platform:?} must serve its default row's renderer to WebGL"
+            );
+            assert!(
+                s.contains("GPUAdapter.prototype"),
+                "{platform:?} must still emit the WebGPU adapter patch"
+            );
+            // The adapter derived from that renderer has to be the one the row
+            // itself declares: the row is the single ground truth both surfaces
+            // answer from, so a derivation that disagrees with it is by
+            // definition a second GPU.
+            let derived = crate::gpu::devices::adapter_for_renderer(row.unmasked_renderer);
+            assert_eq!(
+                derived.vendor, row.webgpu_vendor,
+                "{platform:?}: WebGPU vendor derived from {} disagrees with its own device row",
+                row.unmasked_renderer
+            );
+            assert_eq!(
+                derived.architecture, row.webgpu_architecture,
+                "{platform:?}: WebGPU architecture derived from {} disagrees with its own device \
+                 row",
+                row.unmasked_renderer
+            );
+            if !row.webgpu_vendor.is_empty() {
+                assert!(
+                    s.contains(&format!("\"{}\"", row.webgpu_vendor)),
+                    "{platform:?} must emit its row's WebGPU vendor"
+                );
+            }
+            // And nothing in the emitted script may name a *different* GPU
+            // vendor than the one that row declares.
+            for token in VENDOR_TOKENS {
+                if token == row.webgpu_vendor {
+                    continue;
+                }
+                assert!(
+                    !s.contains(&format!("\"{token}\"")),
+                    "{platform:?} serves {} to WebGL but names {token:?} to WebGPU",
+                    row.unmasked_renderer
+                );
+            }
+        }
     }
 
     #[test]
