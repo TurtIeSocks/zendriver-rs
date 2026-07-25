@@ -56,21 +56,78 @@
   // native `function get rangeMin() { [native code] }` shape, and enumerable
   // so `for (k in fmt)` still yields the three names a real instance inherits.
   //
-  // They go on an intermediate prototype rather than the instance because that
-  // is where IDL attributes live: a real fmt has no own properties at all, so
-  // `Object.keys(fmt)` is `[]` and `JSON.stringify(fmt)` is `{}`. Own accessors
-  // answered three names to both. The residual is that the instance's
-  // immediate prototype is one we made (the interface's own is one link
-  // further up) — a deeper probe than the own-key one this closes.
+  // They belong on the interface's own prototype, which is where IDL
+  // attributes live: a real fmt has no own properties at all, so
+  // `Object.keys(fmt)` is `[]` and `JSON.stringify(fmt)` is `{}`, AND every
+  // instance shares one prototype, so
+  // `Object.getPrototypeOf(a) === Object.getPrototypeOf(b)` and both are
+  // `WebGLShaderPrecisionFormat.prototype`. Building a fresh intermediate
+  // prototype per call satisfies only the first and fails the other two — a
+  // cheaper one-line probe than the own-key tell it was meant to close.
+  //
+  // The values therefore live in a WeakMap keyed by instance (the same shape
+  // `stubCache` below uses) and the three accessors are installed once on the
+  // real prototype. An instance that never came through here — from an
+  // unpatched path, or the real backend on a lost context — is absent from the
+  // map and falls through to the accessor that was already there, so genuine
+  // objects still answer their genuine values and an illegal receiver still
+  // earns the browser's own TypeError.
+  var PRECISION_KEYS = ['rangeMin', 'rangeMax', 'precision'];
+  var precisionValues = new WeakMap();
+
+  function installPrecisionAccessors(proto) {
+    for (var i = 0; i < PRECISION_KEYS.length; i++) {
+      installPrecisionAccessor(proto, PRECISION_KEYS[i], i);
+    }
+  }
+
+  function installPrecisionAccessor(proto, key, index) {
+    var desc = Object.getOwnPropertyDescriptor(proto, key);
+    var origGet = desc && desc.get;
+    __zdGetter(
+      proto,
+      key,
+      function () {
+        var v = precisionValues.get(this);
+        if (v) return v[index];
+        return origGet ? origGet.call(this) : undefined;
+      },
+      { enumerable: desc ? desc.enumerable : true }
+    );
+  }
+
+  // Chrome exposes WebGLShaderPrecisionFormat as a global, so the synthesized
+  // prototype below is only a fallback for a build that does not. It is still
+  // shared across instances rather than rebuilt per call, so prototype
+  // identity holds there too.
+  var precisionProtoPatched = false;
+  var fallbackPrecisionProto = null;
+
   function precisionFormat(p) {
     var Ctor = window.WebGLShaderPrecisionFormat;
-    var proto = Object.create(
-      Ctor && Ctor.prototype ? Ctor.prototype : Object.prototype
-    );
-    __zdGetter(proto, 'rangeMin', function () { return p[0]; }, { enumerable: true });
-    __zdGetter(proto, 'rangeMax', function () { return p[1]; }, { enumerable: true });
-    __zdGetter(proto, 'precision', function () { return p[2]; }, { enumerable: true });
-    return Object.create(proto);
+    var proto;
+    if (Ctor && Ctor.prototype) {
+      proto = Ctor.prototype;
+      if (!precisionProtoPatched) {
+        precisionProtoPatched = true;
+        installPrecisionAccessors(proto);
+      }
+    } else {
+      if (!fallbackPrecisionProto) {
+        fallbackPrecisionProto = {};
+        if (typeof Symbol !== 'undefined' && Symbol.toStringTag) {
+          Object.defineProperty(fallbackPrecisionProto, Symbol.toStringTag, {
+            value: 'WebGLShaderPrecisionFormat',
+            configurable: true,
+          });
+        }
+        installPrecisionAccessors(fallbackPrecisionProto);
+      }
+      proto = fallbackPrecisionProto;
+    }
+    var fmt = Object.create(proto);
+    precisionValues.set(fmt, p);
+    return fmt;
   }
 
   // Real Chrome answers getExtension with an instance of the extension's own
