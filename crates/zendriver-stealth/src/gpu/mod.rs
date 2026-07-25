@@ -44,7 +44,13 @@ impl GpuProfile {
         }
     }
 
-    /// Field-wise merge: anything set in `over` wins, anything empty inherits.
+    /// Merge `over` on top of `self`.
+    ///
+    /// The maps merge key-wise rather than whole-field, so a caller supplying a
+    /// partial profile overrides only the keys it sets and cannot silently wipe
+    /// entries it said nothing about. The lists and strings replace wholesale,
+    /// but only when non-empty, so an empty `over` is a no-op rather than a
+    /// clear.
     #[must_use]
     pub fn overlay(mut self, over: GpuProfile) -> GpuProfile {
         self.params_webgl1.extend(over.params_webgl1);
@@ -80,7 +86,9 @@ fn lookup<'a, V>(table: &'a [(&str, V)], key: &str) -> Option<&'a V> {
 /// Merge one context version's base table with a tier's overrides.
 ///
 /// The two context versions are kept apart deliberately. WebGL1 exposes 82
-/// parameters and WebGL2 exposes 132; serving the WebGL2 set to a WebGL1
+/// parameters and WebGL2 exposes up to 132 (132 on Metal, 130 on SwiftShader,
+/// which lacks `DRAW_BUFFER6`/`7` because its `MAX_DRAW_BUFFERS` is 6);
+/// serving the WebGL2 set to a WebGL1
 /// context would answer enums that context has no constant for, where real
 /// Chrome returns `null` and raises `INVALID_ENUM`.
 fn flatten(
