@@ -239,18 +239,17 @@ async fn webgpu_adapter_coheres_with_webgl_renderer() {
 /// On a host that exposes a real `navigator.gpu` adapter, this validates the
 /// DECORATE path end-to-end.
 ///
-/// **Known environment limitation (verified 2026-07-19):** zendriver's
-/// current launch flags (`--disable-gpu` under headless —
-/// `crates/zendriver/src/browser.rs:1447` — plus the Spoofed profile's
-/// SwiftShader WebGL flags, which are WebGL-specific, not WebGPU) leave
-/// `'gpu' in navigator` **false** on this darwin CI/dev host in BOTH headless
-/// and headful mode, so `webgpu.js`'s very first line (`if (!('gpu' in
-/// navigator)) return;`) short-circuits before the decorate OR fabricate
-/// branch ever runs. This is a pre-existing gap in Chrome's WebGPU
-/// availability under zendriver's launch flags (see also the untouched
-/// sibling test above, `webgpu_adapter_coheres_with_webgl_renderer`, which
-/// hits the identical no-op for the same reason) — not something this
-/// change introduced or can fix from `WebgpuSpec` alone. The DECORATE and
+/// **Known environment limitation:** this test navigates to `about:blank`,
+/// an opaque origin. `navigator.gpu` is `[SecureContext]`-gated, so
+/// `'gpu' in navigator` is **false** there regardless of launch flags, GPU
+/// backend, or headless vs. headful — not a consequence of
+/// `--disable-gpu` or the Spoofed profile's SwiftShader WebGL flags. So
+/// `webgpu.js`'s very first line (`if (!('gpu' in navigator)) return;`)
+/// short-circuits before the decorate OR fabricate branch ever runs (see
+/// also the untouched sibling test above,
+/// `webgpu_adapter_coheres_with_webgl_renderer`, which hits the identical
+/// no-op for the same reason) — not something this change introduced or can
+/// fix from `WebgpuSpec` alone. The DECORATE and
 /// FABRICATE argument-substitution logic is instead covered exhaustively by
 /// `zendriver-stealth`'s unit tests (`push_webgpu` in `patches.rs`), which
 /// assert on the exact JS invocation arguments emitted for each case. This

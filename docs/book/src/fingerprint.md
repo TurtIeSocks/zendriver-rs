@@ -266,6 +266,17 @@ WebGPU rendering on a GPU-less host. The synthetic adapter and (when created)
 the synthetic `navigator.gpu` are plain objects, so `adapter instanceof
 GPUAdapter` and `navigator.gpu instanceof GPU` are `false`.
 
+**On a GPU-equipped host, [`GpuBackend::Native`](gpu-backend.md) sidesteps
+`WebgpuSpec` fabrication entirely.** Instead of faking an adapter and
+accepting the `requestDevice()`-rejects / no-real-rendering limitations
+above, `Native` has Chrome render on the host's real GPU: a real adapter, a
+real working `requestDevice()`, real limits and features — no patch
+involved. The trade-off moves in the other direction: `Native` reports
+whatever GPU the host actually has, with no caller-supplied identity, so it
+doesn't help when you need a *specific* (rather than *coherent*) GPU
+identity. See the [GPU backend](gpu-backend.md) chapter for the full
+comparison.
+
 ## Country → locale + timezone overlay (`geo_locale`)
 
 The optional `geo` feature adds [`BrowserBuilder::geo_locale`], which maps an

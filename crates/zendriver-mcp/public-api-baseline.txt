@@ -22,6 +22,7 @@ pub use zendriver::FetcherChannel
 pub use zendriver::FetcherError
 pub use zendriver::FetcherPhase
 pub use zendriver::FetcherProgress
+pub use zendriver::GpuBackend
 pub use zendriver::HostMatcher
 pub use zendriver::ImpervaBypass
 pub use zendriver::ImpervaClearanceOutcome
@@ -281,6 +282,7 @@ pub fn zendriver::browser::BrowserBuilder::force_open_shadow_roots(self, bool) -
 pub fn zendriver::browser::BrowserBuilder::geo_auto(self) -> Self
 pub fn zendriver::browser::BrowserBuilder::geo_locale(self, impl core::convert::TryInto<zendriver_stealth::geo::Country>) -> Self
 pub fn zendriver::browser::BrowserBuilder::geo_resolver(self, impl zendriver_stealth::geo::GeoResolver + 'static) -> Self
+pub fn zendriver::browser::BrowserBuilder::gpu_backend(self, zendriver_stealth::flags::GpuBackend) -> Self
 pub fn zendriver::browser::BrowserBuilder::headless(self, bool) -> Self
 pub fn zendriver::browser::BrowserBuilder::input_profile(self, zendriver_stealth::input_profile::InputProfile) -> Self
 pub fn zendriver::browser::BrowserBuilder::lang(self, impl core::convert::Into<alloc::string::String>) -> Self
@@ -962,6 +964,7 @@ pub zendriver::error::BrowserError::ExecutableNotFound::searched: alloc::vec::Ve
 pub zendriver::error::BrowserError::ExtensionLoad
 pub zendriver::error::BrowserError::ExtensionLoad::path: std::path::PathBuf
 pub zendriver::error::BrowserError::ExtensionLoad::reason: alloc::string::String
+pub zendriver::error::BrowserError::GpuBackendUnavailable
 pub zendriver::error::BrowserError::HandshakeTimeout
 pub zendriver::error::BrowserError::SpawnFailed(std::io::error::Error)
 pub zendriver::error::BrowserError::WsTimeout
@@ -4061,6 +4064,7 @@ impl<V, T> ppv_lite86::types::VZip<V> for zendriver::screenshot::ScreenshotBuild
 pub fn zendriver::screenshot::ScreenshotBuilder<'tab>::vzip(self) -> V
 pub mod zendriver::stealth
 pub use zendriver::stealth::Fingerprint
+pub use zendriver::stealth::GpuBackend
 pub use zendriver::stealth::InputProfile
 pub use zendriver::stealth::Persona
 pub use zendriver::stealth::PersonaBuilder
@@ -4816,6 +4820,7 @@ pub zendriver::BrowserError::ExecutableNotFound::searched: alloc::vec::Vec<std::
 pub zendriver::BrowserError::ExtensionLoad
 pub zendriver::BrowserError::ExtensionLoad::path: std::path::PathBuf
 pub zendriver::BrowserError::ExtensionLoad::reason: alloc::string::String
+pub zendriver::BrowserError::GpuBackendUnavailable
 pub zendriver::BrowserError::HandshakeTimeout
 pub zendriver::BrowserError::SpawnFailed(std::io::error::Error)
 pub zendriver::BrowserError::WsTimeout
@@ -6309,6 +6314,7 @@ pub fn zendriver::browser::BrowserBuilder::force_open_shadow_roots(self, bool) -
 pub fn zendriver::browser::BrowserBuilder::geo_auto(self) -> Self
 pub fn zendriver::browser::BrowserBuilder::geo_locale(self, impl core::convert::TryInto<zendriver_stealth::geo::Country>) -> Self
 pub fn zendriver::browser::BrowserBuilder::geo_resolver(self, impl zendriver_stealth::geo::GeoResolver + 'static) -> Self
+pub fn zendriver::browser::BrowserBuilder::gpu_backend(self, zendriver_stealth::flags::GpuBackend) -> Self
 pub fn zendriver::browser::BrowserBuilder::headless(self, bool) -> Self
 pub fn zendriver::browser::BrowserBuilder::input_profile(self, zendriver_stealth::input_profile::InputProfile) -> Self
 pub fn zendriver::browser::BrowserBuilder::lang(self, impl core::convert::Into<alloc::string::String>) -> Self

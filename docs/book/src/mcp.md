@@ -158,6 +158,16 @@ present in the schema but only takes effect when the `geo` feature is enabled.
   setting. Wraps `zendriver::stealth::InputProfile` via
   `BrowserBuilder::input_profile`; the output `input_profile` field always
   echoes the *resolved* value, not the raw request.
+- `gpu_backend: "disabled" | "swift_shader" | "native"` — select the GPU
+  backend Chrome renders WebGL/WebGPU with (default: `"disabled"`, today's
+  historical flags). `"swift_shader"` forces ANGLE's software rasterizer
+  explicitly. `"native"` drops `--disable-gpu` and renders on the host's real
+  GPU — a fully coherent WebGL/WebGPU surface, but it reports **the host's**
+  GPU (no identity control) and requires a usable GPU with no automatic
+  fallback: a launch that can't start the GPU process fails outright rather
+  than silently falling back to software rendering. See the
+  [GPU backend chapter](gpu-backend.md) for the measured comparison and the
+  `--disable-gpu`-alone hang this option exists to avoid.
 
 ## `browser_monitor_*` options
 

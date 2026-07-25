@@ -191,10 +191,11 @@ async fn random_canvas_stable_within_page() {
 }
 
 /// Opt-in WebGPU FABRICATION on a GPU-less host — the case `fabricate_when_absent`
-/// exists for. zendriver's default headless launch adds `--disable-gpu`
-/// (`crates/zendriver/src/browser.rs`), so on many hosts (including CI and this
-/// dev host) `'gpu' in navigator === false` — `navigator.gpu` is entirely
-/// absent. With a `WebgpuSpec` carrying vendor + limits + `fabricate_when_absent`,
+/// exists for. This test navigates to `about:blank`, an opaque origin where
+/// `navigator.gpu` is entirely absent (`'gpu' in navigator === false`)
+/// regardless of launch flags or GPU backend — `navigator.gpu` is
+/// `[SecureContext]`-gated, and opaque origins are never secure contexts.
+/// With a `WebgpuSpec` carrying vendor + limits + `fabricate_when_absent`,
 /// `webgpu.js` DEFINES a synthetic `navigator.gpu` on `Navigator.prototype`
 /// (case (b) in that patch), flipping `'gpu' in navigator` to true — coherent
 /// for a modern-Chrome persona, which always exposes `navigator.gpu` even

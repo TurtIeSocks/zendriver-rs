@@ -10,6 +10,7 @@
 
 - [Stealth](./stealth.md)
 - [Fingerprint spoofing](./fingerprint.md)
+- [GPU backend](./gpu-backend.md)
 
 # Automation
 
