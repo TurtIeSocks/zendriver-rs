@@ -73,39 +73,145 @@ pub struct TierData {
     pub extensions_webgl2: Vec<String>,
 }
 
-fn nums(v: &Value) -> Vec<f64> {
-    v.as_array()
-        .map(|a| a.iter().filter_map(Value::as_f64).collect())
-        .unwrap_or_default()
+/// Read exactly `count` numbers out of a JSON array, or explain why the
+/// capture's shape doesn't match what the spec-declared GL type needs.
+///
+/// `name` is the parameter/precision key, folded into the error so a failure
+/// names what broke rather than just vanishing.
+fn exact_nums(name: &str, v: &Value, count: usize) -> Result<Vec<f64>, String> {
+    let arr = v
+        .as_array()
+        .ok_or_else(|| format!("{name}: expected a {count}-element array, got {v}"))?;
+    if arr.len() != count {
+        return Err(format!(
+            "{name}: expected {count} elements, got {} in {v}",
+            arr.len()
+        ));
+    }
+    arr.iter()
+        .enumerate()
+        .map(|(i, x)| {
+            x.as_f64()
+                .ok_or_else(|| format!("{name}: element {i} is not a number in {v}"))
+        })
+        .collect()
+}
+
+/// Read every number out of a JSON array of unknown length (used for
+/// `COMPRESSED_TEXTURE_FORMATS`, which has no fixed arity).
+fn all_nums(name: &str, v: &Value) -> Result<Vec<f64>, String> {
+    let arr = v
+        .as_array()
+        .ok_or_else(|| format!("{name}: expected an array, got {v}"))?;
+    arr.iter()
+        .enumerate()
+        .map(|(i, x)| {
+            x.as_f64()
+                .ok_or_else(|| format!("{name}: element {i} is not a number in {v}"))
+        })
+        .collect()
+}
+
+/// Narrow an `f64` to `i32`, failing rather than silently truncating a value
+/// the `as` cast can't represent exactly.
+fn checked_i32(name: &str, f: f64) -> Result<i32, String> {
+    let out = f as i32;
+    (out as f64 == f)
+        .then_some(out)
+        .ok_or_else(|| format!("{name}: value {f} does not fit in i32"))
+}
+
+/// Narrow an `f64` to `u32`; see [`checked_i32`].
+fn checked_u32(name: &str, f: f64) -> Result<u32, String> {
+    let out = f as u32;
+    (out as f64 == f)
+        .then_some(out)
+        .ok_or_else(|| format!("{name}: value {f} does not fit in u32"))
+}
+
+/// Narrow an `f64` to `f32`; see [`checked_i32`].
+fn checked_f32(name: &str, f: f64) -> Result<f32, String> {
+    let out = f as f32;
+    (out as f64 == f)
+        .then_some(out)
+        .ok_or_else(|| format!("{name}: value {f} does not fit in f32 without loss"))
 }
 
 /// Convert one captured value using its spec-declared GL type.
-fn param_from_json(name: &str, v: &Value) -> Option<ParamValue> {
-    let n = nums(v);
-    Some(match gl_type_for(name) {
-        GlType::Float => ParamValue::Float(v.as_f64()?),
-        GlType::FloatPair => ParamValue::FloatPair([*n.first()? as f32, *n.get(1)? as f32]),
-        GlType::FloatQuad => ParamValue::FloatQuad([
-            *n.first()? as f32,
-            *n.get(1)? as f32,
-            *n.get(2)? as f32,
-            *n.get(3)? as f32,
-        ]),
-        GlType::IntPair => ParamValue::IntPair([*n.first()? as i32, *n.get(1)? as i32]),
-        GlType::IntQuad => ParamValue::IntQuad([
-            *n.first()? as i32,
-            *n.get(1)? as i32,
-            *n.get(2)? as i32,
-            *n.get(3)? as i32,
-        ]),
-        GlType::IntList => ParamValue::IntList(n.iter().map(|f| *f as u32).collect()),
+///
+/// Returns `Err` naming the parameter and the raw capture value whenever the
+/// shape doesn't match — a param this can't convert must be surfaced, not
+/// dropped from the table.
+fn param_from_json(name: &str, v: &Value) -> Result<ParamValue, String> {
+    Ok(match gl_type_for(name) {
+        GlType::Float => ParamValue::Float(
+            v.as_f64()
+                .ok_or_else(|| format!("{name}: expected a number, got {v}"))?,
+        ),
+        GlType::FloatPair => {
+            let n = exact_nums(name, v, 2)?;
+            ParamValue::FloatPair([checked_f32(name, n[0])?, checked_f32(name, n[1])?])
+        }
+        GlType::FloatQuad => {
+            let n = exact_nums(name, v, 4)?;
+            ParamValue::FloatQuad([
+                checked_f32(name, n[0])?,
+                checked_f32(name, n[1])?,
+                checked_f32(name, n[2])?,
+                checked_f32(name, n[3])?,
+            ])
+        }
+        GlType::IntPair => {
+            let n = exact_nums(name, v, 2)?;
+            ParamValue::IntPair([checked_i32(name, n[0])?, checked_i32(name, n[1])?])
+        }
+        GlType::IntQuad => {
+            let n = exact_nums(name, v, 4)?;
+            ParamValue::IntQuad([
+                checked_i32(name, n[0])?,
+                checked_i32(name, n[1])?,
+                checked_i32(name, n[2])?,
+                checked_i32(name, n[3])?,
+            ])
+        }
+        GlType::IntList => {
+            let n = all_nums(name, v)?;
+            ParamValue::IntList(
+                n.iter()
+                    .map(|f| checked_u32(name, *f))
+                    .collect::<Result<_, _>>()?,
+            )
+        }
         GlType::FromJson => match v {
             Value::Bool(b) => ParamValue::Bool(*b),
             Value::String(s) => ParamValue::Str(s.clone()),
-            Value::Number(num) => ParamValue::Int(num.as_i64()?),
-            _ => return None,
+            Value::Number(num) => ParamValue::Int(
+                num.as_i64()
+                    .ok_or_else(|| format!("{name}: number {num} does not fit in i64"))?,
+            ),
+            other => return Err(format!("{name}: unsupported JSON shape {other}")),
         },
     })
+}
+
+/// Read the three-element `[range_min, range_max, precision]` triple the
+/// WebGL spec returns for a `getShaderPrecisionFormat` query.
+fn precision_triple(name: &str, v: &Value) -> Result<[i32; 3], String> {
+    let n = exact_nums(name, v, 3)?;
+    Ok([
+        checked_i32(name, n[0])?,
+        checked_i32(name, n[1])?,
+        checked_i32(name, n[2])?,
+    ])
+}
+
+/// Panic with a message naming the offending key and raw value. Acceptable
+/// here: this is a build-time-only generator (`publish = false`, never
+/// shipped), and a capture entry this can't convert must stop the generator
+/// loudly rather than silently vanish from the emitted table.
+#[allow(clippy::panic)]
+fn fail_loud<T>(result: Result<T, String>) -> T {
+    result.unwrap_or_else(|e| panic!("gpu-tier-gen: {e}"))
 }
 
 fn params_of(ctx: &Value) -> BTreeMap<String, ParamValue> {
@@ -113,7 +219,7 @@ fn params_of(ctx: &Value) -> BTreeMap<String, ParamValue> {
         .as_object()
         .map(|m| {
             m.iter()
-                .filter_map(|(k, v)| param_from_json(k, v).map(|p| (k.clone(), p)))
+                .map(|(k, v)| (k.clone(), fail_loud(param_from_json(k, v))))
                 .collect()
         })
         .unwrap_or_default()
@@ -140,13 +246,7 @@ pub fn tier_from_capture(name: &str, provenance: &str, capture: &Value) -> TierD
         .as_object()
         .map(|m| {
             m.iter()
-                .filter_map(|(k, v)| {
-                    let n = nums(v);
-                    Some((
-                        k.clone(),
-                        [*n.first()? as i32, *n.get(1)? as i32, *n.get(2)? as i32],
-                    ))
-                })
+                .map(|(k, v)| (k.clone(), fail_loud(precision_triple(k, v))))
                 .collect()
         })
         .unwrap_or_default();
@@ -266,5 +366,22 @@ mod tests {
                 gl_type_for(name)
             );
         }
+    }
+
+    #[test]
+    fn an_unconvertible_capture_value_fails_loudly() {
+        let capture = serde_json::json!({
+            "webgl1": {
+                "params": {"MAX_VIEWPORT_DIMS": "not-an-array"},
+                "precision": {}, "extensions": [], "enums": {}
+            },
+            "webgl2": {"params": {}, "precision": {}, "extensions": [], "enums": {}}
+        });
+        let err =
+            std::panic::catch_unwind(|| tier_from_capture("swiftshader", "probed: test", &capture));
+        assert!(
+            err.is_err(),
+            "a malformed capture value must not be silently dropped"
+        );
     }
 }
