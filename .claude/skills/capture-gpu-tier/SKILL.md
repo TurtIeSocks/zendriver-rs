@@ -61,9 +61,18 @@ real GPU: a `Native` launch on a GPU-less host fails rather than falling back.
    capture is worthless — stop and fix the machine, not the data.
 
 2. **Pick the tier name** from the renderer string, using the existing files as
-   precedent: `swiftshader`, `metal-apple-family3`. Name by *backend and
+   precedent: `swiftshader`, `metal-macos`, `d3d11-fl11`. Name by *backend and
    capability tier*, not by card — `d3d11-fl11` rather than `nvidia-rtx-4090`,
    because every D3D11 feature-level-11 GPU reports the same numbers.
+
+   Name it after the branch ANGLE actually takes, which means reading the
+   `#if`/`else` around the constants and not just the nearest capability test.
+   The Metal tier was `metal-apple-family3` until someone did: the
+   `supportsAppleGPUFamily(3)` check that chooses 16384 over 8192 is in
+   `DisplayMtl.mm`'s **iOS** arm, while macOS takes the `TARGET_OS_OSX` arm
+   above it, where the same values are plain compile-time constants. The name
+   advertised a distinction no Mac can express, and would have sent someone to
+   capture an Intel Mac for a tier that reproduces `metal-macos` exactly.
 
 3. **Capture with provenance.**
 

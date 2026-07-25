@@ -232,7 +232,9 @@ values cluster by *(backend, capability tier)* rather than by exact GPU
 model. Three tiers ship today:
 
 - `SwiftShader` — Chrome's software rasterizer.
-- Apple Metal (family 3) — real Apple silicon.
+- Metal on macOS — ANGLE's Metal backend, covering every Mac. The values are
+  compile-time constants in ANGLE's `DisplayMtl.mm` `TARGET_OS_OSX` branch, so
+  an Intel Mac and an Apple silicon one report the same numbers.
 - D3D11 (feature level 11_0+) — ANGLE's Direct3D 11 backend on Windows. One
   tier covers every Intel, NVIDIA and AMD card at that feature level, because
   ANGLE derives the values from `D3D11_REQ_*` constants rather than from the

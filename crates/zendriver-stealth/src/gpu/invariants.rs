@@ -120,7 +120,7 @@ pub(crate) fn platform_skew(platform: Platform, tier: Tier) -> Option<String> {
     // numbers is a pair Chrome cannot produce.
     let ok = matches!(
         (platform, tier),
-        (Platform::MacIntel, Tier::MetalAppleFamily3) | (Platform::Win32, Tier::D3d11Fl11)
+        (Platform::MacIntel, Tier::MetalMacos) | (Platform::Win32, Tier::D3d11Fl11)
     );
     (!ok).then(|| format!("persona claims {platform:?} but its GPU values come from {tier:?}"))
 }
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn combined_texture_units_below_the_sum_of_its_parts_is_rejected() {
-        let mut p = profile_for_tier(Tier::MetalAppleFamily3);
+        let mut p = profile_for_tier(Tier::MetalMacos);
         p.params_webgl2
             .insert("MAX_COMBINED_TEXTURE_IMAGE_UNITS".into(), GlParam::Int(1));
         assert!(check_coherence(&p).is_err());
@@ -279,8 +279,8 @@ mod tests {
         // A Windows persona resolving Metal's values is incoherent. This is a
         // warning, not an error, matching the header-coherence precedent from
         // #43 — the caller may be doing it deliberately.
-        assert!(platform_skew(Platform::Win32, Tier::MetalAppleFamily3).is_some());
-        assert!(platform_skew(Platform::MacIntel, Tier::MetalAppleFamily3).is_none());
+        assert!(platform_skew(Platform::Win32, Tier::MetalMacos).is_some());
+        assert!(platform_skew(Platform::MacIntel, Tier::MetalMacos).is_none());
         // D3D11 is the mirror image: coherent on Windows, impossible anywhere
         // else. A Linux persona on it is as wrong as a Windows one on Metal.
         assert!(platform_skew(Platform::Win32, Tier::D3d11Fl11).is_none());

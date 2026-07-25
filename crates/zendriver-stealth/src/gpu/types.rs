@@ -100,7 +100,20 @@ pub enum Provenance {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Tier {
     SwiftShader,
-    MetalAppleFamily3,
+    /// ANGLE's Metal backend on **macOS** — every Mac, Intel and Apple silicon
+    /// alike. Probed on an Apple M4 Pro, but the values are not that machine's:
+    /// `DisplayMtl.mm:727-731` sets `max2DTextureSize = 16384`,
+    /// `maxVaryingVectors = 31 - 1` and `maxVertexOutputComponents = 124 - 4`
+    /// as compile-time constants under `#if TARGET_OS_OSX ||
+    /// TARGET_OS_MACCATALYST`, with no device query anywhere in that arm.
+    ///
+    /// It was called `MetalAppleFamily3` until the `#if` was read properly. The
+    /// `supportsAppleGPUFamily(3)` test that picks 16384 over 8192 lives in the
+    /// `#else` arm, which is **iOS**, so no Mac ever reaches it and the old name
+    /// pointed at a branch macOS cannot take. Renaming it is what stops someone
+    /// capturing an Intel Mac in the expectation of a second, lower Metal tier —
+    /// it would reproduce this one exactly.
+    MetalMacos,
     /// Direct3D 11 at feature level 11_0 or above. Named for the backend and
     /// feature level rather than the card it was probed on (an RTX 4090):
     /// ANGLE's D3D11 renderer derives every one of these values from
@@ -113,8 +126,7 @@ impl Tier {
     /// Every shipped tier, in one place: the invariant checks and the tests
     /// that sweep "all tiers" iterate this, so adding a tier cannot quietly
     /// leave one of them behind.
-    pub(crate) const ALL: &'static [Tier] =
-        &[Tier::SwiftShader, Tier::MetalAppleFamily3, Tier::D3d11Fl11];
+    pub(crate) const ALL: &'static [Tier] = &[Tier::SwiftShader, Tier::MetalMacos, Tier::D3d11Fl11];
 }
 
 #[cfg(test)]

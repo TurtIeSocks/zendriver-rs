@@ -93,7 +93,7 @@ impl GpuProfile {
 fn tier_key(tier: Tier) -> &'static str {
     match tier {
         Tier::SwiftShader => "swiftshader",
-        Tier::MetalAppleFamily3 => "metal-apple-family3",
+        Tier::MetalMacos => "metal-macos",
         Tier::D3d11Fl11 => "d3d11-fl11",
     }
 }
@@ -329,7 +329,7 @@ mod tests {
 
     #[test]
     fn metal_tier_resolves_its_own_values_not_swiftshaders() {
-        let p = profile_for_tier(types::Tier::MetalAppleFamily3);
+        let p = profile_for_tier(types::Tier::MetalMacos);
         assert_eq!(p.params_webgl2["MAX_TEXTURE_SIZE"], GlParam::Int(16384));
         assert_eq!(
             p.params_webgl2["MAX_VIEWPORT_DIMS"],
@@ -416,7 +416,7 @@ mod tests {
     #[test]
     fn precision_differs_where_it_was_measured_to_differ() {
         let sw = profile_for_tier(types::Tier::SwiftShader);
-        let mt = profile_for_tier(types::Tier::MetalAppleFamily3);
+        let mt = profile_for_tier(types::Tier::MetalMacos);
         assert_ne!(
             sw.precision["VERTEX_SHADER/MEDIUM_FLOAT"],
             mt.precision["VERTEX_SHADER/MEDIUM_FLOAT"]
@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn webgl2_extension_list_drops_the_core_promoted_entries() {
-        let p = profile_for_tier(types::Tier::MetalAppleFamily3);
+        let p = profile_for_tier(types::Tier::MetalMacos);
         assert!(p.extensions_webgl1.iter().any(|e| e == "OES_texture_float"));
         assert!(
             !p.extensions_webgl2.iter().any(|e| e == "OES_texture_float"),
@@ -443,7 +443,7 @@ mod tests {
         // JSON cannot tell an Int32Array from a Float32Array, so the tag is
         // what stops the page from seeing the wrong typed array — one
         // instanceof check away from a tell.
-        let p = profile_for_tier(types::Tier::MetalAppleFamily3);
+        let p = profile_for_tier(types::Tier::MetalMacos);
         let js: serde_json::Value = serde_json::from_str(&profile_to_js(&p)).unwrap();
         assert_eq!(js["params2"]["MAX_VIEWPORT_DIMS"]["t"], "i32pair");
         assert_eq!(js["params2"]["ALIASED_POINT_SIZE_RANGE"]["t"], "f32pair");
@@ -488,7 +488,7 @@ mod tests {
         // The two strings a fingerprinter reads first are served like any
         // other parameter, so both halves have to be there: the value in the
         // params map, and 37445/37446 in enumNames to reach it.
-        let mut p = profile_for_tier(types::Tier::MetalAppleFamily3);
+        let mut p = profile_for_tier(types::Tier::MetalMacos);
         p.unmasked_vendor = "Google Inc. (Apple)".into();
         p.unmasked_renderer = "ANGLE (Apple, ...)".into();
         let js: serde_json::Value = serde_json::from_str(&profile_to_js(&p)).unwrap();
@@ -514,7 +514,7 @@ mod tests {
         // not carry them. Without EXTRA_ENUMS the key is "undefined/undefined",
         // every lookup misses, and getShaderPrecisionFormat quietly serves the
         // real backend's precision instead of the tier's.
-        let p = profile_for_tier(types::Tier::MetalAppleFamily3);
+        let p = profile_for_tier(types::Tier::MetalMacos);
         let js: serde_json::Value = serde_json::from_str(&profile_to_js(&p)).unwrap();
         let named: std::collections::BTreeSet<&str> = js["enumNames"]
             .as_object()

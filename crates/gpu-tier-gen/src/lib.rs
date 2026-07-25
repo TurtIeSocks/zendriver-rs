@@ -532,8 +532,8 @@ const CAPTURES: &[(&str, &str)] = &[
         include_str!("../../zendriver-stealth/data/gpu-tiers/swiftshader.json"),
     ),
     (
-        "metal-apple-family3",
-        include_str!("../../zendriver-stealth/data/gpu-tiers/metal-apple-family3.json"),
+        "metal-macos",
+        include_str!("../../zendriver-stealth/data/gpu-tiers/metal-macos.json"),
     ),
     (
         "d3d11-fl11",
@@ -1234,10 +1234,9 @@ mod tests {
     /// guard is anchored to what Chrome really emitted.
     #[test]
     fn extension_order_is_chromes_not_alphabetical() {
-        const METAL: &str =
-            include_str!("../../zendriver-stealth/data/gpu-tiers/metal-apple-family3.json");
+        const METAL: &str = include_str!("../../zendriver-stealth/data/gpu-tiers/metal-macos.json");
         let doc: Value = serde_json::from_str(METAL).expect("capture json");
-        let tier = tier_from_capture("metal-apple-family3", "probed: test", &doc["capture"]);
+        let tier = tier_from_capture("metal-macos", "probed: test", &doc["capture"]);
 
         let captured: Vec<String> = doc["capture"]["webgl1"]["extensions"]
             .as_array()

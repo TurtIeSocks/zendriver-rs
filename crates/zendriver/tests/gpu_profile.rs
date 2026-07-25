@@ -143,7 +143,7 @@ const POLL_DELAY: Duration = Duration::from_millis(50);
 /// backend's — so the pin decides *which* capture this file includes, not
 /// whether the test can work at all.
 const RESOLVED_TIER_CAPTURE: &str =
-    include_str!("../../zendriver-stealth/data/gpu-tiers/metal-apple-family3.json");
+    include_str!("../../zendriver-stealth/data/gpu-tiers/metal-macos.json");
 
 /// The persona every test here launches with: a Mac, so the platform-derived
 /// default renderer resolves to the Apple Metal row on any host.

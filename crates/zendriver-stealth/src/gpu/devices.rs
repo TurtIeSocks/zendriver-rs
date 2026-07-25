@@ -77,7 +77,7 @@ const DEVICES: &[DeviceRow] = &[
     DeviceRow {
         unmasked_vendor: "Google Inc. (Apple)",
         unmasked_renderer: "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
-        tier: Tier::MetalAppleFamily3,
+        tier: Tier::MetalMacos,
         webgpu_vendor: "apple",
         webgpu_architecture: "metal-3",
         match_token: "apple",
@@ -561,7 +561,7 @@ mod tests {
             "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
         )
         .expect("apple renderer must match the metal row");
-        assert_eq!(d.tier, Tier::MetalAppleFamily3);
+        assert_eq!(d.tier, Tier::MetalMacos);
         assert_eq!(d.webgpu_vendor, "apple");
     }
 
@@ -677,10 +677,7 @@ mod tests {
             default_renderer(Platform::MacIntel),
             "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)"
         );
-        assert_eq!(
-            default_device(Platform::MacIntel).tier,
-            Tier::MetalAppleFamily3
-        );
+        assert_eq!(default_device(Platform::MacIntel).tier, Tier::MetalMacos);
     }
 
     #[test]
@@ -738,10 +735,7 @@ mod tests {
                 "{platform:?}'s default tier must not skew against it"
             );
         }
-        assert_eq!(
-            default_device(Platform::MacIntel).tier,
-            Tier::MetalAppleFamily3
-        );
+        assert_eq!(default_device(Platform::MacIntel).tier, Tier::MetalMacos);
     }
 
     #[test]

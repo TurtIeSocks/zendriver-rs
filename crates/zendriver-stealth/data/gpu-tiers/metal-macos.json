@@ -784,5 +784,5 @@
     }
   },
   "provenance": "probed: Google Chrome 150.0.7871.186  on Darwin",
-  "tier": "metal-apple-family3"
+  "tier": "metal-macos"
 }

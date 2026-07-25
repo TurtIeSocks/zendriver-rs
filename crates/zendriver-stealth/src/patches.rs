@@ -1089,7 +1089,7 @@ mod tests {
             push_webgl(&mut out, Some(&spec), None, Platform::Win32);
         });
         assert!(
-            logs.contains("Win32") && logs.contains("MetalAppleFamily3"),
+            logs.contains("Win32") && logs.contains("MetalMacos"),
             "the platform/tier skew must be reported, got: {logs:?}"
         );
     }
