@@ -18,11 +18,30 @@ description: >-
 the stealth patch reports. It is **generated** from committed probe captures in
 `crates/zendriver-stealth/data/gpu-tiers/*.json`, one per backend tier.
 
-Values cluster by **(backend, capability tier)**, not by GPU model — ANGLE
-computes them from constants branched on backend and feature level, so one
-capture from any D3D11 machine covers every D3D11 GPU at that feature level.
-That is why a handful of captures is enough, and why capturing on the right
-*backend* matters more than on the right *card*.
+Whether a capture generalizes beyond the machine it was taken on depends
+entirely on the backend, because ANGLE decides these values differently per
+backend. Know which case you are in before you name the tier:
+
+- **D3D11 — generalizes by feature level.** `renderer11_utils.cpp` branches on
+  the `D3D_FEATURE_LEVEL`, so every FL11+ card reports the same numbers whether
+  it is Intel, AMD or NVIDIA. One capture from any D3D11 machine covers every
+  D3D11 GPU at that feature level.
+- **Metal on macOS — generalizes across Macs.** `DisplayMtl.mm`'s
+  `TARGET_OS_OSX` arm sets its caps from plain compile-time constants. (The
+  runtime `supportsAppleGPUFamily` test that would vary them is in the iOS arm
+  — see step 2.)
+- **Vulkan — does NOT generalize.** `vk_caps_utils.cpp` reads the caps straight
+  off the physical device: `max2DTextureSize` is
+  `min(limitsVk.maxFramebufferWidth, limitsVk.maxImageDimension2D)`, the
+  viewport bounds come from `limitsVk.maxViewportDimensions`, and that one file
+  reads `limitsVk.` around 99 times. A Linux/Vulkan capture describes **that
+  GPU under that driver**, and nothing else.
+
+So on D3D11 and Metal, capturing on the right *backend* matters more than on the
+right *card*, which is why a handful of captures is enough. On Vulkan there is
+no such shortcut: name and document the tier for the specific device and driver
+it came from (step 2), record the Mesa/driver version in its provenance
+(step 3), and never present it as covering Vulkan generally.
 
 **Never hand-write or edit a tier's values.** A wrong value is more detectable
 than no spoof at all, and `tiers.rs` carries a `DO NOT EDIT` header enforced by
@@ -61,9 +80,18 @@ real GPU: a `Native` launch on a GPU-less host fails rather than falling back.
    capture is worthless — stop and fix the machine, not the data.
 
 2. **Pick the tier name** from the renderer string, using the existing files as
-   precedent: `swiftshader`, `metal-macos`, `d3d11-fl11`. Name by *backend and
-   capability tier*, not by card — `d3d11-fl11` rather than `nvidia-rtx-4090`,
-   because every D3D11 feature-level-11 GPU reports the same numbers.
+   precedent: `swiftshader`, `metal-macos`, `d3d11-fl11`.
+
+   Where the values generalize, name by *backend and capability tier*, not by
+   card — `d3d11-fl11` rather than `nvidia-rtx-4090`, because every D3D11
+   feature-level-11 GPU reports the same numbers. That advice is a *consequence*
+   of the generalization above, not a house style, so it inverts where the
+   generalization does not hold: a **Vulkan** tier's numbers come off the
+   physical device, so the device and the driver *are* the tier and the name has
+   to carry both — `vulkan-intel-uhd620-mesa24`, not `vulkan-linux`. A
+   backend-general name on a device-specific capture is the worst outcome
+   available here: it reads as covering every Linux GPU and quietly serves one
+   machine's numbers to all of them.
 
    Name it after the branch ANGLE actually takes, which means reading the
    `#if`/`else` around the constants and not just the nearest capability test.
@@ -77,12 +105,18 @@ real GPU: a `Native` launch on a GPU-less host fails rather than falling back.
 3. **Capture with provenance.**
 
    The probe reports its own `userAgent`, so the Chrome version lands in the
-   provenance string without you looking it up per-platform.
+   provenance string without you looking it up per-platform. On **Vulkan** the
+   Chrome version is not enough: the numbers came off this physical device
+   through this driver, so set `DRIVER` to the GPU model and Mesa/driver version
+   (both are in the renderer string's fields, e.g. `ANGLE (Intel, Intel(R) UHD
+   Graphics 620 (KBL GT2), Mesa 24.0.9)`). Leave `DRIVER` unset on D3D11 and
+   Metal, where the capture is not device-specific.
 
    ```bash
    TIER=d3d11-fl11   # <- set this
+   DRIVER=           # <- Vulkan only, e.g. "Intel UHD Graphics 620, Mesa 24.0.9"
    cargo run -q -p zendriver --example probe_gpu -- native 2>/dev/null \
-     | TIER=$TIER python3 -c "
+     | TIER=$TIER DRIVER=$DRIVER python3 -c "
 import json,sys,os,platform,re
 d=json.load(sys.stdin)
 assert d['isSecureContext'], 'not a secure context; WebGPU data would be missing'
@@ -90,8 +124,10 @@ r=d['webgl2']['unmaskedRenderer']
 assert 'SwiftShader' not in r, f'GPU did not engage, got: {r}'
 m=re.search(r'Chrome/([\d.]+)', d.get('userAgent',''))
 chrome=m.group(1) if m else 'unknown'
-print(json.dumps({'tier': os.environ['TIER'],
-                  'provenance': f'probed: Chrome {chrome} on {platform.system()} {platform.release()}',
+driver=os.environ.get('DRIVER','').strip()
+prov=f'probed: Chrome {chrome} on {platform.system()} {platform.release()}'
+if driver: prov += f' / {driver}'
+print(json.dumps({'tier': os.environ['TIER'], 'provenance': prov,
                   'capture': d}, indent=2, sort_keys=True))
 " > crates/zendriver-stealth/data/gpu-tiers/$TIER.json
    ```
@@ -165,3 +201,6 @@ print(json.dumps({'tier': os.environ['TIER'],
   on every number having been measured somewhere.
 - **Do not reuse a tier name across backends.** The name is the join key
   between the capture, `tier_key`, and the device row.
+- **Do not give a Vulkan capture a backend-general name or provenance.** Its
+  numbers are read off one physical device (`vk_caps_utils.cpp`), so a
+  `vulkan-linux` tier claims a generality it does not have — see the Overview.
