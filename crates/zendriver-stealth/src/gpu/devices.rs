@@ -42,13 +42,36 @@ pub(crate) struct DeviceRow {
 }
 
 /// Known devices, keyed by [`DeviceRow::match_token`].
+///
+/// Order is load-bearing: [`device_for_renderer`] takes the *first* row whose
+/// token the renderer contains, so the specific SwiftShader row must precede
+/// the generic one.
+///
+/// The two SwiftShader rows are one capability tier under two identity
+/// strings. SwiftShader picks its JIT backend at build time — Subzero on
+/// Linux, LLVM on macOS — and Chrome prints the chosen one inside the
+/// renderer string, so the string is platform-specific even though the
+/// capabilities behind it are not (measured; see [`default_device`]).
 const DEVICES: &[DeviceRow] = &[
+    DeviceRow {
+        unmasked_vendor: "Google Inc. (Google)",
+        unmasked_renderer: "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+        tier: Tier::SwiftShader,
+        webgpu_vendor: "",
+        webgpu_architecture: "",
+        // Specific enough to beat the generic row below, which is why it is
+        // listed first.
+        match_token: "subzero",
+    },
     DeviceRow {
         unmasked_vendor: "Google Inc. (Google)",
         unmasked_renderer: "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (LLVM 10.0.0) (0x0000C0DE)), SwiftShader driver)",
         tier: Tier::SwiftShader,
         webgpu_vendor: "",
         webgpu_architecture: "",
+        // The catch-all for the tier: any SwiftShader string that is not
+        // Subzero's lands here. Both rows carry the same tier, so a miss costs
+        // only the identity string, never the capability values.
         match_token: "swiftshader",
     },
     DeviceRow {
@@ -71,11 +94,35 @@ const DEVICES: &[DeviceRow] = &[
 /// new hardware capture — only choosing new *capability values* would.
 ///
 /// - macOS gets the Apple Metal row, which is both coherent and real hardware.
-/// - Every other platform gets the SwiftShader row. Chrome's software
+/// - Every other platform gets a SwiftShader row. Chrome's software
 ///   rasterizer runs on every OS and its renderer string names no
 ///   platform-specific API, so the pairing is one real Chrome does produce
 ///   (a GPU-blocklisted machine, a VM, a headless container), and the
 ///   capability values served beside it are genuinely SwiftShader's.
+///
+/// **Which SwiftShader row, and why there are two.** SwiftShader's
+/// *capability values* are platform-independent; its *renderer string* is
+/// not. Measured on 2026-07-25: the same flag set probed on Ubuntu 24
+/// (Chrome 150.0.7871.114, GPU-less VM) reproduced the macOS capture exactly
+/// — 0 of 82 WebGL1 parameters differed, 0 of 130 WebGL2, extension lists
+/// identical in content and order, all 12 precision entries identical — while
+/// the renderer string differed in one token, because SwiftShader selects its
+/// JIT backend at build time and Chrome prints the choice:
+///
+/// - Linux: `SwiftShader Device (Subzero)`
+/// - macOS: `SwiftShader Device (LLVM 10.0.0)`
+///
+/// That is one capability tier and two identity rows, which is why the split
+/// lives in [`DEVICES`] rather than in [`Tier`], and why it needed no capture
+/// and no table regeneration.
+///
+/// `Win32` is **inferred, not measured**: nobody has probed Chrome's Windows
+/// SwiftShader build, which could use either backend. It gets Subzero on the
+/// reasoning that Windows and Linux Chrome builds share more configuration
+/// with each other than either does with macOS. Treat that as a guess until
+/// someone runs `cargo run -p zendriver --example probe_gpu -- swiftshader`
+/// on a Windows machine and compares the renderer string; if it prints LLVM,
+/// point `Win32` at the LLVM row.
 ///
 /// The rejected alternative was a D3D11 Intel string, which is what shipped
 /// before the tier tables existed. It looks like ordinary hardware, but no
@@ -96,7 +143,8 @@ const DEVICES: &[DeviceRow] = &[
 pub(crate) fn default_device(platform: Platform) -> DeviceRow {
     match platform {
         Platform::MacIntel => METAL_APPLE,
-        Platform::Win32 | Platform::LinuxX86_64 => SWIFTSHADER,
+        // Linux is measured; Windows is inferred from it — see the doc comment.
+        Platform::Win32 | Platform::LinuxX86_64 => SWIFTSHADER_SUBZERO,
     }
 }
 
@@ -107,12 +155,24 @@ pub(crate) fn default_renderer(platform: Platform) -> &'static str {
 
 /// Named row aliases, so the platform mapping above reads as intent rather
 /// than as an index into [`DEVICES`].
-const SWIFTSHADER: DeviceRow = DEVICES[0];
-const METAL_APPLE: DeviceRow = DEVICES[1];
+const SWIFTSHADER_SUBZERO: DeviceRow = DEVICES[0];
+/// No platform defaults to this row: macOS gets Metal, and every other
+/// platform gets Subzero. It is the tier's catch-all, reached when a caller
+/// pins a macOS-flavored SwiftShader string — and named here so the tests can
+/// assert the two rows never drift apart.
+#[allow(dead_code)]
+const SWIFTSHADER_LLVM: DeviceRow = DEVICES[1];
+const METAL_APPLE: DeviceRow = DEVICES[2];
 
 /// Pick the device row a renderer string belongs to, by explicit
 /// [`DeviceRow::match_token`] — never by a key derived from a row's own
 /// reference string.
+///
+/// First match in [`DEVICES`] order wins, so a specific token must be listed
+/// ahead of a token it is a special case of: `"subzero"` before
+/// `"swiftshader"`, or every Subzero string would resolve to the LLVM row's
+/// identity. Both carry the same tier, so ordering decides the identity
+/// string alone — but that string is the whole reason the rows are separate.
 ///
 /// Only two tiers ship today (SwiftShader and Apple Metal), so `None` is
 /// common and expected for D3D11-family renderers (Intel/NVIDIA/AMD) that
@@ -355,17 +415,20 @@ mod tests {
         // SwiftShader is the non-Mac default row, so this is the adapter a
         // default Win32/Linux persona serves. It used to reach the Intel
         // catch-all: an Intel WebGPU adapter beside a SwiftShader WebGL
-        // renderer, a pairing Chrome does not produce.
-        let a = adapter_for_renderer(SWIFTSHADER.unmasked_renderer);
-        assert_eq!(
-            (a.vendor.as_str(), a.architecture.as_str()),
-            (SWIFTSHADER.webgpu_vendor, SWIFTSHADER.webgpu_architecture),
-            "the derived adapter must match the device row's own declaration"
-        );
-        assert_eq!(
-            a.vendor, "",
-            "a software rasterizer has no vendor to report"
-        );
+        // renderer, a pairing Chrome does not produce. Both JIT-backend rows,
+        // since either can be served depending on the renderer resolved.
+        for row in [SWIFTSHADER_SUBZERO, SWIFTSHADER_LLVM] {
+            let a = adapter_for_renderer(row.unmasked_renderer);
+            assert_eq!(
+                (a.vendor.as_str(), a.architecture.as_str()),
+                (row.webgpu_vendor, row.webgpu_architecture),
+                "the derived adapter must match the device row's own declaration"
+            );
+            assert_eq!(
+                a.vendor, "",
+                "a software rasterizer has no vendor to report"
+            );
+        }
     }
 
     #[test]
@@ -387,11 +450,96 @@ mod tests {
 
     #[test]
     fn a_software_renderer_selects_the_swiftshader_tier() {
-        let d = device_for_renderer(
-            "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (LLVM 10.0.0) (0x0000C0DE)), SwiftShader driver)",
-        )
-        .expect("swiftshader renderer must match the software row");
-        assert_eq!(d.tier, Tier::SwiftShader);
+        // Both strings verbatim as real Chrome prints them. SwiftShader picks
+        // its JIT backend at build time, so the platform shows through the
+        // renderer string even though nothing behind it differs — each string
+        // must land on its own row, not merely on the right tier.
+        for (renderer, expected) in [
+            (
+                "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+                SWIFTSHADER_SUBZERO,
+            ),
+            (
+                "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (LLVM 10.0.0) (0x0000C0DE)), SwiftShader driver)",
+                SWIFTSHADER_LLVM,
+            ),
+        ] {
+            let d = device_for_renderer(renderer)
+                .expect("swiftshader renderer must match a software row");
+            assert_eq!(d, expected, "{renderer} resolved to the wrong device row");
+            assert_eq!(d.tier, Tier::SwiftShader);
+        }
+    }
+
+    #[test]
+    fn both_swiftshader_rows_serve_one_capability_tier() {
+        // The rows differ in identity only. Probing Ubuntu 24 (Chrome
+        // 150.0.7871.114) against the flags the macOS capture used reproduced
+        // it exactly — 0 of 82 WebGL1 parameters differed, 0 of 130 WebGL2,
+        // extensions identical in content and order, all 12 precision entries
+        // identical — and only the renderer string moved. A split that forked
+        // the tier would serve two platforms different numbers off that one
+        // measurement.
+        assert_eq!(SWIFTSHADER_SUBZERO.tier, Tier::SwiftShader);
+        assert_eq!(SWIFTSHADER_LLVM.tier, Tier::SwiftShader);
+        assert_eq!(
+            SWIFTSHADER_SUBZERO.unmasked_vendor,
+            SWIFTSHADER_LLVM.unmasked_vendor
+        );
+        assert_eq!(
+            (
+                SWIFTSHADER_SUBZERO.webgpu_vendor,
+                SWIFTSHADER_SUBZERO.webgpu_architecture
+            ),
+            (
+                SWIFTSHADER_LLVM.webgpu_vendor,
+                SWIFTSHADER_LLVM.webgpu_architecture
+            )
+        );
+        assert_ne!(
+            SWIFTSHADER_SUBZERO.unmasked_renderer, SWIFTSHADER_LLVM.unmasked_renderer,
+            "two rows exist only because the identity string differs"
+        );
+    }
+
+    #[test]
+    fn a_linux_persona_defaults_to_swiftshaders_subzero_string() {
+        // The bug this guards: every non-Mac platform pointed at the single
+        // SwiftShader row, which carries the *macOS* build's string. A Linux
+        // persona then reported `LLVM 10.0.0` where real Linux Chrome reports
+        // `Subzero` — one token off against any corpus of real Linux
+        // fingerprints.
+        let linux = default_renderer(Platform::LinuxX86_64);
+        assert!(
+            linux.contains("Subzero"),
+            "a Linux persona must report SwiftShader's Subzero build: {linux}"
+        );
+        assert!(
+            !linux.contains("LLVM"),
+            "a Linux persona must not report macOS's LLVM build: {linux}"
+        );
+        // Windows is inferred from the Linux measurement rather than measured
+        // (see `default_device`). Pinned so a real Windows probe has to change
+        // this deliberately.
+        assert_eq!(
+            default_renderer(Platform::Win32),
+            linux,
+            "Win32 follows Linux's SwiftShader build until someone measures it"
+        );
+    }
+
+    #[test]
+    fn a_mac_persona_defaults_to_the_apple_metal_renderer() {
+        // Unchanged by the SwiftShader split: macOS resolves real hardware,
+        // never either software row.
+        assert_eq!(
+            default_renderer(Platform::MacIntel),
+            "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)"
+        );
+        assert_eq!(
+            default_device(Platform::MacIntel).tier,
+            Tier::MetalAppleFamily3
+        );
     }
 
     #[test]

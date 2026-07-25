@@ -246,6 +246,24 @@ Apple Metal's numbers, or (as previously shipped) the Apple Metal string
 itself under a Win32 `navigator.platform`. The actual fix is capturing a
 D3D11 tier on Windows hardware.
 
+**SwiftShader's numbers are platform-independent; its renderer string is
+not.** Probing Ubuntu 24 (Chrome 150.0.7871.114, GPU-less VM) against the
+flags used for the macOS capture reproduced it exactly — no WebGL1 or WebGL2
+parameter differed, and the extension and precision lists matched — while the
+renderer string differed in one token, because SwiftShader chooses its JIT
+backend at build time and Chrome prints the choice:
+
+| persona platform | renderer string |
+|---|---|
+| `LinuxX86_64` | `ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)` |
+| `Win32` | same as Linux — inferred from that measurement, not measured |
+| macOS SwiftShader (matched, never a default) | `ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (LLVM 10.0.0) (0x0000C0DE)), SwiftShader driver)` |
+
+So one capability tier ships under two identity strings, and a Linux persona
+reports the string real Linux Chrome reports. Windows Chrome's SwiftShader
+build has not been probed and could use either backend; it currently follows
+Linux.
+
 **A renderer you pin yourself that matches neither tier falls back to your
 platform's default device and logs a warning.** Serving an unrecognized
 renderer's *name* above a different backend's *numbers* is its own

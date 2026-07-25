@@ -99,6 +99,14 @@ tier, not from device queries. That's why the SwiftShader row above is
 identical regardless of what real GPU sits underneath: it's a software
 rasterizer, so there's no real device to query.
 
+The one part of that row that *is* host-specific is the renderer string.
+Re-probing the same flags on Ubuntu 24 (Chrome 150.0.7871.114) reproduced
+every capability value above, but reported `SwiftShader Device (Subzero)`
+rather than `(LLVM 10.0.0)` — SwiftShader picks its JIT backend at build time
+and Chrome prints the choice. The spoofed profile serves whichever string
+matches the persona's platform; see
+[the WebGL section of the fingerprint chapter](./fingerprint.md#webgl-full-surface-value-spoof-resolved-from-measured-tiers).
+
 ## `navigator.gpu` visibility is governed by the page, not by this option
 
 `navigator.gpu` is `[SecureContext]`-gated. On an opaque-origin page —
