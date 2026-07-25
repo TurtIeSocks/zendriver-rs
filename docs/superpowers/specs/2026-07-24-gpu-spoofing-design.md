@@ -65,6 +65,15 @@ discarded (see [Corrections](#corrections-from-measurement)).
 | `failIfMajorPerformanceCaveat: true` yields a context | yes | yes |
 | unmasked renderer | `ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (LLVM 10.0.0) (0x0000C0DE)), SwiftShader driver)` | `ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)` |
 
+The `'gpu' in navigator` row above was measured on the `file://` probe page
+this appendix loads via `--dump-dom`, which is a secure context. That
+precondition matters: `navigator.gpu` is `[SecureContext]`-gated, so an
+opaque-origin page (`about:blank`, `data:`) reports `'gpu' in navigator` as
+`false` regardless of these backend flags (see
+[Corrections](#corrections-from-measurement)). Re-running this table against
+`about:blank` instead of `file://` will not reproduce the `true` values above
+— that is expected, not a discrepancy in this table.
+
 Two configurations that did **not** work, recorded so they are not retried:
 
 - `--headless=new` with `--disable-gpu` simply removed: **hangs**. Killed at 30s,
@@ -498,12 +507,20 @@ repeating:
   (`--disable-gpu --use-gl=angle --use-angle=swiftshader
   --enable-unsafe-swiftshader`), contradicting the note in
   `docs/superpowers/deferred-backlog.md:103`, which recorded it as `false` in
-  both headless and headful. **Caveat:** the probe used the GPU-relevant flags
-  only, not zendriver's complete launch set, and the Chrome build has moved
-  since that note was written on 2026-07-19. Re-confirm against the full flag
-  set in Phase 2 before treating the note as retired. Either way,
-  `requestAdapter()` resolving `null` — not the property being absent — is what
-  the fabrication path actually has to handle.
+  both headless and headful. **Re-confirmed 2026-07-25 (Chrome
+  150.0.7871.186), and it was never a launch-flags question.**
+  `navigator.gpu` is `[SecureContext]`-gated: `about:blank` and `data:` URLs
+  are opaque origins where `window.isSecureContext` is `false`, and WebGPU is
+  absent there regardless of flags, backend, or headless/headful. The
+  `deferred-backlog.md` note almost certainly measured from a non-secure page
+  and misattributed the absence to launch flags. `cargo run -p zendriver
+  --example probe_gpu -- disabled`, which navigates to a `file://` page
+  (secure context) through `BrowserBuilder`'s real launch argv, confirms
+  `{"isSecureContext":true,"gpuInNavigator":true,"adapter":null}` under
+  zendriver's default flags — the governing variable is the page's
+  secure-context status, not the flag set. Either way, `requestAdapter()`
+  resolving `null` — not the property being absent — is what the fabrication
+  path actually has to handle.
 - **`MAX_TEXTURE_SIZE` does not encode VRAM.** It is a compile-time constant per
   feature level.
 
