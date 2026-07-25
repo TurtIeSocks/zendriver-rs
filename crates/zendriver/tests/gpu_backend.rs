@@ -68,6 +68,11 @@ async fn swiftshader_tier_matches_recorded_baseline() {
     tab.goto(&file_url(&page)).await.expect("goto");
     tab.wait_for_load().await.expect("load");
     let raw: String = tab.evaluate(CAPS_JS).await.expect("evaluate");
+    // Recorded so a drift failure's message names the Chrome build that
+    // produced it — this canary also runs on a linux nightly CI lane, not
+    // just the darwin host the baseline below was measured on, so triage
+    // needs to know which Chrome was actually observed.
+    let chrome_version = browser.version().await.unwrap_or_default();
     browser.close().await.ok();
 
     let got: serde_json::Value = serde_json::from_str(&raw).expect("probe json");
@@ -77,22 +82,32 @@ async fn swiftshader_tier_matches_recorded_baseline() {
             .as_str()
             .unwrap_or_default()
             .contains("SwiftShader"),
-        "expected the SwiftShader backend, got: {got:#}"
+        "expected the SwiftShader backend on chrome={chrome_version}, got: {got:#}"
     );
 
-    // These are ANGLE's SwiftShader constants as measured on 2026-07-24. A
-    // failure here does NOT mean this test is wrong — it means Chrome's
-    // ANGLE constants moved, and every tier table derived from them must be
-    // re-derived. Update these values together with the tables, and note the
-    // Chrome version the new numbers were measured against.
-    assert_eq!(got["maxTextureSize"], 8192, "ANGLE drift: {got:#}");
+    // These are ANGLE's SwiftShader constants as measured on 2026-07-24 on
+    // Chrome 150.0.7871.186 (darwin). A failure here does NOT mean this test
+    // is wrong — it means Chrome's ANGLE constants moved, and every tier
+    // table derived from them must be re-derived. Update these values
+    // together with the tables; the assertion messages below already report
+    // the Chrome version this run observed, so triage starts with that.
+    assert_eq!(
+        got["maxTextureSize"], 8192,
+        "ANGLE drift (chrome={chrome_version}): {got:#}"
+    );
     assert_eq!(
         got["maxViewportDims"],
         serde_json::json!([8192, 8192]),
-        "ANGLE drift: {got:#}"
+        "ANGLE drift (chrome={chrome_version}): {got:#}"
     );
-    assert_eq!(got["maxVertexUniformVectors"], 4096, "ANGLE drift: {got:#}");
-    assert_eq!(got["extensionCount"], 30, "ANGLE drift: {got:#}");
+    assert_eq!(
+        got["maxVertexUniformVectors"], 4096,
+        "ANGLE drift (chrome={chrome_version}): {got:#}"
+    );
+    assert_eq!(
+        got["extensionCount"], 30,
+        "ANGLE drift (chrome={chrome_version}): {got:#}"
+    );
 }
 
 const ADAPTER_JS: &str = r#"
