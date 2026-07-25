@@ -21,7 +21,9 @@
 //       GPU.prototype.requestAdapter so a null/rejected result falls back to
 //       the synthetic adapter, leaving a real adapter untouched.
 //   (b) `navigator.gpu` is ENTIRELY ABSENT (`'gpu' in navigator === false` —
-//       the common GPU-less case, e.g. Chrome launched with `--disable-gpu`)
+//       `navigator.gpu` is `[SecureContext]`-gated, so this is what an
+//       opaque-origin page reports, e.g. `about:blank` or a bare `data:`
+//       URL, regardless of launch flags or GPU hardware)
 //       → DEFINE a synthetic `navigator.gpu` on Navigator.prototype whose
 //       `requestAdapter()` resolves the synthetic adapter. This flips
 //       `'gpu' in navigator` to TRUE, which is COHERENT for a modern-Chrome
