@@ -1081,7 +1081,16 @@ async fn main() -> zendriver::Result<()> {
 
     let browser = Browser::builder().gpu_backend(backend).launch().await?;
     let tab = browser.main_tab();
-    tab.goto("about:blank").await?;
+    // MUST be a secure context. `navigator.gpu` is `[SecureContext]`-gated,
+    // and `about:blank` is an opaque origin where `isSecureContext` is false —
+    // WebGPU is then invisible no matter which backend Chrome is running, so
+    // the probe would silently report `adapter: null` on a machine that has a
+    // perfectly good GPU. Measured: file:// → isSecureContext true → gpu
+    // present; data:/about:blank → false → absent. WebGL is not gated this way,
+    // which is why it reports correctly either way and masks the problem.
+    let page = std::env::temp_dir().join("zendriver-probe-gpu.html");
+    std::fs::write(&page, "<!doctype html><title>probe</title>")?;
+    tab.goto(&format!("file://{}", page.display())).await?;
     tab.wait_for_load().await?;
     // `Tab::evaluate` already sends `awaitPromise: true` (tab.rs:1096), so the
     // async IIFE above resolves before the value comes back.
@@ -1285,7 +1294,15 @@ async fn native_backend_yields_a_real_adapter_and_device() {
         }
     };
     let tab = browser.main_tab();
-    tab.goto("about:blank").await.expect("goto");
+    // Secure context required — `navigator.gpu` is `[SecureContext]`-gated and
+    // `about:blank` is an opaque origin. On `about:blank` this test would take
+    // the "no adapter on this host" skip branch on a machine that has a real
+    // GPU, quietly reporting a pass while verifying nothing.
+    let page = std::env::temp_dir().join("zendriver-native-adapter.html");
+    std::fs::write(&page, "<!doctype html><title>probe</title>").expect("write probe page");
+    tab.goto(&format!("file://{}", page.display()))
+        .await
+        .expect("goto");
     tab.wait_for_load().await.expect("load");
     let raw: String = tab.evaluate(ADAPTER_JS).await.expect("evaluate");
     browser.close().await.ok();
