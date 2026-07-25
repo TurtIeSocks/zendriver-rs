@@ -75,9 +75,24 @@
   // globals, so the synthesized prototype below is only a fallback; it mirrors
   // the IDL's own shape (constants enumerable and non-writable, on the
   // prototype, plus the toStringTag).
-  function inertExtension(name, consts) {
+  //
+  // Cached per context because real Chrome caches too: two getExtension calls
+  // with the same name hand back the identical object, so a stub rebuilt each
+  // call fails `gl.getExtension(x) === gl.getExtension(x)`.
+  var stubCache = new WeakMap();
+  function inertExtension(ctx, name, consts) {
+    var perContext = stubCache.get(ctx);
+    if (!perContext) {
+      perContext = Object.create(null);
+      stubCache.set(ctx, perContext);
+    }
+    if (perContext[name]) return perContext[name];
+
     var Ctor = window[name];
-    if (Ctor && Ctor.prototype) return Object.create(Ctor.prototype);
+    if (Ctor && Ctor.prototype) {
+      perContext[name] = Object.create(Ctor.prototype);
+      return perContext[name];
+    }
     var proto = {};
     if (typeof Symbol !== 'undefined' && Symbol.toStringTag) {
       Object.defineProperty(proto, Symbol.toStringTag, {
@@ -88,7 +103,8 @@
     for (var k in consts) {
       Object.defineProperty(proto, k, { value: consts[k], enumerable: true });
     }
-    return Object.create(proto);
+    perContext[name] = Object.create(proto);
+    return perContext[name];
   }
 
   function patch(proto, isV2) {
@@ -176,7 +192,7 @@
         if (stub) {
           // Inert extension: pure constants, nothing to break. Synthesize it
           // so the claimed list and getExtension agree.
-          ext = orig.call(this, canonical) || inertExtension(canonical, stub);
+          ext = orig.call(this, canonical) || inertExtension(this, canonical, stub);
         } else {
           // Functional extension: the list above only claims it when the
           // backend really has it, so both answers agree either way.
