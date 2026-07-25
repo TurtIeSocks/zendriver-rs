@@ -96,9 +96,12 @@ let browser = Browser::builder()
   arrays).
 - `navigator.chrome` (installs the runtime object headless Chrome
   doesn't ship).
-- WebGL vendor / renderer (returns `"Google Inc. (Intel)"` /
-  `"ANGLE (Intel, Mesa Intel(R) UHD Graphics, OpenGL 4.6)"` by
-  default).
+- WebGL vendor / renderer, plus every other readable WebGL value,
+  resolved from one capability tier (defaults to a captured Apple Metal
+  device: `"Google Inc. (Apple)"` / `"ANGLE (Apple, ANGLE Metal
+  Renderer: Apple M4 Pro, Unspecified Version)"`). The WebGPU adapter is
+  derived from that same renderer string, so the two APIs never name
+  different GPUs.
 - ChunkSplit + iframe-contentWindow guards so the patches survive
   cross-realm escape attempts.
 
