@@ -136,10 +136,19 @@ use serde::{Deserialize, Serialize};
 /// section). The two decisions are therefore coupled and owned together here,
 /// rather than left to the caller to combine correctly.
 ///
-/// ```no_run
-/// use zendriver::GpuBackend;
-/// // Use the host's real GPU instead of a software rasterizer.
-/// let builder = zendriver::Browser::builder().gpu_backend(GpuBackend::Native);
+/// The example must be scoped to **this crate's** own types.
+/// `zendriver-stealth` does not depend on `zendriver`, so an example
+/// referencing `zendriver::Browser::builder()` cannot compile here and would
+/// have to be marked `ignore` — leaving the only unchecked doctest in the
+/// crate, free to rot. The caller-facing `BrowserBuilder` example belongs in
+/// Task 3, where that method actually exists.
+///
+/// ```
+/// use zendriver_stealth::GpuBackend;
+/// // Selecting a backend never probes the host — the caller decides.
+/// let flags = GpuBackend::Native.angle_flags();
+/// assert_eq!(flags[0], "--use-gl=angle");
+/// assert!(!GpuBackend::Native.allows_disable_gpu());
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
