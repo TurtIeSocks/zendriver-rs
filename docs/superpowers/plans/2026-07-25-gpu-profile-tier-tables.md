@@ -442,7 +442,8 @@ pub fn gl_type_for(name: &str) -> GlType {
         | "POLYGON_OFFSET_FACTOR"
         | "POLYGON_OFFSET_UNITS"
         | "SAMPLE_COVERAGE_VALUE"
-        | "MAX_TEXTURE_MAX_ANISOTROPY_EXT" => GlType::Float,
+        | "MAX_TEXTURE_MAX_ANISOTROPY_EXT"
+        | "MAX_TEXTURE_LOD_BIAS" => GlType::Float,
         "MAX_VIEWPORT_DIMS" => GlType::IntPair,
         "VIEWPORT" | "SCISSOR_BOX" => GlType::IntQuad,
         "COMPRESSED_TEXTURE_FORMATS" => GlType::IntList,
