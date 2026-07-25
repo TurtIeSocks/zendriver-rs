@@ -55,13 +55,22 @@
   // avoid. Accessors rather than data properties so the members report the
   // native `function get rangeMin() { [native code] }` shape, and enumerable
   // so `for (k in fmt)` still yields the three names a real instance inherits.
+  //
+  // They go on an intermediate prototype rather than the instance because that
+  // is where IDL attributes live: a real fmt has no own properties at all, so
+  // `Object.keys(fmt)` is `[]` and `JSON.stringify(fmt)` is `{}`. Own accessors
+  // answered three names to both. The residual is that the instance's
+  // immediate prototype is one we made (the interface's own is one link
+  // further up) — a deeper probe than the own-key one this closes.
   function precisionFormat(p) {
     var Ctor = window.WebGLShaderPrecisionFormat;
-    var o = Ctor && Ctor.prototype ? Object.create(Ctor.prototype) : {};
-    __zdGetter(o, 'rangeMin', function () { return p[0]; }, { enumerable: true });
-    __zdGetter(o, 'rangeMax', function () { return p[1]; }, { enumerable: true });
-    __zdGetter(o, 'precision', function () { return p[2]; }, { enumerable: true });
-    return o;
+    var proto = Object.create(
+      Ctor && Ctor.prototype ? Ctor.prototype : Object.prototype
+    );
+    __zdGetter(proto, 'rangeMin', function () { return p[0]; }, { enumerable: true });
+    __zdGetter(proto, 'rangeMax', function () { return p[1]; }, { enumerable: true });
+    __zdGetter(proto, 'precision', function () { return p[2]; }, { enumerable: true });
+    return Object.create(proto);
   }
 
   // Real Chrome answers getExtension with an instance of the extension's own
