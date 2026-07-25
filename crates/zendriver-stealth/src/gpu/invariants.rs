@@ -31,12 +31,25 @@ fn pair_min(p: &GpuProfile, k: &str) -> Option<i64> {
 ///
 /// The three relations, and why a real GPU always satisfies them:
 ///
-/// - `MAX_VIEWPORT_DIMS >= MAX_TEXTURE_SIZE`: the viewport is backed by a
-///   framebuffer, and a framebuffer attachment is itself a texture, so a
-///   driver can never offer a rendering surface larger than the textures it
-///   can allocate. This is the shipped bug this whole effort exists to fix:
-///   the old patch reported a 32767 viewport beside an 8192 texture max —
-///   one `getParameter` pair that outed the browser as patched.
+/// - `MAX_VIEWPORT_DIMS >= MAX_TEXTURE_SIZE`: a viewport *larger* than the
+///   texture max is normal — D3D11 reports a 32767 viewport bound
+///   (`D3D11_VIEWPORT_BOUNDS_MAX`) beside a 16384 texture max
+///   (`D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION`) for feature level 11_0 and
+///   above (ANGLE `GetMaximumViewportSize` / `GetMaximum2DTextureSize`,
+///   `src/libANGLE/renderer/d3d/d3d11/renderer11_utils.cpp:422-434`). What
+///   never happens on any backend measured or documented here — SwiftShader
+///   8192/8192, Metal 16384/16384, D3D11 32767/16384 — is the viewport
+///   coming in *below* the texture max, so that direction is still a real
+///   defect: a profile reporting a smaller viewport than texture max is
+///   malformed. This check does not (and must not) catch the shipped bug —
+///   a 32767 viewport beside an 8192 texture max is exactly the real D3D11
+///   pairing above with a different texture-max source, so `vp < tex` is
+///   false and the check correctly passes it. That bug's defect was
+///   provenance (viewport and texture max drawn from two different
+///   backends in one profile), not an arithmetic relation between the two
+///   values; [`profile_for_tier`](crate::gpu::profile_for_tier) resolving
+///   every value from a single tier is what prevents it structurally. See
+///   `the_historical_mixed_tier_pair_is_not_an_arithmetic_violation` below.
 /// - `MAX_COMBINED_TEXTURE_IMAGE_UNITS >= MAX_TEXTURE_IMAGE_UNITS +
 ///   MAX_VERTEX_TEXTURE_IMAGE_UNITS`: "combined" is literally the shared pool
 ///   the fragment and vertex stages draw texture units from, per the WebGL
@@ -117,14 +130,35 @@ mod tests {
 
     #[test]
     fn viewport_smaller_than_texture_is_rejected() {
-        // This is exactly the shipped bug this whole effort exists to fix:
-        // the old patch reported a 32767 viewport beside an 8192 texture max.
+        // No measured or documented backend ever reports a viewport bound
+        // below its own texture max (SwiftShader 8192/8192, Metal
+        // 16384/16384, D3D11 32767/16384) — that direction is still a real
+        // defect, so it must stay an error. This is NOT the shipped bug:
+        // see `the_historical_mixed_tier_pair_is_not_an_arithmetic_violation`
+        // for why that pair (32767 viewport, 8192 texture) is legitimate and
+        // must NOT be rejected by this check.
         let mut p = profile_for_tier(Tier::SwiftShader);
         p.params_webgl2
             .insert("MAX_TEXTURE_SIZE".into(), GlParam::Int(16384));
         p.params_webgl2
             .insert("MAX_VIEWPORT_DIMS".into(), GlParam::IntPair([8192, 8192]));
         assert!(check_coherence(&p).is_err());
+    }
+
+    #[test]
+    fn the_historical_mixed_tier_pair_is_not_an_arithmetic_violation() {
+        // The shipped bug was MAX_VIEWPORT_DIMS [32767,32767] beside
+        // MAX_TEXTURE_SIZE 8192. Both values are real: 32767 is D3D11's
+        // viewport bound (ANGLE GetMaximumViewportSize) and 8192 is
+        // SwiftShader's texture max. The defect was that they came from two
+        // different backends, which no arithmetic relation can detect —
+        // resolving every value from a single tier is what prevents it.
+        // This test exists so nobody "fixes" check_coherence by inventing a
+        // ratio bound that would reject real D3D11 hardware.
+        let mut p = profile_for_tier(Tier::SwiftShader);
+        p.params_webgl2
+            .insert("MAX_VIEWPORT_DIMS".into(), GlParam::IntPair([32767, 32767]));
+        assert_eq!(check_coherence(&p), Ok(()));
     }
 
     #[test]
