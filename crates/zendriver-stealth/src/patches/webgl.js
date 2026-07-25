@@ -19,9 +19,11 @@
 // [0, 0, 300, 150] viewport beside an 800-wide drawingBufferWidth, and every
 // state-caching renderer that saves and restores through getParameter would
 // restore the wrong state. The Rust side (`gpu-tier-gen`'s SERVED_CAPS) is
-// what enforces the split; no branch is needed here, because a name the table
-// does not carry already delegates — the same path an unknown vendor-specific
-// enum takes.
+// what enforces the split, and it needs almost no support here: a name the
+// table does not carry already delegates — the same path an unknown
+// vendor-specific enum takes. The one exception is DRAW_BUFFERn, where a
+// served capability can outrun the backend that answers for it; see
+// `drawBufferGap` in `patch` below.
 //
 // Why per-context extension lists: about sixteen WebGL1 extensions are core in
 // WebGL2 and a real WebGL2 context does not list them. Serving one array to
@@ -228,6 +230,53 @@
     var claimable = Object.create(null);
     for (var i = 0; i < exts.length; i++) claimable[exts[i].toLowerCase()] = exts[i];
 
+    // DRAW_BUFFERn, keyed by enum number, for every index the served
+    // MAX_DRAW_BUFFERS claims to have.
+    //
+    // Whether a DRAW_BUFFERn enum answers at all is a property of the *real*
+    // backend, not of the number this table serves. So a persona serving
+    // MAX_DRAW_BUFFERS 8 over a backend that has 6 leaves DRAW_BUFFER6/7
+    // answering null beside a cap that says they must exist — and no driver
+    // reports 8 and then refuses DRAW_BUFFER6, because ES 3.0 derives the
+    // valid range from MAX_DRAW_BUFFERS itself. That pair is the default
+    // configuration rather than a corner case: `StealthProfile::spoofed()`
+    // runs on SwiftShader (6) while a Win32 or MacIntel persona serves 8.
+    //
+    // The gap is filled with the ES 3.0 initial value — BACK for index 0, NONE
+    // for every other index. Filling it cannot freeze state a page wrote:
+    // drawBuffers() rejects an index the backend does not have, so any index
+    // this case reaches is one the page could never have assigned. Every index
+    // the backend does know keeps delegating, so a page that calls
+    // drawBuffers() still reads back exactly what it set — including on a
+    // bound framebuffer, where NONE is also what a real device of the claimed
+    // size reports for an index the page left unassigned.
+    //
+    // Indices come from the profile's own enum table rather than from
+    // arithmetic on DRAW_BUFFER0, so the numbering stays whatever the captures
+    // measured.
+    //
+    // Two residues this does not claim to close. Chrome answers BACK at
+    // *every* in-range index while the default framebuffer is bound (measured:
+    // all three captures record BACK for DRAW_BUFFER0 through
+    // MAX_DRAW_BUFFERS-1), so in that pristine state a filled index reads NONE
+    // where the claimed device would read BACK. Serving BACK instead would
+    // trade that for an illegal value once a framebuffer object is bound,
+    // where only NONE and COLOR_ATTACHMENTi are legal, so NONE is the safer
+    // half. And the delegated read below has already synthesized the backend's
+    // own INVALID_ENUM by the time we answer; swallowing it would mean
+    // consuming an error the page may not have read yet.
+    var drawBufferGap = Object.create(null);
+    var servedMaxDraw = decode(table['MAX_DRAW_BUFFERS']);
+    if (typeof servedMaxDraw === 'number') {
+      for (var num in profile.enumNames) {
+        var m = /^DRAW_BUFFER(\d+)$/.exec(profile.enumNames[num]);
+        if (!m) continue;
+        var index = Number(m[1]);
+        // 0x0405 is BACK; 0 is NONE.
+        if (index < servedMaxDraw) drawBufferGap[num] = index === 0 ? 0x0405 : 0;
+      }
+    }
+
     __zdReplace(proto, 'getParameter', function (orig) {
       return function (param) {
         if (lost(this)) return orig.call(this, param);
@@ -244,7 +293,14 @@
         if (name && Object.prototype.hasOwnProperty.call(table, name)) {
           return decode(table[name]);
         }
-        return orig.call(this, param);
+        var real = orig.call(this, param);
+        // A DRAW_BUFFERn the served cap claims but this backend does not have
+        // answers null here; see `drawBufferGap` above for why that pair
+        // cannot stand and why filling it is safe.
+        if (real === null && Object.prototype.hasOwnProperty.call(drawBufferGap, param)) {
+          return drawBufferGap[param];
+        }
+        return real;
       };
     });
 

@@ -533,6 +533,36 @@ mod tests {
     }
 
     #[test]
+    fn every_draw_buffer_below_the_served_cap_is_named_in_the_enum_table() {
+        // `webgl.js` fills the DRAW_BUFFERn gap — the indices the served
+        // MAX_DRAW_BUFFERS claims but the host backend does not have — by
+        // walking `enumNames` for names matching DRAW_BUFFERn. A name missing
+        // from that table is an index the fill can never reach, so it would
+        // keep answering null beside a cap that says it exists.
+        for tier in types::Tier::ALL {
+            let p = profile_for_tier(*tier);
+            let GlParam::Int(max_draw) = p.params_webgl2["MAX_DRAW_BUFFERS"] else {
+                panic!("{tier:?} does not serve MAX_DRAW_BUFFERS as an integer");
+            };
+            let js: serde_json::Value = serde_json::from_str(&profile_to_js(&p)).unwrap();
+            let named: std::collections::BTreeSet<&str> = js["enumNames"]
+                .as_object()
+                .unwrap()
+                .values()
+                .filter_map(serde_json::Value::as_str)
+                .collect();
+            for i in 0..max_draw {
+                let name = format!("DRAW_BUFFER{i}");
+                assert!(
+                    named.contains(name.as_str()),
+                    "{tier:?} serves MAX_DRAW_BUFFERS {max_draw} but no enum number names \
+                     {name}; webgl.js could not fill it if the backend lacks it"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn extra_enums_do_not_shadow_the_generated_table() {
         // EXTRA_ENUMS is inserted after the generated names, so a number
         // appearing in both would silently win here. That can only happen if a

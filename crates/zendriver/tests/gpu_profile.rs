@@ -50,6 +50,13 @@ const CHECK_JS: &str = r#"
   // Context-attribute-dependent state: STENCIL_BITS is a property of the
   // context that was actually created, not of the device.
   const stencilGl = document.createElement('canvas').getContext('webgl2', {stencil: true});
+  // MAX_DRAW_BUFFERS is table-served but the DRAW_BUFFERn enums are not, and
+  // whether one answers at all is a property of the real backend. Read every
+  // index the served cap claims, plus the first index past it.
+  const maxDraw = gl.getParameter(gl.MAX_DRAW_BUFFERS);
+  const drawBuffers = [];
+  for (let i = 0; i < maxDraw; i++) drawBuffers.push(gl.getParameter(gl['DRAW_BUFFER' + i]));
+  const drawBufferPastCap = gl.getParameter(gl['DRAW_BUFFER' + maxDraw]);
   return JSON.stringify({
     renderer: dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : null,
     maxTexture: gl.getParameter(gl.MAX_TEXTURE_SIZE),
@@ -64,6 +71,9 @@ const CHECK_JS: &str = r#"
     stencilRequested: stencilGl ? stencilGl.getContextAttributes().stencil : null,
     stencilBits: stencilGl ? stencilGl.getParameter(stencilGl.STENCIL_BITS) : null,
     stencilBitsDefault: gl.getParameter(gl.STENCIL_BITS),
+    maxDraw,
+    drawBuffers,
+    drawBufferPastCap,
   });
 })()
 "#;
@@ -302,6 +312,39 @@ async fn spoofed_profile_is_internally_coherent() {
     assert_eq!(
         got["aliasedIsFloat32"], true,
         "ALIASED_POINT_SIZE_RANGE must be a Float32Array, not Int32Array: {got:#}"
+    );
+
+    // MAX_DRAW_BUFFERS is served from the table; whether a DRAW_BUFFERn enum
+    // answers at all comes from the real backend. This test launches on
+    // SwiftShader (6 draw buffers) with a persona serving 8, which is the
+    // default pairing rather than a contrived one — so without the patch's
+    // gap fill, DRAW_BUFFER6/7 read null beside a cap claiming they exist. No
+    // driver reports 8 and then refuses DRAW_BUFFER6: ES 3.0 derives the valid
+    // range from MAX_DRAW_BUFFERS itself.
+    let max_draw = got["maxDraw"].as_i64().expect("maxDraw");
+    let drawn = got["drawBuffers"].as_array().expect("drawBuffers array");
+    assert_eq!(
+        drawn.len() as i64,
+        max_draw,
+        "the probe must read every index below the served cap: {got:#}"
+    );
+    let null_indices: Vec<usize> = drawn
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| v.is_null())
+        .map(|(i, _)| i)
+        .collect();
+    assert!(
+        null_indices.is_empty(),
+        "MAX_DRAW_BUFFERS is {max_draw} but DRAW_BUFFER{null_indices:?} answered null; a page \
+         reads that pair in two lines: {got:#}"
+    );
+    // The other direction: an index at or above the served cap is out of range
+    // for the claimed device too, so it must keep delegating rather than
+    // gaining a fabricated value.
+    assert!(
+        got["drawBufferPastCap"].is_null(),
+        "DRAW_BUFFER{max_draw} is at the served cap and must stay delegated (null): {got:#}"
     );
 }
 

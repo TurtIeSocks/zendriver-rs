@@ -216,8 +216,9 @@ other ~85 values it answers are not device capabilities: they are per-context
 context attributes the page asked for (`RED_BITS`, `STENCIL_BITS`, `SAMPLES`
 — `getContext('webgl', {stencil: true})` changes them), or the
 extension-dependent `COMPRESSED_TEXTURE_FORMATS`. Every real Chrome reports
-the same defaults for all of them, so they carry no entropy to spoof, and
-serving them from a table would be a tell rather than a disguise:
+the same defaults for all of them, so they carry no entropy to spoof (with one
+partial exception, `DRAW_BUFFERn`, covered below), and serving them from a
+table would be a tell rather than a disguise:
 `gl.enable(gl.BLEND); gl.getParameter(gl.BLEND)` would answer `false`
 forever, and a resized canvas would report a stale viewport beside its real
 `drawingBufferWidth`. Delegating also keeps real WebGL pages working —
@@ -284,6 +285,24 @@ since no tier covers those backends yet. Adding a tier requires probing real
 hardware with that backend; values are never invented. See the
 [`capture-gpu-tier` skill](https://github.com/TurtIeSocks/zendriver-rs/blob/main/.claude/skills/capture-gpu-tier/SKILL.md)
 for the procedure if you hit this warning and have the hardware to fix it.
+
+**The tables describe the claimed device, not the host that runs the page.**
+A served capability can exceed what the backend underneath can actually do,
+and nothing in the tables can change that — the numbers are read from a table,
+the work is done by real hardware. `MAX_TEXTURE_SIZE` 16384 sits above a
+backend that fails a 16384 `texImage2D`; `MAX_SAMPLES` 8 sits above one whose
+`getInternalformatParameter` offers fewer; `MAX_DRAW_BUFFERS` 8 sits above one
+with six real `DRAW_BUFFERn` enums. The last of those is cheap enough to close
+outright, and the patch does close it (it answers the ES 3.0 default for any
+index the served cap claims and the backend has no constant for). The rest are
+not: a script that *exercises* a limit rather than reading it can tell the
+claim from the capability, and no table can fabricate the capability itself.
+Where that fidelity matters, pair the persona's tier with a
+[`gpu_backend`](gpu-backend.md) that really has those limits — a `MacIntel`
+persona (Apple Metal tier) or a `Win32` one (D3D11 tier) on
+`GpuBackend::Native` hardware, rather than over SwiftShader, which is the
+default. A `LinuxX86_64` persona already resolves the SwiftShader tier, so it
+is coherent with the default backend as shipped.
 
 **`Persona.gpu: Option<GpuProfile>` lets you pin a whole coherent device.**
 Unset, it resolves from the persona's WebGL renderer string, matched against

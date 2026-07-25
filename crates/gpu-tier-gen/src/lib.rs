@@ -77,9 +77,13 @@ pub fn gl_type_for(name: &str) -> GlType {
 /// Measured against the committed captures, this partition keeps **every**
 /// parameter whose value differs between the tiers (10 of 10 in WebGL1, 29 of
 /// 31 in WebGL2). The two exceptions are `DRAW_BUFFER6`/`7`, which differ only
-/// in *presence*, and that presence is implied by `MAX_DRAW_BUFFERS` — which is
-/// served. Everything delegated is byte-identical across every measured
-/// backend, so the entropy cost of delegating it is zero.
+/// in *presence* — and presence is a property of the **host backend**, not of
+/// the number this table serves, so delegating them does cost something the
+/// served `MAX_DRAW_BUFFERS` cannot buy back. `webgl.js` closes that one gap
+/// itself (see `drawBufferGap` there), answering the ES 3.0 default for any
+/// index below the served cap that the backend has no constant for. Everything
+/// else delegated is byte-identical across every measured backend, so the
+/// entropy cost of delegating it is zero.
 pub const SERVED_CAPS: &[&str] = &[
     // Implementation-dependent ranges and limits (ES 2.0 Table 6.20 /
     // ES 3.0 Table 6.35, "Implementation Dependent Values"). Nothing in the
@@ -171,11 +175,15 @@ pub const DELEGATED_PARAMS: &[&str] = &[
     "DEPTH_TEST",
     "DEPTH_WRITEMASK",
     "DITHER",
-    // DRAW_BUFFERn is written by `drawBuffers()` and is per-framebuffer. Its
-    // *presence* does carry entropy (a backend with MAX_DRAW_BUFFERS 6 has no
-    // DRAW_BUFFER6), but that presence is implied by the served
-    // MAX_DRAW_BUFFERS, and freezing the value would contradict every
-    // multiple-render-target page on its first `drawBuffers` call.
+    // DRAW_BUFFERn is written by `drawBuffers()` and is per-framebuffer, so
+    // freezing the value would contradict every multiple-render-target page on
+    // its first `drawBuffers` call. Its *presence* does carry entropy, and the
+    // served MAX_DRAW_BUFFERS does not supply it: presence comes from the host
+    // backend, which can have fewer buffers than the table claims (SwiftShader
+    // 6 under a persona serving 8 is the default pairing). `webgl.js` fills
+    // exactly that gap — see `drawBufferGap` — rather than serving the value
+    // from here, so the page reads its own `drawBuffers` writes back for every
+    // index the backend really has.
     "DRAW_BUFFER0",
     "DRAW_BUFFER1",
     "DRAW_BUFFER2",

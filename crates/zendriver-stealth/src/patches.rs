@@ -857,6 +857,30 @@ mod tests {
     }
 
     #[test]
+    fn webgl_patch_fills_the_draw_buffer_gap_from_the_served_cap() {
+        // Presence of a DRAW_BUFFERn enum comes from the real backend, so a
+        // served MAX_DRAW_BUFFERS of 8 over a 6-buffer backend leaves
+        // DRAW_BUFFER6/7 answering null — the default pairing, since
+        // `StealthProfile::spoofed()` launches on SwiftShader. The patch fills
+        // that gap; the behavior is proven in a real browser by
+        // `zendriver/tests/gpu_profile.rs`, and this guards the JS that does
+        // it against being deleted as dead weight.
+        assert!(
+            WEBGL.contains("drawBufferGap"),
+            "webgl.js no longer fills the DRAW_BUFFERn gap"
+        );
+        assert!(
+            WEBGL.contains("MAX_DRAW_BUFFERS"),
+            "the gap must be driven off the SERVED cap, not a hardcoded count"
+        );
+        assert!(
+            !WEBGL.contains("34853"),
+            "DRAW_BUFFERn enum numbers come from the profile's enum table, not \
+             from literals in the JS"
+        );
+    }
+
+    #[test]
     fn webgl_patch_serves_different_extension_lists_per_context_version() {
         let mut out = String::new();
         push_webgl(&mut out, None, None, Platform::MacIntel);
