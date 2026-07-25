@@ -21,6 +21,10 @@ properties:
     type:
       - string
       - "null"
+  gpu_backend:
+    description: "GPU backend Chrome renders WebGL / WebGPU with (default: `disabled`).\n\n`disabled` keeps zendriver's historical flags. `swift_shader` forces a\nsoftware rasterizer. `native` uses the host GPU through the platform's\nANGLE backend, giving a fully coherent GPU fingerprint — but it\nrequires a real GPU and reports **the host's** device, not a spoofed\none. There is no automatic fallback."
+    $ref: "#/$defs/GpuBackendSchema"
+    default: disabled
   headless:
     description: "Run Chrome with `--headless=new` (default: `true`)."
     type: boolean
@@ -57,6 +61,13 @@ properties:
       - type: "null"
 additionalProperties: false
 $defs:
+  GpuBackendSchema:
+    description: "Schema-only mirror of [`zendriver::GpuBackend`], which lives in\n`zendriver-stealth` and doesn't derive `schemars::JsonSchema` (a\ndependency that crate has no other reason to take on). Never\nconstructed — referenced only via `#[schemars(with = \"GpuBackendSchema\")]`\nso the generator can describe the field's shape without requiring the\nreal type to implement the trait. Variant names/casing must track\n[`zendriver::GpuBackend`] exactly."
+    type: string
+    enum:
+      - disabled
+      - swift_shader
+      - native
   InputProfileChoice:
     description: "Input-timing profile choice carried over the MCP wire.\n\nWire mirror of `zendriver::stealth::InputProfile`'s two presets.\nDecoupled from [`StealthProfileChoice`] — an explicit choice here always\nwins over anything stealth would otherwise imply. When `browser_open`'s\n`input_profile` field is left unset, the *effective* profile instead\nfollows the resolved stealth profile (spoofed stealth implies\n`Coherent`, `auto`/`native` stealth implies `Native`) — see\n`crate::tools::lifecycle::input_profile_choice_for`. This type's own\n`#[default]` (`Native`) is not consulted on that unset path; nothing in\nthis crate currently calls `InputProfileChoice::default()`."
     oneOf:
