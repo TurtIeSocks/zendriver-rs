@@ -1,28 +1,12 @@
 //! Regenerate the stealth crate's GPU capability tier tables from the
 //! committed probe captures.
 
-use gpu_tier_gen::{TierData, emit_rust, tier_from_capture};
+use gpu_tier_gen::{committed_tiers, emit_rust};
 
-const CAPTURES: &[(&str, &str)] = &[
-    (
-        "swiftshader",
-        "crates/zendriver-stealth/data/gpu-tiers/swiftshader.json",
-    ),
-    (
-        "metal-apple-family3",
-        "crates/zendriver-stealth/data/gpu-tiers/metal-apple-family3.json",
-    ),
-];
 const OUT: &str = "crates/zendriver-stealth/src/gpu/tiers.rs";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut tiers: Vec<TierData> = Vec::new();
-    for (name, path) in CAPTURES {
-        let raw = std::fs::read_to_string(path)?;
-        let v: serde_json::Value = serde_json::from_str(&raw)?;
-        let prov = v["provenance"].as_str().unwrap_or("unknown");
-        tiers.push(tier_from_capture(name, prov, &v["capture"]));
-    }
+    let tiers = committed_tiers();
     eprintln!("emitting {} tiers to {OUT}", tiers.len());
     std::fs::write(OUT, emit_rust(&tiers))?;
 

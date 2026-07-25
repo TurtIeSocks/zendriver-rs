@@ -512,6 +512,43 @@ fn strings_of(ctx: &Value, key: &str) -> Vec<String> {
     )
 }
 
+/// The committed probe captures, embedded rather than read from disk.
+///
+/// `include_str!` resolves against this source file, so the generator and its
+/// drift guard provably read the same bytes and neither depends on the
+/// working directory it is invoked from.
+const CAPTURES: &[(&str, &str)] = &[
+    (
+        "swiftshader",
+        include_str!("../../zendriver-stealth/data/gpu-tiers/swiftshader.json"),
+    ),
+    (
+        "metal-apple-family3",
+        include_str!("../../zendriver-stealth/data/gpu-tiers/metal-apple-family3.json"),
+    ),
+];
+
+/// Parse every committed capture into the emitter's input.
+///
+/// # Panics
+///
+/// Panics, loudly and by name, if a committed capture is not valid JSON or is
+/// missing a block — a hollow tier must stop the generator, not ship.
+#[must_use]
+pub fn committed_tiers() -> Vec<TierData> {
+    CAPTURES
+        .iter()
+        .map(|(name, raw)| {
+            let doc: Value = fail_loud(
+                serde_json::from_str(raw)
+                    .map_err(|e| format!("{name}: capture is not valid JSON: {e}")),
+            );
+            let provenance = doc["provenance"].as_str().unwrap_or("unknown").to_string();
+            tier_from_capture(name, &provenance, &doc["capture"])
+        })
+        .collect()
+}
+
 /// Parse one probe capture into the emitter's input.
 pub fn tier_from_capture(name: &str, provenance: &str, capture: &Value) -> TierData {
     let w1 = &capture["webgl1"];
@@ -1094,11 +1131,79 @@ mod tests {
         }
     }
 
+    /// The committed generated file, for the guards that check it directly.
+    const COMMITTED_TIERS_RS: &str = include_str!("../../zendriver-stealth/src/gpu/tiers.rs");
+
+    /// Collapse the only differences `rustfmt` can introduce between what
+    /// [`emit_rust`] writes and what lands in the committed file: whitespace,
+    /// and the trailing comma rustfmt drops when it collapses a list onto one
+    /// line. Everything token-level — every name, number and nesting — still
+    /// has to match exactly.
+    fn ignoring_rustfmt(src: &str) -> String {
+        let mut out = String::with_capacity(src.len());
+        for c in src.chars().filter(|c| !c.is_whitespace()) {
+            if matches!(c, ']' | ')') {
+                while out.ends_with(',') {
+                    out.pop();
+                }
+            }
+            out.push(c);
+        }
+        out
+    }
+
+    /// The committed `tiers.rs` must be what the generator produces from the
+    /// committed captures.
+    ///
+    /// This replaces a test that carried exactly this claim in its name and
+    /// doc while its body only grepped for two header substrings — so
+    /// rewriting every number in the table kept it green. It now runs the real
+    /// pipeline ([`committed_tiers`] + [`emit_rust`], the same two calls
+    /// `main.rs` makes) and compares the whole output.
+    #[test]
+    fn committed_table_matches_a_fresh_generation() {
+        let fresh = emit_rust(&committed_tiers());
+        assert_eq!(
+            ignoring_rustfmt(&fresh),
+            ignoring_rustfmt(COMMITTED_TIERS_RS),
+            "crates/zendriver-stealth/src/gpu/tiers.rs is not what the generator produces from \
+             the committed captures. Either it was hand-edited, or a capture changed without \
+             rerunning `cargo run -p gpu-tier-gen`."
+        );
+        // The comparison above is only meaningful if it is looking at real
+        // content, so pin the two things that would make it vacuous.
+        assert!(
+            fresh.contains("BASE_PARAMS_WEBGL2") && fresh.contains("MAX_TEXTURE_SIZE"),
+            "the generated source must actually contain the tables"
+        );
+        assert!(
+            COMMITTED_TIERS_RS.contains("DO NOT EDIT"),
+            "tiers.rs lost its generated-file header"
+        );
+    }
+
+    /// A changed value must fail the comparison above — the property the test
+    /// it replaces did not have.
+    #[test]
+    fn a_hand_edited_value_fails_the_comparison() {
+        let fresh = emit_rust(&committed_tiers());
+        let tampered = fresh.replacen("GlParam::Int(16384)", "GlParam::Int(16385)", 1);
+        assert_ne!(
+            tampered, fresh,
+            "the tamper target must exist, or this test proves nothing"
+        );
+        assert_ne!(
+            ignoring_rustfmt(&tampered),
+            ignoring_rustfmt(&fresh),
+            "a single changed number must not survive normalization"
+        );
+    }
+
     /// The whole delegated set, checked against the real captures rather than
     /// a hand-picked sample.
     #[test]
     fn no_delegated_param_survives_into_the_real_tables() {
-        let committed = include_str!("../../zendriver-stealth/src/gpu/tiers.rs").replace('\n', " ");
+        let committed = COMMITTED_TIERS_RS.replace('\n', " ");
         for name in DELEGATED_PARAMS {
             assert!(
                 !committed.contains(&format!("(\"{name}\", GlParam")),
