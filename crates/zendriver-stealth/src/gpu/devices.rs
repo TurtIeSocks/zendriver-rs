@@ -31,16 +31,21 @@ pub(crate) struct DeviceRow {
     pub tier: Tier,
     pub webgpu_vendor: &'static str,
     pub webgpu_architecture: &'static str,
+    /// Lowercase substring that identifies this device in a renderer string.
+    /// Explicit and independent of `unmasked_renderer` / `adapter_for_renderer`
+    /// — matching must never be derived from the row's own reference string.
+    pub match_token: &'static str,
 }
 
-/// Known devices, keyed by a substring of the unmasked renderer string.
-static DEVICES: &[DeviceRow] = &[
+/// Known devices, keyed by [`DeviceRow::match_token`].
+const DEVICES: &[DeviceRow] = &[
     DeviceRow {
         unmasked_vendor: "Google Inc. (Google)",
         unmasked_renderer: "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (LLVM 10.0.0) (0x0000C0DE)), SwiftShader driver)",
         tier: Tier::SwiftShader,
         webgpu_vendor: "",
         webgpu_architecture: "",
+        match_token: "swiftshader",
     },
     DeviceRow {
         unmasked_vendor: "Google Inc. (Apple)",
@@ -48,6 +53,7 @@ static DEVICES: &[DeviceRow] = &[
         tier: Tier::MetalAppleFamily3,
         webgpu_vendor: "apple",
         webgpu_architecture: "metal-3",
+        match_token: "apple",
     },
 ];
 
@@ -60,25 +66,32 @@ static DEVICES: &[DeviceRow] = &[
 pub(crate) const DEFAULT_RENDERER: &str =
     "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)";
 
-/// Pick the device row a renderer string belongs to.
+/// Row used when a renderer matches no shipped tier.
 ///
-/// Falls back to the first non-software row rather than inventing a tier:
-/// reporting a plausible real desktop GPU beats reporting a tier that matches
-/// no device.
+/// Deliberately the hardware row, not the software one: a persona that
+/// pins nothing should look like ordinary hardware, and SwiftShader's
+/// renderer string is itself a bot signal. Callers must reach for this
+/// explicitly, because using it for a renderer that named a *different*
+/// vendor means serving that vendor's name above Apple's capability
+/// values — incoherent, and only acceptable until that vendor's tier is
+/// actually captured.
 #[allow(dead_code)] // consumed starting with the persona/fingerprint wiring (a later task)
-pub(crate) fn device_for_renderer(renderer: &str) -> DeviceRow {
+pub(crate) const FALLBACK_DEVICE: DeviceRow = DEVICES[1];
+
+/// Pick the device row a renderer string belongs to, by explicit
+/// [`DeviceRow::match_token`] — never by a key derived from a row's own
+/// reference string.
+///
+/// Only two tiers ship today (SwiftShader and Apple Metal), so `None` is
+/// common and expected for D3D11-family renderers (Intel/NVIDIA/AMD) that
+/// have no captured tier yet. Callers that need a value regardless should
+/// reach for [`FALLBACK_DEVICE`] explicitly rather than have one guessed
+/// here. Adding a tier means capturing it on that hardware, not inventing
+/// values for an existing row.
+#[allow(dead_code)] // consumed starting with the persona/fingerprint wiring (a later task)
+pub(crate) fn device_for_renderer(renderer: &str) -> Option<DeviceRow> {
     let r = renderer.to_ascii_lowercase();
-    if r.contains("swiftshader") {
-        return DEVICES[0];
-    }
-    DEVICES
-        .iter()
-        .copied()
-        .find(|d| {
-            let vendor = adapter_for_renderer(d.unmasked_renderer).vendor;
-            !vendor.is_empty() && r.contains(&vendor)
-        })
-        .unwrap_or(DEVICES[1])
+    DEVICES.iter().copied().find(|d| r.contains(d.match_token))
 }
 
 /// vendor + architecture for the spoofed WebGPU adapter. `device` and
@@ -262,7 +275,8 @@ mod tests {
     fn a_known_renderer_selects_its_tier() {
         let d = device_for_renderer(
             "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
-        );
+        )
+        .expect("apple renderer must match the metal row");
         assert_eq!(d.tier, Tier::MetalAppleFamily3);
         assert_eq!(d.webgpu_vendor, "apple");
     }
@@ -271,15 +285,42 @@ mod tests {
     fn a_software_renderer_selects_the_swiftshader_tier() {
         let d = device_for_renderer(
             "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (LLVM 10.0.0) (0x0000C0DE)), SwiftShader driver)",
-        );
+        )
+        .expect("swiftshader renderer must match the software row");
         assert_eq!(d.tier, Tier::SwiftShader);
     }
 
     #[test]
-    fn an_unknown_renderer_falls_back_without_inventing_a_tier() {
-        // Unknown hardware takes the default desktop tier rather than
-        // guessing; a wrong tier is more detectable than a generic one.
-        let d = device_for_renderer("Some Unreleased GPU");
-        assert_eq!(d.tier, Tier::MetalAppleFamily3);
+    fn an_unknown_renderer_returns_none() {
+        // Unknown hardware matches no row; guessing a tier would be more
+        // detectable than admitting there is none.
+        assert_eq!(device_for_renderer("Some Unreleased GPU"), None);
+    }
+
+    #[test]
+    fn a_hardware_renderer_never_selects_the_software_tier() {
+        // The bug this replaces: the SwiftShader row's match key was derived
+        // from its own reference string, which fell through to "intel", so
+        // every Intel renderer selected the software tier.
+        let intel = "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)";
+        assert_ne!(
+            device_for_renderer(intel).map(|d| d.tier),
+            Some(Tier::SwiftShader),
+            "a real Intel GPU must never resolve to the software rasterizer's values"
+        );
+    }
+
+    #[test]
+    fn renderers_with_no_shipped_tier_return_none() {
+        // Only SwiftShader and Apple Metal tiers ship. A D3D11-family renderer
+        // has no measured tier, and guessing one would pair its name with
+        // another backend's numbers.
+        for r in [
+            "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+            "ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+            "ANGLE (AMD, AMD Radeon RX 7900 XT, D3D11)",
+        ] {
+            assert_eq!(device_for_renderer(r), None, "unexpected tier for {r}");
+        }
     }
 }
