@@ -22,7 +22,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
+      - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
+      # gpu-tier-gen's own output feeds back through rustfmt (see its
+      # main.rs), so this job's rustfmt component doubles as this step's
+      # runtime dependency.
+      - name: GPU tier table is current
+        run: |
+          cargo run -p gpu-tier-gen
+          git diff --exit-code crates/zendriver-stealth/src/gpu/tiers.rs
 
   clippy:
     runs-on: ubuntu-latest
