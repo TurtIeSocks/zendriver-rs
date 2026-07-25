@@ -55,6 +55,50 @@ const CHECK_JS: &str = r#"
 const MAX_POLL_TRIES: u32 = 20;
 const POLL_DELAY: Duration = Duration::from_millis(50);
 
+/// The capture the default spoofed persona's GPU renderer resolves to.
+///
+/// Every assertion below this point also holds against an unpatched
+/// SwiftShader surface (16384/16384 vs 8192/8192 both satisfy `viewport >=
+/// texture`), so a green run only proves internal coherence, not that the
+/// shipped tier tables reached the browser. This file compares the observed
+/// values against the actual resolved tier instead.
+///
+/// There is no public route to that resolved [`GpuProfile`](zendriver_stealth::GpuProfile)
+/// from this crate: `zendriver_stealth::gpu` is a `pub mod`, but the
+/// functions that would resolve one — `profile_for_tier`,
+/// `device_for_renderer` — and the `Tier` type itself are all `pub(crate)`
+/// inside `zendriver-stealth`, and `Persona::gpu` is only the caller-pinned
+/// *override*, not the resolved profile `push_webgl` builds internally. So
+/// this reads the same measured capture the tier's generated table was built
+/// from — table-derived, not a hand-copied literal — rather than the table
+/// itself.
+///
+/// This is the Metal tier specifically because `StealthProfile::spoofed()`
+/// below pins no persona/WebGL spec, so `push_webgl` resolves the renderer to
+/// `gpu::devices::DEFAULT_RENDERER` ("ANGLE (Apple, ANGLE Metal Renderer:
+/// Apple M4 Pro, Unspecified Version)"), which `device_for_renderer` maps to
+/// `Tier::MetalAppleFamily3` — the same row this JSON was captured from.
+const RESOLVED_TIER_CAPTURE: &str =
+    include_str!("../../zendriver-stealth/data/gpu-tiers/metal-apple-family3.json");
+
+/// `(MAX_TEXTURE_SIZE, MAX_VIEWPORT_DIMS)` from the capture the default
+/// persona's GPU tier resolves to — see [`RESOLVED_TIER_CAPTURE`].
+fn resolved_tier_texture_and_viewport() -> (i64, [i64; 2]) {
+    let capture: Value = serde_json::from_str(RESOLVED_TIER_CAPTURE).expect("capture json");
+    let params = &capture["capture"]["webgl2"]["params"];
+    let tex = params["MAX_TEXTURE_SIZE"]
+        .as_i64()
+        .expect("capture MAX_TEXTURE_SIZE");
+    let dims = params["MAX_VIEWPORT_DIMS"]
+        .as_array()
+        .expect("capture MAX_VIEWPORT_DIMS array");
+    let vp = [
+        dims[0].as_i64().expect("capture maxViewport[0]"),
+        dims[1].as_i64().expect("capture maxViewport[1]"),
+    ];
+    (tex, vp)
+}
+
 /// Writes `name` into the temp dir and returns its `file://` URL.
 ///
 /// The probe must not run on `about:blank`: that is an opaque origin, and this
@@ -96,9 +140,23 @@ fn file_url(name: &str) -> String {
 async fn spoofed_surface(tab: &Tab) -> Value {
     let raw: String = tab.evaluate(CHECK_JS).await.expect("isolated-world probe");
     let native: Value = serde_json::from_str(&raw).expect("probe json");
+    if let Some(err) = native["error"].as_str() {
+        panic!("isolated-world WebGL probe failed: {err}");
+    }
     for attempt in 0..MAX_POLL_TRIES {
         let raw: String = tab.evaluate_main(CHECK_JS).await.expect("main-world probe");
         let got: Value = serde_json::from_str(&raw).expect("probe json");
+        // `CHECK_JS` creates a fresh WebGL2 context per invocation and never
+        // releases it, so a long poll accumulates contexts against Chrome's
+        // live-context cap. Once that cap is hit this returns
+        // `{error: 'no webgl2'}`, which — because it carries neither
+        // `renderer` field — would otherwise read as "different from
+        // `native`" and get returned below as though it were the spoof,
+        // panicking downstream on a missing key instead of naming the real
+        // cause.
+        if let Some(err) = got["error"].as_str() {
+            panic!("main-world WebGL probe failed: {err}");
+        }
         if got["renderer"] != native["renderer"] {
             return got;
         }
@@ -137,11 +195,45 @@ async fn spoofed_profile_is_internally_coherent() {
     browser.close().await.ok();
 
     let tex = got["maxTexture"].as_i64().expect("maxTexture");
-    let vp = got["maxViewport"][0].as_i64().expect("maxViewport");
-    assert!(
-        vp >= tex,
-        "viewport {vp} below texture max {tex} — the exact pair this work fixes: {got:#}"
+    let vp_dims = got["maxViewport"].as_array().expect("maxViewport array");
+    assert_eq!(
+        vp_dims.len(),
+        2,
+        "MAX_VIEWPORT_DIMS must have 2 elements: {got:#}"
     );
+    let vp = [
+        vp_dims[0].as_i64().expect("maxViewport[0]"),
+        vp_dims[1].as_i64().expect("maxViewport[1]"),
+    ];
+    // Both elements, not just [0]: the shipped bug this work fixes paired
+    // values across backends, and a divergent second element would slip
+    // through a check of [0] alone.
+    for (i, &v) in vp.iter().enumerate() {
+        assert!(
+            v >= tex,
+            "viewport[{i}] {v} below texture max {tex} — the exact pair this work fixes: {got:#}"
+        );
+    }
+
+    // Every assertion above also holds against an unpatched SwiftShader
+    // surface (8192/8192 satisfies `viewport >= texture` just as well as
+    // 16384/16384 does), so it proves self-coherence, not that the shipped
+    // tier tables reached the browser. Compare against the tier the persona
+    // actually resolved to — see `RESOLVED_TIER_CAPTURE` — so serving the
+    // wrong tier, or falling back to the native surface, fails loudly here
+    // instead of passing silently.
+    let (expect_tex, expect_vp) = resolved_tier_texture_and_viewport();
+    assert_eq!(
+        tex, expect_tex,
+        "MAX_TEXTURE_SIZE {tex} does not match the resolved tier's capture {expect_tex} — \
+         wrong tier or an unpatched native surface: {got:#}"
+    );
+    assert_eq!(
+        vp, expect_vp,
+        "MAX_VIEWPORT_DIMS {vp:?} does not match the resolved tier's capture {expect_vp:?} — \
+         wrong tier or an unpatched native surface: {got:#}"
+    );
+
     let (c, f, v) = (
         got["combined"].as_i64().expect("combined"),
         got["frag"].as_i64().expect("frag"),
