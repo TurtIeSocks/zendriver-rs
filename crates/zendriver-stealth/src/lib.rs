@@ -39,6 +39,7 @@ pub mod fingerprint;
 pub mod flags;
 #[cfg(feature = "geo")]
 pub mod geo;
+pub mod gpu;
 mod headers;
 pub mod input_profile;
 pub mod lang;
@@ -52,6 +53,7 @@ pub mod ua;
 pub use error::StealthError;
 pub use fingerprint::{Brand, Fingerprint, UserAgentMetadata};
 pub use flags::GpuBackend;
+pub use gpu::{GlParam, Provenance, ShaderPrecision};
 pub use input_profile::InputProfile;
 pub use lang::accept_language;
 pub use observer::StealthObserver;
