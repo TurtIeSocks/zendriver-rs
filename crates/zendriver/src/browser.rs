@@ -370,6 +370,33 @@ fn launch_timeout_error(backend: GpuBackend) -> BrowserError {
     }
 }
 
+/// Merge the stealth profile's `extra_flags` onto `base_flags` (the output of
+/// [`BrowserBuilder::build_flags`]).
+///
+/// Only the ANGLE flags can arrive from both paths (`build_flags` emits them
+/// for the stealth-`None` / non-Spoofed case via `effective_gpu_backend`, and
+/// the profile emits them too when it carries a backend), so those are the
+/// only flags deduped here. Everything else `extra_flags` contributes is
+/// appended as-is — even if it happens to already be present in
+/// `base_flags` — so the merged argv is unchanged from before this feature
+/// for every backend that emits no ANGLE flags (in particular the default
+/// `GpuBackend::Disabled` path, which must reproduce today's behavior
+/// byte-for-byte, duplicate flags included).
+pub(crate) fn merge_launch_flags(
+    mut base_flags: Vec<String>,
+    extra_flags: Vec<String>,
+    gpu_backend: GpuBackend,
+) -> Vec<String> {
+    let angle = gpu_backend.angle_flags();
+    for f in extra_flags {
+        if angle.contains(&f) && base_flags.contains(&f) {
+            continue;
+        }
+        base_flags.push(f);
+    }
+    base_flags
+}
+
 /// Load (or first-time generate + persist) the fingerprint [`Seed`] bound to a
 /// `user_data_dir`.
 ///
@@ -3023,16 +3050,18 @@ impl BrowserBuilder {
             &self.preferences,
         );
 
-        let mut flags = self.build_flags(&user_data_path);
         // The ANGLE backend flags are emitted by `build_flags` already, and
         // the stealth profile emits them too when it carries a backend.
         // Chrome would accept both, but two conflicting `--use-angle=` values
-        // in the argv are a debugging trap.
-        for f in extra_flags {
-            if !flags.contains(&f) {
-                flags.push(f);
-            }
-        }
+        // in the argv are a debugging trap — `merge_launch_flags` dedups only
+        // that pair, leaving everything else (including the flags every
+        // stealth profile shares with `build_flags`, like `--no-first-run`)
+        // appended unconditionally, matching today's behavior.
+        let mut flags = merge_launch_flags(
+            self.build_flags(&user_data_path),
+            extra_flags,
+            self.effective_gpu_backend(),
+        );
         // CI-friendly defaults: when running under CI (the runner sets
         // `CI=true`), Chrome's user-namespace sandbox refuses to start
         // because the GitHub-Actions / Docker container runs as root,
@@ -5173,6 +5202,36 @@ mod tests {
         let b = Browser::builder().stealth(StealthProfile::native());
         let flags = b.build_flags(Path::new("/tmp/zd-test"));
         assert!(flags.contains(&"--disable-gpu".to_string()));
+    }
+
+    #[test]
+    fn merge_launch_flags_preserves_duplicate_multiplicity_for_default_backend() {
+        // Regression guard: `merge_launch_flags` must dedup ONLY the ANGLE
+        // pair, never any other flag. `build_flags` and the stealth profile's
+        // own `shared_stealth_flags` (zendriver-stealth/src/flags.rs) both
+        // independently emit `--no-first-run` / `--no-default-browser-check`
+        // / `--password-store=basic` — for the default `GpuBackend::Disabled`
+        // path (which emits no ANGLE flags at all) the merged argv must still
+        // carry those in their original, pre-dedup multiplicity, so the
+        // "byte-for-byte today's behavior" guarantee for `Disabled` holds.
+        let base = Browser::builder()
+            .stealth(StealthProfile::native())
+            .build_flags(Path::new("/tmp/zd-test"));
+        let extra = StealthProfile::native().build_flags();
+        let merged = super::merge_launch_flags(base, extra, GpuBackend::Disabled);
+
+        for dup in [
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--password-store=basic",
+        ] {
+            assert_eq!(
+                merged.iter().filter(|f| *f == dup).count(),
+                2,
+                "{dup} must appear twice (once from build_flags, once from the \
+                 profile) under the default GpuBackend::Disabled, got: {merged:?}"
+            );
+        }
     }
 
     #[test]
