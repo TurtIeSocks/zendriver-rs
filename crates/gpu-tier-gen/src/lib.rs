@@ -476,8 +476,18 @@ fn enums_of(ctx: &Value) -> BTreeMap<String, u32> {
         .unwrap_or_default()
 }
 
+/// Read a capture's string array **in capture order**.
+///
+/// Deliberately not sorted. This reads the extension lists, and
+/// `getSupportedExtensions()` order is a standard order-sensitive fingerprint
+/// input: Chrome emits `EXT_shader_texture_lod` before `EXT_sRGB`, which no
+/// sort produces. Blink's order is already deterministic, so preserving the
+/// capture's order is both more faithful than sorting and equally reproducible
+/// for the drift guard. Sorting stays where order genuinely carries no
+/// meaning — the parameter and enum tables, which are `BTreeMap`s keyed for
+/// lookup.
 fn strings_of(ctx: &Value, key: &str) -> Vec<String> {
-    let mut v: Vec<String> = ctx[key]
+    ctx[key]
         .as_array()
         .map(|a| {
             fail_loud(
@@ -491,9 +501,7 @@ fn strings_of(ctx: &Value, key: &str) -> Vec<String> {
                     .collect(),
             )
         })
-        .unwrap_or_default();
-    v.sort();
-    v
+        .unwrap_or_default()
 }
 
 /// Parse one probe capture into the emitter's input.
@@ -1094,6 +1102,51 @@ mod tests {
                  `cargo run -p gpu-tier-gen`"
             );
         }
+    }
+
+    /// `getSupportedExtensions()` order is itself a fingerprint input, and
+    /// Chrome's order is not alphabetical — it emits `EXT_shader_texture_lod`
+    /// before `EXT_sRGB`, which is exactly the pair a sort would swap. Checked
+    /// against the committed captures rather than a synthetic list, so the
+    /// guard is anchored to what Chrome really emitted.
+    #[test]
+    fn extension_order_is_chromes_not_alphabetical() {
+        const METAL: &str =
+            include_str!("../../zendriver-stealth/data/gpu-tiers/metal-apple-family3.json");
+        let doc: Value = serde_json::from_str(METAL).expect("capture json");
+        let tier = tier_from_capture("metal-apple-family3", "probed: test", &doc["capture"]);
+
+        let captured: Vec<String> = doc["capture"]["webgl1"]["extensions"]
+            .as_array()
+            .expect("extensions array")
+            .iter()
+            .map(|s| s.as_str().expect("string").to_string())
+            .collect();
+        assert_eq!(
+            tier.extensions_webgl1, captured,
+            "the extension list must survive in the capture's own order"
+        );
+
+        let pos = |name: &str| {
+            tier.extensions_webgl1
+                .iter()
+                .position(|e| e == name)
+                .expect("both names are present in the committed capture")
+        };
+        assert!(
+            pos("EXT_shader_texture_lod") < pos("EXT_sRGB"),
+            "Chrome emits EXT_shader_texture_lod before EXT_sRGB; a sorted list \
+             reverses them and changes an order-sensitive fingerprint"
+        );
+        assert_ne!(
+            tier.extensions_webgl1,
+            {
+                let mut sorted = tier.extensions_webgl1.clone();
+                sorted.sort();
+                sorted
+            },
+            "this capture is genuinely unsorted, so the assertion above is not vacuous"
+        );
     }
 
     #[test]
