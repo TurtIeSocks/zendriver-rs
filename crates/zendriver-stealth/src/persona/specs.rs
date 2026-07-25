@@ -133,6 +133,14 @@ pub struct ScreenSpec {
 /// tier tables. Both can be set together — `gpu` supplies the full device,
 /// and this still overlays on top to pin just the vendor/renderer strings
 /// without restating the rest of the device.
+///
+/// A [`Strategy::Native`] strategy here emits no WebGL patch at all — the
+/// host's real renderer passes through — and therefore also suppresses the
+/// WebGPU **value** spoof, so `navigator.gpu` cannot name a GPU that
+/// `getParameter(UNMASKED_RENDERER_WEBGL)` never claimed. An explicit
+/// [`WebgpuSpec`] `Block` names no GPU at all and stays honored regardless.
+/// [`StealthProfile::native_isolation`](crate::StealthProfile::native_isolation)
+/// applies the same coupling profile-wide.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct WebglSpec {
     pub strategy: Option<Strategy>,

@@ -50,6 +50,16 @@ Noise surfaces (Canvas, Audio, ClientRects) accept `Native`, `Seeded`,
 `Block`, `Value` (fake IP). Requesting a meaningless combination logs a
 warning and falls back to the surface's kind default.
 
+**`Native` on `Webgl` also silences the `Webgpu` value spoof.** A native
+WebGL surface reports the host's real renderer, so a substituted
+`GPUAdapterInfo` — derived from the renderer that was *not* applied — would
+have `navigator.gpu` naming a GPU that `getParameter(UNMASKED_RENDERER_WEBGL)`
+never claimed, which is exactly the cross-API mismatch a fingerprinter looks
+for. The same coupling applies to
+[`native_isolation`](stealth.md#opting-into-real-site-isolation--real-webgl-native_isolation),
+which drops the WebGL patch profile-wide. An explicit `Webgpu` `Block` names
+no GPU at all, so it stays honored either way.
+
 ## Persona sources
 
 ### `Persona::system()` — host-probed, cached

@@ -220,9 +220,11 @@ driven by the
 [`Persona`](https://docs.rs/zendriver-stealth/latest/zendriver_stealth/struct.Persona.html)
 `webgpu` surface) is skipped along with it, so `navigator.gpu` reports
 the real host adapter instead of one derived from a renderer the WebGL
-patch no longer applies — no cross-API mismatch. An explicit `Webgpu`
-`Block` (hiding `navigator.gpu`) is renderer-neutral, so it is still
-honored if you set it.
+patch no longer applies — no cross-API mismatch. The same holds for the
+per-surface `Strategy::Native` on `Webgl`, which leaves the real renderer
+in place for one persona rather than the whole profile. An explicit
+`Webgpu` `Block` (hiding `navigator.gpu`) is renderer-neutral, so it is
+still honored if you set it.
 
 ## End-to-end example
 
