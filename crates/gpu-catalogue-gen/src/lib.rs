@@ -143,6 +143,187 @@ pub struct CorpusModel {
     pub model: String,
 }
 
+/// Reduce a model name to the form both sides of the `pci.ids` join agree on.
+///
+/// Two mistakes are already paid for here, so do not simplify them away.
+/// Writing the `(tm)`/`(r)` strip as `\b\(tm\)\b` matches nothing, because a
+/// word boundary before a parenthesis is not where it looks like it is; that
+/// alone dropped Intel's join rate to zero. The vendor words have to go too,
+/// because the driver leads with them (`NVIDIA GeForce RTX 3070`) and
+/// `pci.ids` does not (`GA104 [GeForce RTX 3070]`).
+#[must_use]
+pub fn normalize_model(s: &str) -> String {
+    const DROP_WORDS: &[&str] = &[
+        "nvidia",
+        "amd",
+        "ati",
+        "intel",
+        "corporation",
+        "inc",
+        "series",
+    ];
+    let lower = s
+        .to_ascii_lowercase()
+        .replace("(tm)", "")
+        .replace("(r)", "");
+    let mut out = String::new();
+    for word in lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+    {
+        if DROP_WORDS.contains(&word) {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(word);
+    }
+    out
+}
+
+/// Every marketing name one `pci.ids` entry covers.
+///
+/// A single entry routinely stands for several cards:
+/// `Navi 22 [Radeon RX 6700/6700 XT/6750 XT]`. Only the first slash segment
+/// carries the `Radeon RX` prefix, so each later segment is tried both bare and
+/// with that prefix prepended. Skipping this costs about a third of AMD.
+fn pci_aliases(name: &str) -> Vec<String> {
+    let mut out = vec![normalize_model(name)];
+    let mut rest = name;
+    while let Some(open) = rest.find('[') {
+        let Some(close) = rest[open..].find(']') else {
+            break;
+        };
+        let bracket = &rest[open + 1..open + close];
+        rest = &rest[open + close..];
+
+        out.push(normalize_model(bracket));
+        let parts: Vec<&str> = bracket
+            .split('/')
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .collect();
+        if parts.len() > 1 {
+            // "Radeon RX 6700" lends "Radeon RX" to "6700 XT" and "6750 XT".
+            let head: Vec<&str> = parts[0].split_whitespace().collect();
+            let prefix = head[..head.len().saturating_sub(1)].join(" ");
+            for part in &parts {
+                out.push(normalize_model(part));
+                if !prefix.is_empty() {
+                    out.push(normalize_model(&format!("{prefix} {part}")));
+                }
+            }
+        }
+    }
+    out.retain(|a| !a.is_empty());
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// PCI vendor id for each ANGLE vendor token the catalogue keeps.
+const VENDOR_IDS: &[(&str, u32)] = &[("NVIDIA", 0x10de), ("AMD", 0x1002), ("Intel", 0x8086)];
+
+/// A catalogue row on its way to the generated file.
+///
+/// Strings rather than the stealth crate's enums, because this generator does
+/// not depend on it: `tier` is rendered as `Tier::{tier}`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogueRow {
+    pub model: String,
+    pub vendor: String,
+    pub device_id: Option<u32>,
+    pub tier: String,
+}
+
+/// What a `build_catalogue` run kept and what it had to drop.
+#[derive(Debug, Clone, Default)]
+pub struct BuildReport {
+    pub rows: Vec<CatalogueRow>,
+    /// D3D11 models with no `pci.ids` match, so no device ID, so no composable
+    /// renderer string. Reported rather than silently swallowed.
+    pub unmatched: Vec<String>,
+}
+
+/// Join corpus models against `pci.ids` and produce the catalogue rows.
+///
+/// A D3D11 renderer string carries its device ID by construction, so a model
+/// that fails to join **cannot be composed at all** and is dropped. Inventing
+/// the number is the one thing this design forbids, and a placeholder would be
+/// a fabricated fingerprint value wearing a real card's name.
+///
+/// Metal needs no join: Apple silicon exposes no PCI ID and the string has
+/// nowhere to put one.
+#[must_use]
+pub fn build_catalogue(network_json: &str, pci_ids: &str) -> BuildReport {
+    let devices = parse_pci_ids(pci_ids);
+    let mut by_vendor: std::collections::BTreeMap<u32, Vec<(&PciDevice, Vec<String>)>> =
+        std::collections::BTreeMap::new();
+    for d in &devices {
+        if VENDOR_IDS.iter().any(|(_, id)| *id == d.vendor_id) {
+            by_vendor
+                .entry(d.vendor_id)
+                .or_default()
+                .push((d, pci_aliases(&d.name)));
+        }
+    }
+
+    let mut report = BuildReport::default();
+    for m in extract_models(network_json) {
+        match m.backend {
+            Backend::Metal => report.rows.push(CatalogueRow {
+                model: m.model,
+                vendor: m.vendor,
+                device_id: None,
+                tier: "MetalMacos".to_string(),
+            }),
+            Backend::D3d11 => {
+                let Some((_, vendor_id)) = VENDOR_IDS.iter().find(|(v, _)| *v == m.vendor) else {
+                    report.unmatched.push(m.model);
+                    continue;
+                };
+                let target = normalize_model(&m.model);
+                // A marketing name routinely covers several SKUs: `Intel(R)
+                // Graphics` matches 30 device ids, `Intel(R) UHD Graphics` 29.
+                // Every candidate is a device that really does report that
+                // name, so any of them composes a string some real machine
+                // emits — but the choice must not depend on the order pci.ids
+                // happens to list them in, or bumping the pin would silently
+                // reshuffle the catalogue. Take the lowest id.
+                let hit = by_vendor
+                    .get(vendor_id)
+                    .into_iter()
+                    .flatten()
+                    .filter(|(_, aliases)| !target.is_empty() && aliases.contains(&target))
+                    .min_by_key(|(device, _)| device.device_id);
+                let is_nvidia = m.vendor == "NVIDIA";
+                match hit {
+                    Some((device, _)) => report.rows.push(CatalogueRow {
+                        model: m.model,
+                        vendor: m.vendor,
+                        device_id: Some(device.device_id),
+                        // The one measured vendor split: ANGLE applies
+                        // skipVSConstantRegisterZero when and only when
+                        // isNvidia.
+                        tier: if is_nvidia {
+                            "D3d11Fl11Nvidia".to_string()
+                        } else {
+                            "D3d11Fl11".to_string()
+                        },
+                    }),
+                    None => report.unmatched.push(m.model),
+                }
+            }
+        }
+    }
+    report
+        .rows
+        .sort_by(|a, b| (&a.tier, &a.model).cmp(&(&b.tier, &b.model)));
+    report.unmatched.sort();
+    report
+}
+
 /// Vendors whose D3D11 parts are out of scope, with the reason each is out.
 ///
 /// These are not hypothetical: every one appears in the pinned corpus.
@@ -268,6 +449,134 @@ fn split_renderer(renderer: &str) -> Option<CorpusModel> {
     // Every other backend: desktop GL, GLES, Vulkan. Real, but device-derived
     // or unmodelled, so out of scope for a catalogue built on shared tiers.
     None
+}
+
+#[cfg(test)]
+mod join_tests {
+    use super::*;
+
+    const CORPUS: &str = include_str!("../tests/fixtures/corpus-mini.json");
+    const PCI: &str = include_str!("../tests/fixtures/pci-mini.ids");
+
+    #[test]
+    fn normalization_survives_the_parenthesised_trademarks() {
+        // Written as a \b-anchored regex this matches nothing, because a word
+        // boundary before "(" is not where it looks like it is. That mistake
+        // took Intel's join rate to zero.
+        assert_eq!(
+            normalize_model("Intel(R) UHD Graphics 630"),
+            "uhd graphics 630"
+        );
+        assert_eq!(
+            normalize_model("AMD Radeon(TM) Graphics"),
+            "radeon graphics"
+        );
+        assert_eq!(
+            normalize_model("NVIDIA GeForce RTX 3070"),
+            normalize_model("GeForce RTX 3070"),
+            "the driver leads with the vendor and pci.ids does not"
+        );
+    }
+
+    #[test]
+    fn a_slash_group_lends_its_prefix_to_every_segment() {
+        let aliases = pci_aliases("Navi 22 [Radeon RX 6700/6700 XT/6750 XT]");
+        for want in ["radeon rx 6700", "radeon rx 6700 xt", "radeon rx 6750 xt"] {
+            assert!(
+                aliases.contains(&want.to_string()),
+                "{want} missing from {aliases:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn joins_a_driver_name_to_its_device_id() {
+        let report = build_catalogue(CORPUS, PCI);
+        let rtx = report
+            .rows
+            .iter()
+            .find(|r| r.model == "NVIDIA GeForce RTX 4090")
+            .expect("RTX 4090 row");
+        assert_eq!(rtx.device_id, Some(0x2684));
+        assert_eq!(rtx.tier, "D3d11Fl11Nvidia");
+
+        let uhd = report
+            .rows
+            .iter()
+            .find(|r| r.model == "Intel(R) UHD Graphics 630")
+            .expect("UHD 630 row");
+        assert_eq!(uhd.device_id, Some(0x3e92));
+        assert_eq!(
+            uhd.tier, "D3d11Fl11",
+            "only NVIDIA takes the workaround tier"
+        );
+    }
+
+    #[test]
+    fn a_metal_row_needs_no_join_and_carries_no_device_id() {
+        let report = build_catalogue(CORPUS, PCI);
+        let m2 = report
+            .rows
+            .iter()
+            .find(|r| r.model == "Apple M2")
+            .expect("M2 row");
+        assert_eq!(m2.device_id, None);
+        assert_eq!(m2.tier, "MetalMacos");
+    }
+
+    #[test]
+    fn an_unjoinable_model_is_dropped_and_reported_never_given_a_placeholder_id() {
+        // "AMD Radeon RX 6700 XT" is in the corpus fixture; the pci.ids fixture
+        // has the slash-grouped Navi 22 entry, so it joins. Nothing in the
+        // fixtures should end up with a fabricated id either way.
+        let report = build_catalogue(CORPUS, PCI);
+        assert!(
+            report
+                .rows
+                .iter()
+                .all(|r| r.tier == "MetalMacos" || r.device_id.is_some()),
+            "a D3D11 row without a device id cannot compose a renderer string: {:?}",
+            report.rows
+        );
+        // Whatever failed to join is named, so a shrinking catalogue is visible
+        // rather than silent.
+        assert!(
+            report.unmatched.iter().all(|m| !m.is_empty()),
+            "{:?}",
+            report.unmatched
+        );
+    }
+
+    #[test]
+    fn an_ambiguous_name_resolves_to_the_lowest_device_id() {
+        // The pci.ids fixture gives NVIDIA both 0x2484 and 0x2684. A model
+        // whose normalized name matched both must land on 0x2484 by rule
+        // rather than by whichever line the file listed first, so bumping the
+        // pinned pci.ids commit cannot reshuffle the catalogue underneath us.
+        let pci = "10de  NVIDIA Corporation\n\
+                   \t2684  AD102 [GeForce Ambiguous]\n\
+                   \t2484  GA104 [GeForce Ambiguous]\n";
+        let corpus = r#"{"nodes":[{"name":"videoCard","conditionalProbabilities":{"deeper":{"x":{
+          "*STRINGIFIED*{\"renderer\":\"ANGLE (NVIDIA, NVIDIA GeForce Ambiguous Direct3D11 vs_5_0 ps_5_0, D3D11)\",\"vendor\":\"\"}": 1.0}}}}]}"#;
+        let report = build_catalogue(corpus, pci);
+        assert_eq!(report.rows.len(), 1, "{report:?}");
+        assert_eq!(report.rows[0].device_id, Some(0x2484));
+    }
+
+    #[test]
+    fn every_row_composes_a_renderer_string_that_names_its_own_device() {
+        let report = build_catalogue(CORPUS, PCI);
+        for row in &report.rows {
+            let backend = if row.tier == "MetalMacos" {
+                Backend::Metal
+            } else {
+                Backend::D3d11
+            };
+            let s = compose_renderer(backend, &row.vendor, &row.model, row.device_id);
+            assert!(s.contains(&row.model), "{s} does not name {}", row.model);
+            assert!(s.starts_with(&format!("ANGLE ({}, ", row.vendor)), "{s}");
+        }
+    }
 }
 
 #[cfg(test)]
