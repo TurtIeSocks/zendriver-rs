@@ -81,6 +81,129 @@ pub fn parse_pci_ids(raw: &str) -> Vec<PciDevice> {
     out
 }
 
+/// Which ANGLE backend composes a renderer string, and therefore which format
+/// it takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Backend {
+    D3d11,
+    Metal,
+}
+
+/// Build the renderer string ANGLE would report for a device.
+///
+/// Reconstructed from the source that composes it rather than copied from
+/// samples, because the format has changed under the corpus: strings collected
+/// on older Chrome omit the device ID current ANGLE always appends. Composing
+/// means a future format change is a small, detectable fix here instead of
+/// silent rot spread across every row of the data.
+///
+/// D3D11, `Renderer11.cpp:2308-2319`:
+///
+/// ```text
+/// mDescription << " (" << FmtHex(DeviceId) << ")" << " Direct3D11"
+///              << " vs_" << major << "_" << minor << " ps_" << major << "_" << minor
+/// ```
+///
+/// Metal, `DisplayMtl.mm:188-201`:
+///
+/// ```text
+/// "ANGLE Metal Renderer" + ": " + MTLDevice.name
+/// ```
+///
+/// The trailing Metal field is the literal `getVersionString` returns for WebGL
+/// contexts (`:216`) because Chrome requires something there. It is not a
+/// version and must never be synthesized as one.
+///
+/// `device_id` is ignored on Metal: Apple silicon exposes no PCI ID, and the
+/// string has nowhere to put one.
+#[must_use]
+pub fn compose_renderer(
+    backend: Backend,
+    vendor: &str,
+    model: &str,
+    device_id: Option<u32>,
+) -> String {
+    match backend {
+        Backend::D3d11 => {
+            let id = device_id.unwrap_or(0);
+            format!("ANGLE ({vendor}, {model} (0x{id:08X}) Direct3D11 vs_5_0 ps_5_0, D3D11)")
+        }
+        Backend::Metal => {
+            format!("ANGLE ({vendor}, ANGLE Metal Renderer: {model}, Unspecified Version)")
+        }
+    }
+}
+
+#[cfg(test)]
+mod compose_tests {
+    use super::*;
+
+    // Read the expected strings out of the committed captures rather than
+    // restating them here. A hand-copied literal would pass even if the
+    // captures and the composer drifted apart, which is the only thing this
+    // test exists to catch.
+    const NVIDIA: &str =
+        include_str!("../../zendriver-stealth/data/gpu-tiers/d3d11-fl11-nvidia.json");
+    const AMD: &str = include_str!("../../zendriver-stealth/data/gpu-tiers/d3d11-fl11.json");
+    const METAL: &str = include_str!("../../zendriver-stealth/data/gpu-tiers/metal-macos.json");
+
+    fn captured_renderer(raw: &str) -> String {
+        let v: serde_json::Value = serde_json::from_str(raw).expect("capture json");
+        v["capture"]["webgl2"]["unmaskedRenderer"]
+            .as_str()
+            .expect("unmaskedRenderer")
+            .to_string()
+    }
+
+    #[test]
+    fn composition_reproduces_every_committed_capture() {
+        assert_eq!(
+            compose_renderer(
+                Backend::D3d11,
+                "NVIDIA",
+                "NVIDIA GeForce RTX 4090",
+                Some(0x2684)
+            ),
+            captured_renderer(NVIDIA)
+        );
+        assert_eq!(
+            compose_renderer(
+                Backend::D3d11,
+                "AMD",
+                "AMD Radeon(TM) Graphics",
+                Some(0x164E)
+            ),
+            captured_renderer(AMD)
+        );
+        assert_eq!(
+            compose_renderer(Backend::Metal, "Apple", "Apple M4 Pro", None),
+            captured_renderer(METAL)
+        );
+    }
+
+    #[test]
+    fn the_device_id_is_zero_padded_to_eight_uppercase_hex_digits() {
+        // FmtHex writes the full 32-bit field: 0x2684 is "(0x00002684)", not
+        // "(0x2684)". Getting the width wrong produces a string that reads as
+        // plausible and matches no device Chrome has ever reported.
+        let s = compose_renderer(Backend::D3d11, "NVIDIA", "X", Some(0x2684));
+        assert!(s.contains("(0x00002684)"), "{s}");
+        let low = compose_renderer(Backend::D3d11, "AMD", "X", Some(0x9));
+        assert!(low.contains("(0x00000009)"), "{low}");
+        // Lowercase hex would be wrong too: 0x164E, not 0x164e.
+        let amd = compose_renderer(Backend::D3d11, "AMD", "X", Some(0x164E));
+        assert!(amd.contains("(0x0000164E)"), "{amd}");
+    }
+
+    #[test]
+    fn metal_ignores_a_device_id_it_has_nowhere_to_put() {
+        let with = compose_renderer(Backend::Metal, "Apple", "Apple M2", Some(0x1234));
+        let without = compose_renderer(Backend::Metal, "Apple", "Apple M2", None);
+        assert_eq!(with, without);
+        assert!(!with.contains("0x"), "{with}");
+    }
+}
+
 #[cfg(test)]
 mod pci_tests {
     use super::*;
