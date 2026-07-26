@@ -95,6 +95,7 @@ fn tier_key(tier: Tier) -> &'static str {
         Tier::SwiftShader => "swiftshader",
         Tier::MetalMacos => "metal-macos",
         Tier::D3d11Fl11 => "d3d11-fl11",
+        Tier::D3d11Fl11Nvidia => "d3d11-fl11-nvidia",
         Tier::VulkanMesaIntelIrisPro580 => "vulkan-mesa-intel-iris-pro-580",
     }
 }

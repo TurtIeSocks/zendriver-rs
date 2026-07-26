@@ -39,13 +39,27 @@ pub(crate) struct DeviceRow {
     /// Explicit and independent of `unmasked_renderer` / `adapter_for_renderer`
     /// — matching must never be derived from the row's own reference string.
     pub match_token: &'static str,
+    /// Extra lowercase substring that must *also* be present, or `None` when
+    /// `match_token` alone decides the row.
+    ///
+    /// Exists because one row needs two facts that are not adjacent in the
+    /// string. ANGLE puts the vendor first and the backend tag last —
+    /// `ANGLE (NVIDIA, … Direct3D11 …, D3D11)` — and the NVIDIA D3D11 tier is
+    /// selected by exactly that pair, so no single contiguous substring can
+    /// express it. Splitting the D3D11 rows on `Some("nvidia")` also keeps the
+    /// vendor test out of `device_for_renderer`, which stays a table sweep.
+    pub vendor_token: Option<&'static str>,
 }
 
 /// Known devices, keyed by [`DeviceRow::match_token`].
 ///
 /// Order is load-bearing: [`device_for_renderer`] takes the *first* row whose
-/// token the renderer contains, so the specific SwiftShader row must precede
-/// the generic one.
+/// tokens the renderer matches, so a specific row must precede the general one
+/// it refines. That holds twice here — the Subzero SwiftShader row before the
+/// generic one, and the NVIDIA D3D11 row before the generic D3D11 row. The
+/// second pair matters more: the SwiftShader rows share a tier, so their order
+/// decides only an identity string, while the D3D11 rows carry *different
+/// tiers* and getting them backwards serves the wrong capability values.
 ///
 /// The two SwiftShader rows are one capability tier under two identity
 /// strings. SwiftShader picks its JIT backend at build time — Subzero on
@@ -62,6 +76,7 @@ const DEVICES: &[DeviceRow] = &[
         // Specific enough to beat the generic row below, which is why it is
         // listed first.
         match_token: "subzero",
+        vendor_token: None,
     },
     DeviceRow {
         unmasked_vendor: "Google Inc. (Google)",
@@ -73,6 +88,7 @@ const DEVICES: &[DeviceRow] = &[
         // Subzero's lands here. Both rows carry the same tier, so a miss costs
         // only the identity string, never the capability values.
         match_token: "swiftshader",
+        vendor_token: None,
     },
     DeviceRow {
         unmasked_vendor: "Google Inc. (Apple)",
@@ -81,20 +97,46 @@ const DEVICES: &[DeviceRow] = &[
         webgpu_vendor: "apple",
         webgpu_architecture: "metal-3",
         match_token: "apple",
+        vendor_token: None,
     },
+    // The two D3D11 rows are one backend and feature level under two capability
+    // tiers, and the NVIDIA row must be listed first because its token is a
+    // strict refinement of the generic one below.
+    //
+    // Splitting them is measured, not defensive. An RTX 4090 and an AMD Radeon
+    // probed on the same machine and the same Chrome build differ in
+    // `MAX_VERTEX_UNIFORM_VECTORS` (4095 against 4096) and in the two values
+    // derived from it. ANGLE's cause is a vendor-conditional workaround —
+    // `ANGLE_FEATURE_CONDITION(features, skipVSConstantRegisterZero, isNvidia)`,
+    // which then does `caps->maxVertexUniformVectors -= 1` — so the condition
+    // is the vendor and nothing else. See [`Tier::D3d11Fl11Nvidia`].
     DeviceRow {
         unmasked_vendor: "Google Inc. (NVIDIA)",
         unmasked_renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 (0x00002684) Direct3D11 vs_5_0 ps_5_0, D3D11)",
-        tier: Tier::D3d11Fl11,
+        tier: Tier::D3d11Fl11Nvidia,
         webgpu_vendor: "nvidia",
         webgpu_architecture: "lovelace",
+        match_token: "d3d11",
+        vendor_token: Some("nvidia"),
+    },
+    DeviceRow {
+        unmasked_vendor: "Google Inc. (AMD)",
+        unmasked_renderer: "ANGLE (AMD, AMD Radeon(TM) Graphics (0x0000164E) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+        tier: Tier::D3d11Fl11,
+        webgpu_vendor: "amd",
+        webgpu_architecture: "rdna-2",
         // ANGLE's D3D11 renderer string always ends in the backend tag
         // ", D3D11)", whatever the card — which is exactly the granularity the
         // tier has. `direct3d11` would be wrong twice over: it misses the AMD
         // form ("ANGLE (AMD, AMD Radeon RX 7900 XT, D3D11)"), which names no
         // shader model, and it would tie a backend-and-feature-level tier to a
         // spelling only some vendors emit.
+        //
+        // No vendor token: this row is every non-NVIDIA D3D11 device, AMD and
+        // Intel alike, which is what `skipVSConstantRegisterZero` being keyed
+        // on `isNvidia` means.
         match_token: "d3d11",
+        vendor_token: None,
     },
     DeviceRow {
         unmasked_vendor: "Google Inc. (Intel)",
@@ -121,6 +163,7 @@ const DEVICES: &[DeviceRow] = &[
         // Direct3D11 vs_5_0 ps_5_0, D3D11` — does not match this row and keeps
         // resolving the D3D11 tier it belongs to.
         match_token: "iris(r) pro graphics 580 (skl gt4)",
+        vendor_token: None,
     },
 ];
 
@@ -211,24 +254,37 @@ const SWIFTSHADER_SUBZERO: DeviceRow = DEVICES[0];
 const SWIFTSHADER_LLVM: DeviceRow = DEVICES[1];
 const METAL_APPLE: DeviceRow = DEVICES[2];
 const NVIDIA_D3D11: DeviceRow = DEVICES[3];
-const VULKAN_INTEL_IRIS_PRO_580: DeviceRow = DEVICES[4];
+#[allow(dead_code)]
+const AMD_D3D11: DeviceRow = DEVICES[4];
+const VULKAN_INTEL_IRIS_PRO_580: DeviceRow = DEVICES[5];
 
 /// Pick the device row a renderer string belongs to, by explicit
 /// [`DeviceRow::match_token`] — never by a key derived from a row's own
 /// reference string.
 ///
-/// First match in [`DEVICES`] order wins, so a specific token must be listed
-/// ahead of a token it is a special case of: `"subzero"` before
-/// `"swiftshader"`, or every Subzero string would resolve to the LLVM row's
-/// identity. Both carry the same tier, so ordering decides the identity
-/// string alone — but that string is the whole reason the rows are separate.
-/// The other three tokens (`"apple"`, `"d3d11"`, and the Iris Pro's Mesa
-/// device name) are disjoint from those and from each other, so their position
-/// is not load-bearing.
+/// A row matches when the renderer contains its `match_token` and, where it
+/// declares one, its [`vendor_token`](DeviceRow::vendor_token) as well.
 ///
-/// Four tiers ship today (SwiftShader, Apple Metal, D3D11 FL11+, and the Intel
-/// Iris Pro 580 under Mesa), so `None` is still expected for the backends none
-/// of them covers — a desktop-GL renderer, a D3D9 string, or **any Vulkan
+/// First match in [`DEVICES`] order wins, so a specific row must be listed
+/// ahead of one it is a special case of. Two pairs depend on that:
+///
+/// - `"subzero"` before `"swiftshader"`, or every Subzero string would resolve
+///   to the LLVM row's identity. Both carry the same tier, so ordering decides
+///   the identity string alone — but that string is the whole reason the rows
+///   are separate.
+/// - The NVIDIA D3D11 row before the generic one. Here ordering decides the
+///   **capability values**, not just a name: the two rows carry different
+///   tiers, and the generic row's `match_token` alone would swallow every
+///   NVIDIA string. Getting this backwards serves an RTX its 4096 instead of
+///   its measured 4095, which is one `getParameter` call from being read.
+///
+/// The remaining tokens (`"apple"` and the Iris Pro's Mesa device name) are
+/// disjoint from those and from each other, so their position is not
+/// load-bearing.
+///
+/// Five tiers ship today (SwiftShader, Apple Metal, D3D11 FL11+ in its NVIDIA
+/// and non-NVIDIA forms, and the Intel Iris Pro 580 under Mesa), so `None` is
+/// still expected for the backends none of them covers — a desktop-GL renderer, a D3D9 string, or **any Vulkan
 /// device other than that one Iris Pro**. That last one is not a gap waiting
 /// to be filled by widening the token: ANGLE's Vulkan caps come off
 /// `VkPhysicalDeviceLimits`, so serving another Linux GPU this row's numbers
@@ -244,7 +300,9 @@ const VULKAN_INTEL_IRIS_PRO_580: DeviceRow = DEVICES[4];
 /// inventing values for an existing row.
 pub(crate) fn device_for_renderer(renderer: &str) -> Option<DeviceRow> {
     let r = renderer.to_ascii_lowercase();
-    DEVICES.iter().copied().find(|d| r.contains(d.match_token))
+    DEVICES.iter().copied().find(|d| {
+        r.contains(d.match_token) && d.vendor_token.is_none_or(|vendor| r.contains(vendor))
+    })
 }
 
 /// The `UNMASKED_VENDOR_WEBGL` string Chrome reports beside an ANGLE renderer.
@@ -553,36 +611,44 @@ mod tests {
 
     #[test]
     fn a_d3d11_renderer_reports_its_own_vendor_not_the_rows() {
-        // The D3D11 row is deliberately shared across vendors — its token
-        // matches every FL11+ renderer because the capability values are the
-        // same. The identity strings are not shared, so an Intel or AMD
-        // renderer must carry an Intel or AMD vendor even though the row that
-        // supplied its numbers declares NVIDIA. Measured before the derivation
-        // existed: `Google Inc. (NVIDIA)` beside an Intel renderer, silently.
-        for (renderer, expected) in [
+        // The non-NVIDIA D3D11 row is deliberately shared across vendors — its
+        // token matches every FL11+ renderer that is not NVIDIA's, because
+        // their capability values really are the same. The identity strings are
+        // not shared, so an Intel renderer must carry an Intel vendor even
+        // though the row that supplied its numbers declares AMD. Measured
+        // before the derivation existed: `Google Inc. (NVIDIA)` beside an Intel
+        // renderer, silently.
+        //
+        // Vendor now decides the *tier* as well, but only for NVIDIA and only
+        // by one cap — see `d3d11_splits_nvidia_from_every_other_vendor`. The
+        // vendor string stays derived from the renderer either way, which is
+        // what keeps a shared row from lending its name to another card.
+        for (renderer, expected_vendor, expected_tier) in [
             (
                 "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)",
                 "Google Inc. (Intel)",
+                Tier::D3d11Fl11,
             ),
             (
                 "ANGLE (AMD, AMD Radeon RX 7900 XT, D3D11)",
                 "Google Inc. (AMD)",
+                Tier::D3d11Fl11,
             ),
             (
                 "ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 (0x00002684) Direct3D11 vs_5_0 ps_5_0, D3D11)",
                 "Google Inc. (NVIDIA)",
+                Tier::D3d11Fl11Nvidia,
             ),
         ] {
-            // All three share one tier...
             assert_eq!(
                 device_for_renderer(renderer).map(|d| d.tier),
-                Some(Tier::D3d11Fl11),
-                "{renderer} must resolve the shared D3D11 tier"
+                Some(expected_tier),
+                "{renderer} must resolve {expected_tier:?}"
             );
-            // ...and none of them shares its identity.
+            // Whichever row supplied the numbers, none of them lends its name.
             assert_eq!(
                 vendor_for_renderer(renderer).as_deref(),
-                Some(expected),
+                Some(expected_vendor),
                 "{renderer} must report its own vendor"
             );
         }
@@ -911,30 +977,97 @@ mod tests {
     }
 
     #[test]
-    fn every_d3d11_vendor_selects_the_one_d3d11_tier() {
-        // The tier is per backend and feature level, not per card: ANGLE's
-        // D3D11 renderer derives these values from `D3D11_REQ_*` constants
-        // branched on the feature level, so Intel, NVIDIA and AMD at FL11+ all
-        // report the same numbers and all resolve here. The match token is the
-        // trailing ", D3D11)" backend tag, which is why the AMD form — naming
-        // no shader model at all — matches like the other two.
-        for r in [
-            "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)",
-            "ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 Direct3D11 vs_5_0 ps_5_0, D3D11)",
-            "ANGLE (AMD, AMD Radeon RX 7900 XT, D3D11)",
+    fn d3d11_splits_nvidia_from_every_other_vendor() {
+        // The D3D11 tier is per backend and feature level rather than per card
+        // — `renderer11_utils.cpp` derives these values from `D3D11_REQ_*`
+        // constants branched on the feature level — with one measured
+        // exception. ANGLE applies `skipVSConstantRegisterZero` when and only
+        // when `isNvidia`, docking `maxVertexUniformVectors` by one, so NVIDIA
+        // parts report 4095 where AMD and Intel report 4096.
+        //
+        // This test used to assert the opposite, that all three vendors shared
+        // one tier. Probing an AMD Radeon and an RTX 4090 on the same machine
+        // and the same Chrome build disproved it. Vendor is therefore
+        // load-bearing in row selection, and the match token alone is not
+        // enough to pick a tier.
+        for (r, want) in [
+            (
+                "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+                Tier::D3d11Fl11,
+            ),
+            ("ANGLE (AMD, AMD Radeon RX 7900 XT, D3D11)", Tier::D3d11Fl11),
+            (
+                "ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+                Tier::D3d11Fl11Nvidia,
+            ),
         ] {
             assert_eq!(
                 device_for_renderer(r).map(|d| d.tier),
-                Some(Tier::D3d11Fl11),
-                "expected the D3D11 tier for {r}"
+                Some(want),
+                "expected {want:?} for {r}"
             );
         }
     }
 
     #[test]
+    fn the_d3d11_tiers_differ_only_in_the_nvidia_reserved_uniform_vector() {
+        // Locks the shape of the split, so a future capture that widens it
+        // fails here rather than silently making the two tiers diverge.
+        // ANGLE's workaround touches exactly one cap; the other two reported
+        // values are arithmetic consequences of it.
+        use crate::gpu::{GlParam, profile_for_tier};
+
+        let base = profile_for_tier(Tier::D3d11Fl11);
+        let nvidia = profile_for_tier(Tier::D3d11Fl11Nvidia);
+
+        let differing: Vec<&str> = base
+            .params_webgl2
+            .iter()
+            .filter(|(name, value)| nvidia.params_webgl2.get(*name) != Some(*value))
+            .map(|(name, _)| name.as_str())
+            .collect();
+
+        assert_eq!(
+            differing,
+            [
+                "MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS",
+                "MAX_VERTEX_UNIFORM_COMPONENTS",
+                "MAX_VERTEX_UNIFORM_VECTORS",
+            ],
+            "the D3D11 tiers must differ only where skipVSConstantRegisterZero reaches"
+        );
+
+        // Both sides spelled out, so the measured numbers are visible here and
+        // not only in the generated table.
+        for (profile, vectors, components, combined) in
+            [(&base, 4096, 16384, 212992), (&nvidia, 4095, 16380, 212988)]
+        {
+            let param = |k: &str| profile.params_webgl2.get(k);
+            assert_eq!(
+                param("MAX_VERTEX_UNIFORM_VECTORS"),
+                Some(&GlParam::Int(vectors))
+            );
+            assert_eq!(
+                param("MAX_VERTEX_UNIFORM_COMPONENTS"),
+                Some(&GlParam::Int(components))
+            );
+            assert_eq!(
+                param("MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS"),
+                Some(&GlParam::Int(combined))
+            );
+            // The relations that make these one fact rather than three: the
+            // components are the vectors in scalars, and the combined total
+            // adds the same 12 * 16384 of uniform-block storage on both tiers.
+            assert_eq!(components, vectors * 4);
+            assert_eq!(combined, components + 12 * 16384);
+        }
+    }
+
+    #[test]
     fn renderers_with_no_shipped_tier_return_none() {
-        // Four tiers ship (SwiftShader, Apple Metal, D3D11 FL11+, and the Intel
-        // Iris Pro 580 under Mesa/Vulkan). A backend none of them covers still
+        // Five tiers ship (SwiftShader, Apple Metal, D3D11 FL11+ in its NVIDIA
+        // and non-NVIDIA forms, and the Intel Iris Pro 580 under Mesa/Vulkan).
+        // A backend none of them covers still
         // has no measured tier, and guessing one would pair its name with
         // another backend's numbers. Desktop-GL is such a backend, and so is
         // every Vulkan device but the captured one: the Vulkan tier is

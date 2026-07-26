@@ -127,12 +127,43 @@ pub(crate) enum Tier {
     /// capturing an Intel Mac in the expectation of a second, lower Metal tier —
     /// it would reproduce this one exactly.
     MetalMacos,
-    /// Direct3D 11 at feature level 11_0 or above. Named for the backend and
-    /// feature level rather than the card it was probed on (an RTX 4090):
-    /// ANGLE's D3D11 renderer derives every one of these values from
-    /// `D3D11_REQ_*` constants branched on the feature level, so an Intel UHD,
-    /// an AMD RX, and an NVIDIA RTX at FL11+ all report the same numbers.
+    /// Direct3D 11 at feature level 11_0 or above, as ANGLE reports it for
+    /// every vendor **except NVIDIA**. Probed on an AMD Radeon (Raphael
+    /// integrated, `0x164E`) under Windows.
+    ///
+    /// Named for the backend and feature level rather than the card, because
+    /// `renderer11_utils.cpp` derives these values from `D3D11_REQ_*` constants
+    /// branched on the feature level and asks the device nothing. This tier
+    /// therefore covers AMD and Intel alike.
+    ///
+    /// **It does not cover NVIDIA**, and that exception is measured rather than
+    /// assumed — see [`D3d11Fl11Nvidia`](Self::D3d11Fl11Nvidia).
     D3d11Fl11,
+    /// The same backend and feature level as [`D3d11Fl11`](Self::D3d11Fl11),
+    /// with ANGLE's NVIDIA-only workaround applied. Probed on an RTX 4090,
+    /// same machine and same Chrome build as the AMD capture above.
+    ///
+    /// **Exactly one value differs at the root**: `MAX_VERTEX_UNIFORM_VECTORS`
+    /// is 4095 here against 4096 there. `MAX_VERTEX_UNIFORM_COMPONENTS`
+    /// (`× 4`) and `MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS` (`+ 12 × 16384`)
+    /// follow arithmetically, so the whole difference is three reported numbers
+    /// carrying one fact. Everything else is byte-identical across the two
+    /// captures: both WebGL parameter sets otherwise, both extension lists, all
+    /// shader precisions, all 36 WebGPU limits, and all 19 WebGPU features.
+    ///
+    /// The cause is in ANGLE, not in the silicon. `renderer11_utils.cpp` sets
+    /// `ANGLE_FEATURE_CONDITION(features, skipVSConstantRegisterZero, isNvidia)`
+    /// and then, in `GenerateCaps`, does
+    /// `if (features.skipVSConstantRegisterZero.enabled) {
+    /// caps->maxVertexUniformVectors -= 1; }`. The condition is the vendor and
+    /// nothing else — no driver version, no OS check — so the split is binary
+    /// and fully predictable: NVIDIA lands here, every other vendor lands on
+    /// [`D3d11Fl11`](Self::D3d11Fl11).
+    ///
+    /// This is why the two are separate tiers rather than one tier with a
+    /// computed adjustment. Both values were measured; neither is derived at
+    /// runtime.
+    D3d11Fl11Nvidia,
     /// ANGLE's **Vulkan** backend on Linux, on an Intel Iris Pro Graphics 580
     /// (Skylake GT4e) under Mesa 25.2.8. Probed on Linux Mint with Chrome
     /// 150.0.7871.186 in a NUC6i7KYK.
@@ -179,6 +210,7 @@ impl Tier {
         Tier::SwiftShader,
         Tier::MetalMacos,
         Tier::D3d11Fl11,
+        Tier::D3d11Fl11Nvidia,
         Tier::VulkanMesaIntelIrisPro580,
     ];
 }

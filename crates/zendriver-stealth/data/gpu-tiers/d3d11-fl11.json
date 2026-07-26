@@ -1,7 +1,7 @@
 {
   "capture": {
     "adapter": {
-      "architecture": "lovelace",
+      "architecture": "rdna-2",
       "description": "",
       "device": "",
       "features": [
@@ -17,10 +17,10 @@
         "float32-blendable",
         "depth-clip-control",
         "texture-compression-bc-sliced-3d",
-        "shader-f16",
-        "timestamp-query",
         "texture-formats-tier2",
+        "timestamp-query",
         "clip-distances",
+        "shader-f16",
         "primitive-index",
         "texture-component-swizzle",
         "subgroups"
@@ -63,7 +63,7 @@
         "minStorageBufferOffsetAlignment": 256,
         "minUniformBufferOffsetAlignment": 256
       },
-      "vendor": "nvidia"
+      "vendor": "amd"
     },
     "deviceOk": true,
     "gpuInNavigator": true,
@@ -251,7 +251,7 @@
         "MAX_VARYING_VECTORS": 30,
         "MAX_VERTEX_ATTRIBS": 16,
         "MAX_VERTEX_TEXTURE_IMAGE_UNITS": 16,
-        "MAX_VERTEX_UNIFORM_VECTORS": 4095,
+        "MAX_VERTEX_UNIFORM_VECTORS": 4096,
         "MAX_VIEWPORT_DIMS": [
           32767,
           32767
@@ -369,8 +369,8 @@
           0
         ]
       },
-      "unmaskedRenderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 (0x00002684) Direct3D11 vs_5_0 ps_5_0, D3D11)",
-      "unmaskedVendor": "Google Inc. (NVIDIA)"
+      "unmaskedRenderer": "ANGLE (AMD, AMD Radeon(TM) Graphics (0x0000164E) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "unmaskedVendor": "Google Inc. (AMD)"
     },
     "webgl2": {
       "enums": {
@@ -608,7 +608,7 @@
         "MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS": 200704,
         "MAX_COMBINED_TEXTURE_IMAGE_UNITS": 32,
         "MAX_COMBINED_UNIFORM_BLOCKS": 24,
-        "MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS": 212988,
+        "MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS": 212992,
         "MAX_CUBE_MAP_TEXTURE_SIZE": 16384,
         "MAX_DRAW_BUFFERS": 8,
         "MAX_ELEMENTS_INDICES": 2147483647,
@@ -636,8 +636,8 @@
         "MAX_VERTEX_OUTPUT_COMPONENTS": 120,
         "MAX_VERTEX_TEXTURE_IMAGE_UNITS": 16,
         "MAX_VERTEX_UNIFORM_BLOCKS": 12,
-        "MAX_VERTEX_UNIFORM_COMPONENTS": 16380,
-        "MAX_VERTEX_UNIFORM_VECTORS": 4095,
+        "MAX_VERTEX_UNIFORM_COMPONENTS": 16384,
+        "MAX_VERTEX_UNIFORM_VECTORS": 4096,
         "MAX_VIEWPORT_DIMS": [
           32767,
           32767
@@ -769,10 +769,10 @@
           0
         ]
       },
-      "unmaskedRenderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 (0x00002684) Direct3D11 vs_5_0 ps_5_0, D3D11)",
-      "unmaskedVendor": "Google Inc. (NVIDIA)"
+      "unmaskedRenderer": "ANGLE (AMD, AMD Radeon(TM) Graphics (0x0000164E) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "unmaskedVendor": "Google Inc. (AMD)"
     }
   },
-  "provenance": "probed: Chrome 150.0.7871.186 on Windows 10.0.21996",
+  "provenance": "probed: Chrome 150.0.7871.186 on Windows 21996",
   "tier": "d3d11-fl11"
 }

@@ -123,7 +123,7 @@ pub(crate) fn platform_skew(platform: Platform, tier: Tier) -> Option<String> {
     let ok = matches!(
         (platform, tier),
         (Platform::MacIntel, Tier::MetalMacos)
-            | (Platform::Win32, Tier::D3d11Fl11)
+            | (Platform::Win32, Tier::D3d11Fl11 | Tier::D3d11Fl11Nvidia)
             | (Platform::LinuxX86_64, Tier::VulkanMesaIntelIrisPro580)
     );
     (!ok).then(|| format!("persona claims {platform:?} but its GPU values come from {tier:?}"))
