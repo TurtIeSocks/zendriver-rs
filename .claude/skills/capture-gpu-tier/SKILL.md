@@ -66,18 +66,47 @@ the fix.
 Run this on a machine with the backend you want to capture. It must have a
 real GPU: a `Native` launch on a GPU-less host fails rather than falling back.
 
-1. **Confirm the backend engages.**
+1. **Capture.** One command, same on every platform:
 
    ```bash
-   cargo run -q -p zendriver --example probe_gpu -- native 2>/dev/null \
-     | python3 -c "import json,sys; d=json.load(sys.stdin); w=d['webgl2']; print('secure:', d['isSecureContext']); print('adapter:', d['adapter'] and d['adapter']['vendor']); print('renderer:', w['unmaskedRenderer']); print('MAX_TEXTURE_SIZE:', w['params']['MAX_TEXTURE_SIZE'])"
+   cargo run -q -p zendriver --example probe_gpu -- native --emit-tier d3d11-fl11
    ```
 
-   `isSecureContext` must be `true` — `navigator.gpu` is `[SecureContext]`-gated
-   and the probe navigates a temp `file://` page for exactly this reason. The
-   renderer string must name the backend you meant to capture (`Direct3D11`,
-   `Metal`, `Vulkan`). If it says `SwiftShader`, the GPU did not engage and the
-   capture is worthless — stop and fix the machine, not the data.
+   On a **Vulkan** capture, add the device and driver — its numbers are read
+   off the physical device, so they mean nothing without knowing which:
+
+   ```bash
+   cargo run -q -p zendriver --example probe_gpu -- native --emit-tier vulkan-intel-uhd620-mesa24 --driver "Intel UHD Graphics 620, Mesa 24.0.9"
+   ```
+
+   This writes `crates/zendriver-stealth/data/gpu-tiers/<name>.json` with the
+   Chrome version and OS already stamped into its provenance, and prints the
+   renderer string it captured. Leave `--driver` off on D3D11 and Metal, where
+   the capture is not device-specific.
+
+   It **refuses** rather than writing a plausible-looking wrong file when:
+
+   - the page is not a secure context — `navigator.gpu` is
+     `[SecureContext]`-gated, so the capture would silently lack all WebGPU
+     data; or
+   - a `native` capture came back as `SwiftShader`, meaning the GPU never
+     engaged and the file would describe a different backend than its name
+     claims.
+
+   Both failures produce a file that looks fine and is wrong, which is why they
+   are refused here instead of left for a reviewer to catch.
+
+   Read the renderer string it prints and confirm it names the backend you
+   meant to capture (`Direct3D11`, `Metal`, `Vulkan`) — that string is also
+   what names the tier, so if step 2 says you guessed wrong, just re-run with
+   the right `--emit-tier` name and delete the stale file.
+
+   > Do not reach for a shell pipeline here. The old form of this step piped
+   > stdout through `python3` with a `VAR=x cmd` prefix, which has no
+   > PowerShell equivalent; `python3` is `python` on Windows; and `>` in
+   > Windows PowerShell 5.1 writes UTF-16 with a BOM, producing a capture that
+   > looks correct in an editor and fails to parse. `--emit-tier` writes the
+   > same bytes on every platform.
 
 2. **Pick the tier name** from the renderer string, using the existing files as
    precedent: `swiftshader`, `metal-macos`, `d3d11-fl11`, and — the Vulkan
@@ -103,42 +132,11 @@ real GPU: a `Native` launch on a GPU-less host fails rather than falling back.
    advertised a distinction no Mac can express, and would have sent someone to
    capture an Intel Mac for a tier that reproduces `metal-macos` exactly.
 
-3. **Capture with provenance.**
+   The `--driver` value belongs in the renderer string's own fields — e.g.
+   from `ANGLE (Intel, Intel(R) UHD Graphics 620 (KBL GT2), Mesa 24.0.9)`,
+   pass `"Intel UHD Graphics 620, Mesa 24.0.9"`.
 
-   The probe reports its own `userAgent`, so the Chrome version lands in the
-   provenance string without you looking it up per-platform. On **Vulkan** the
-   Chrome version is not enough: the numbers came off this physical device
-   through this driver, so set `DRIVER` to the GPU model and Mesa/driver version
-   (both are in the renderer string's fields, e.g. `ANGLE (Intel, Intel(R) UHD
-   Graphics 620 (KBL GT2), Mesa 24.0.9)`). Leave `DRIVER` unset on D3D11 and
-   Metal, where the capture is not device-specific.
-
-   ```bash
-   TIER=d3d11-fl11   # <- set this
-   DRIVER=           # <- Vulkan only, e.g. "Intel UHD Graphics 620, Mesa 24.0.9"
-   cargo run -q -p zendriver --example probe_gpu -- native 2>/dev/null \
-     | TIER=$TIER DRIVER=$DRIVER python3 -c "
-import json,sys,os,platform,re
-d=json.load(sys.stdin)
-assert d['isSecureContext'], 'not a secure context; WebGPU data would be missing'
-r=d['webgl2']['unmaskedRenderer']
-assert 'SwiftShader' not in r, f'GPU did not engage, got: {r}'
-m=re.search(r'Chrome/([\d.]+)', d.get('userAgent',''))
-chrome=m.group(1) if m else 'unknown'
-driver=os.environ.get('DRIVER','').strip()
-prov=f'probed: Chrome {chrome} on {platform.system()} {platform.release()}'
-if driver: prov += f' / {driver}'
-print(json.dumps({'tier': os.environ['TIER'], 'provenance': prov,
-                  'capture': d}, indent=2, sort_keys=True))
-" > crates/zendriver-stealth/data/gpu-tiers/$TIER.json
-   ```
-
-   The two asserts are the point of this step: a capture from a non-secure
-   context silently lacks WebGPU data, and a capture that fell back to
-   SwiftShader describes the wrong backend entirely. Both produce a file that
-   looks fine and is wrong.
-
-4. **Register the tier in the code.** Six places, all small. Miss one and the
+3. **Register the tier in the code.** Six places, all small. Miss one and the
    tier is half-registered:
    - `crates/zendriver-stealth/src/gpu/types.rs` — add a `Tier` variant.
    - `crates/zendriver-stealth/src/gpu/types.rs` — add it to `Tier::ALL` too.
@@ -160,7 +158,7 @@ print(json.dumps({'tier': os.environ['TIER'], 'provenance': prov,
      if it is platform-neutral. Otherwise every persona on the new tier logs a
      skew warning.
 
-5. **Regenerate and verify.**
+4. **Regenerate and verify.**
 
    ```bash
    cargo run -p gpu-tier-gen
@@ -180,7 +178,7 @@ print(json.dumps({'tier': os.environ['TIER'], 'provenance': prov,
    disagrees with a relation real hardware satisfies — investigate the capture
    before touching the invariant.
 
-6. **Commit** the capture, the regenerated `tiers.rs`, and every registration
+5. **Commit** the capture, the regenerated `tiers.rs`, and every registration
    edit together, so the generated file never lands out of sync with its
    input:
 
