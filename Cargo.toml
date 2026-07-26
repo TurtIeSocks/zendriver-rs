@@ -13,6 +13,7 @@ members = [
     "crates/zendriver-fingerprints",
     "crates/locale-gen",
     "crates/gpu-tier-gen",
+    "crates/gpu-catalogue-gen",
 ]
 
 [workspace.package]
