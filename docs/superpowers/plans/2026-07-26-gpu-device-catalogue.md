@@ -1376,13 +1376,34 @@ its test.
 
 **Known gaps the implementer must resolve, not paper over:**
 
-1. **Task 5's `build_catalogue` joins model names against `pci.ids` names, and
-   they do not match textually.** `pci.ids` says `GA104 [GeForce RTX 3070]`
-   where the driver says `NVIDIA GeForce RTX 3070`. The join needs a
-   normalization step: strip the vendor prefix from the driver name, then look
-   for it inside the bracketed part of the `pci.ids` name. Entries that fail to
-   join must be **dropped with a logged count**, never given a fabricated
-   device ID. Expect a meaningful drop rate and report it.
+1. ~~**Task 5's `build_catalogue` joins model names against `pci.ids` names,
+   and they do not match textually.**~~ **Measured after Task 2, against the
+   real corpus and the real `pci.ids`: 216 of 315 D3D11 models join (68%).**
+
+   The working algorithm, in the order the steps matter:
+
+   - Normalize both sides: lowercase, remove the literal substrings `(tm)`,
+     `(r)`, `(c)`, drop the words `nvidia|amd|ati|intel|corporation|inc|series`,
+     then squash everything non-alphanumeric to single spaces.
+   - Build the alias set for a `pci.ids` entry from its **bracketed** parts as
+     well as its whole name: `GA104 [GeForce RTX 3070]` must match
+     `NVIDIA GeForce RTX 3070`.
+   - Expand slash groups **with prefix inheritance**. One entry often covers
+     several marketing names — `Navi 22 [Radeon RX 6700/6700 XT/6750 XT]` — and
+     only the first segment carries the `Radeon RX` prefix, so each later
+     segment must be tried both bare and with that prefix prepended.
+
+   Two mistakes are already paid for, so do not repeat them. Writing the
+   `(tm)`/`(r)` strip as `\b\(tm\)\b` matches nothing, because `\b` before `(`
+   is not a word boundary; that alone cost 13 points and took Intel to 0%.
+   Skipping slash expansion cost another 11, almost all AMD.
+
+   Rates by vendor: NVIDIA 132/160, Intel 34/56, AMD 50/94. The residual AMD
+   misses are integrated parts (`AMD Radeon 780M Graphics`) whose `pci.ids`
+   entries carry a codename and no marketing name, so no string rule reaches
+   them. **Drop a miss, with a logged count.** A D3D11 renderer string has a
+   device ID in it by construction, so an entry without one cannot be composed,
+   and inventing the number is the one thing this design forbids.
 2. **Task 8's share snapshot needs real numbers.** The two rows shown are
    placeholders for format only. Pull the actual Steam Hardware Survey figures
    when implementing, and if they cannot be obtained, ship `by_share` returning
