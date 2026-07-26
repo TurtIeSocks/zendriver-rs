@@ -249,6 +249,29 @@ const EXTRA_ENUMS: &[(u32, &str)] = &[
     (37446, "UNMASKED_RENDERER_WEBGL"),
 ];
 
+/// `DRAW_BUFFER0`, which ES 3.0 fixes at `0x8825`, with `DRAW_BUFFER1` through
+/// `DRAW_BUFFER15` following contiguously.
+const DRAW_BUFFER0: u32 = 34853;
+
+/// How many `DRAW_BUFFERn` enums the ES 3.0 spec defines.
+const DRAW_BUFFER_COUNT: u32 = 16;
+
+/// Name every `DRAW_BUFFERn` enum, whether or not a capture recorded it.
+///
+/// A capture only records the indices its own backend answered, so the
+/// SwiftShader capture stops at `DRAW_BUFFER5` (that backend has 6). Taking the
+/// names from captures alone would then leave a SwiftShader persona unable to
+/// recognise `DRAW_BUFFER6`, and `webgl.js` cannot suppress an enum it cannot
+/// name: the read would fall through to a host that has 8 and answer beside a
+/// cap saying 6 exist.
+///
+/// These are spec constants rather than measurements, the same category as
+/// [`EXTRA_ENUMS`] above, so the full range is declared here instead of being
+/// inferred from whatever hardware happened to be probed.
+fn draw_buffer_enums() -> impl Iterator<Item = (u32, String)> {
+    (0..DRAW_BUFFER_COUNT).map(|i| (DRAW_BUFFER0 + i, format!("DRAW_BUFFER{i}")))
+}
+
 /// Serialize a profile into the JSON object `webgl.js` consumes.
 ///
 /// Each value carries a `t` tag naming its GL type so the JS side builds the
@@ -292,6 +315,9 @@ pub(crate) fn profile_to_js(p: &GpuProfile) -> String {
     let mut enums = enum_names();
     for (num, name) in EXTRA_ENUMS {
         enums.insert(num.to_string(), Value::from(*name));
+    }
+    for (num, name) in draw_buffer_enums() {
+        enums.insert(num.to_string(), Value::from(name));
     }
 
     json!({
@@ -582,6 +608,31 @@ mod tests {
                 js[ctx]["UNMASKED_RENDERER_WEBGL"]["v"], "ANGLE (Apple, ...)",
                 "{ctx} must carry the renderer"
             );
+        }
+    }
+
+    #[test]
+    fn every_profile_can_name_draw_buffers_past_its_own_cap() {
+        // `webgl.js` cannot suppress an enum it cannot name, and the profile
+        // that most needs the suppression is the one whose capture carries the
+        // fewest of these names.
+        //
+        // SwiftShader has 6 draw buffers, so its capture records DRAW_BUFFER0
+        // through DRAW_BUFFER5 and nothing else. A SwiftShader persona on an
+        // 8-buffer host is asked for DRAW_BUFFER6; without a name for 34859 the
+        // read falls through and the host answers 1029 beside a served cap of
+        // 6, which is two lines for a page to check.
+        for tier in types::Tier::ALL {
+            let p = profile_for_tier(*tier);
+            let js: serde_json::Value = serde_json::from_str(&profile_to_js(&p)).unwrap();
+            for i in 0..16 {
+                let num = (34853 + i).to_string();
+                assert_eq!(
+                    js["enumNames"][&num],
+                    serde_json::json!(format!("DRAW_BUFFER{i}")),
+                    "{tier:?} cannot name enum {num} (DRAW_BUFFER{i})"
+                );
+            }
         }
     }
 

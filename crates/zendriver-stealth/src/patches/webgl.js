@@ -276,16 +276,36 @@
     // synthesized the backend's own INVALID_ENUM by the time we answer, and
     // swallowing it would mean consuming an error the page may not have read
     // yet.
+    //
+    // The mirror case needs the opposite treatment. A persona serving
+    // MAX_DRAW_BUFFERS 6 over a backend that has 8 leaves DRAW_BUFFER6/7
+    // *answering* beside a cap that says they cannot exist, which is the same
+    // contradiction read from the other side: ES 3.0 derives the valid range
+    // from MAX_DRAW_BUFFERS, so no driver reports 6 and then answers
+    // DRAW_BUFFER6. Those indices answer null here, before the delegated read,
+    // which is what the claimed device would answer.
+    //
+    // This cannot freeze page state either, and for the same reason as above:
+    // the claimed cap is below the backend's, so drawBuffers() on the real
+    // context would itself reject any index this case covers.
+    //
+    // It carries the mirror of the same residue. Returning early means no
+    // INVALID_ENUM is queued where a real device of the claimed size would
+    // queue one, just as the fill above leaves one queued that the claimed
+    // device would not. Both are visible only to a page that reads getError()
+    // around the call.
     var FRAMEBUFFER_BINDING = 0x8ca6;
     var BACK = 0x0405;
     var NONE = 0;
     var drawBufferGap = Object.create(null);
+    var drawBufferOverCap = Object.create(null);
     var servedMaxDraw = decode(table['MAX_DRAW_BUFFERS']);
     if (typeof servedMaxDraw === 'number') {
       for (var num in profile.enumNames) {
         var m = /^DRAW_BUFFER(\d+)$/.exec(profile.enumNames[num]);
         if (!m) continue;
         if (Number(m[1]) < servedMaxDraw) drawBufferGap[num] = true;
+        else drawBufferOverCap[num] = true;
       }
     }
 
@@ -305,6 +325,10 @@
         if (name && Object.prototype.hasOwnProperty.call(table, name)) {
           return decode(table[name]);
         }
+        // A DRAW_BUFFERn past the served cap: the claimed device does not have
+        // this index, so it answers null however many the real backend has.
+        // See `drawBufferOverCap` above.
+        if (drawBufferOverCap[param]) return null;
         var real = orig.call(this, param);
         // A DRAW_BUFFERn the served cap claims but this backend does not have
         // answers null here; see `drawBufferGap` above for why that pair
