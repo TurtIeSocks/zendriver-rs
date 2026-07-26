@@ -202,6 +202,40 @@ pub(crate) enum Tier {
     VulkanMesaIntelIrisPro580,
 }
 
+/// One catalogued GPU **identity**, layered over a measured capability
+/// [`Tier`].
+///
+/// The catalogue widens which device a persona can claim; it never widens what
+/// any device can do. Every capability value still comes from `tiers.rs`, which
+/// is what stops a catalogue entry from being able to invent one.
+///
+/// The renderer string is deliberately **not** stored. It is composed on demand
+/// from ANGLE's own format, so a Chrome format change is one fix in one place
+/// rather than a rewrite of several hundred rows — and that format has already
+/// changed once, gaining the device id current ANGLE always appends.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct CatalogueEntry {
+    /// Driver-reported model text: `Description` on D3D11, `MTLDevice.name` on
+    /// Metal.
+    pub model: &'static str,
+    /// ANGLE's vendor token, the first field of the renderer string.
+    pub vendor: &'static str,
+    /// PCI device id. `None` on Metal, where Apple silicon exposes none and the
+    /// string has nowhere to put one.
+    pub device_id: Option<u32>,
+    /// Which measured tier supplies this device's capability values.
+    pub tier: Tier,
+    /// Share of the corpus population, for the share-weighted draw.
+    ///
+    /// A marginal probability, `Σ_ua P(ua) · P(device | ua)`, since the corpus
+    /// reports device frequency conditioned on user agent. These do **not** sum
+    /// to 1 across the catalogue: the categories the catalogue excludes (iOS,
+    /// Windows-on-ARM, WARP, VM adapters, unmodelled backends) hold the rest,
+    /// so a caller drawing by share renormalizes over the subset it draws from.
+    pub weight: f64,
+}
+
 impl Tier {
     /// Every shipped tier, in one place: the invariant checks and the tests
     /// that sweep "all tiers" iterate this, so adding a tier cannot quietly
