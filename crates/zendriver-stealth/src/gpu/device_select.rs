@@ -332,6 +332,55 @@ mod tests {
     }
 
     #[test]
+    fn every_catalogued_device_derives_a_coherent_webgpu_adapter() {
+        // Third coherence rule: the composed string must resolve its own
+        // identity. `adapter_for_renderer` owns the model-to-architecture
+        // mapping, so deriving through it rather than storing a generation
+        // keeps one source of truth that cannot drift from the catalogue.
+        for e in CATALOGUE {
+            let renderer = compose_renderer(e);
+            let adapter = crate::gpu::devices::adapter_for_renderer(&renderer);
+            assert_eq!(
+                adapter.vendor,
+                e.vendor.to_ascii_lowercase(),
+                "{renderer} derived vendor {:?}",
+                adapter.vendor
+            );
+            // An empty architecture is legitimate -- Chrome answers "" for a
+            // device it does not classify -- but a *wrong* one reads as a
+            // device that does not exist, so only emptiness is tolerated.
+            assert!(
+                adapter.architecture.is_empty()
+                    || adapter
+                        .architecture
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+                "{renderer} derived a malformed architecture {:?}",
+                adapter.architecture
+            );
+        }
+    }
+
+    #[test]
+    fn no_catalogued_device_is_platform_skewed_against_its_own_tier() {
+        // Every entry must be reachable from exactly the platform whose
+        // backend it belongs to, or it is catalogued and undrawable.
+        for e in CATALOGUE {
+            let platform = match e.tier {
+                Tier::MetalMacos => Platform::MacIntel,
+                Tier::D3d11Fl11 | Tier::D3d11Fl11Nvidia => Platform::Win32,
+                other => panic!("{} is on {other:?}, which has no catalogue", e.model),
+            };
+            assert!(
+                platform_skew(platform, e.tier).is_none(),
+                "{} claims {platform:?} over {:?}",
+                e.model,
+                e.tier
+            );
+        }
+    }
+
+    #[test]
     fn by_name_finds_a_device_case_insensitively() {
         let d = GpuDevice::by_name("nvidia geforce rtx 4090").unwrap();
         assert_eq!(d.model(), "NVIDIA GeForce RTX 4090");
