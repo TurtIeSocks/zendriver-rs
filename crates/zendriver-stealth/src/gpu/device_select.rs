@@ -180,8 +180,14 @@ impl GpuDevice {
     ///
     /// The same seed always yields the same device, so a persona's GPU is
     /// reproducible alongside the seeded farbling `Persona` already does.
-    /// Uniform over the platform's entries; [`Self::by_share`] draws by how
-    /// common each one actually is.
+    ///
+    /// **Uniform, which is usually not what you want.** Prefer
+    /// [`Self::by_share`] unless you specifically need every catalogued device
+    /// to be equally likely. A uniform draw makes a GeForce 210 as probable as
+    /// the commonest laptop chip, and fingerprint checks in practice ask
+    /// whether a combination is *common* rather than whether it is *correct* —
+    /// so a rare device is conspicuous even when every value in it is
+    /// internally perfect.
     ///
     /// `None` when no catalogued device is coherent for that platform, which
     /// today means Linux: its tier is device-scoped and has no catalogue.
@@ -200,6 +206,14 @@ impl GpuDevice {
     /// Same determinism as [`Self::from_seed`], but weighted: a device that
     /// 4% of the corpus population reports is drawn about 4% of the time,
     /// where `from_seed` would treat it the same as a card almost nobody has.
+    ///
+    /// **Prefer this one.** A detection service sitting in the request path
+    /// builds its reference set from the traffic it already sees, so what it
+    /// can cheaply check is whether a combination recurs across many unrelated
+    /// sessions — not whether it matches some ground truth for that GPU. Rarity
+    /// is the signal. Drawing by share lands in the dense part of that
+    /// distribution; drawing uniformly is equally coherent and considerably
+    /// rarer.
     ///
     /// The weights are marginal probabilities over the *whole* corpus, so they
     /// do not sum to 1 over the catalogue — the categories the catalogue

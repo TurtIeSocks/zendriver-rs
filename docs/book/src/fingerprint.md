@@ -398,6 +398,39 @@ marginal probabilities over its user-agent prior. They are deliberately *not*
 Steam Hardware Survey numbers: Steam skews toward discrete gaming cards, and
 this is a browser tool.
 
+### Why the weighting matters more than it looks
+
+The instinct is that a spoof succeeds by being *correct*. For fingerprinting it
+succeeds by being *common*, and those are different targets.
+
+A detection vendor sitting in the request path sees hundreds of millions of real
+sessions, each handing over a renderer string, a canvas hash, a font list, an
+audio hash, and timings, all correlated. That is a continuously-updating census
+of what real browsers report, and it costs them nothing beyond being there — it
+even self-updates through driver releases, because real users update drivers.
+Nobody needs a reference lab of every GPU on every driver version when the
+population reports itself.
+
+So the practical check is not "is this what an RTX 4090 should render?" but
+"does this combination show up across thousands of unrelated sessions?" Rarity
+is the signal, not incorrectness. A device nobody else reports is conspicuous
+even when every value in it is internally perfect.
+
+That is the real argument for `by_share`: it lands in the dense part of the
+distribution. A uniform draw is just as coherent and considerably rarer, and a
+GeForce 210 in current traffic is a small population to hide in.
+
+It also sharpens a tradeoff the surface farbling makes. Per-persona noise
+defeats *linkage* — two sessions cannot be tied together by a shared canvas
+hash — while making each session's hash unique, and uniqueness is the anomaly a
+consensus check looks for. Those goals genuinely oppose each other. Defending
+against being followed and defending against being spotted are not the same
+problem, and no single setting wins both.
+
+(Reasoning about incentives and cost, not inside knowledge of any vendor's
+implementation. The conclusion is robust either way: a common device is never
+the worse choice.)
+
 **What the catalogue will not do.**
 
 - **Invent a device id.** A D3D11 renderer string carries one by construction,
