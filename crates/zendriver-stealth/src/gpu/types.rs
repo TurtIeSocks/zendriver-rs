@@ -126,6 +126,14 @@ pub(crate) enum Tier {
     /// pointed at a branch macOS cannot take. Renaming it is what stops someone
     /// capturing an Intel Mac in the expectation of a second, lower Metal tier —
     /// it would reproduce this one exactly.
+    ///
+    /// **Confirmed on a second generation.** An M2 Pro, on a different Chrome
+    /// patch and a different macOS, matches this capture on every value: all 82
+    /// WebGL1 parameters, all 132 WebGL2, both extension lists, every shader
+    /// precision, all 36 WebGPU limits and all 22 WebGPU features. Only the
+    /// renderer string differs, which is the identity rather than a capability.
+    /// So the generalization claimed above is measured across Apple silicon
+    /// generations, not merely read out of the `#if`.
     MetalMacos,
     /// Direct3D 11 at feature level 11_0 or above, as ANGLE reports it for
     /// every vendor **except NVIDIA**. Probed on an AMD Radeon (Raphael

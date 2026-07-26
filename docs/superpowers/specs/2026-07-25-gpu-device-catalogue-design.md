@@ -376,13 +376,22 @@ diffing, and the explaining condition was looked up afterwards. Every
 "generalizes by backend" claim in this document is worth the same treatment
 before it is leaned on.
 
-**`metal-3` is expected, not measured, on pre-M4 Apple silicon.** The
-mechanism is known exactly (see Scope): it is a capability test, and Apple
-documents the *newer* Metal 4 as M1-or-later, so Metal 3's floor is no higher.
-An M1 reporting something other than `metal-3` on macOS 13+ would contradict
-both. But no M1 was probed here, and "follows from the mechanism" is a weaker
-warrant than "was measured." If a capture ever disagrees, the fix is local —
-Metal entries gain the architecture axis that D3D11 entries already have.
+**~~`metal-3` is expected, not measured, on pre-M4 Apple silicon.~~ Measured.**
+A second Apple silicon capture — an M2 Pro, one generation back, on a different
+Chrome patch and a different macOS — reports `metal-3` and matches the M4 Pro
+capture on *every* value: all 82 WebGL1 parameters, all 132 WebGL2, both
+extension lists, all shader precisions, all 36 WebGPU limits and all 22 WebGPU
+features. The only differences in the whole capture are the renderer string
+itself and the order of the feature array.
+
+That confirms both halves of the reasoning this paragraph used to hedge:
+`metal-3` really is a capability-family token rather than a generation one, and
+the Metal tier really does generalize across Apple silicon. The 19 catalogued
+M-series identities all share one measured tier because they measurably can.
+
+It is also the second independent confirmation that the removed generation axis
+was right to remove: RDNA2 versus Lovelace on D3D11, and now M2 Pro versus M4
+Pro on Metal, each a generation apart with no capability difference at all.
 
 **Catalogue breadth invites incoherent picks.** Mitigated by the three
 coherence rules, but a caller who pins a renderer *and* a conflicting

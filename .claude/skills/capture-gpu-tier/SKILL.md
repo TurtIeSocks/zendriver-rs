@@ -39,10 +39,16 @@ backend. Know which case you are in before you name the tier:
   and all 19 WebGPU features. So the vendor axis here is one integer wide, not
   a second capability tier — but it is real, and it was found only by probing a
   second vendor.
-- **Metal on macOS — generalizes across Macs.** `DisplayMtl.mm`'s
-  `TARGET_OS_OSX` arm sets its caps from plain compile-time constants. (The
-  runtime `supportsAppleGPUFamily` test that would vary them is in the iOS arm
-  — see step 2.)
+- **Metal on macOS — generalizes across Macs, confirmed by measurement.**
+  `DisplayMtl.mm`'s `TARGET_OS_OSX` arm sets its caps from plain compile-time
+  constants. (The runtime `supportsAppleGPUFamily` test that would vary them is
+  in the iOS arm — see step 2.) An M2 Pro and an M4 Pro, on different Chrome
+  patches and different macOS builds, agree on every value: 82 WebGL1
+  parameters, 132 WebGL2, both extension lists, every precision, all 36 WebGPU
+  limits and all 22 features. Only the renderer string differs. **A second
+  Apple silicon capture is therefore not worth taking** — it will reproduce
+  `metal-macos` exactly, and the useful Mac capture now is an *Intel* one,
+  which takes a different Dawn path entirely.
 - **Vulkan — does NOT generalize.** `vk_caps_utils.cpp` reads the caps straight
   off the physical device: `max2DTextureSize` is
   `min(limitsVk.maxFramebufferWidth, limitsVk.maxImageDimension2D)`, the
