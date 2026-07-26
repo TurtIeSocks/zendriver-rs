@@ -98,6 +98,22 @@ and the string is **reconstructed from the ANGLE code that composes it**
 rather than pattern-matched from samples. The two in-scope backends compose
 their strings differently, so they source differently too.
 
+> **Revised during implementation: device IDs come from the corpus, not
+> `pci.ids`.** The section below was written expecting `pci.ids` to supply
+> every device ID by name lookup. Measuring showed the corpus already carries
+> 467 exact `(name, id)` pairs covering 308 of the 310 D3D11 names.
+>
+> Preferring those is a fidelity gain, not a shortcut. A name lookup can only
+> reconstruct a *plausible* ID, and the names are wildly ambiguous —
+> `Intel(R) Graphics` matches 30 candidates, so choosing among them is a rule
+> rather than a fact. The corpus instead reports the pair a real machine
+> emitted, and reports **every** SKU a marketing name spans: 77 names appear
+> with several IDs, so the catalogue carries 476 D3D11 rows over 310 names.
+>
+> `pci.ids` remains, demoted to a fallback for names the corpus never pairs
+> with an ID, and still earns its place by resolving 9 such rows. Two names
+> resist both sources and are dropped and reported.
+
 ### The string format comes from ANGLE's source
 
 D3D11, `Renderer11.cpp:2308-2319`:
@@ -298,10 +314,32 @@ text, erroring on ambiguity rather than guessing.
 existing `Seed`, so a given seed always yields the same device. Composes with
 the seeded farbling already in `Persona`.
 
-**Share-weighted.** Draws proportional to a vendored, dated snapshot derived
-from the Steam Hardware Survey, regenerable by a generator in the same shape
-as `locale-gen`'s pinned CLDR tag. A stale snapshot is still a real
-distribution and decays visibly rather than silently. No network at runtime.
+**Share-weighted.** Draws proportional to the corpus's own frequencies.
+
+> **Revised during implementation.** This originally specified a vendored,
+> dated snapshot of the Steam Hardware Survey. That is no longer needed: the
+> fingerprint corpus already pinned for model names is a Bayesian network, and
+> its `videoCard` node carries real frequencies for exactly the devices being
+> catalogued.
+>
+> `videoCard` is conditioned on `userAgent`, which is parentless with a prior
+> summing to 1, so each device's weight is the marginal
+> `Σ_ua P(ua) · P(device | ua)`. Summing the conditionals raw would
+> over-weight anything common to many user agents.
+>
+> Three reasons this is better rather than merely cheaper. It removes a source
+> (Valve publishes no API, and their page is not content-addressed, so it could
+> not be pinned the way everything else here is). It removes a licensing
+> question, since the community CSV archives carry no explicit license. And it
+> is the *right population*: Steam skews hard toward discrete gaming cards,
+> while a browser-automation tool wants what browsers report — the corpus's top
+> entries are Intel Iris Xe and Apple silicon, which is what the web actually
+> looks like.
+>
+> The stored weight is the raw marginal, so it does not sum to 1 over the
+> catalogue: the excluded categories (iOS, Windows-on-ARM, WARP, VM adapters,
+> non-modelled backends) hold the remainder. Selection renormalizes over
+> whatever it is drawing from.
 
 **Nearest-to-host.** `GpuDevice::nearest_to_host()` — probes the running
 machine and picks the closest catalogue entry. **Explicit opt-in only.**

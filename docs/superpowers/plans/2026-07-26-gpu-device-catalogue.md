@@ -4,7 +4,7 @@
 
 **Goal:** Let a caller name a specific GPU, or draw one, and get a coherent identity (renderer string, device ID, WebGPU architecture) composed over one of the already-measured capability tiers.
 
-**Architecture:** A generator crate (`gpu-catalogue-gen`) fetches model names from a pinned `fingerprint-suite` commit and device IDs from a pinned `pciutils/pciids` commit, then emits a committed Rust table. At runtime the catalogue supplies only *identity*: the capability values still come from `gpu::tiers`. Selection is four small strategies over that one table.
+**Architecture:** A generator crate (`gpu-catalogue-gen`) fetches model names, device IDs and population weights from a pinned `fingerprint-suite` commit, falling back to a pinned `pciutils/pciids` commit for the few IDs the corpus never reports, then emits a committed Rust table. At runtime the catalogue supplies only *identity*: the capability values still come from `gpu::tiers`. Selection is four small strategies over that one table.
 
 **Tech Stack:** Rust 2024 (MSRV 1.85), `serde_json`, `reqwest` (blocking, generator only), the existing `gpu-tier-gen` / `locale-gen` generator pattern.
 
@@ -987,79 +987,85 @@ git commit -m "feat(stealth): add catalogue selection strategies"
 
 ---
 
-### Task 8: Share-weighted selection from a dated snapshot
+### Task 8: Share-weighted selection from the catalogue's own weights
 
 **Files:**
-- Create: `crates/zendriver-stealth/data/gpu-share-2026-07.json`
 - Modify: `crates/zendriver-stealth/src/gpu/device_select.rs`
 
 **Interfaces:**
-- Consumes: `CATALOGUE`, `from_seed` from Task 7.
+- Consumes: `CATALOGUE` (whose rows carry a `weight`) and `from_seed` from Task 7.
 - Produces: `pub fn by_share(seed: Seed, platform: Platform) -> Option<GpuDevice>`.
 
-- [ ] **Step 1: Write the snapshot**
+**No snapshot file, and no Steam dependency.** This task originally vendored a
+dated Steam Hardware Survey extract. The corpus already carries the
+frequencies, so the generator emits a `weight` on every row and there is
+nothing to fetch, date, or license. See the revision note in the spec's
+Selection section for why that is a fidelity gain rather than a shortcut: it is
+the browser population rather than the gamer population, and Steam has no
+pinnable URL.
 
-A dated JSON file mapping catalogue model names to shares, derived from the
-Steam Hardware Survey. The date is in the filename so staleness is visible:
+The weights are raw marginals, so they do **not** sum to 1 over the catalogue —
+the excluded categories hold the remainder. `by_share` therefore renormalizes
+over the rows it is actually drawing from, which is also what makes the
+platform filter correct rather than merely approximate.
 
-```json
-{
-  "source": "Steam Hardware Survey",
-  "captured": "2026-07",
-  "shares": {
-    "NVIDIA GeForce RTX 3060": 0.0412,
-    "NVIDIA GeForce RTX 4090": 0.0091
-  }
-}
-```
-
-- [ ] **Step 2: Write the failing test**
+- [ ] **Step 1: Write the failing test**
 
 ```rust
-#[test]
-fn every_share_entry_names_a_catalogued_device() {
-    // A distribution naming a device the catalogue lacks would silently
-    // reweight everything else.
-    let snapshot: serde_json::Value = serde_json::from_str(SHARE_SNAPSHOT).unwrap();
-    for model in snapshot["shares"].as_object().unwrap().keys() {
-        assert!(
-            CATALOGUE.iter().any(|e| e.model == model),
-            "share data names {model}, which is not in the catalogue"
-        );
-    }
-}
-
 #[test]
 fn share_weighted_selection_is_deterministic_per_seed() {
     let a = by_share(Seed(7), Platform::Win32);
     let b = by_share(Seed(7), Platform::Win32);
     assert_eq!(a.map(|d| d.model()), b.map(|d| d.model()));
 }
+
+#[test]
+fn every_catalogued_row_carries_a_usable_weight() {
+    // A zero-weight row can never be drawn by share, which would make it
+    // invisible to fleet diversity while still being selectable by name.
+    for entry in CATALOGUE {
+        assert!(entry.weight > 0.0, "{} has no share weight", entry.model);
+    }
+}
+
+#[test]
+fn share_selection_respects_the_platform_and_renormalizes() {
+    // Drawing from a platform subset must still cover that subset: with the
+    // raw marginals summing to well under 1, a naive cumulative scan would
+    // fall off the end and always answer the last row.
+    let mut seen = std::collections::BTreeSet::new();
+    for seed in 0..500u64 {
+        if let Some(d) = by_share(Seed(seed), Platform::MacIntel) {
+            assert_eq!(d.tier(), Tier::MetalMacos, "seed {seed} crossed platforms");
+            seen.insert(d.model());
+        }
+    }
+    assert!(seen.len() > 1, "share draw collapsed to one device: {seen:?}");
+}
 ```
 
-- [ ] **Step 3: Run and watch them fail**
+- [ ] **Step 2: Run and watch them fail**
 
 Run: `cargo test -p zendriver-stealth share`
-Expected: FAIL, `SHARE_SNAPSHOT` not found.
+Expected: FAIL, `by_share` not found.
 
-- [ ] **Step 4: Implement**
+- [ ] **Step 3: Implement**
 
-`include_str!` the snapshot, parse it once into a cumulative-weight vector
-filtered to the platform, and index with `seed.0` scaled across the total.
+Filter `CATALOGUE` to the platform, sum those rows' weights, and walk a
+cumulative scan indexed by `seed.0` scaled across **that** sum rather than
+across 1.0.
 
-- [ ] **Step 5: Run the tests**
+- [ ] **Step 4: Run the tests**
 
 Run: `cargo test -p zendriver-stealth share`
-Expected: PASS, 2 tests.
+Expected: PASS, 3 tests.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add crates/zendriver-stealth/data crates/zendriver-stealth/src/gpu
-git commit -m "feat(stealth): draw catalogue devices by market share"
+git add crates/zendriver-stealth/src/gpu
+git commit -m "feat(stealth): draw catalogue devices by their corpus share"
 ```
-
----
 
 ### Task 9: Coherence rules over the whole catalogue
 
@@ -1404,10 +1410,22 @@ its test.
    them. **Drop a miss, with a logged count.** A D3D11 renderer string has a
    device ID in it by construction, so an entry without one cannot be composed,
    and inventing the number is the one thing this design forbids.
-2. **Task 8's share snapshot needs real numbers.** The two rows shown are
-   placeholders for format only. Pull the actual Steam Hardware Survey figures
-   when implementing, and if they cannot be obtained, ship `by_share` returning
-   `None` with a documented reason rather than inventing a distribution.
+2. ~~**Task 8's share snapshot needs real numbers.**~~ **Resolved: no snapshot
+   is needed.** The corpus's `videoCard` node carries real frequencies, so the
+   generator emits a `weight` per row and the Steam dependency is gone along
+   with its unpinnable URL and its licensing question. Weights are marginals,
+   `Σ_ua P(ua) · P(device | ua)`, because `videoCard` is conditioned on
+   `userAgent`; a raw sum over buckets over-weights whatever is common to many
+   user agents. They sum to well under 1 over the catalogue, since the excluded
+   categories hold the rest, so `by_share` must renormalize over the rows it
+   draws from.
+
+   The same discovery moved device IDs off `pci.ids`: the corpus reports 467
+   exact `(name, id)` pairs covering 308 of 310 names, which is an observation
+   rather than a reconstruction, and it preserves the real multi-SKU spread
+   that a name lookup flattens. `pci.ids` stays as a fallback and resolves 9
+   further rows; 2 names resist both and are dropped. Gap 1's join algorithm
+   still matters, but only for those few.
 3. **Generation assignment is unspecified above.** Deriving `Ampere` vs
    `Lovelace` from a model name needs a table; take the tokens from Dawn's
    `gpu_info.json` as `adapter_for_renderer` already does, and reuse that
