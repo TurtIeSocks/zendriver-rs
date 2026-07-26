@@ -96,6 +96,32 @@ const DEVICES: &[DeviceRow] = &[
         // spelling only some vendors emit.
         match_token: "d3d11",
     },
+    DeviceRow {
+        unmasked_vendor: "Google Inc. (Intel)",
+        unmasked_renderer: "ANGLE (Intel, Vulkan 1.4.318 (Intel(R) Iris(R) Pro Graphics 580 (SKL GT4) (0x0000193B)), Intel open-source Mesa driver)",
+        tier: Tier::VulkanMesaIntelIrisPro580,
+        // The probed machine has no WebGPU adapter at all (Chrome does not
+        // enable WebGPU by default on Linux), so the tier serves no limits and
+        // no features. What this pair still declares is the adapter *identity*
+        // `adapter_for_renderer` derives from the string above, which is what
+        // decorates whatever adapter a host does resolve: an Intel renderer
+        // must not be paired with any other vendor's name. The architecture
+        // stays empty because nothing measured this part's Dawn token — and
+        // Chrome legitimately answers "" for a device it does not classify,
+        // where a wrong token reads as an unknown device.
+        webgpu_vendor: "intel",
+        webgpu_architecture: "",
+        // Names the *device as Mesa spells it*, not the backend, because a
+        // Vulkan tier's numbers are read off one physical device under one
+        // driver (see [`Tier::VulkanMesaIntelIrisPro580`]). `"vulkan"` would be
+        // wrong twice over: SwiftShader's own renderer string carries
+        // `Vulkan 1.3.0`, and every other Linux GPU would then be served this
+        // Iris Pro's device-derived limits. `"(SKL GT4)"` is Mesa's naming, so
+        // the same card on Windows — `Intel(R) Iris(R) Pro Graphics 580
+        // Direct3D11 vs_5_0 ps_5_0, D3D11` — does not match this row and keeps
+        // resolving the D3D11 tier it belongs to.
+        match_token: "iris(r) pro graphics 580 (skl gt4)",
+    },
 ];
 
 /// The device row assumed for a platform, used both when a persona pins no
@@ -111,15 +137,15 @@ const DEVICES: &[DeviceRow] = &[
 /// - Windows gets the D3D11 row. ANGLE's D3D11 backend is what Chrome uses on
 ///   Windows by default, so the renderer string, `navigator.platform`, and the
 ///   capability values beside them all describe one ordinary Windows machine.
-/// - Linux gets a SwiftShader row. Chrome's software rasterizer runs on every
-///   OS and its renderer string names no platform-specific API, so the pairing
-///   is one real Chrome does produce (a GPU-blocklisted machine, a VM, a
-///   headless container), and the capability values served beside it are
-///   genuinely SwiftShader's. Linux keeps it until a Vulkan or desktop-GL tier
-///   is captured — the cost is honest and worth naming: SwiftShader means "this
-///   machine has no usable GPU", which some fingerprinters weight on its own.
-///   That is a real configuration rather than an impossible one, so it is the
-///   better trade until that capture exists. See the `capture-gpu-tier` skill.
+/// - Linux gets the Intel Iris Pro 580 Vulkan row. ANGLE's Vulkan backend is
+///   what Chrome uses on Linux, so this is real hardware under the API real
+///   Linux Chrome runs — the same standing macOS and Windows already had.
+///   Linux used to get a SwiftShader row instead, which was honest but said
+///   "this machine has no usable GPU", something some fingerprinters weight on
+///   its own; capturing the tier is what retired that last fallback. What the
+///   Vulkan row cannot claim is generality: its numbers are this Iris Pro's
+///   under this Mesa build, not Linux's or Vulkan's (see
+///   [`Tier::VulkanMesaIntelIrisPro580`]).
 ///
 /// **Which SwiftShader row, and why there are two.** SwiftShader's
 /// *capability values* are platform-independent; its *renderer string* is
@@ -136,7 +162,10 @@ const DEVICES: &[DeviceRow] = &[
 ///
 /// That is one capability tier and two identity rows, which is why the split
 /// lives in [`DEVICES`] rather than in [`Tier`], and why it needed no capture
-/// and no table regeneration.
+/// and no table regeneration. Neither row decides a *default* any more, now
+/// that Linux resolves the captured Vulkan row above — but Subzero is still
+/// what a Linux persona lands on when it pins a SwiftShader renderer itself,
+/// so it has to stay the build real Linux Chrome prints.
 ///
 /// Windows' entry there was previously **inferred** from the Linux
 /// measurement; it is now measured too. `cargo run -p zendriver --example
@@ -160,7 +189,7 @@ pub(crate) fn default_device(platform: Platform) -> DeviceRow {
     match platform {
         Platform::MacIntel => METAL_APPLE,
         Platform::Win32 => NVIDIA_D3D11,
-        Platform::LinuxX86_64 => SWIFTSHADER_SUBZERO,
+        Platform::LinuxX86_64 => VULKAN_INTEL_IRIS_PRO_580,
     }
 }
 
@@ -171,15 +200,18 @@ pub(crate) fn default_renderer(platform: Platform) -> &'static str {
 
 /// Named row aliases, so the platform mapping above reads as intent rather
 /// than as an index into [`DEVICES`].
+/// No platform defaults to either SwiftShader row any more: macOS gets Metal,
+/// Windows D3D11, and Linux the captured Vulkan row. Both are still reached
+/// when a caller pins a SwiftShader string itself — Subzero on Linux and
+/// Windows, LLVM on macOS — and are named here so the tests can assert the two
+/// never drift apart.
+#[allow(dead_code)]
 const SWIFTSHADER_SUBZERO: DeviceRow = DEVICES[0];
-/// No platform defaults to this row: macOS gets Metal, Windows gets D3D11, and
-/// Linux gets Subzero. It is the tier's catch-all, reached when a caller pins a
-/// macOS-flavored SwiftShader string — and named here so the tests can assert
-/// the two rows never drift apart.
 #[allow(dead_code)]
 const SWIFTSHADER_LLVM: DeviceRow = DEVICES[1];
 const METAL_APPLE: DeviceRow = DEVICES[2];
 const NVIDIA_D3D11: DeviceRow = DEVICES[3];
+const VULKAN_INTEL_IRIS_PRO_580: DeviceRow = DEVICES[4];
 
 /// Pick the device row a renderer string belongs to, by explicit
 /// [`DeviceRow::match_token`] — never by a key derived from a row's own
@@ -190,12 +222,18 @@ const NVIDIA_D3D11: DeviceRow = DEVICES[3];
 /// `"swiftshader"`, or every Subzero string would resolve to the LLVM row's
 /// identity. Both carry the same tier, so ordering decides the identity
 /// string alone — but that string is the whole reason the rows are separate.
-/// The other two tokens (`"apple"`, `"d3d11"`) are disjoint from those and
-/// from each other, so their position is not load-bearing.
+/// The other three tokens (`"apple"`, `"d3d11"`, and the Iris Pro's Mesa
+/// device name) are disjoint from those and from each other, so their position
+/// is not load-bearing.
 ///
-/// Three tiers ship today (SwiftShader, Apple Metal, D3D11 FL11+), so `None`
-/// is still expected for the backends none of them covers — a Linux Vulkan or
-/// desktop-GL renderer, or a D3D9 string. A **feature-level-10** D3D11
+/// Four tiers ship today (SwiftShader, Apple Metal, D3D11 FL11+, and the Intel
+/// Iris Pro 580 under Mesa), so `None` is still expected for the backends none
+/// of them covers — a desktop-GL renderer, a D3D9 string, or **any Vulkan
+/// device other than that one Iris Pro**. That last one is not a gap waiting
+/// to be filled by widening the token: ANGLE's Vulkan caps come off
+/// `VkPhysicalDeviceLimits`, so serving another Linux GPU this row's numbers
+/// would be exactly the wrong-backend pairing the tiers exist to prevent (see
+/// [`Tier::VulkanMesaIntelIrisPro580`]). A **feature-level-10** D3D11
 /// renderer does *not* answer `None`: ANGLE emits the same trailing `, D3D11)`
 /// tag at every feature level, so an FL10 string matches the D3D11 row's
 /// `match_token` and is served the FL11 numbers silently. Telling the two
@@ -301,10 +339,13 @@ pub(crate) fn adapter_for_renderer(renderer: &str) -> GpuAdapterInfo {
 
     // Software rasterizer: no vendor to report, and it must be answered before
     // the hardware branches so it cannot reach the Intel catch-all below. It
-    // did reach it, which is the split this arm closes: a SwiftShader row is
-    // Linux's default and was Windows' too (see `default_device`), so such a
-    // persona served SwiftShader's renderer to WebGL and an *Intel* adapter to
-    // WebGPU. Both JIT-backend rows go through this arm — the token is
+    // did reach it, which is the split this arm closes: a SwiftShader row was
+    // Linux's default and Windows' before either tier was captured (see
+    // `default_device`), so such a persona served SwiftShader's renderer to
+    // WebGL and an *Intel* adapter to WebGPU. A persona that pins a
+    // SwiftShader renderer itself still lands here on every platform, which is
+    // what keeps the arm load-bearing.
+    // Both JIT-backend rows go through it — the token is
     // `swiftshader`, which each renderer string carries.
     // Empty matches what the SwiftShader rows themselves declare, and is what Chrome
     // answers for an adapter it cannot classify — the honest value for a
@@ -471,14 +512,13 @@ mod tests {
 
     #[test]
     fn the_software_rasterizer_reports_no_vendor() {
-        // A SwiftShader row is Linux's default and was Windows' too, so this
-        // is the adapter a default Linux persona serves — and the one any
-        // persona gets when it pins a SwiftShader renderer itself, `Win32`
-        // included, now that Windows defaults to the D3D11 row. It used to
-        // reach the Intel catch-all: an Intel WebGPU adapter beside a
-        // SwiftShader WebGL renderer, a pairing Chrome does not produce. Both
-        // JIT-backend rows, since either can be served depending on the
-        // renderer resolved.
+        // A SwiftShader row was Linux's default and Windows' before either
+        // platform had a captured tier. No platform defaults to one now, so
+        // this is the adapter a persona gets when it pins a SwiftShader
+        // renderer itself — on any OS. It used to reach the Intel catch-all:
+        // an Intel WebGPU adapter beside a SwiftShader WebGL renderer, a
+        // pairing Chrome does not produce. Both JIT-backend rows, since either
+        // can be served depending on the renderer resolved.
         for row in [SWIFTSHADER_SUBZERO, SWIFTSHADER_LLVM] {
             let a = adapter_for_renderer(row.unmasked_renderer);
             assert_eq!(
@@ -651,27 +691,110 @@ mod tests {
     }
 
     #[test]
-    fn a_linux_persona_defaults_to_swiftshaders_subzero_string() {
-        // The bug this guards: every non-Mac platform pointed at the single
-        // SwiftShader row, which carries the *macOS* build's string. A Linux
-        // persona then reported `LLVM 10.0.0` where real Linux Chrome reports
-        // `Subzero` — one token off against any corpus of real Linux
-        // fingerprints.
-        let linux = default_renderer(Platform::LinuxX86_64);
-        assert!(
-            linux.contains("Subzero"),
-            "a Linux persona must report SwiftShader's Subzero build: {linux}"
+    fn no_platform_defaults_to_a_software_rasterizer_any_more() {
+        // Every platform now resolves a captured hardware tier: Metal on
+        // macOS, D3D11 on Windows, and Mesa/Vulkan on Linux. Linux was the
+        // last fallback — it served SwiftShader's renderer, which is a real
+        // configuration but announces "this machine has no usable GPU".
+        for (platform, expected) in [
+            (Platform::Win32, "D3D11"),
+            (Platform::MacIntel, "Metal"),
+            (Platform::LinuxX86_64, "Vulkan"),
+        ] {
+            let r = default_renderer(platform);
+            assert!(
+                r.contains(expected),
+                "{platform:?} must default to its captured {expected} row: {r}"
+            );
+            assert!(
+                !r.contains("SwiftShader"),
+                "{platform:?} must not default to a software rasterizer: {r}"
+            );
+        }
+        assert_eq!(
+            default_device(Platform::LinuxX86_64).tier,
+            Tier::VulkanMesaIntelIrisPro580
         );
-        assert!(
-            !linux.contains("LLVM"),
-            "a Linux persona must not report macOS's LLVM build: {linux}"
+    }
+
+    #[test]
+    fn a_pinned_swiftshader_string_still_resolves_its_platforms_build() {
+        // Neither SwiftShader row is a default any more, but a persona may pin
+        // one itself — a GPU-blocklisted machine, a VM, a headless container —
+        // and it must land on the build that platform's Chrome really prints.
+        // The bug this descends from: every non-Mac platform pointed at the
+        // single SwiftShader row, which carries the *macOS* build's string, so
+        // a Linux persona reported `LLVM 10.0.0` where real Linux Chrome
+        // reports `Subzero`.
+        let subzero = SWIFTSHADER_SUBZERO.unmasked_renderer;
+        assert!(subzero.contains("Subzero") && !subzero.contains("LLVM"));
+        assert_eq!(
+            device_for_renderer(subzero),
+            Some(SWIFTSHADER_SUBZERO),
+            "the Linux/Windows SwiftShader build must resolve its own row"
         );
-        // Win32 no longer defaults to any SwiftShader row — it resolves the
-        // captured D3D11 tier, real hardware rather than a software rasterizer.
-        let win = default_renderer(Platform::Win32);
-        assert!(
-            win.contains("D3D11") && !win.contains("SwiftShader"),
-            "Win32 must default to the captured D3D11 row, not a software one: {win}"
+        // And it stays platform-neutral, so pinning it warns on no OS.
+        for platform in [Platform::Win32, Platform::MacIntel, Platform::LinuxX86_64] {
+            assert_eq!(
+                crate::gpu::invariants::platform_skew(platform, Tier::SwiftShader),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn a_linux_vulkan_renderer_selects_only_its_own_device() {
+        // A Vulkan tier's numbers come off `VkPhysicalDeviceLimits`, so the row
+        // describes this Iris Pro under this Mesa build and nothing else. The
+        // token has to be narrow enough to say so: the captured string matches,
+        // and other Vulkan devices — including the same vendor — must not.
+        let d = device_for_renderer(VULKAN_INTEL_IRIS_PRO_580.unmasked_renderer)
+            .expect("the captured Vulkan renderer must match its own row");
+        assert_eq!(d, VULKAN_INTEL_IRIS_PRO_580);
+        assert_eq!(d.tier, Tier::VulkanMesaIntelIrisPro580);
+        for other in [
+            "ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 (0x00002684), Vulkan 1.3.277)",
+            "ANGLE (Intel, Vulkan 1.3.289 (Intel(R) UHD Graphics 620 (KBL GT2) (0x00005917)), Intel open-source Mesa driver)",
+        ] {
+            assert_eq!(
+                device_for_renderer(other),
+                None,
+                "another Vulkan device must not be served this Iris Pro's limits: {other}"
+            );
+        }
+        // The same card on Windows goes through ANGLE's D3D11 backend, whose
+        // values come from feature-level constants instead — so it must resolve
+        // the D3D11 tier, not this one.
+        assert_eq!(
+            device_for_renderer(
+                "ANGLE (Intel, Intel(R) Iris(R) Pro Graphics 580 Direct3D11 vs_5_0 ps_5_0, D3D11)"
+            )
+            .map(|d| d.tier),
+            Some(Tier::D3d11Fl11)
+        );
+    }
+
+    #[test]
+    fn the_linux_default_row_has_no_measured_webgpu_adapter() {
+        // Chrome does not enable WebGPU by default on Linux, so the probe
+        // recorded an explicit null and the tier serves neither limits nor
+        // features — the same standing SwiftShader has. What the row still
+        // declares is the adapter *identity* derived from its renderer, which
+        // has to name Intel and not some other vendor.
+        assert_eq!(
+            crate::gpu::webgpu_for_tier(Tier::VulkanMesaIntelIrisPro580),
+            None,
+            "no adapter was measured; substituting another tier's would claim a GPU the \
+             persona never reported"
+        );
+        let a = adapter_for_renderer(VULKAN_INTEL_IRIS_PRO_580.unmasked_renderer);
+        assert_eq!(
+            (a.vendor.as_str(), a.architecture.as_str()),
+            (
+                VULKAN_INTEL_IRIS_PRO_580.webgpu_vendor,
+                VULKAN_INTEL_IRIS_PRO_580.webgpu_architecture
+            ),
+            "the derived adapter must match the device row's own declaration"
         );
     }
 
@@ -810,11 +933,12 @@ mod tests {
 
     #[test]
     fn renderers_with_no_shipped_tier_return_none() {
-        // Three tiers ship (SwiftShader, Apple Metal, D3D11 FL11+). A backend
-        // none of them covers still has no measured tier, and guessing one
-        // would pair its name with another backend's numbers. These are the
-        // Linux desktop-GL and Vulkan renderer strings, which is why Linux
-        // still defaults to the SwiftShader row — see `default_device`.
+        // Four tiers ship (SwiftShader, Apple Metal, D3D11 FL11+, and the Intel
+        // Iris Pro 580 under Mesa/Vulkan). A backend none of them covers still
+        // has no measured tier, and guessing one would pair its name with
+        // another backend's numbers. Desktop-GL is such a backend, and so is
+        // every Vulkan device but the captured one: the Vulkan tier is
+        // device-scoped by construction, not a Linux catch-all.
         for r in [
             "ANGLE (Mesa, llvmpipe (LLVM 15.0.7, 256 bits), OpenGL ES 3.2)",
             "ANGLE (Intel, Mesa Intel(R) UHD Graphics (TGL GT1), OpenGL ES 3.2)",

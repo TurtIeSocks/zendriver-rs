@@ -39,7 +39,7 @@ fn pair_min(p: &GpuProfile, k: &str) -> Option<i64> {
 ///   `src/libANGLE/renderer/d3d/d3d11/renderer11_utils.cpp:422-434`), and the
 ///   `d3d11-fl11` capture measures exactly that pair. What never happens on
 ///   any backend measured here — SwiftShader 8192/8192, Metal 16384/16384,
-///   D3D11 32767/16384 — is the viewport
+///   D3D11 32767/16384, Mesa/Vulkan 16384/16384 — is the viewport
 ///   coming in *below* the texture max, so that direction is still a real
 ///   defect: a profile reporting a smaller viewport than texture max is
 ///   malformed. This check does not (and must not) catch the shipped bug —
@@ -116,11 +116,15 @@ pub(crate) fn platform_skew(platform: Platform, tier: Tier) -> Option<String> {
         return None;
     }
     // Each remaining tier is tied to the one OS its backend exists on: Metal
-    // to macOS, D3D11 to Windows. A page claiming either OS beside the other's
-    // numbers is a pair Chrome cannot produce.
+    // to macOS, D3D11 to Windows, and the Mesa/Vulkan capture to Linux (Mesa's
+    // open-source Intel driver is what ANGLE's Vulkan backend sits on there,
+    // and its renderer string names it). A page claiming one OS beside
+    // another's numbers is a pair Chrome cannot produce.
     let ok = matches!(
         (platform, tier),
-        (Platform::MacIntel, Tier::MetalMacos) | (Platform::Win32, Tier::D3d11Fl11)
+        (Platform::MacIntel, Tier::MetalMacos)
+            | (Platform::Win32, Tier::D3d11Fl11)
+            | (Platform::LinuxX86_64, Tier::VulkanMesaIntelIrisPro580)
     );
     (!ok).then(|| format!("persona claims {platform:?} but its GPU values come from {tier:?}"))
 }
@@ -143,7 +147,8 @@ mod tests {
     fn viewport_smaller_than_texture_is_rejected() {
         // No measured or documented backend ever reports a viewport bound
         // below its own texture max (SwiftShader 8192/8192, Metal
-        // 16384/16384, D3D11 32767/16384) — that direction is still a real
+        // 16384/16384, D3D11 32767/16384, Mesa/Vulkan 16384/16384) — that
+        // direction is still a real
         // defect, so it must stay an error. This is NOT the shipped bug:
         // see `the_historical_mixed_tier_pair_is_not_an_arithmetic_violation`
         // for why that pair (32767 viewport, 8192 texture) is legitimate and
@@ -360,7 +365,13 @@ mod tests {
         assert!(platform_skew(Platform::Win32, Tier::D3d11Fl11).is_none());
         assert!(platform_skew(Platform::MacIntel, Tier::D3d11Fl11).is_some());
         assert!(platform_skew(Platform::LinuxX86_64, Tier::D3d11Fl11).is_some());
+        // And the Vulkan/Mesa capture is Linux's: coherent there, impossible on
+        // either other OS, which no longer has to fall back to software.
+        assert!(platform_skew(Platform::LinuxX86_64, Tier::VulkanMesaIntelIrisPro580).is_none());
+        assert!(platform_skew(Platform::Win32, Tier::VulkanMesaIntelIrisPro580).is_some());
+        assert!(platform_skew(Platform::MacIntel, Tier::VulkanMesaIntelIrisPro580).is_some());
         // SwiftShader is platform-neutral: it is software, available anywhere.
         assert!(platform_skew(Platform::Win32, Tier::SwiftShader).is_none());
+        assert!(platform_skew(Platform::LinuxX86_64, Tier::SwiftShader).is_none());
     }
 }

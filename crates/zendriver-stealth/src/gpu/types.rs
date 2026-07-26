@@ -133,13 +133,54 @@ pub(crate) enum Tier {
     /// `D3D11_REQ_*` constants branched on the feature level, so an Intel UHD,
     /// an AMD RX, and an NVIDIA RTX at FL11+ all report the same numbers.
     D3d11Fl11,
+    /// ANGLE's **Vulkan** backend on Linux, on an Intel Iris Pro Graphics 580
+    /// (Skylake GT4e) under Mesa 25.2.8. Probed on Linux Mint with Chrome
+    /// 150.0.7871.186 in a NUC6i7KYK.
+    ///
+    /// **Named for the device and the driver, because a Vulkan tier does not
+    /// generalize.** The other two hardware tiers do, and that is why they are
+    /// named for a backend: `renderer11_utils.cpp` branches on the
+    /// `D3D_FEATURE_LEVEL`, and `DisplayMtl.mm`'s `TARGET_OS_OSX` arm uses
+    /// plain compile-time constants — neither asks the device anything. ANGLE's
+    /// Vulkan backend does the opposite: `vk_caps_utils.cpp` fills its caps
+    /// straight from `VkPhysicalDeviceLimits` (`max2DTextureSize` is
+    /// `min(limitsVk.maxFramebufferWidth, limitsVk.maxImageDimension2D)`, the
+    /// viewport bounds come from `limitsVk.maxViewportDimensions`, and that one
+    /// file reads `limitsVk.` around 99 times). The limits it reads are the
+    /// driver's answer for this physical device, so the **Mesa version is part
+    /// of what determines these numbers** as much as the silicon is: a
+    /// different Intel part, or the same part on a different Mesa release, is a
+    /// different tier and needs its own capture. Nothing here may be reused for
+    /// "Linux" or for "Vulkan" in general.
+    ///
+    /// The measurement bears that out. This capture is closest to
+    /// [`SwiftShader`](Self::SwiftShader) — 7 of 82 WebGL1 parameters differ
+    /// and 21 of 132 WebGL2, against 10/26 for [`D3d11Fl11`](Self::D3d11Fl11)
+    /// and 9/23 for [`MetalMacos`](Self::MetalMacos) — because SwiftShader's
+    /// renderer string says `Vulkan 1.3.0` and it runs through the same ANGLE
+    /// backend. Those 21 remaining WebGL2 differences between two
+    /// Vulkan-backed captures on one Chrome build are exactly the
+    /// device-derived limits, which is the empirical form of what the source
+    /// predicts.
+    ///
+    /// **No WebGPU adapter**, and that is a measurement rather than a hole:
+    /// Chrome does not enable WebGPU by default on Linux, so `navigator.gpu`
+    /// exists and `requestAdapter()` resolves null. The capture records the
+    /// explicit null and the tier serves no limits or features, exactly as the
+    /// SwiftShader tier does.
+    VulkanMesaIntelIrisPro580,
 }
 
 impl Tier {
     /// Every shipped tier, in one place: the invariant checks and the tests
     /// that sweep "all tiers" iterate this, so adding a tier cannot quietly
     /// leave one of them behind.
-    pub(crate) const ALL: &'static [Tier] = &[Tier::SwiftShader, Tier::MetalMacos, Tier::D3d11Fl11];
+    pub(crate) const ALL: &'static [Tier] = &[
+        Tier::SwiftShader,
+        Tier::MetalMacos,
+        Tier::D3d11Fl11,
+        Tier::VulkanMesaIntelIrisPro580,
+    ];
 }
 
 #[cfg(test)]

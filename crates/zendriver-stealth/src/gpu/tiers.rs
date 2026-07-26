@@ -3,6 +3,7 @@
 //   swiftshader — probed: Google Chrome 150.0.7871.186  on Darwin
 //   metal-macos — probed: Google Chrome 150.0.7871.186  on Darwin
 //   d3d11-fl11 — probed: Chrome 150.0.7871.186 on Windows 10.0.21996
+//   vulkan-mesa-intel-iris-pro-580 — probed: Chrome 150.0.7871.186 on Linux 7.0.0-28-generic, Mesa 25.2.8-0ubuntu0.24.04.2
 #![allow(dead_code)]
 #![allow(clippy::type_complexity)]
 
@@ -10,7 +11,6 @@ use super::types::{GlParamRef as GlParam, WebgpuAdapterRef};
 
 /// WEBGL1 values every tier agrees on. Sorted, binary-searchable.
 pub(crate) static BASE_PARAMS_WEBGL1: &[(&str, GlParam)] = &[
-    ("ALIASED_LINE_WIDTH_RANGE", GlParam::FloatPair([1.0, 1.0])),
     ("MAX_CUBE_MAP_TEXTURE_SIZE", GlParam::Int(16384)),
     ("MAX_VERTEX_ATTRIBS", GlParam::Int(16)),
     ("RENDERER", GlParam::Str("WebKit WebGL")),
@@ -18,7 +18,6 @@ pub(crate) static BASE_PARAMS_WEBGL1: &[(&str, GlParam)] = &[
         "SHADING_LANGUAGE_VERSION",
         GlParam::Str("WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)"),
     ),
-    ("SUBPIXEL_BITS", GlParam::Int(4)),
     ("VENDOR", GlParam::Str("WebKit")),
     (
         "VERSION",
@@ -31,6 +30,7 @@ pub(crate) static PARAM_OVERRIDES_WEBGL1: &[(&str, &[(&str, GlParam)])] = &[
     (
         "d3d11-fl11",
         &[
+            ("ALIASED_LINE_WIDTH_RANGE", GlParam::FloatPair([1.0, 1.0])),
             (
                 "ALIASED_POINT_SIZE_RANGE",
                 GlParam::FloatPair([1.0, 1024.0]),
@@ -44,11 +44,13 @@ pub(crate) static PARAM_OVERRIDES_WEBGL1: &[(&str, &[(&str, GlParam)])] = &[
             ("MAX_VERTEX_TEXTURE_IMAGE_UNITS", GlParam::Int(16)),
             ("MAX_VERTEX_UNIFORM_VECTORS", GlParam::Int(4095)),
             ("MAX_VIEWPORT_DIMS", GlParam::IntPair([32767, 32767])),
+            ("SUBPIXEL_BITS", GlParam::Int(4)),
         ],
     ),
     (
         "metal-macos",
         &[
+            ("ALIASED_LINE_WIDTH_RANGE", GlParam::FloatPair([1.0, 1.0])),
             ("ALIASED_POINT_SIZE_RANGE", GlParam::FloatPair([1.0, 511.0])),
             ("MAX_COMBINED_TEXTURE_IMAGE_UNITS", GlParam::Int(32)),
             ("MAX_FRAGMENT_UNIFORM_VECTORS", GlParam::Int(1024)),
@@ -59,11 +61,13 @@ pub(crate) static PARAM_OVERRIDES_WEBGL1: &[(&str, &[(&str, GlParam)])] = &[
             ("MAX_VERTEX_TEXTURE_IMAGE_UNITS", GlParam::Int(16)),
             ("MAX_VERTEX_UNIFORM_VECTORS", GlParam::Int(1024)),
             ("MAX_VIEWPORT_DIMS", GlParam::IntPair([16384, 16384])),
+            ("SUBPIXEL_BITS", GlParam::Int(4)),
         ],
     ),
     (
         "swiftshader",
         &[
+            ("ALIASED_LINE_WIDTH_RANGE", GlParam::FloatPair([1.0, 1.0])),
             (
                 "ALIASED_POINT_SIZE_RANGE",
                 GlParam::FloatPair([1.0, 1023.0]),
@@ -77,13 +81,33 @@ pub(crate) static PARAM_OVERRIDES_WEBGL1: &[(&str, &[(&str, GlParam)])] = &[
             ("MAX_VERTEX_TEXTURE_IMAGE_UNITS", GlParam::Int(32)),
             ("MAX_VERTEX_UNIFORM_VECTORS", GlParam::Int(4096)),
             ("MAX_VIEWPORT_DIMS", GlParam::IntPair([8192, 8192])),
+            ("SUBPIXEL_BITS", GlParam::Int(4)),
+        ],
+    ),
+    (
+        "vulkan-mesa-intel-iris-pro-580",
+        &[
+            ("ALIASED_LINE_WIDTH_RANGE", GlParam::FloatPair([1.0, 8.0])),
+            (
+                "ALIASED_POINT_SIZE_RANGE",
+                GlParam::FloatPair([1.0, 255.875]),
+            ),
+            ("MAX_COMBINED_TEXTURE_IMAGE_UNITS", GlParam::Int(64)),
+            ("MAX_FRAGMENT_UNIFORM_VECTORS", GlParam::Int(4096)),
+            ("MAX_RENDERBUFFER_SIZE", GlParam::Int(16384)),
+            ("MAX_TEXTURE_IMAGE_UNITS", GlParam::Int(32)),
+            ("MAX_TEXTURE_SIZE", GlParam::Int(16384)),
+            ("MAX_VARYING_VECTORS", GlParam::Int(27)),
+            ("MAX_VERTEX_TEXTURE_IMAGE_UNITS", GlParam::Int(32)),
+            ("MAX_VERTEX_UNIFORM_VECTORS", GlParam::Int(4096)),
+            ("MAX_VIEWPORT_DIMS", GlParam::IntPair([16384, 16384])),
+            ("SUBPIXEL_BITS", GlParam::Int(8)),
         ],
     ),
 ];
 
 /// WEBGL2 values every tier agrees on. Sorted, binary-searchable.
 pub(crate) static BASE_PARAMS_WEBGL2: &[(&str, GlParam)] = &[
-    ("ALIASED_LINE_WIDTH_RANGE", GlParam::FloatPair([1.0, 1.0])),
     ("MAX_3D_TEXTURE_SIZE", GlParam::Int(2048)),
     ("MAX_ARRAY_TEXTURE_LAYERS", GlParam::Int(2048)),
     ("MAX_CLIENT_WAIT_TIMEOUT_WEBGL", GlParam::Int(0)),
@@ -104,7 +128,6 @@ pub(crate) static BASE_PARAMS_WEBGL2: &[(&str, GlParam)] = &[
         "SHADING_LANGUAGE_VERSION",
         GlParam::Str("WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)"),
     ),
-    ("SUBPIXEL_BITS", GlParam::Int(4)),
     ("VENDOR", GlParam::Str("WebKit")),
     (
         "VERSION",
@@ -117,6 +140,7 @@ pub(crate) static PARAM_OVERRIDES_WEBGL2: &[(&str, &[(&str, GlParam)])] = &[
     (
         "d3d11-fl11",
         &[
+            ("ALIASED_LINE_WIDTH_RANGE", GlParam::FloatPair([1.0, 1.0])),
             (
                 "ALIASED_POINT_SIZE_RANGE",
                 GlParam::FloatPair([1.0, 1024.0]),
@@ -157,12 +181,14 @@ pub(crate) static PARAM_OVERRIDES_WEBGL2: &[(&str, &[(&str, GlParam)])] = &[
             ("MAX_VERTEX_UNIFORM_COMPONENTS", GlParam::Int(16380)),
             ("MAX_VERTEX_UNIFORM_VECTORS", GlParam::Int(4095)),
             ("MAX_VIEWPORT_DIMS", GlParam::IntPair([32767, 32767])),
+            ("SUBPIXEL_BITS", GlParam::Int(4)),
             ("UNIFORM_BUFFER_OFFSET_ALIGNMENT", GlParam::Int(256)),
         ],
     ),
     (
         "metal-macos",
         &[
+            ("ALIASED_LINE_WIDTH_RANGE", GlParam::FloatPair([1.0, 1.0])),
             ("ALIASED_POINT_SIZE_RANGE", GlParam::FloatPair([1.0, 511.0])),
             ("MAX_COLOR_ATTACHMENTS", GlParam::Int(8)),
             (
@@ -200,12 +226,14 @@ pub(crate) static PARAM_OVERRIDES_WEBGL2: &[(&str, &[(&str, GlParam)])] = &[
             ("MAX_VERTEX_UNIFORM_COMPONENTS", GlParam::Int(4096)),
             ("MAX_VERTEX_UNIFORM_VECTORS", GlParam::Int(1024)),
             ("MAX_VIEWPORT_DIMS", GlParam::IntPair([16384, 16384])),
+            ("SUBPIXEL_BITS", GlParam::Int(4)),
             ("UNIFORM_BUFFER_OFFSET_ALIGNMENT", GlParam::Int(16)),
         ],
     ),
     (
         "swiftshader",
         &[
+            ("ALIASED_LINE_WIDTH_RANGE", GlParam::FloatPair([1.0, 1.0])),
             (
                 "ALIASED_POINT_SIZE_RANGE",
                 GlParam::FloatPair([1.0, 1023.0]),
@@ -246,7 +274,56 @@ pub(crate) static PARAM_OVERRIDES_WEBGL2: &[(&str, &[(&str, GlParam)])] = &[
             ("MAX_VERTEX_UNIFORM_COMPONENTS", GlParam::Int(16384)),
             ("MAX_VERTEX_UNIFORM_VECTORS", GlParam::Int(4096)),
             ("MAX_VIEWPORT_DIMS", GlParam::IntPair([8192, 8192])),
+            ("SUBPIXEL_BITS", GlParam::Int(4)),
             ("UNIFORM_BUFFER_OFFSET_ALIGNMENT", GlParam::Int(256)),
+        ],
+    ),
+    (
+        "vulkan-mesa-intel-iris-pro-580",
+        &[
+            ("ALIASED_LINE_WIDTH_RANGE", GlParam::FloatPair([1.0, 8.0])),
+            (
+                "ALIASED_POINT_SIZE_RANGE",
+                GlParam::FloatPair([1.0, 255.875]),
+            ),
+            ("MAX_COLOR_ATTACHMENTS", GlParam::Int(8)),
+            (
+                "MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS",
+                GlParam::Int(2147483647),
+            ),
+            ("MAX_COMBINED_TEXTURE_IMAGE_UNITS", GlParam::Int(64)),
+            ("MAX_COMBINED_UNIFORM_BLOCKS", GlParam::Int(60)),
+            (
+                "MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS",
+                GlParam::Int(2147483647),
+            ),
+            ("MAX_DRAW_BUFFERS", GlParam::Int(8)),
+            ("MAX_ELEMENT_INDEX", GlParam::Int(1073741823)),
+            ("MAX_FRAGMENT_INPUT_COMPONENTS", GlParam::Int(116)),
+            ("MAX_FRAGMENT_UNIFORM_BLOCKS", GlParam::Int(16)),
+            ("MAX_FRAGMENT_UNIFORM_COMPONENTS", GlParam::Int(16384)),
+            ("MAX_FRAGMENT_UNIFORM_VECTORS", GlParam::Int(4096)),
+            ("MAX_RENDERBUFFER_SIZE", GlParam::Int(16384)),
+            ("MAX_SAMPLES", GlParam::Int(16)),
+            ("MAX_TEXTURE_IMAGE_UNITS", GlParam::Int(32)),
+            ("MAX_TEXTURE_LOD_BIAS", GlParam::Float(16.0)),
+            ("MAX_TEXTURE_SIZE", GlParam::Int(16384)),
+            (
+                "MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS",
+                GlParam::Int(128),
+            ),
+            ("MAX_UNIFORM_BLOCK_SIZE", GlParam::Int(65536)),
+            ("MAX_UNIFORM_BUFFER_BINDINGS", GlParam::Int(72)),
+            ("MAX_VARYING_COMPONENTS", GlParam::Int(108)),
+            ("MAX_VARYING_VECTORS", GlParam::Int(27)),
+            ("MAX_VERTEX_OUTPUT_COMPONENTS", GlParam::Int(124)),
+            ("MAX_VERTEX_TEXTURE_IMAGE_UNITS", GlParam::Int(32)),
+            ("MAX_VERTEX_UNIFORM_BLOCKS", GlParam::Int(16)),
+            ("MAX_VERTEX_UNIFORM_COMPONENTS", GlParam::Int(16384)),
+            ("MAX_VERTEX_UNIFORM_VECTORS", GlParam::Int(4096)),
+            ("MAX_VIEWPORT_DIMS", GlParam::IntPair([16384, 16384])),
+            ("SUBPIXEL_BITS", GlParam::Int(8)),
+            ("UNIFORM_BUFFER_OFFSET_ALIGNMENT", GlParam::Int(64)),
         ],
     ),
 ];
@@ -302,6 +379,23 @@ pub(crate) static PRECISION: &[(&str, &[(&str, [i32; 3])])] = &[
             ("VERTEX_SHADER/LOW_INT", [31, 30, 0]),
             ("VERTEX_SHADER/MEDIUM_FLOAT", [127, 127, 23]),
             ("VERTEX_SHADER/MEDIUM_INT", [31, 30, 0]),
+        ],
+    ),
+    (
+        "vulkan-mesa-intel-iris-pro-580",
+        &[
+            ("FRAGMENT_SHADER/HIGH_FLOAT", [127, 127, 23]),
+            ("FRAGMENT_SHADER/HIGH_INT", [31, 30, 0]),
+            ("FRAGMENT_SHADER/LOW_FLOAT", [15, 15, 10]),
+            ("FRAGMENT_SHADER/LOW_INT", [15, 14, 0]),
+            ("FRAGMENT_SHADER/MEDIUM_FLOAT", [15, 15, 10]),
+            ("FRAGMENT_SHADER/MEDIUM_INT", [15, 14, 0]),
+            ("VERTEX_SHADER/HIGH_FLOAT", [127, 127, 23]),
+            ("VERTEX_SHADER/HIGH_INT", [31, 30, 0]),
+            ("VERTEX_SHADER/LOW_FLOAT", [15, 15, 10]),
+            ("VERTEX_SHADER/LOW_INT", [15, 14, 0]),
+            ("VERTEX_SHADER/MEDIUM_FLOAT", [15, 15, 10]),
+            ("VERTEX_SHADER/MEDIUM_INT", [15, 14, 0]),
         ],
     ),
 ];
@@ -433,6 +527,48 @@ pub(crate) static EXTENSIONS_WEBGL1: &[(&str, &[&str])] = &[
             "WEBGL_polygon_mode",
         ],
     ),
+    (
+        "vulkan-mesa-intel-iris-pro-580",
+        &[
+            "ANGLE_instanced_arrays",
+            "EXT_blend_minmax",
+            "EXT_clip_control",
+            "EXT_color_buffer_half_float",
+            "EXT_depth_clamp",
+            "EXT_disjoint_timer_query",
+            "EXT_float_blend",
+            "EXT_frag_depth",
+            "EXT_polygon_offset_clamp",
+            "EXT_shader_texture_lod",
+            "EXT_texture_compression_bptc",
+            "EXT_texture_compression_rgtc",
+            "EXT_texture_filter_anisotropic",
+            "EXT_texture_mirror_clamp_to_edge",
+            "EXT_sRGB",
+            "OES_element_index_uint",
+            "OES_fbo_render_mipmap",
+            "OES_standard_derivatives",
+            "OES_texture_float",
+            "OES_texture_float_linear",
+            "OES_texture_half_float",
+            "OES_texture_half_float_linear",
+            "OES_vertex_array_object",
+            "WEBGL_blend_func_extended",
+            "WEBGL_color_buffer_float",
+            "WEBGL_compressed_texture_astc",
+            "WEBGL_compressed_texture_etc",
+            "WEBGL_compressed_texture_etc1",
+            "WEBGL_compressed_texture_s3tc",
+            "WEBGL_compressed_texture_s3tc_srgb",
+            "WEBGL_debug_renderer_info",
+            "WEBGL_debug_shaders",
+            "WEBGL_depth_texture",
+            "WEBGL_draw_buffers",
+            "WEBGL_lose_context",
+            "WEBGL_multi_draw",
+            "WEBGL_polygon_mode",
+        ],
+    ),
 ];
 
 /// Extension list per tier for WebGL2.
@@ -547,6 +683,43 @@ pub(crate) static EXTENSIONS_WEBGL2: &[(&str, &[&str])] = &[
             "WEBGL_multi_draw",
             "WEBGL_polygon_mode",
             "WEBGL_provoking_vertex",
+            "WEBGL_stencil_texturing",
+        ],
+    ),
+    (
+        "vulkan-mesa-intel-iris-pro-580",
+        &[
+            "EXT_clip_control",
+            "EXT_color_buffer_float",
+            "EXT_color_buffer_half_float",
+            "EXT_conservative_depth",
+            "EXT_depth_clamp",
+            "EXT_disjoint_timer_query_webgl2",
+            "EXT_float_blend",
+            "EXT_polygon_offset_clamp",
+            "EXT_render_snorm",
+            "EXT_texture_compression_bptc",
+            "EXT_texture_compression_rgtc",
+            "EXT_texture_filter_anisotropic",
+            "EXT_texture_mirror_clamp_to_edge",
+            "EXT_texture_norm16",
+            "NV_shader_noperspective_interpolation",
+            "OES_draw_buffers_indexed",
+            "OES_sample_variables",
+            "OES_shader_multisample_interpolation",
+            "OES_texture_float_linear",
+            "OVR_multiview2",
+            "WEBGL_blend_func_extended",
+            "WEBGL_compressed_texture_astc",
+            "WEBGL_compressed_texture_etc",
+            "WEBGL_compressed_texture_etc1",
+            "WEBGL_compressed_texture_s3tc",
+            "WEBGL_compressed_texture_s3tc_srgb",
+            "WEBGL_debug_renderer_info",
+            "WEBGL_debug_shaders",
+            "WEBGL_lose_context",
+            "WEBGL_multi_draw",
+            "WEBGL_polygon_mode",
             "WEBGL_stencil_texturing",
         ],
     ),
@@ -841,4 +1014,5 @@ pub(crate) static WEBGPU_ADAPTERS: &[(&str, Option<WebgpuAdapterRef>)] = &[
         }),
     ),
     ("swiftshader", None),
+    ("vulkan-mesa-intel-iris-pro-580", None),
 ];

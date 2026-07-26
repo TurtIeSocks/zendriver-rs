@@ -95,6 +95,7 @@ fn tier_key(tier: Tier) -> &'static str {
         Tier::SwiftShader => "swiftshader",
         Tier::MetalMacos => "metal-macos",
         Tier::D3d11Fl11 => "d3d11-fl11",
+        Tier::VulkanMesaIntelIrisPro580 => "vulkan-mesa-intel-iris-pro-580",
     }
 }
 
@@ -398,6 +399,42 @@ mod tests {
     }
 
     #[test]
+    fn the_vulkan_tier_resolves_its_own_device_derived_values() {
+        // ANGLE's Vulkan backend reads its caps off `VkPhysicalDeviceLimits`,
+        // so this tier's numbers are one Intel Iris Pro 580's under Mesa 25.2.8
+        // rather than any backend's constants. These four are the ones no other
+        // shipped tier reports, which is what proves the tier is wired end to
+        // end instead of silently inheriting a neighbour's values: every other
+        // capture measured 4 samples (8 on D3D11), 4 subpixel bits, and a
+        // one-pixel line-width range.
+        let p = profile_for_tier(types::Tier::VulkanMesaIntelIrisPro580);
+        assert_eq!(p.params_webgl2["MAX_SAMPLES"], GlParam::Int(16));
+        assert_eq!(p.params_webgl2["SUBPIXEL_BITS"], GlParam::Int(8));
+        assert_eq!(p.params_webgl1["SUBPIXEL_BITS"], GlParam::Int(8));
+        assert_eq!(
+            p.params_webgl2["ALIASED_LINE_WIDTH_RANGE"],
+            GlParam::FloatPair([1.0, 8.0])
+        );
+        assert_eq!(
+            p.params_webgl2["ALIASED_POINT_SIZE_RANGE"],
+            GlParam::FloatPair([1.0, 255.875])
+        );
+        // Closest to SwiftShader of the three tiers that preceded it — both run
+        // through ANGLE's Vulkan backend — but not equal to it, which is the
+        // whole reason it is a fourth tier rather than an identity row.
+        let sw = profile_for_tier(types::Tier::SwiftShader);
+        assert_ne!(p.params_webgl2, sw.params_webgl2);
+        assert_ne!(
+            p.params_webgl2,
+            profile_for_tier(types::Tier::MetalMacos).params_webgl2
+        );
+        assert_ne!(
+            p.params_webgl2,
+            profile_for_tier(types::Tier::D3d11Fl11).params_webgl2
+        );
+    }
+
+    #[test]
     fn base_values_reach_every_tier() {
         // A capability every tier agrees on lives only in base; resolution
         // must still surface it, or the ~19 shared WebGL2 capabilities would
@@ -658,12 +695,18 @@ mod tests {
     }
 
     #[test]
-    fn the_swiftshader_tier_resolves_no_adapter_at_all() {
-        // Not an oversight in the capture: Chrome on SwiftShader resolves
-        // `requestAdapter()` to null, so there is nothing to describe. Serving
-        // a neighbour's limits here would hand a persona that just told WebGL
-        // it has a software rasterizer a hardware adapter's capabilities.
+    fn the_tiers_probed_without_an_adapter_resolve_none_at_all() {
+        // Not an oversight in either capture. Chrome on SwiftShader resolves
+        // `requestAdapter()` to null, and Chrome on Linux does not enable
+        // WebGPU by default, so neither machine had an adapter to describe.
+        // Serving a neighbour's limits here would hand a persona that just told
+        // WebGL it has a software rasterizer — or a machine with WebGPU off —
+        // a hardware adapter's capabilities.
         assert_eq!(webgpu_for_tier(types::Tier::SwiftShader), None);
+        assert_eq!(
+            webgpu_for_tier(types::Tier::VulkanMesaIntelIrisPro580),
+            None
+        );
     }
 
     #[test]

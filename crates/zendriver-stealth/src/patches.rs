@@ -330,10 +330,12 @@ fn push_webgl(
         return;
     }
     let renderer = resolved_renderer(spec, gpu, platform);
-    // `device_for_renderer` returns None when no shipped tier matches. Three
-    // tiers exist today (SwiftShader, Apple Metal, D3D11 FL11+), so what lands
-    // here is a caller-pinned renderer from a backend none of them covers — a
-    // Linux Vulkan or desktop-GL string, say. Falling back means serving that
+    // `device_for_renderer` returns None when no shipped tier matches. Four
+    // tiers exist today (SwiftShader, Apple Metal, D3D11 FL11+, and one Intel
+    // Iris Pro 580 under Mesa/Vulkan), so what lands here is a caller-pinned
+    // renderer from a backend or device none of them covers — a desktop-GL
+    // string, or any Vulkan device but that one, whose limits ANGLE reads off
+    // the physical device. Falling back means serving that
     // renderer's name above another backend's numbers, so it is warned about
     // rather than done silently — the real fix is capturing that tier.
     // The default renderer never reaches this path: it is drawn from a shipped
@@ -401,10 +403,11 @@ fn push_webgl(
 /// [`WebgpuSpec`] still overlays on top — limits key-wise, features wholesale —
 /// exactly as [`WebglSpec`] overlays the WebGL tier's values.
 ///
-/// A tier with **no adapter** (SwiftShader, whose Chrome resolves
-/// `requestAdapter()` to null) serves neither, leaving the host adapter's own
-/// untouched. Substituting another tier's numbers there would claim a GPU the
-/// persona just told WebGL it does not have.
+/// A tier with **no adapter** serves neither, leaving the host adapter's own
+/// untouched. Two ship: SwiftShader, whose Chrome resolves `requestAdapter()`
+/// to null, and the Mesa/Vulkan tier, probed on a Linux Chrome that does not
+/// enable WebGPU by default. Substituting another tier's numbers there would
+/// claim a GPU the persona just told WebGL it does not have.
 ///
 /// `webgl_spoofed` reflects whether the WebGL value patch ran. When it is
 /// `false` — either the native-WebGL opt-in
@@ -1047,11 +1050,12 @@ mod tests {
         // platform, so the common case is coherent and silent.
         //
         // The expected backend differs per platform because the captured tiers
-        // do: Windows has a D3D11 tier, Linux has no Vulkan or desktop-GL one
-        // and keeps the platform-neutral software rasterizer.
+        // do: Windows has a D3D11 tier and Linux a Mesa/Vulkan one. Linux used
+        // to keep the platform-neutral software rasterizer here, which was the
+        // last default that was merely *possible* rather than ordinary.
         for (platform, backend) in [
             (Platform::Win32, "D3D11"),
-            (Platform::LinuxX86_64, "SwiftShader"),
+            (Platform::LinuxX86_64, "Vulkan"),
         ] {
             let mut out = String::new();
             let logs = captured_warnings(|| push_webgl(&mut out, None, None, platform));
@@ -1503,12 +1507,14 @@ mod tests {
         //
         // Every platform, not just the mock identity's: the default renderer is
         // platform-derived, so pinning only the mock's `MacIntel` exercised the
-        // Apple branch alone. The second split this caught: `LinuxX86_64`
-        // defaults to the SwiftShader row (as `Win32` did before the D3D11 tier
-        // was captured), whose renderer matched none of
+        // Apple branch alone. The second split this caught: `LinuxX86_64` used
+        // to default to the SwiftShader row (as `Win32` did before the D3D11
+        // tier was captured), whose renderer matched none of
         // `adapter_for_renderer`'s branches and fell through to the Intel
         // catch-all — an Intel WebGPU adapter beside a SwiftShader WebGL
         // renderer, which is the same cross-API contradiction one layer down.
+        // Linux now defaults to the captured Mesa/Vulkan row, where Intel is
+        // the honest answer rather than a fall-through.
         const VENDOR_TOKENS: [&str; 4] = ["intel", "nvidia", "amd", "apple"];
         for platform in [Platform::MacIntel, Platform::Win32, Platform::LinuxX86_64] {
             let persona = Persona {
@@ -1735,9 +1741,10 @@ mod tests {
 
     #[test]
     fn a_tier_with_no_webgpu_adapter_serves_neither_limits_nor_features() {
-        // A `LinuxX86_64` persona resolves the SwiftShader row, whose Chrome
-        // resolves `requestAdapter()` to null — so there is nothing measured to
-        // serve, and `webgpu.js` leaves the host adapter's own values alone.
+        // A `LinuxX86_64` persona resolves the Mesa/Vulkan row, probed on a
+        // Chrome that does not enable WebGPU by default — so there is nothing
+        // measured to serve, and `webgpu.js` leaves the host adapter's own
+        // values alone, exactly as it does for SwiftShader.
         // Substituting another tier's numbers would claim a GPU the persona
         // just told WebGL it does not have.
         let p = Persona {

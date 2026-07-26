@@ -595,6 +595,10 @@ const CAPTURES: &[(&str, &str)] = &[
         "d3d11-fl11",
         include_str!("../../zendriver-stealth/data/gpu-tiers/d3d11-fl11.json"),
     ),
+    (
+        "vulkan-mesa-intel-iris-pro-580",
+        include_str!("../../zendriver-stealth/data/gpu-tiers/vulkan-mesa-intel-iris-pro-580.json"),
+    ),
 ];
 
 /// Parse every committed capture into the emitter's input.
