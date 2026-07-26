@@ -47,6 +47,20 @@ pub(crate) fn compose_renderer(entry: &CatalogueEntry) -> String {
     }
 }
 
+/// Spread a seed across the whole `u64` range before it indexes anything.
+///
+/// The splitmix64 finalizer. Needed because callers use small sequential
+/// seeds — a fleet is naturally `Seed(0..n)` — and those map to a tiny slice of
+/// any range they are scaled into. Taking `seed % 1_000_000` as a fraction of a
+/// cumulative weight sum put every seed below 1000 within 0.001 of zero, so
+/// every draw returned the catalogue's first entry.
+const fn mix(seed: u64) -> u64 {
+    let mut z = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
 /// A catalogued GPU identity.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GpuDevice(&'static CatalogueEntry);
@@ -177,8 +191,48 @@ impl GpuDevice {
         if pool.is_empty() {
             return None;
         }
-        let index = usize::try_from(seed.0 % pool.len() as u64).ok()?;
+        let index = usize::try_from(mix(seed.0) % pool.len() as u64).ok()?;
         Some(Self(pool[index]))
+    }
+
+    /// Draw a device by how common it actually is.
+    ///
+    /// Same determinism as [`Self::from_seed`], but weighted: a device that
+    /// 4% of the corpus population reports is drawn about 4% of the time,
+    /// where `from_seed` would treat it the same as a card almost nobody has.
+    ///
+    /// The weights are marginal probabilities over the *whole* corpus, so they
+    /// do not sum to 1 over the catalogue — the categories the catalogue
+    /// excludes (iOS, Windows-on-ARM, WARP, VM adapters, unmodelled backends)
+    /// hold the rest, and filtering to one platform removes more. This
+    /// renormalizes over the pool it is actually drawing from; scanning against
+    /// a fixed 1.0 would fall off the end of the cumulative sum and answer the
+    /// last entry for most seeds.
+    ///
+    /// `None` on a platform with no catalogued device, as [`Self::from_seed`].
+    #[must_use]
+    pub fn by_share(seed: Seed, platform: Platform) -> Option<Self> {
+        let pool = Self::pool(platform);
+        let total: f64 = pool.iter().map(|e| e.weight).sum();
+        if pool.is_empty() || total <= 0.0 {
+            return None;
+        }
+        // A fraction of the pool's own mass. `mix` is what makes a fleet built
+        // from `Seed(0..n)` walk the whole distribution rather than crowding
+        // into its first entry.
+        #[allow(clippy::cast_precision_loss)]
+        let fraction = mix(seed.0) as f64 / u64::MAX as f64;
+        let target = fraction * total;
+
+        let mut acc = 0.0;
+        for entry in &pool {
+            acc += entry.weight;
+            if acc >= target {
+                return Some(Self(entry));
+            }
+        }
+        // Only reachable through floating-point accumulation error.
+        pool.last().map(|e| Self(e))
     }
 
     /// Every catalogue entry coherent with `platform`.
@@ -371,6 +425,75 @@ mod tests {
             seen.len() > 50,
             "seeded draw covered only {} devices",
             seen.len()
+        );
+    }
+
+    #[test]
+    fn a_share_draw_is_deterministic_per_seed() {
+        for seed in [0u64, 3, 77, 1_234_567] {
+            let a = GpuDevice::by_share(Seed(seed), Platform::Win32);
+            let b = GpuDevice::by_share(Seed(seed), Platform::Win32);
+            assert_eq!(a.map(|d| d.renderer()), b.map(|d| d.renderer()));
+        }
+    }
+
+    #[test]
+    fn every_catalogued_entry_carries_a_usable_weight() {
+        // A zero-weight row can never be drawn by share, so it would be
+        // invisible to fleet diversity while still selectable by name.
+        for e in CATALOGUE {
+            assert!(
+                e.weight > 0.0,
+                "{} ({:?}) has no share weight",
+                e.model,
+                e.device_id
+            );
+        }
+    }
+
+    #[test]
+    fn a_share_draw_spreads_and_never_crosses_platforms() {
+        // The pool's mass is well under 1, so a scan against a fixed 1.0 would
+        // fall off the end and answer the last entry for most seeds. That bug
+        // passes a determinism test, so this one checks coverage instead.
+        let mut seen = std::collections::BTreeSet::new();
+        for seed in 0..1_000u64 {
+            let d = GpuDevice::by_share(Seed(seed), Platform::Win32).unwrap();
+            assert!(
+                matches!(d.tier(), Tier::D3d11Fl11 | Tier::D3d11Fl11Nvidia),
+                "seed {seed} drew {:?} for Win32",
+                d.tier()
+            );
+            seen.insert(d.renderer());
+        }
+        assert!(
+            seen.len() > 20,
+            "share draw covered only {} devices",
+            seen.len()
+        );
+    }
+
+    #[test]
+    fn a_share_draw_favours_the_common_devices() {
+        // The point of weighting: the heaviest entry must come up far more
+        // often than a uniform draw would give it.
+        let pool: Vec<_> = CATALOGUE
+            .iter()
+            .filter(|e| platform_skew(Platform::MacIntel, e.tier).is_none())
+            .collect();
+        let heaviest = pool
+            .iter()
+            .max_by(|a, b| a.weight.total_cmp(&b.weight))
+            .unwrap();
+        let draws = 2_000u64;
+        let hits = (0..draws)
+            .filter_map(|s| GpuDevice::by_share(Seed(s), Platform::MacIntel))
+            .filter(|d| d.model() == heaviest.model)
+            .count();
+        let uniform = draws as usize / pool.len();
+        assert!(
+            hits > uniform,
+            "weighting did nothing: {hits} hits vs {uniform} for a uniform draw"
         );
     }
 
