@@ -134,6 +134,217 @@ pub fn compose_renderer(
     }
 }
 
+/// One device the corpus reports, reduced to the three fields the catalogue
+/// keeps. The renderer string itself is rebuilt by [`compose_renderer`].
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CorpusModel {
+    pub backend: Backend,
+    pub vendor: String,
+    pub model: String,
+}
+
+/// Vendors whose D3D11 parts are out of scope, with the reason each is out.
+///
+/// These are not hypothetical: every one appears in the pinned corpus.
+const D3D11_VENDOR_EXCLUSIONS: &[(&str, &str)] = &[
+    // Windows-on-ARM. The non-NVIDIA D3D11 tier's numbers were measured on an
+    // x86 AMD part, and nothing has probed an Adreno under D3D11, so filing
+    // one under that tier would claim a generalization across instruction set
+    // and vendor at once.
+    (
+        "Qualcomm",
+        "Windows-on-ARM, and no ARM D3D11 capture exists",
+    ),
+    // WARP, a software rasterizer wearing a D3D11 renderer string. Its numbers
+    // are not a GPU's, which is the same reason SwiftShader is its own tier.
+    (
+        "Microsoft",
+        "Microsoft Basic Render Driver is WARP, not a GPU",
+    ),
+];
+
+/// Apple silicon prefixes that are **not** Macs.
+///
+/// The Metal tier is ANGLE's `TARGET_OS_OSX` arm, whose caps are compile-time
+/// constants. iOS takes the `#else` arm, where `supportsAppleGPUFamily` picks
+/// different ones, so an A-series identity over macOS numbers is the exact
+/// backend mismatch the tiers exist to prevent.
+const NON_MAC_APPLE_PREFIXES: &[&str] = &["Apple A"];
+
+/// Pull every in-scope `(backend, vendor, model)` out of the corpus's
+/// `videoCard` node.
+///
+/// Only the model name is taken. The renderer string is rebuilt by
+/// [`compose_renderer`], because the corpus predates the device ID current
+/// ANGLE appends and a copied string would carry whichever Chrome collected it.
+///
+/// Results are sorted and deduplicated, so the emitted catalogue does not
+/// change when the corpus reorders its buckets.
+#[must_use]
+pub fn extract_models(network_json: &str) -> Vec<CorpusModel> {
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(network_json) else {
+        return Vec::new();
+    };
+    let mut seen = std::collections::BTreeSet::new();
+
+    for node in root["nodes"].as_array().into_iter().flatten() {
+        if node["name"] != "videoCard" {
+            continue;
+        }
+        let deeper = &node["conditionalProbabilities"]["deeper"];
+        for bucket in deeper.as_object().into_iter().flatten().map(|(_, v)| v) {
+            for key in bucket.as_object().into_iter().flatten().map(|(k, _)| k) {
+                let json = key.strip_prefix("*STRINGIFIED*").unwrap_or(key);
+                let Ok(card) = serde_json::from_str::<serde_json::Value>(json) else {
+                    continue;
+                };
+                let Some(renderer) = card["renderer"].as_str() else {
+                    continue;
+                };
+                if let Some(model) = split_renderer(renderer) {
+                    seen.insert(model);
+                }
+            }
+        }
+    }
+    seen.into_iter().collect()
+}
+
+/// Take an ANGLE renderer string apart, or answer `None` when it describes
+/// something v1 does not model.
+fn split_renderer(renderer: &str) -> Option<CorpusModel> {
+    let inner = renderer.strip_prefix("ANGLE (")?.strip_suffix(')')?;
+    let (vendor, rest) = inner.split_once(", ")?;
+
+    // A vendor ANGLE could not name, so it printed the raw PCI id — a VM
+    // display adapter in every corpus instance. There is no real device here.
+    if vendor.starts_with("0x") {
+        return None;
+    }
+
+    if let Some(model) = rest.strip_prefix("ANGLE Metal Renderer: ") {
+        // Everything before the trailing ", Unspecified Version" field.
+        let model = model.split_once(", ").map_or(model, |(before, _)| before);
+        if NON_MAC_APPLE_PREFIXES.iter().any(|p| model.starts_with(p)) {
+            return None;
+        }
+        // Intel and AMD Macs are deliberately out of scope for v1: Dawn
+        // resolves their WebGPU architecture through a `gpu_info` lookup
+        // rather than the `mDeviceId == 0` path every Apple silicon part
+        // takes, and nothing has probed one. Dropping them costs identities;
+        // guessing an architecture token costs coherence.
+        if vendor != "Apple" {
+            return None;
+        }
+        return Some(CorpusModel {
+            backend: Backend::Metal,
+            vendor: vendor.to_string(),
+            model: model.to_string(),
+        });
+    }
+
+    if let Some(body) = rest.strip_suffix(", D3D11") {
+        if D3D11_VENDOR_EXCLUSIONS.iter().any(|(v, _)| *v == vendor) {
+            return None;
+        }
+        let model = body.split(" Direct3D11").next()?.trim();
+        // Strip a device ID if this entry came from a Chrome that appended
+        // one; the catalogue resolves the ID from pci.ids instead, and a name
+        // carrying one would never match.
+        let model = model
+            .rsplit_once(" (0x")
+            .map_or(model, |(before, _)| before)
+            .trim();
+        if model.is_empty() {
+            return None;
+        }
+        return Some(CorpusModel {
+            backend: Backend::D3d11,
+            vendor: vendor.to_string(),
+            model: model.to_string(),
+        });
+    }
+
+    // Every other backend: desktop GL, GLES, Vulkan. Real, but device-derived
+    // or unmodelled, so out of scope for a catalogue built on shared tiers.
+    None
+}
+
+#[cfg(test)]
+mod extract_tests {
+    use super::*;
+
+    const MINI: &str = include_str!("../tests/fixtures/corpus-mini.json");
+
+    fn models() -> Vec<CorpusModel> {
+        extract_models(MINI)
+    }
+
+    fn has(models: &[CorpusModel], model: &str) -> bool {
+        models.iter().any(|m| m.model == model)
+    }
+
+    #[test]
+    fn keeps_the_in_scope_devices() {
+        let m = models();
+        assert!(has(&m, "NVIDIA GeForce RTX 3060"));
+        assert!(has(&m, "AMD Radeon RX 6700 XT"));
+        assert!(has(&m, "Intel(R) UHD Graphics 630"));
+        assert!(has(&m, "Apple M2"));
+    }
+
+    #[test]
+    fn strips_a_device_id_from_a_newer_corpus_entry() {
+        // Only the name is taken; the ID is resolved from pci.ids. A name that
+        // kept "(0x00002684)" would match nothing there.
+        let m = models();
+        assert!(has(&m, "NVIDIA GeForce RTX 4090"), "{m:?}");
+        assert!(!m.iter().any(|x| x.model.contains("0x")), "{m:?}");
+    }
+
+    #[test]
+    fn drops_every_out_of_scope_device() {
+        let m = models();
+        for (model, why) in [
+            ("Apple A18 Pro", "iOS takes ANGLE's non-macOS arm"),
+            ("Qualcomm(R) Adreno(TM) X1-85 GPU", "Windows-on-ARM"),
+            ("Microsoft Basic Render Driver", "WARP, not a GPU"),
+            ("Parallels Display Adapter (WDDM)", "VM adapter, hex vendor"),
+            ("Adreno (TM) 730", "GLES, not a modelled backend"),
+            ("llvmpipe", "desktop GL software rasterizer"),
+        ] {
+            assert!(!has(&m, model), "{model} must be dropped: {why}");
+        }
+    }
+
+    #[test]
+    fn drops_intel_and_amd_macs_while_v1_has_no_capture_for_them() {
+        // Flip this the day a probe from one exists; the tier's caps very
+        // likely cover them, but the WebGPU architecture token does not.
+        let m = models();
+        assert!(!has(&m, "Intel(R) UHD Graphics 630 "), "{m:?}");
+        assert!(!has(&m, "AMD Radeon Pro 5500M"), "{m:?}");
+        assert!(
+            m.iter()
+                .filter(|x| x.backend == Backend::Metal)
+                .all(|x| x.vendor == "Apple"),
+            "every Metal entry must be Apple silicon in v1: {m:?}"
+        );
+    }
+
+    #[test]
+    fn output_is_sorted_and_deduplicated() {
+        let m = models();
+        let mut sorted = m.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(
+            m, sorted,
+            "emitted order must not depend on corpus bucket order"
+        );
+    }
+}
+
 #[cfg(test)]
 mod compose_tests {
     use super::*;
