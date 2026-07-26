@@ -361,15 +361,17 @@ async fn spoofed_profile_is_internally_coherent() {
          reads that pair in two lines: {got:#}"
     );
     // The other direction: an index at or above the served cap is out of range
-    // for the claimed device too, so it must keep delegating rather than
-    // gaining a fabricated value.
+    // for the claimed device, so it answers null whatever the real backend has.
+    // Under this pairing the host agrees it is out of range, so the read would
+    // come back null even unpatched; `draw_buffers_past_a_lower_served_cap_are_
+    // suppressed` is the test that separates the two.
     assert!(
         got["drawBufferPastCap"].is_null(),
-        "DRAW_BUFFER{max_draw} is at the served cap and must stay delegated (null): {got:#}"
+        "DRAW_BUFFER{max_draw} is at the served cap and must answer null: {got:#}"
     );
     assert!(
         got["drawBufferPastCapFbo"].is_null(),
-        "DRAW_BUFFER{max_draw} must stay delegated with an FBO bound too: {got:#}"
+        "DRAW_BUFFER{max_draw} must answer null with an FBO bound too: {got:#}"
     );
 
     // Not answering null is only half of it. The value has to be the one a real
@@ -998,5 +1000,115 @@ async fn extension_lists_agree_with_get_extension() {
     assert!(
         missing.is_empty(),
         "every claimed extension must resolve; these did not: {missing:?}"
+    );
+}
+
+/// Reads `DRAW_BUFFERn` around the served cap, plus the cap itself, so the
+/// caller can compare the claimed range against the host's.
+/// Returns a plain object rather than a JSON string, matching `ADAPTER_JS`:
+/// the caller reads it as a `Value` directly.
+const DRAW_BUFFER_RANGE_JS: &str = r#"(() => {
+  const gl = document.createElement('canvas').getContext('webgl2');
+  if (!gl) return {error: 'no webgl2'};
+  const max = gl.getParameter(gl.MAX_DRAW_BUFFERS);
+  const read = (i) => {
+    const e = gl['DRAW_BUFFER' + i];
+    return e === undefined ? 'no-enum' : gl.getParameter(e);
+  };
+  return {maxDraw: max, atCap: read(max), lastInRange: read(max - 1)};
+})()"#;
+
+/// A `DRAW_BUFFERn` the served cap excludes must answer null even when the real
+/// backend has that many.
+///
+/// The reverse pairing (serving more than the host has) is the default one and
+/// is covered by `spoofed_profile_is_internally_coherent`. This one needs the
+/// host to be the *larger* of the two, so it pins a SwiftShader renderer, whose
+/// tier serves 6, and launches `Native` so the host is real hardware with 8.
+///
+/// Without the suppression the host answers 1029 for `DRAW_BUFFER6` beside a
+/// served `MAX_DRAW_BUFFERS` of 6. ES 3.0 derives the valid range from that cap,
+/// so no device reports 6 and then answers index 6, and a page reads the
+/// contradiction in two lines.
+#[tokio::test]
+#[ignore = "launches real Chrome and requires a usable GPU"]
+async fn draw_buffers_past_a_lower_served_cap_are_suppressed() {
+    let browser = match Browser::builder()
+        .stealth(StealthProfile::spoofed())
+        .gpu_backend(GpuBackend::Native)
+        .persona(zendriver::stealth::Persona {
+            webgl: Some(zendriver::stealth::WebglSpec {
+                unmasked_renderer: Some(
+                    "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), \
+                     SwiftShader driver)"
+                        .to_string(),
+                ),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .launch()
+        .await
+    {
+        Ok(b) => b,
+        Err(e) => {
+            assert!(
+                matches!(
+                    e,
+                    ZendriverError::Browser(BrowserError::GpuBackendUnavailable)
+                ),
+                "a host without a usable GPU must fail with GpuBackendUnavailable: {e:?}"
+            );
+            eprintln!("skipping: Native backend unavailable on this host: {e}");
+            return;
+        }
+    };
+    let tab = browser.main_tab();
+    tab.goto(&file_url("zendriver-gpu-drawbuffers.html"))
+        .await
+        .expect("navigate");
+    tab.wait_for_load().await.expect("load");
+
+    let native: Value = tab
+        .evaluate(DRAW_BUFFER_RANGE_JS)
+        .await
+        .expect("isolated-world probe");
+    let host_max = native["maxDraw"].as_i64().unwrap_or(0);
+
+    let mut got = Value::Null;
+    for attempt in 0..MAX_POLL_TRIES {
+        got = tab
+            .evaluate_main(DRAW_BUFFER_RANGE_JS)
+            .await
+            .expect("main-world probe");
+        if got["maxDraw"].as_i64() != Some(host_max) {
+            break;
+        }
+        if attempt + 1 < MAX_POLL_TRIES {
+            tokio::time::sleep(POLL_DELAY).await;
+        }
+    }
+    let served_max = got["maxDraw"].as_i64().expect("served maxDraw");
+    browser.close().await.ok();
+
+    if served_max >= host_max {
+        eprintln!(
+            "skipping: served cap {served_max} is not below this host's {host_max}, so an \
+             out-of-range index would read null either way"
+        );
+        return;
+    }
+
+    assert!(
+        got["atCap"].is_null(),
+        "MAX_DRAW_BUFFERS is {served_max} but DRAW_BUFFER{served_max} answered \
+         {:?}; this host has {host_max}, so the value leaked through: {got:#}",
+        got["atCap"]
+    );
+    // The suppression must stop exactly at the cap, not swallow the range.
+    assert!(
+        !got["lastInRange"].is_null(),
+        "DRAW_BUFFER{} is the last in-range index and must still answer: {got:#}",
+        served_max - 1
     );
 }

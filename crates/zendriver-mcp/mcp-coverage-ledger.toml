@@ -50,11 +50,19 @@ excluded = "internal fingerprint surface type; surfaced opaquely via Persona JSO
 # as `Strategy`/`Surface` above, it's excluded rather than covered.
 [[entry]]
 api = "zendriver::WebgpuSpec"
-excluded = "caller-supplied fingerprint spec; surfaced opaquely via Persona JSON in browser_open.persona, not a granular field on browser_fingerprint_generate's request (consistent with WebglSpec/ScreenSpec, which are lib-only and carry no ledger entry at all since they're not re-exported from the zendriver crate root)"
+excluded = "caller-supplied fingerprint spec; surfaced opaquely via Persona JSON in browser_open.persona, not a granular field on browser_fingerprint_generate's request (same treatment as WebglSpec below; ScreenSpec is lib-only and carries no entry since it is not re-exported from the zendriver crate root)"
 
 [[entry]]
 api = "zendriver::stealth::WebgpuSpec"
-excluded = "caller-supplied fingerprint spec; surfaced opaquely via Persona JSON in browser_open.persona, not a granular field on browser_fingerprint_generate's request (consistent with WebglSpec/ScreenSpec, which are lib-only and carry no ledger entry at all since they're not re-exported from the zendriver crate root)"
+excluded = "caller-supplied fingerprint spec; surfaced opaquely via Persona JSON in browser_open.persona, not a granular field on browser_fingerprint_generate's request (same treatment as WebglSpec below; ScreenSpec is lib-only and carries no entry since it is not re-exported from the zendriver crate root)"
+
+# Re-exported alongside WebgpuSpec so a caller can set `Persona.webgl` through
+# the facade. Without it the field is public but its type is not nameable from
+# `zendriver`, which is a gap rather than a deliberate restriction: `webgpu` was
+# reachable and `webgl` was not.
+[[entry]]
+api = "zendriver::stealth::WebglSpec"
+excluded = "caller-supplied fingerprint spec; surfaced opaquely via Persona JSON in browser_open.persona, not a granular field on browser_fingerprint_generate's request (same rationale as WebgpuSpec above)"
 
 [[entry]]
 api = "zendriver::stealth::Persona"

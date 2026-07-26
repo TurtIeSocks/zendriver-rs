@@ -270,7 +270,7 @@ pub mod stealth {
     pub use zendriver_stealth::{
         Fingerprint, GlParam, GpuBackend, GpuProfile, InputProfile, Persona, PersonaBuilder,
         Platform, Provenance, Seed, ShaderPrecision, StealthProfile, Strategy, Surface,
-        UserAgentMetadata, WebgpuSpec,
+        UserAgentMetadata, WebglSpec, WebgpuSpec,
     };
 }
 

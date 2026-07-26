@@ -4082,6 +4082,7 @@ pub use zendriver::stealth::StealthProfile
 pub use zendriver::stealth::Strategy
 pub use zendriver::stealth::Surface
 pub use zendriver::stealth::UserAgentMetadata
+pub use zendriver::stealth::WebglSpec
 pub use zendriver::stealth::WebgpuSpec
 pub mod zendriver::storage
 pub struct zendriver::storage::Storage
