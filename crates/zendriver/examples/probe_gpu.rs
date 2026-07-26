@@ -223,11 +223,19 @@ fn emit_tier(
         .as_str()
         .and_then(chrome_version)
         .unwrap_or("unknown");
-    let os = format!(
-        "{} {}",
-        sysinfo::System::name().unwrap_or_default(),
-        sysinfo::System::kernel_version().unwrap_or_default()
-    );
+    // `long_os_version` is the human-facing one ("Windows 11 Pro", "MacOS
+    // 15.2"); the kernel/build number beside it is what distinguishes two
+    // machines running the same marketing version. An earlier revision used
+    // `kernel_version` alone, which on Windows is the bare build number and
+    // reads as "Windows 21996" — true, but it drops which Windows that is.
+    let os = match (
+        sysinfo::System::long_os_version(),
+        sysinfo::System::kernel_version(),
+    ) {
+        (Some(name), Some(build)) => format!("{name} ({build})"),
+        (Some(only), None) | (None, Some(only)) => only,
+        (None, None) => std::env::consts::OS.to_string(),
+    };
     let mut provenance = format!("probed: Chrome {chrome} on {}", os.trim());
     if let Some(driver) = driver.map(str::trim).filter(|d| !d.is_empty()) {
         provenance.push_str(&format!(", {driver}"));
