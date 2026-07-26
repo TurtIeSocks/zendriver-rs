@@ -27,11 +27,12 @@ Measured across the four committed captures:
 
 | surface | varies by | evidence |
 |---|---|---|
-| WebGL parameters (D3D11) | feature level, not card | `renderer11_utils.cpp` switches on `D3D_FEATURE_LEVEL`; every value is a `D3D11_REQ_*` constant |
+| WebGL parameters (D3D11) | feature level, **plus one vendor bit** | `renderer11_utils.cpp` switches on `D3D_FEATURE_LEVEL` for the values themselves, but `skipVSConstantRegisterZero` is keyed on `isNvidia` and docks `maxVertexUniformVectors` by 1 — measured: an RTX 4090 and an AMD Radeon on one machine differ in that cap and the two derived from it, and in nothing else |
 | WebGL parameters (Metal) | nothing on macOS | `DisplayMtl.mm:727-731`, `TARGET_OS_OSX` branch is compile-time constants |
 | WebGL parameters (Vulkan) | **the device** | `vk_caps_utils.cpp:652-684` reads `VkPhysicalDeviceLimits`; two Vulkan captures on one Chrome differ in 21 WebGL2 params |
 | WebGPU limits | backend | 5 of 36 differ between Metal and D3D12, all API-level (`maxBufferSize`, storage-buffer counts) |
-| WebGPU features | backend | D3D11's 19 are a strict subset of Metal's 22; the 3 extra are ASTC/ETC2 texture formats Apple silicon has and desktop D3D11 lacks |
+| WebGPU features | backend, **not vendor** | D3D11's 19 are a strict subset of Metal's 22; the 3 extra are ASTC/ETC2 formats Apple silicon has and desktop D3D11 lacks. AMD RDNA2 and NVIDIA Lovelace report identical 19-feature sets |
+| WebGPU limits | **not vendor** | 0 of 36 differ between AMD RDNA2 and NVIDIA Lovelace |
 | renderer string | **the device** | model name and PCI device ID |
 | WebGPU `architecture` | generation on D3D11 (`ampere`, `lovelace`); **constant** on Apple silicon (`metal-3`) | `PhysicalDeviceMTL.mm` picks it by capability family, not generation — see Scope |
 
@@ -225,6 +226,13 @@ Whether Dawn exposes these depends on shader-model support *and* the installed
 driver, so they are the ones an older card on the same tier plausibly lacks.
 An estimated entry **omits** them.
 
+Two D3D11 vendors have since been probed, and all five are present on both
+(AMD RDNA2 and NVIDIA Lovelace report identical feature sets). So this list is
+now a guard against *older generations*, not against vendors — the axis it was
+originally written to hedge has been measured and found flat. It stays because
+neither probed part is old; an entry for a pre-Turing or pre-RDNA card is
+still estimating across a gap nothing has measured.
+
 Everything else in the set is carried, and the carrying is not inference. The
 19 features on the RTX 4090 capture include `core-features-and-limits`,
 `texture-formats-tier1`, `texture-formats-tier2`, and
@@ -341,12 +349,32 @@ the model name, compose the rest — but a generator that skipped either would
 produce a catalogue that drifts without its input changing, which is the
 failure mode hardest to notice.
 
-**Vendor is an untested axis.** Feature sets are keyed by generation alone.
-The evidence for that is an M4 Pro and an RTX 4090 differing by three
-features, all texture-compression formats — no sign of a vendor dimension, but
-no non-NVIDIA D3D11 capture exists to rule one out. If one later disagrees,
-the key widens to `(vendor, generation)`. That is a contained schema change:
-`GenerationFeatures` gains a field and its lookup gains an argument.
+**Vendor is a tested axis now, and the answer was mixed.** This section
+originally recorded it as untested, pending a non-NVIDIA D3D11 capture. That
+capture exists: an AMD Radeon (Raphael integrated, `0x164E`) probed on the
+same machine and Chrome build as the RTX 4090.
+
+For **WebGPU it settles the question in the design's favour** — 0 of 36 limits
+and 0 of 19 features differ between RDNA2 and Lovelace, including all five
+names this spec had flagged as silicon-gated and unsafe to estimate
+(`shader-f16`, `subgroups`, `dual-source-blending`, `clip-distances`,
+`primitive-index`). Feature sets stay keyed without a vendor dimension, and
+D3D11 estimates are considerably safer than written below.
+
+For **WebGL it found a real vendor split**, though a narrow one:
+`MAX_VERTEX_UNIFORM_VECTORS` is 4095 on NVIDIA against 4096 elsewhere, with
+two derived values following. The cause is
+`ANGLE_FEATURE_CONDITION(features, skipVSConstantRegisterZero, isNvidia)` —
+the vendor and nothing else, so the split is binary and predictable. Two
+capability tiers ship for it (`d3d11-fl11`, `d3d11-fl11-nvidia`), both
+measured, and a catalogue entry's `tier` field already carries which one a
+device is on.
+
+The generalisable lesson is about method, not about NVIDIA: the split was not
+predicted from reading ANGLE, it was found by probing a second vendor and
+diffing, and the explaining condition was looked up afterwards. Every
+"generalizes by backend" claim in this document is worth the same treatment
+before it is leaned on.
 
 **`metal-3` is expected, not measured, on pre-M4 Apple silicon.** The
 mechanism is known exactly (see Scope): it is a capability test, and Apple

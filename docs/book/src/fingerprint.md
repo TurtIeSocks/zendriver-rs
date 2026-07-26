@@ -227,17 +227,23 @@ save and restore through `getParameter`.
 
 **Values come from measured capability tiers, not per-parameter guesses.**
 How far one capture reaches depends on the backend, because ANGLE (Chrome's GL
-layer) decides these values differently per backend. Four tiers ship today, and
-the first three generalize while the fourth does not:
+layer) decides these values differently per backend. Five tiers ship today, and
+all but the last generalize:
 
 - `SwiftShader` — Chrome's software rasterizer, the same numbers on every OS.
 - Metal on macOS — ANGLE's Metal backend, covering every Mac. The values are
   compile-time constants in ANGLE's `DisplayMtl.mm` `TARGET_OS_OSX` branch, so
   an Intel Mac and an Apple silicon one report the same numbers.
-- D3D11 (feature level 11_0+) — ANGLE's Direct3D 11 backend on Windows. One
-  tier covers every Intel, NVIDIA and AMD card at that feature level, because
-  ANGLE derives the values from `D3D11_REQ_*` constants rather than from the
-  card.
+- D3D11 (feature level 11_0+) — ANGLE's Direct3D 11 backend on Windows, in two
+  tiers. ANGLE derives the values from `D3D11_REQ_*` constants rather than from
+  the card, so one tier covers every Intel and AMD part at that feature level.
+  NVIDIA gets its own: `renderer11_utils.cpp` enables
+  `skipVSConstantRegisterZero` when and only when the vendor is NVIDIA, which
+  docks `MAX_VERTEX_UNIFORM_VECTORS` from 4096 to 4095 and shifts the two
+  values derived from it. Everything else matches — probing an RTX 4090 and an
+  AMD Radeon on one machine found no other difference in either WebGL
+  parameter set, the extension lists, the shader precisions, or any WebGPU
+  limit or feature.
 - Intel Iris Pro Graphics 580 (Skylake GT4e) under Mesa 25.2.8 — ANGLE's
   **Vulkan** backend on Linux. This one covers **that GPU under that driver and
   nothing else**: `vk_caps_utils.cpp` fills its caps straight from
