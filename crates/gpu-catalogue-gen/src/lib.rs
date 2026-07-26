@@ -134,13 +134,36 @@ pub fn compose_renderer(
     }
 }
 
-/// One device the corpus reports, reduced to the three fields the catalogue
-/// keeps. The renderer string itself is rebuilt by [`compose_renderer`].
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+/// One device the corpus reports. The renderer string itself is rebuilt by
+/// [`compose_renderer`].
+#[derive(Debug, Clone, PartialEq)]
 pub struct CorpusModel {
     pub backend: Backend,
     pub vendor: String,
     pub model: String,
+    /// The PCI device id the corpus observed **this name paired with**, when
+    /// the string carried one.
+    ///
+    /// This is an observation, not a lookup: 467 such pairs cover 308 of the
+    /// 310 D3D11 names, and 77 names appear with several ids because one
+    /// marketing name really does span several SKUs. Preferring these over a
+    /// `pci.ids` name match is what turns a deterministic guess among 30
+    /// candidates into a pairing some real machine actually reported.
+    pub device_id: Option<u32>,
+    /// Marginal probability of this device across the whole corpus.
+    ///
+    /// `videoCard` is conditioned on `userAgent`, so a bucket's numbers are
+    /// `P(device | ua)` and summing them naively would over-weight anything
+    /// that appears under many user agents. `userAgent` is parentless and its
+    /// prior sums to 1, so the honest weight is
+    /// `Σ_ua P(ua) · P(device | ua)`.
+    pub weight: f64,
+}
+
+/// Key that orders [`CorpusModel`]s deterministically. `weight` is an `f64`,
+/// so the struct cannot derive `Ord`.
+fn model_key(m: &CorpusModel) -> (Backend, &str, &str, Option<u32>) {
+    (m.backend, m.vendor.as_str(), m.model.as_str(), m.device_id)
 }
 
 /// Reduce a model name to the form both sides of the `pci.ids` join agree on.
@@ -229,12 +252,32 @@ const VENDOR_IDS: &[(&str, u32)] = &[("NVIDIA", 0x10de), ("AMD", 0x1002), ("Inte
 ///
 /// Strings rather than the stealth crate's enums, because this generator does
 /// not depend on it: `tier` is rendered as `Tier::{tier}`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CatalogueRow {
     pub model: String,
     pub vendor: String,
     pub device_id: Option<u32>,
     pub tier: String,
+    /// Marginal share of this device in the corpus population, for the
+    /// share-weighted draw. Browser population rather than gamer population,
+    /// which is the one a browser-automation tool wants.
+    pub weight: f64,
+    /// Where the device id came from. Nothing is emitted without one on
+    /// D3D11, so this records which of the two grounded sources supplied it.
+    pub id_source: IdSource,
+}
+
+/// Provenance of a row's device id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdSource {
+    /// The corpus reported this exact `(name, id)` pair. Preferred: it is an
+    /// observation of a real machine rather than a reconstruction.
+    Observed,
+    /// No corpus entry for this name carried an id, so it was resolved by
+    /// name against `pci.ids`. Rare — 2 of 310 names.
+    PciIds,
+    /// Metal, which has no PCI id at all.
+    None,
 }
 
 /// What a `build_catalogue` run kept and what it had to drop.
@@ -271,56 +314,75 @@ pub fn build_catalogue(network_json: &str, pci_ids: &str) -> BuildReport {
 
     let mut report = BuildReport::default();
     for m in extract_models(network_json) {
-        match m.backend {
-            Backend::Metal => report.rows.push(CatalogueRow {
+        // The one measured vendor split: ANGLE applies
+        // skipVSConstantRegisterZero when and only when isNvidia.
+        let tier = match (m.backend, m.vendor.as_str()) {
+            (Backend::Metal, _) => "MetalMacos",
+            (Backend::D3d11, "NVIDIA") => "D3d11Fl11Nvidia",
+            (Backend::D3d11, _) => "D3d11Fl11",
+        };
+
+        if m.backend == Backend::Metal {
+            report.rows.push(CatalogueRow {
                 model: m.model,
                 vendor: m.vendor,
                 device_id: None,
-                tier: "MetalMacos".to_string(),
+                tier: tier.to_string(),
+                weight: m.weight,
+                id_source: IdSource::None,
+            });
+            continue;
+        }
+
+        // Prefer what the corpus observed. A pci.ids name match can only
+        // reconstruct a plausible id -- `Intel(R) Graphics` alone matches 30
+        // candidates -- whereas the corpus reports the pair a real machine
+        // actually emitted, and reports every SKU a name spans rather than
+        // one representative of them.
+        if let Some(device_id) = m.device_id {
+            report.rows.push(CatalogueRow {
+                model: m.model,
+                vendor: m.vendor,
+                device_id: Some(device_id),
+                tier: tier.to_string(),
+                weight: m.weight,
+                id_source: IdSource::Observed,
+            });
+            continue;
+        }
+
+        // Fallback for the few names no corpus entry ever paired with an id.
+        // Lowest id, so bumping the pinned pci.ids cannot reshuffle it.
+        let vendor_id = VENDOR_IDS
+            .iter()
+            .find(|(v, _)| *v == m.vendor)
+            .map(|(_, id)| id);
+        let target = normalize_model(&m.model);
+        let hit = vendor_id
+            .and_then(|id| by_vendor.get(id))
+            .into_iter()
+            .flatten()
+            .filter(|(_, aliases)| !target.is_empty() && aliases.contains(&target))
+            .min_by_key(|(device, _)| device.device_id);
+        match hit {
+            Some((device, _)) => report.rows.push(CatalogueRow {
+                model: m.model,
+                vendor: m.vendor,
+                device_id: Some(device.device_id),
+                tier: tier.to_string(),
+                weight: m.weight,
+                id_source: IdSource::PciIds,
             }),
-            Backend::D3d11 => {
-                let Some((_, vendor_id)) = VENDOR_IDS.iter().find(|(v, _)| *v == m.vendor) else {
-                    report.unmatched.push(m.model);
-                    continue;
-                };
-                let target = normalize_model(&m.model);
-                // A marketing name routinely covers several SKUs: `Intel(R)
-                // Graphics` matches 30 device ids, `Intel(R) UHD Graphics` 29.
-                // Every candidate is a device that really does report that
-                // name, so any of them composes a string some real machine
-                // emits — but the choice must not depend on the order pci.ids
-                // happens to list them in, or bumping the pin would silently
-                // reshuffle the catalogue. Take the lowest id.
-                let hit = by_vendor
-                    .get(vendor_id)
-                    .into_iter()
-                    .flatten()
-                    .filter(|(_, aliases)| !target.is_empty() && aliases.contains(&target))
-                    .min_by_key(|(device, _)| device.device_id);
-                let is_nvidia = m.vendor == "NVIDIA";
-                match hit {
-                    Some((device, _)) => report.rows.push(CatalogueRow {
-                        model: m.model,
-                        vendor: m.vendor,
-                        device_id: Some(device.device_id),
-                        // The one measured vendor split: ANGLE applies
-                        // skipVSConstantRegisterZero when and only when
-                        // isNvidia.
-                        tier: if is_nvidia {
-                            "D3d11Fl11Nvidia".to_string()
-                        } else {
-                            "D3d11Fl11".to_string()
-                        },
-                    }),
-                    None => report.unmatched.push(m.model),
-                }
-            }
+            // A D3D11 renderer string carries its device id by construction,
+            // so a row without one cannot be composed at all. Dropped, named.
+            None => report.unmatched.push(m.model),
         }
     }
     report
         .rows
-        .sort_by(|a, b| (&a.tier, &a.model).cmp(&(&b.tier, &b.model)));
+        .sort_by(|a, b| (&a.tier, &a.model, a.device_id).cmp(&(&b.tier, &b.model, b.device_id)));
     report.unmatched.sort();
+    report.unmatched.dedup();
     report
 }
 
@@ -366,15 +428,39 @@ pub fn extract_models(network_json: &str) -> Vec<CorpusModel> {
     let Ok(root) = serde_json::from_str::<serde_json::Value>(network_json) else {
         return Vec::new();
     };
-    let mut seen = std::collections::BTreeSet::new();
+    let nodes = root["nodes"].as_array().map(Vec::as_slice).unwrap_or(&[]);
 
-    for node in root["nodes"].as_array().into_iter().flatten() {
+    // `userAgent` is parentless, so its conditional table is a plain prior.
+    let mut prior: std::collections::BTreeMap<&str, f64> = std::collections::BTreeMap::new();
+    for node in nodes {
+        if node["name"] != "userAgent" {
+            continue;
+        }
+        for (ua, p) in node["conditionalProbabilities"]
+            .as_object()
+            .into_iter()
+            .flatten()
+        {
+            if let Some(p) = p.as_f64() {
+                prior.insert(ua.as_str(), p);
+            }
+        }
+    }
+
+    let mut totals: std::collections::BTreeMap<(Backend, String, String, Option<u32>), f64> =
+        std::collections::BTreeMap::new();
+
+    for node in nodes {
         if node["name"] != "videoCard" {
             continue;
         }
         let deeper = &node["conditionalProbabilities"]["deeper"];
-        for bucket in deeper.as_object().into_iter().flatten().map(|(_, v)| v) {
-            for key in bucket.as_object().into_iter().flatten().map(|(k, _)| k) {
+        for (ua, bucket) in deeper.as_object().into_iter().flatten() {
+            // A user agent the prior does not mention contributes nothing: its
+            // marginal weight is zero, so the device is still catalogued but
+            // never drawn by share.
+            let p_ua = prior.get(ua.as_str()).copied().unwrap_or(0.0);
+            for (key, p) in bucket.as_object().into_iter().flatten() {
                 let json = key.strip_prefix("*STRINGIFIED*").unwrap_or(key);
                 let Ok(card) = serde_json::from_str::<serde_json::Value>(json) else {
                     continue;
@@ -382,13 +468,30 @@ pub fn extract_models(network_json: &str) -> Vec<CorpusModel> {
                 let Some(renderer) = card["renderer"].as_str() else {
                     continue;
                 };
-                if let Some(model) = split_renderer(renderer) {
-                    seen.insert(model);
-                }
+                let Some(m) = split_renderer(renderer) else {
+                    continue;
+                };
+                *totals
+                    .entry((m.backend, m.vendor, m.model, m.device_id))
+                    .or_default() += p_ua * p.as_f64().unwrap_or(0.0);
             }
         }
     }
-    seen.into_iter().collect()
+
+    let mut out: Vec<CorpusModel> = totals
+        .into_iter()
+        .map(
+            |((backend, vendor, model, device_id), weight)| CorpusModel {
+                backend,
+                vendor,
+                model,
+                device_id,
+                weight,
+            },
+        )
+        .collect();
+    out.sort_by(|a, b| model_key(a).cmp(&model_key(b)));
+    out
 }
 
 /// Take an ANGLE renderer string apart, or answer `None` when it describes
@@ -421,6 +524,8 @@ fn split_renderer(renderer: &str) -> Option<CorpusModel> {
             backend: Backend::Metal,
             vendor: vendor.to_string(),
             model: model.to_string(),
+            device_id: None,
+            weight: 0.0,
         });
     }
 
@@ -428,14 +533,18 @@ fn split_renderer(renderer: &str) -> Option<CorpusModel> {
         if D3D11_VENDOR_EXCLUSIONS.iter().any(|(v, _)| *v == vendor) {
             return None;
         }
-        let model = body.split(" Direct3D11").next()?.trim();
-        // Strip a device ID if this entry came from a Chrome that appended
-        // one; the catalogue resolves the ID from pci.ids instead, and a name
-        // carrying one would never match.
-        let model = model
-            .rsplit_once(" (0x")
-            .map_or(model, |(before, _)| before)
-            .trim();
+        let named = body.split(" Direct3D11").next()?.trim();
+        // Keep the device id when the string carries one. Chrome has appended
+        // it for some time, so most entries have it, and an observed pairing
+        // beats anything a name lookup can reconstruct: one marketing name
+        // spans many SKUs, and the corpus knows which ones actually occur.
+        let (model, device_id) = match named.rsplit_once(" (0x") {
+            Some((before, hex)) => {
+                let hex = hex.strip_suffix(')').unwrap_or(hex);
+                (before.trim(), u32::from_str_radix(hex, 16).ok())
+            }
+            None => (named, None),
+        };
         if model.is_empty() {
             return None;
         }
@@ -443,6 +552,8 @@ fn split_renderer(renderer: &str) -> Option<CorpusModel> {
             backend: Backend::D3d11,
             vendor: vendor.to_string(),
             model: model.to_string(),
+            device_id,
+            weight: 0.0,
         });
     }
 
@@ -644,12 +755,43 @@ mod extract_tests {
     #[test]
     fn output_is_sorted_and_deduplicated() {
         let m = models();
-        let mut sorted = m.clone();
+        let keys: Vec<_> = m
+            .iter()
+            .map(|x| (x.backend, x.vendor.clone(), x.model.clone(), x.device_id))
+            .collect();
+        let mut sorted = keys.clone();
         sorted.sort();
         sorted.dedup();
         assert_eq!(
-            m, sorted,
+            keys, sorted,
             "emitted order must not depend on corpus bucket order"
+        );
+    }
+
+    #[test]
+    fn a_device_id_in_the_string_is_kept_not_discarded() {
+        // The corpus is the better source for these: it reports the pair a
+        // real machine emitted, where a pci.ids name lookup can only pick one
+        // plausible SKU out of the many sharing a marketing name.
+        let m = models();
+        let rtx = m
+            .iter()
+            .find(|x| x.model == "NVIDIA GeForce RTX 4090")
+            .expect("4090");
+        assert_eq!(rtx.device_id, Some(0x2684));
+        // ...while the name itself must not keep the id text.
+        assert!(!m.iter().any(|x| x.model.contains("0x")), "{m:?}");
+    }
+
+    #[test]
+    fn weights_marginalize_over_the_user_agent_prior() {
+        // videoCard is conditioned on userAgent, so a raw sum over buckets
+        // over-weights whatever is common to many user agents. Each weight is
+        // P(ua) * P(card|ua) accumulated, so the total is a probability mass.
+        let total: f64 = models().iter().map(|x| x.weight).sum();
+        assert!(
+            total > 0.0 && total <= 1.0 + 1e-9,
+            "marginal weights must be a probability mass, got {total}"
         );
     }
 }
