@@ -633,11 +633,8 @@ git commit -m "feat(gpu-catalogue-gen): extract model names from the fingerprint
 **Interfaces:**
 - Consumes: everything from Tasks 2 to 4.
 - Produces, in `zendriver_stealth::gpu::catalogue`:
-  - `pub(crate) struct CatalogueEntry { pub model: &'static str, pub vendor: &'static str, pub device_id: Option<u32>, pub tier: Tier, pub generation: Option<Generation> }`
-  - `pub(crate) const CATALOGUE: &[CatalogueEntry]`
-  - `pub(crate) enum Generation { Ampere, Lovelace, Rdna2, MetalConstant }`
-  - `pub(crate) struct FeatureSet { pub generation: Option<Generation>, pub tier: Tier, pub features: &'static [&'static str], pub provenance: FeatureProvenance }`
-  - `pub(crate) enum FeatureProvenance { Probed { chrome: &'static str, device: &'static str }, Estimated { carried_from: Tier } }`
+  - `pub(crate) struct CatalogueEntry { pub model: &'static str, pub vendor: &'static str, pub device_id: Option<u32>, pub tier: Tier, pub weight: f64 }` — hand-written in `gpu::types`; the generated file carries data only, as `tiers.rs` does.
+  - `pub(crate) const CATALOGUE: &[CatalogueEntry]` — generated.
 
 - [ ] **Step 1: Write the pinned entry point**
 
@@ -738,14 +735,10 @@ pub fn emit_rust(corpus_commit: &str, pci_ids_commit: &str, rows: &[CatalogueRow
         let device_id = row
             .device_id
             .map_or_else(|| "None".to_string(), |id| format!("Some(0x{id:04X})"));
-        let generation = row
-            .generation
-            .as_ref()
-            .map_or_else(|| "None".to_string(), |g| format!("Some(Generation::{g})"));
         out.push_str(&format!(
             "    CatalogueEntry {{ model: {:?}, vendor: {:?}, device_id: {device_id}, \
-             tier: Tier::{}, generation: {generation} }},\n",
-            row.model, row.vendor, row.tier
+             tier: Tier::{}, weight: {:.9} }},\n",
+            row.model, row.vendor, row.tier, row.weight
         ));
     }
     out.push_str("];\n");
@@ -779,110 +772,47 @@ git commit -m "feat(gpu-catalogue-gen): emit the committed device catalogue"
 
 ---
 
-### Task 6: Feature sets keyed by generation, with provenance
+### Task 6: No feature-set table. Record why.
 
-**Files:**
-- Modify: `crates/gpu-catalogue-gen/src/lib.rs`
-- Modify: `crates/zendriver-stealth/src/gpu/catalogue.rs` (regenerated)
+**Files:** none. This task builds nothing.
 
-**Interfaces:**
-- Consumes: `Tier`, `Generation` from Task 5.
-- Produces: `pub(crate) const FEATURE_SETS: &[FeatureSet]`, and
-  `pub(crate) fn features_for(tier: Tier, generation: Option<Generation>) -> &'static FeatureSet`.
+**It was going to key WebGPU feature sets by `Generation`**, with a
+`Probed`/`Estimated` provenance tag and a rule that estimated entries omit five
+silicon-gated names. That design is removed. See the revision note in the
+spec's data-model section for the full reasoning; the short version is that it
+modelled two axes, vendor and generation, that have since been measured and
+found flat:
 
-- [ ] **Step 1: Write the failing test**
+- An AMD Radeon (RDNA2) and an RTX 4090 (Lovelace), same machine, same Chrome,
+  report **identical** 19-feature sets and identical 36 limits — including all
+  five names the rule would have withheld.
+- Two vendors and two years apart still agreeing is evidence the set is decided
+  by the backend, not the silicon.
 
-In `crates/zendriver-stealth/src/gpu/catalogue.rs`'s sibling test module (create `crates/zendriver-stealth/src/gpu/catalogue_tests.rs` and `#[cfg(test)] mod catalogue_tests;` in `mod.rs`, so the generated file stays generated):
+So features come from the tier, which `profile_for_tier` already does. There is
+no second table to build, no key, and no entry that is "listed but not
+selectable": the probed-only default has nothing left to exclude.
 
-```rust
-use super::catalogue::*;
-use super::types::Tier;
-
-/// The five names ANGLE/Dawn gate on shader model and driver rather than on
-/// the backend. An estimated entry omits them; a probed one may carry them.
-const SILICON_GATED: &[&str] = &[
-    "shader-f16",
-    "subgroups",
-    "dual-source-blending",
-    "clip-distances",
-    "primitive-index",
-];
-
-#[test]
-fn an_estimated_feature_set_omits_every_silicon_gated_name() {
-    for set in FEATURE_SETS {
-        if matches!(set.provenance, FeatureProvenance::Estimated { .. }) {
-            for gated in SILICON_GATED {
-                assert!(
-                    !set.features.contains(gated),
-                    "estimated set for {:?} claims {gated}, which nothing measured",
-                    set.generation
-                );
-            }
-        }
-    }
-}
-
-#[test]
-fn every_probed_set_carries_the_browser_level_features() {
-    // Present because a given Chrome implements that spec revision, not
-    // because of the card. Their absence would describe no real browser.
-    for set in FEATURE_SETS {
-        if matches!(set.provenance, FeatureProvenance::Probed { .. }) {
-            for browser_level in ["core-features-and-limits", "texture-formats-tier1"] {
-                assert!(
-                    set.features.contains(&browser_level),
-                    "probed set for {:?} is missing {browser_level}",
-                    set.generation
-                );
-            }
-        }
-    }
-}
-
-#[test]
-fn the_probed_sets_match_the_captures_they_came_from() {
-    // Lovelace and RDNA2 were both measured, on the same machine and Chrome,
-    // and reported identical 19-feature sets.
-    let lovelace = features_for(Tier::D3d11Fl11Nvidia, Some(Generation::Lovelace));
-    let rdna2 = features_for(Tier::D3d11Fl11, Some(Generation::Rdna2));
-    assert_eq!(lovelace.features, rdna2.features);
-    assert_eq!(lovelace.features.len(), 19);
-}
-```
-
-- [ ] **Step 2: Run it and watch it fail**
-
-Run: `cargo test -p zendriver-stealth catalogue`
-Expected: FAIL, `FEATURE_SETS` not found.
-
-- [ ] **Step 3: Extend the emitter**
-
-Emit `FEATURE_SETS` from the committed captures: for each capture with an
-adapter, one `Probed` set carrying its measured feature list, its Chrome
-version, and its device. For each generation named in `CATALOGUE` with no
-capture, one `Estimated` set equal to its tier's probed features minus
-`SILICON_GATED`. Emit `features_for` as a linear scan over `FEATURE_SETS`
-matching on `(tier, generation)`, falling back to the tier's own set when the
-generation is `None`.
-
-- [ ] **Step 4: Regenerate and run**
+- [ ] **Step 1: Confirm no code is needed**
 
 ```bash
-cargo run -p gpu-catalogue-gen && cargo fmt -p zendriver-stealth
-cargo test -p zendriver-stealth catalogue
+grep -rn "Generation\|FeatureSet\|FeatureProvenance" crates/zendriver-stealth/src crates/gpu-catalogue-gen/src
 ```
 
-Expected: PASS, 3 tests.
+Expected: no hits. If any appear, they are leftovers from the removed design
+and should go.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 2: Confirm features still reach a catalogued device**
 
-```bash
-git add crates/gpu-catalogue-gen crates/zendriver-stealth/src/gpu
-git commit -m "feat(stealth): key catalogue feature sets by generation with provenance"
-```
+Covered by Task 11's real-Chrome test, which reads the served feature set
+beside the renderer string. Nothing to add here.
 
----
+**Do not reintroduce a generation axis without a capture that shows one.** The
+open question is real — both probed parts are modern, and an early
+feature-level-11 card is served a 2022 part's feature set — but the answer to
+an unmeasured gap is a probe, not a model of it. Feature-level-10 cards are
+already excluded outright, since ANGLE writes the feature level into the
+renderer string as its shader model.
 
 ### Task 7: The four selection strategies
 
@@ -1426,10 +1356,13 @@ its test.
    that a name lookup flattens. `pci.ids` stays as a fallback and resolves 9
    further rows; 2 names resist both and are dropped. Gap 1's join algorithm
    still matters, but only for those few.
-3. **Generation assignment is unspecified above.** Deriving `Ampere` vs
-   `Lovelace` from a model name needs a table; take the tokens from Dawn's
-   `gpu_info.json` as `adapter_for_renderer` already does, and reuse that
-   function rather than writing a second mapping.
+3. ~~**Generation assignment is unspecified above.**~~ **Resolved: there is no
+   generation field.** The concern was that deriving `Ampere` vs `Lovelace`
+   needed a model-to-architecture table, and that a copy in the generator would
+   drift from `adapter_for_renderer`. Both go away: the catalogue stores no
+   generation, and Task 9 derives the architecture from the composed renderer
+   string through `adapter_for_renderer` itself, keeping one source of truth.
+   See Task 6 for why the axis was dropped.
 
 4. **Regeneration is not verified by PR CI.** Task 12 explains why: fetched
    inputs cannot be diffed hermetically. Anyone extending this should not

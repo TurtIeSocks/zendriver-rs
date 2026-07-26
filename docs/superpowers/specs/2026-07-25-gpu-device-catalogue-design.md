@@ -193,114 +193,71 @@ pub struct CatalogueEntry {
     pub device_id: Option<u32>,
     /// Which measured capability tier this device runs on.
     pub tier: Tier,
-    /// Architecture generation, keying the WebGPU feature set. `None` where
-    /// the backend's architecture token is constant and carries no
-    /// generation — every Apple silicon part reports `metal-3`.
-    pub generation: Option<Generation>,
+    /// Share of the corpus population, for the share-weighted draw. See
+    /// Selection.
+    pub weight: f64,
 }
 ```
 
-Both `Option`s are the same fact seen twice: a Metal entry varies only in its
-name, so it has neither a device ID nor a generation. They stay in one table
-rather than splitting per backend because selection, share-weighting, and the
-round-trip test are then uniform, and the composer already has to branch on
-backend to build the string at all.
+`device_id` is `Option` because a Metal entry varies only in its name. Both
+backends stay in one table rather than splitting, because selection,
+share-weighting, and the round-trip test are then uniform, and the composer
+already has to branch on backend to build the string at all.
 
-Feature sets are keyed by generation where one exists, and otherwise fall back
-to the tier's own probed set — which is the Metal case, and the reason the key
-is an `Option` rather than a second table:
+### Feature sets come from the tier. There is no generation axis.
 
-```rust
-pub struct FeatureSet {
-    /// `None` = this is the tier's own probed set, used by every entry on the
-    /// tier whose backend has no generation axis.
-    pub generation: Option<Generation>,
-    pub tier: Tier,
-    pub features: &'static [&'static str],
-    pub provenance: FeatureProvenance,
-}
+> **Revised during implementation.** This section previously specified a
+> `Generation` key, a `FeatureSet` table, a `Probed`/`Estimated` provenance
+> tag, and a rule that estimated entries omit five silicon-gated names
+> (`shader-f16`, `subgroups`, `dual-source-blending`, `clip-distances`,
+> `primitive-index`). All of it is removed. **Nothing measured supports a
+> generation axis, and this project does not model distinctions it has not
+> measured.**
 
-pub enum FeatureProvenance {
-    /// Measured on real hardware of this generation.
-    Probed { chrome: &'static str, device: &'static str },
-    /// The tier's probed set minus the silicon-gated names (see below).
-    Estimated { carried_from: Tier },
-}
-```
+The original design hedged against two axes at once, vendor and generation,
+because only one device had been probed. Both have since been tested:
 
-### How features are keyed, and what "estimated" means
+- **Vendor is flat within a backend.** An AMD Radeon (RDNA2) and an
+  RTX 4090 (Lovelace), captured on the same machine under the same Chrome,
+  report **identical** 19-feature sets and identical 36 limits — including all
+  five names the original rule would have withheld.
+- **Generation was never separately observed at all.** RDNA2 and Lovelace are
+  two years and two vendors apart and still agree, which is evidence the
+  WebGPU feature set is decided by the backend rather than by the silicon.
 
-The estimation rule is one sentence, so it can be checked mechanically rather
-than argued case by case:
+So a catalogue entry takes its features from its tier, which is measured for
+every tier that ships. That is the whole rule. There is no second table, no
+key, no provenance tag, and no entry that is "listed but not selectable" — the
+probed-only default has nothing left to exclude, because every entry resolves
+to a probed set.
 
-> **An estimated entry reports its tier's probed feature set, minus the
-> silicon-gated names.**
+What is genuinely carried, and why it is not inference: the 19 features on the
+D3D11 captures include `core-features-and-limits`, `texture-formats-tier1`,
+`texture-formats-tier2` and `texture-component-swizzle`, which are WebGPU
+*specification* features present because that Chrome implements that revision.
+They have nothing to do with the card. The rest came off a real adapter on that
+tier, and carrying them is a statement about the tier, which is what a tier is
+for.
 
-The silicon-gated list is a small, explicit constant — `shader-f16`,
-`subgroups`, `dual-source-blending`, `clip-distances`, `primitive-index`.
-Whether Dawn exposes these depends on shader-model support *and* the installed
-driver, so they are the ones an older card on the same tier plausibly lacks.
-An estimated entry **omits** them.
+This is also why deriving features from a GPU spec database would be wrong in
+both directions: it would not merely risk overclaiming `shader-f16`, it would
+omit those four browser-level features entirely and produce a list no real
+Chrome reports.
 
-Two D3D11 vendors have since been probed, and all five are present on both
-(AMD RDNA2 and NVIDIA Lovelace report identical feature sets). So this list is
-now a guard against *older generations*, not against vendors — the axis it was
-originally written to hedge has been measured and found flat. It stays because
-neither probed part is old; an entry for a pre-Turing or pre-RDNA card is
-still estimating across a gap nothing has measured.
+The measured D3D11 set is a strict subset of the measured Metal set, differing
+only in `texture-compression-astc`, `texture-compression-astc-sliced-3d` and
+`texture-compression-etc2` — formats Apple silicon has and desktop D3D11 does
+not. That is the only cross-tier feature variation in evidence, and it is a
+texture-format distinction rather than a capability one.
 
-Everything else in the set is carried, and the carrying is not inference. The
-19 features on the RTX 4090 capture include `core-features-and-limits`,
-`texture-formats-tier1`, `texture-formats-tier2`, and
-`texture-component-swizzle` — WebGPU *specification* features, present because
-that Chrome implements that revision. They have nothing to do with the card.
-The remainder (BC compression, the float and depth formats, `timestamp-query`,
-`indirect-first-instance`) came off a real adapter on this tier, and carrying
-them is a statement about the tier, which is exactly what a tier is for.
-
-Omission of the gated five is deliberate. A page requiring an omitted feature
-gets a clean rejection, which is what a card lacking it does; claiming one the
-silicon cannot back is an overclaim a page triggers in one call. Under-claiming
-errs toward a real configuration.
-
-Note what this rules out: deriving features from a GPU spec database would not
-merely risk overclaiming `shader-f16`. It would **omit the four browser-level
-features entirely**, producing a list no real Chrome reports. The error runs
-both directions, which is why the whole set is anchored to a probe rather than
-reasoned about from hardware specs.
-
-The measured D3D11 set is also a strict subset of the measured Metal set — the
-three differing names are `texture-compression-astc`,
-`texture-compression-astc-sliced-3d`, and `texture-compression-etc2`, all
-formats Apple silicon has and desktop D3D11 does not. That is the only
-cross-tier feature variation in evidence, and it is a texture-format
-distinction, not a capability one.
-
-### Provenance is for the caller, not the page
-
-The page never sees `FeatureProvenance`. An overclaim is equally detectable
-however honestly it was labelled. The tag earns its keep only because
-something acts on it:
-
-**Probed-only is the default.** Naming a device whose feature set is
-`Estimated` is an error unless the caller opts in explicitly. That keeps the
-default honest and makes the tag load-bearing rather than decorative.
-
-The two backends land very differently under this rule, which is worth stating
-plainly rather than discovering at implementation time:
-
-- **Metal ships fully probed.** Every Apple silicon entry resolves to the
-  tier's own probed set, because there is no generation axis to miss. The
-  whole M-series name list is usable on the default.
-- **D3D11 ships one probed generation** — `lovelace`, from the RTX 4090. Every
-  other NVIDIA generation, and every AMD and Intel part, is `Estimated` until
-  someone captures one. On the default they are *listed but not selectable*.
-
-That is a real limitation of v1 and not a soft one: the interesting fleet
-diversity on Windows is behind an opt-in until more captures exist. It is
-still the right default — the alternative is shipping guessed feature sets as
-if they were measured, which is the failure this whole design is built to
-avoid.
+**The ceiling this leaves, stated plainly.** Both probed parts are modern. The
+catalogue spans older hardware, and an entry for an early feature-level-11 card
+is served a feature set measured on a 2022 part. Nothing has measured whether
+those agree. The honest options were to model the gap without evidence or to
+document it, and modelling it was what produced the design this note replaces.
+Feature-level-10 cards, at least, are excluded outright: ANGLE writes the
+feature level into the renderer string as its shader model, so they are
+detectable and are dropped rather than filed under an FL11 tier.
 
 ## Selection
 
@@ -356,12 +313,17 @@ space of incoherent ones. Three rules, each enforced rather than documented:
 2. **Platform skew.** A macOS persona selecting a D3D11 entry is incoherent.
    The existing `platform_skew` check already covers this shape and extends to
    catalogue entries.
-3. **Generation and architecture must agree.** Where an entry has a
-   `generation`, it must produce the same `architecture` token that
-   `adapter_for_renderer` derives from its composed renderer string. Where it
-   has none, the backend's constant token must be what that function returns.
-   Enforced by a test over the whole catalogue, so a mis-keyed entry cannot
-   ship.
+3. **The composed string must resolve its own identity.** Passing an entry's
+   composed renderer string back through `adapter_for_renderer` must derive
+   the vendor and architecture that entry claims, and through
+   `device_for_renderer` must resolve the tier it was filed under. Enforced by
+   a test over the whole catalogue, so an entry cannot ship describing one
+   device and resolving as another.
+
+   This replaces a rule about a `generation` field, which no longer exists.
+   Deriving the architecture from the string rather than storing it also keeps
+   one source of truth: `adapter_for_renderer` already owns that mapping, and a
+   second copy in the generator would be free to drift.
 
 ## Testing
 
@@ -369,8 +331,8 @@ space of incoherent ones. Three rules, each enforced rather than documented:
   any diff, exactly as the tier tables do.
 - Every catalogue entry composes a renderer string that `device_for_renderer`
   resolves back to the same tier — a round-trip property over the whole table.
-- Every entry's generation agrees with the architecture derived from its
-  string.
+- Every entry's composed string derives the vendor and architecture the entry
+  claims, via the existing `adapter_for_renderer`.
 - The share snapshot's entries all exist in the catalogue; an entry named in
   the distribution but absent from the catalogue fails the build.
 - A real-Chrome test that a catalogued device's identity reaches the page
@@ -394,7 +356,7 @@ same machine and Chrome build as the RTX 4090.
 
 For **WebGPU it settles the question in the design's favour** — 0 of 36 limits
 and 0 of 19 features differ between RDNA2 and Lovelace, including all five
-names this spec had flagged as silicon-gated and unsafe to estimate
+names this spec had originally flagged as silicon-gated and unsafe to estimate
 (`shader-f16`, `subgroups`, `dual-source-blending`, `clip-distances`,
 `primitive-index`). Feature sets stay keyed without a vendor dimension, and
 D3D11 estimates are considerably safer than written below.
