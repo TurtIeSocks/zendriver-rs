@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 pub(crate) mod catalogue;
+pub mod device_select;
 pub(crate) mod devices;
 pub(crate) mod invariants;
 pub(crate) mod tiers;

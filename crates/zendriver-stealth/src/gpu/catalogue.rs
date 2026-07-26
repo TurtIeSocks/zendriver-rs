@@ -16,7 +16,6 @@
 
 use super::types::{CatalogueEntry, Tier};
 
-#[allow(dead_code)] // until device_select lands
 pub(crate) const CATALOGUE: &[CatalogueEntry] = &[
     CatalogueEntry {
         model: "AMD Radeon (TM) Graphics",

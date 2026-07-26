@@ -439,7 +439,6 @@ pub fn emit_rust(corpus_commit: &str, pci_ids_commit: &str, report: &BuildReport
     out.push_str("\nuse super::types::{CatalogueEntry, Tier};\n\n");
     // Selection lands in the next task and is this table's only consumer, so
     // until then the crate has no non-test reader for it.
-    out.push_str("#[allow(dead_code)] // until device_select lands\n");
     out.push_str("pub(crate) const CATALOGUE: &[CatalogueEntry] = &[\n");
     for row in &report.rows {
         let device_id = row
