@@ -4,7 +4,7 @@
       "name": "userAgent",
       "parentNames": [],
       "conditionalProbabilities": {
-        "ua-win": 0.5,
+        "ua-win": 0.48,
         "ua-win-newer-chrome": 0.2,
         "ua-win-arm": 0.02,
         "ua-win-software": 0.03,
@@ -12,7 +12,8 @@
         "ua-mac": 0.15,
         "ua-ios": 0.04,
         "ua-linux": 0.03,
-        "ua-android": 0.02
+        "ua-android": 0.02,
+        "ua-win-old-gpu": 0.02
       }
     },
     {
@@ -52,6 +53,9 @@
           },
           "ua-android": {
             "*STRINGIFIED*{\"renderer\":\"ANGLE (Qualcomm, Adreno (TM) 730, OpenGL ES 3.2)\",\"vendor\":\"Google Inc. (Qualcomm)\"}": 1.0
+          },
+          "ua-win-old-gpu": {
+            "*STRINGIFIED*{\"renderer\":\"ANGLE (NVIDIA, NVIDIA GeForce 210 (0x00000A65) Direct3D11 vs_4_1 ps_4_1, D3D11)\",\"vendor\":\"Google Inc. (NVIDIA)\"}": 1.0
           }
         }
       }

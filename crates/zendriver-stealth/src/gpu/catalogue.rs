@@ -8,7 +8,7 @@
 // Device ids the corpus never reports: pciutils/pciids pinned at
 // 7a900ad2ad4b91c3a9d4f4da60e247864e6a73aa.
 //
-// 495 entries.
+// 482 entries.
 // 2 models were dropped for having no device id in either source,
 // which a D3D11 renderer string cannot be composed without:
 //   NVIDIA GeForce GTX 1050 Ti with Max-Q Design
@@ -980,13 +980,6 @@ pub(crate) const CATALOGUE: &[CatalogueEntry] = &[
     CatalogueEntry {
         model: "Intel(R) HD Graphics",
         vendor: "Intel",
-        device_id: Some(0x0102),
-        tier: Tier::D3d11Fl11,
-        weight: 0.000140924,
-    },
-    CatalogueEntry {
-        model: "Intel(R) HD Graphics",
-        vendor: "Intel",
         device_id: Some(0x0152),
         tier: Tier::D3d11Fl11,
         weight: 0.001761556,
@@ -1018,20 +1011,6 @@ pub(crate) const CATALOGUE: &[CatalogueEntry] = &[
         device_id: Some(0x22B1),
         tier: Tier::D3d11Fl11,
         weight: 0.000845547,
-    },
-    CatalogueEntry {
-        model: "Intel(R) HD Graphics 3000",
-        vendor: "Intel",
-        device_id: Some(0x0116),
-        tier: Tier::D3d11Fl11,
-        weight: 0.000211387,
-    },
-    CatalogueEntry {
-        model: "Intel(R) HD Graphics 3000",
-        vendor: "Intel",
-        device_id: Some(0x0126),
-        tier: Tier::D3d11Fl11,
-        weight: 0.000493236,
     },
     CatalogueEntry {
         model: "Intel(R) HD Graphics 4000",
@@ -1790,27 +1769,6 @@ pub(crate) const CATALOGUE: &[CatalogueEntry] = &[
         weight: 0.000070462,
     },
     CatalogueEntry {
-        model: "NVIDIA GeForce 210",
-        vendor: "NVIDIA",
-        device_id: Some(0x0A65),
-        tier: Tier::D3d11Fl11Nvidia,
-        weight: 0.000211387,
-    },
-    CatalogueEntry {
-        model: "NVIDIA GeForce 310",
-        vendor: "NVIDIA",
-        device_id: Some(0x0A63),
-        tier: Tier::D3d11Fl11Nvidia,
-        weight: 0.000070462,
-    },
-    CatalogueEntry {
-        model: "NVIDIA GeForce 405",
-        vendor: "NVIDIA",
-        device_id: Some(0x0A24),
-        tier: Tier::D3d11Fl11Nvidia,
-        weight: 0.000070462,
-    },
-    CatalogueEntry {
         model: "NVIDIA GeForce 410M",
         vendor: "NVIDIA",
         device_id: Some(0x1055),
@@ -1821,20 +1779,6 @@ pub(crate) const CATALOGUE: &[CatalogueEntry] = &[
         model: "NVIDIA GeForce 820M",
         vendor: "NVIDIA",
         device_id: Some(0x1140),
-        tier: Tier::D3d11Fl11Nvidia,
-        weight: 0.000070462,
-    },
-    CatalogueEntry {
-        model: "NVIDIA GeForce 8400GS",
-        vendor: "NVIDIA",
-        device_id: Some(0x10C3),
-        tier: Tier::D3d11Fl11Nvidia,
-        weight: 0.000070462,
-    },
-    CatalogueEntry {
-        model: "NVIDIA GeForce 8500 GT",
-        vendor: "NVIDIA",
-        device_id: Some(0x0421),
         tier: Tier::D3d11Fl11Nvidia,
         weight: 0.000070462,
     },
@@ -1853,32 +1797,11 @@ pub(crate) const CATALOGUE: &[CatalogueEntry] = &[
         weight: 0.000281849,
     },
     CatalogueEntry {
-        model: "NVIDIA GeForce 9650M GT",
-        vendor: "NVIDIA",
-        device_id: Some(0x064C),
-        tier: Tier::D3d11Fl11Nvidia,
-        weight: 0.000211387,
-    },
-    CatalogueEntry {
-        model: "NVIDIA GeForce G105M",
-        vendor: "NVIDIA",
-        device_id: Some(0x0A68),
-        tier: Tier::D3d11Fl11Nvidia,
-        weight: 0.000070462,
-    },
-    CatalogueEntry {
         model: "NVIDIA GeForce GT 1030",
         vendor: "NVIDIA",
         device_id: Some(0x1D01),
         tier: Tier::D3d11Fl11Nvidia,
         weight: 0.001972943,
-    },
-    CatalogueEntry {
-        model: "NVIDIA GeForce GT 220",
-        vendor: "NVIDIA",
-        device_id: Some(0x0A20),
-        tier: Tier::D3d11Fl11Nvidia,
-        weight: 0.000140924,
     },
     CatalogueEntry {
         model: "NVIDIA GeForce GT 530",
@@ -3078,13 +3001,6 @@ pub(crate) const CATALOGUE: &[CatalogueEntry] = &[
         weight: 0.000281849,
     },
     CatalogueEntry {
-        model: "NVIDIA NVS 3100M",
-        vendor: "NVIDIA",
-        device_id: Some(0x0A6C),
-        tier: Tier::D3d11Fl11Nvidia,
-        weight: 0.000070462,
-    },
-    CatalogueEntry {
         model: "NVIDIA NVS 315",
         vendor: "NVIDIA",
         device_id: Some(0x107C),
@@ -3151,13 +3067,6 @@ pub(crate) const CATALOGUE: &[CatalogueEntry] = &[
         model: "NVIDIA Quadro M4000",
         vendor: "NVIDIA",
         device_id: Some(0x13F1),
-        tier: Tier::D3d11Fl11Nvidia,
-        weight: 0.000070462,
-    },
-    CatalogueEntry {
-        model: "NVIDIA Quadro NVS 295",
-        vendor: "NVIDIA",
-        device_id: Some(0x06FD),
         tier: Tier::D3d11Fl11Nvidia,
         weight: 0.000070462,
     },

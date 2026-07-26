@@ -602,6 +602,19 @@ fn split_renderer(renderer: &str) -> Option<CorpusModel> {
         if D3D11_VENDOR_EXCLUSIONS.iter().any(|(v, _)| *v == vendor) {
             return None;
         }
+        // Both shipped D3D11 tiers are feature level 11, and ANGLE writes the
+        // feature level into the string as its shader model: FL11 reports
+        // `vs_5_0 ps_5_0`, FL10 reports `vs_4_1` or `vs_4_0`. The corpus really
+        // does contain the latter -- GeForce 210, GT 220, 8500 GT, Quadro NVS
+        // 295, older Intel HD -- and putting one on an FL11 tier would serve
+        // D3D11_REQ_* constants that card cannot reach, beneath a string
+        // claiming a shader model it does not have. Same contradiction the
+        // tiers exist to remove, so these are dropped.
+        //
+        // It is also what licenses `compose_renderer` to hardcode vs_5_0.
+        if !body.contains("vs_5_0 ps_5_0") {
+            return None;
+        }
         let named = body.split(" Direct3D11").next()?.trim();
         // Keep the device id when the string carries one. Chrome has appended
         // it for some time, so most entries have it, and an observed pairing
@@ -800,6 +813,10 @@ mod extract_tests {
             ("Microsoft Basic Render Driver", "WARP, not a GPU"),
             ("Parallels Display Adapter (WDDM)", "VM adapter, hex vendor"),
             ("Adreno (TM) 730", "GLES, not a modelled backend"),
+            (
+                "NVIDIA GeForce 210",
+                "feature level 10; both D3D11 tiers are FL11",
+            ),
             ("llvmpipe", "desktop GL software rasterizer"),
         ] {
             assert!(!has(&m, model), "{model} must be dropped: {why}");
