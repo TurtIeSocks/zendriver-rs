@@ -64,6 +64,24 @@ excluded = "caller-supplied fingerprint spec; surfaced opaquely via Persona JSON
 api = "zendriver::stealth::WebglSpec"
 excluded = "caller-supplied fingerprint spec; surfaced opaquely via Persona JSON in browser_open.persona, not a granular field on browser_fingerprint_generate's request (same rationale as WebgpuSpec above)"
 
+# ── GPU device catalogue ────────────────────────────────────────────────────
+# A catalogued identity is reachable through the tools already: GpuDevice's
+# whole contribution is a renderer string, and `browser_open.persona` carries
+# that inside the Persona JSON as `webgl.unmasked_renderer`. A dedicated tool
+# option would duplicate a field the persona blob already has.
+#
+# What an agent cannot do through MCP is *browse* the catalogue -- there is no
+# tool that lists or searches its 482 entries. Recorded as a gap rather than
+# excluded: it wants a `browser_gpu_devices` query tool, which is worth adding
+# once the catalogue has shipped and its shape has settled.
+[[entry]]
+api = "zendriver::stealth::GpuDevice"
+excluded = "identity resolves to a renderer string, surfaced via browser_open.persona's webgl.unmasked_renderer; a catalogue-browsing tool is a known follow-up, not a coverage claim"
+
+[[entry]]
+api = "zendriver::stealth::DeviceLookupError"
+excluded = "error type for the in-process GpuDevice::by_name lookup; no MCP tool performs that lookup, so there is no wire shape to cover"
+
 [[entry]]
 api = "zendriver::stealth::Persona"
 covered = "browser_open.persona / browser_fingerprint_generate"

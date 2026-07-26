@@ -4067,9 +4067,11 @@ pub type zendriver::screenshot::ScreenshotBuilder<'tab>::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for zendriver::screenshot::ScreenshotBuilder<'tab> where V: ppv_lite86::types::MultiLane<T>
 pub fn zendriver::screenshot::ScreenshotBuilder<'tab>::vzip(self) -> V
 pub mod zendriver::stealth
+pub use zendriver::stealth::DeviceLookupError
 pub use zendriver::stealth::Fingerprint
 pub use zendriver::stealth::GlParam
 pub use zendriver::stealth::GpuBackend
+pub use zendriver::stealth::GpuDevice
 pub use zendriver::stealth::GpuProfile
 pub use zendriver::stealth::InputProfile
 pub use zendriver::stealth::Persona

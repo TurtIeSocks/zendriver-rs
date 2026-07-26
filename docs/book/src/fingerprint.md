@@ -352,6 +352,70 @@ crate from committed probe captures
 and fails the build on any diff, so the shipped file can never drift from
 its source captures.
 
+### Naming a GPU from the device catalogue
+
+The tiers decide what a device *can do*. The catalogue decides *which device*
+it is — 482 identities, against the one default each platform used to get.
+
+```rust,no_run
+use zendriver::stealth::{GpuDevice, Persona, Platform};
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let persona = Persona {
+    platform: Some(Platform::Win32),
+    ..Persona::builder()
+        .gpu_device(GpuDevice::by_name("NVIDIA GeForce RTX 4090")?)
+        .build()
+};
+# Ok(())
+# }
+```
+
+`gpu_device` sets nothing but the renderer string, because that string is a
+device's whole contribution: it already selects the capability tier, the WebGPU
+adapter, and the vendor through the machinery above. There is no separate GPU
+field to keep in sync.
+
+**Drawing one instead of naming it.** A fleet wants variety, and ten personas
+that agree on every readable GPU value are ten personas that can be grouped:
+
+```rust,no_run
+use zendriver::stealth::{GpuDevice, Platform, Seed};
+
+// Same seed, same device, every run.
+let uniform = GpuDevice::from_seed(Seed(42), Platform::Win32);
+// Weighted by how common the device actually is.
+let realistic = GpuDevice::by_share(Seed(42), Platform::Win32);
+```
+
+`by_share` is usually the one you want. Over 5000 Win32 draws it yields 238
+distinct devices led by Intel UHD Graphics at 15%, Iris Xe at 15% and AMD
+integrated at 9% — a browser population, laptop iGPUs first. `from_seed` draws
+uniformly, which makes a GeForce 210 as likely as the commonest laptop chip.
+
+Those weights come from the same fingerprint corpus the device names do, as
+marginal probabilities over its user-agent prior. They are deliberately *not*
+Steam Hardware Survey numbers: Steam skews toward discrete gaming cards, and
+this is a browser tool.
+
+**What the catalogue will not do.**
+
+- **Invent a device id.** A D3D11 renderer string carries one by construction,
+  so a model the sources never pair with an id is dropped rather than given a
+  placeholder. The generated table names the ones it dropped.
+- **Cross a platform.** Every draw is filtered through the same skew check the
+  invariants use, so a Win32 persona cannot draw an Apple identity.
+- **Cover Linux.** ANGLE's Vulkan backend reads its limits off the physical
+  device, so there is no shared tier for a Linux identity to layer over and
+  `from_seed` answers `None` there.
+- **Claim a feature level it does not have.** ANGLE writes the feature level
+  into the renderer string as its shader model, so pre-FL11 cards are excluded
+  rather than filed under an FL11 tier.
+
+`by_name` refuses ambiguity rather than guessing — `"rtx 40"` returns every
+candidate — while an exact model name always wins, since several catalogued
+names are prefixes of others.
+
 ## WebGPU (opt-in adapter override / fabrication)
 
 By default (`Persona.webgpu = None`, or `Some(WebgpuSpec::default())`), the
