@@ -1,0 +1,537 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>GPU tier probe — zendriver-rs</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fff; --fg: #1a1a1a; --muted: #666; --line: #ddd;
+    --card: #f6f6f6; --ok: #1a7f37; --warn: #9a6700; --bad: #c1121f;
+    --accent: #0969da;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1419; --fg: #e6e1cf; --muted: #8a9199; --line: #2a2f35;
+      --card: #171c22; --ok: #7fd962; --warn: #e6b450; --bad: #ff6b6b;
+      --accent: #59c2ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 1.5rem 1rem 4rem;
+    background: var(--bg); color: var(--fg);
+    font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 46rem; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: 0 0 .35rem; }
+  h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+  p.lede { color: var(--muted); margin: 0 0 1.5rem; }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; padding: 1rem; margin: 0 0 1rem;
+  }
+  .row { display: flex; gap: .6rem; align-items: baseline; padding: .3rem 0; flex-wrap: wrap; }
+  .row dt { flex: 0 0 9.5rem; color: var(--muted); font-size: .85rem; }
+  .row dd { flex: 1 1 14rem; margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: .82rem; word-break: break-word; }
+  dl { margin: 0; }
+  .status { font-weight: 600; }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+  ul.checks { list-style: none; padding: 0; margin: .4rem 0 0; }
+  ul.checks li { padding: .25rem 0; font-size: .9rem; display: flex; gap: .5rem; }
+  ul.checks .mark { flex: 0 0 1.2rem; }
+  .actions { display: flex; gap: .6rem; flex-wrap: wrap; margin: 1rem 0 0; }
+  button {
+    font: inherit; font-size: .92rem; padding: .55rem 1rem; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  label.tier { display: block; margin: 1rem 0 0; font-size: .85rem; color: var(--muted); }
+  input[type=text] {
+    font: inherit; font-family: ui-monospace, Menlo, monospace; font-size: .85rem;
+    width: 100%; margin-top: .3rem; padding: .5rem .6rem;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: var(--bg); color: var(--fg);
+  }
+  details { margin-top: 1rem; }
+  summary { cursor: pointer; color: var(--muted); font-size: .88rem; }
+  pre {
+    overflow-x: auto; background: var(--card); border: 1px solid var(--line);
+    border-radius: 8px; padding: .8rem; font-size: .72rem; max-height: 22rem;
+  }
+  .note { font-size: .85rem; color: var(--muted); margin: .8rem 0 0; }
+  code { font-family: ui-monospace, Menlo, monospace; font-size: .88em; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>GPU tier probe</h1>
+  <p class="lede">
+    Reads this browser's real WebGL and WebGPU surface and packages it as a
+    capture file for <a href="https://github.com/TurtIeSocks/zendriver-rs">zendriver-rs</a>'s
+    GPU tier tables. Nothing is uploaded: the measurement runs here and stays
+    here until you choose to export it.
+  </p>
+
+  <div class="card">
+    <div id="status" class="status">Probing…</div>
+    <ul class="checks" id="checks"></ul>
+  </div>
+
+  <div id="summary-wrap" hidden>
+    <h2>What this machine reports</h2>
+    <div class="card"><dl id="summary"></dl></div>
+
+    <label class="tier">
+      Tier name (becomes the filename; see the naming rules below)
+      <input type="text" id="tier" spellcheck="false" autocapitalize="off">
+    </label>
+
+    <div class="actions">
+      <button class="primary" id="dl">Download JSON</button>
+      <button id="share" hidden>Share…</button>
+      <button id="pr">Copy &amp; open a PR</button>
+      <button id="copy">Copy JSON</button>
+    </div>
+    <p class="note" id="action-note"></p>
+
+    <details>
+      <summary>Show the raw capture</summary>
+      <pre id="raw"></pre>
+    </details>
+  </div>
+
+  <h2>What provenance can and cannot record</h2>
+  <p class="note">
+    The Chrome version is exact, which is the part that matters: ANGLE's
+    capability constants move between Chrome releases, so a capture without a
+    version is a capture nobody can date.
+  </p>
+  <p class="note">
+    The OS string is only what the browser chooses to reveal, and that varies.
+    Client hints often return the real platform version, but the legacy user
+    agent is frozen — it says <code>Windows NT 10.0</code> on Windows 11 and
+    <code>Mac OS X 10_15_7</code> on every modern Mac — so a browser that
+    withholds the hints leaves this page recording a frozen value where the Rust
+    probe reads the true one. Treat the OS here as best-effort. Nothing in the
+    tier tables derives from it, so this costs provenance detail rather than
+    correctness.
+  </p>
+
+  <h2>Naming the tier</h2>
+  <p class="note">
+    Name it after the code branch ANGLE actually takes, not the card. Where the
+    values generalize, that means backend and feature level
+    (<code>d3d11-fl11</code>, not <code>rtx-4090</code>). Where they do not, the
+    name has to carry the device and driver: ANGLE's Vulkan backend reads its
+    limits straight off the physical device, so a Vulkan capture describes that
+    GPU under that driver and nothing else. A vendor-conditional ANGLE feature
+    gets its own variant, named for the condition rather than the card that
+    revealed it, which is why <code>d3d11-fl11-nvidia</code> exists.
+  </p>
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  var REPO = 'TurtIeSocks/zendriver-rs';
+  var DATA_DIR = 'crates/zendriver-stealth/data/gpu-tiers';
+
+  var statusEl = document.getElementById('status');
+  var checksEl = document.getElementById('checks');
+  var summaryEl = document.getElementById('summary');
+  var wrapEl = document.getElementById('summary-wrap');
+  var tierEl = document.getElementById('tier');
+  var rawEl = document.getElementById('raw');
+  var noteEl = document.getElementById('action-note');
+
+  var payload = null;
+
+  function check(ok, text, detail) {
+    var li = document.createElement('li');
+    var mark = document.createElement('span');
+    mark.className = 'mark ' + (ok === true ? 'ok' : ok === false ? 'bad' : 'warn');
+    mark.textContent = ok === true ? '✓' : ok === false ? '✗' : '!';
+    var body = document.createElement('span');
+    body.textContent = text + (detail ? ' — ' + detail : '');
+    li.appendChild(mark); li.appendChild(body);
+    checksEl.appendChild(li);
+  }
+
+  function field(label, value) {
+    var row = document.createElement('div');
+    row.className = 'row';
+    var dt = document.createElement('dt'); dt.textContent = label;
+    var dd = document.createElement('dd'); dd.textContent = value;
+    row.appendChild(dt); row.appendChild(dd);
+    summaryEl.appendChild(row);
+  }
+
+  // The same measurement `cargo run -p zendriver --example probe_gpu` performs.
+  // Kept deliberately identical so a capture taken here and one taken through
+  // the Rust probe are the same bytes; the tier generator cannot tell them
+  // apart and must not be able to.
+  async function probe() {
+    var out = {};
+    out.isSecureContext = window.isSecureContext;
+    out.userAgent = navigator.userAgent;
+    out.gpuInNavigator = ('gpu' in navigator);
+    out.adapter = null;
+    out.deviceOk = null;
+    try {
+      var a = navigator.gpu ? await navigator.gpu.requestAdapter() : null;
+      out.adapter = a ? {
+        vendor: a.info ? a.info.vendor : null,
+        architecture: a.info ? a.info.architecture : null,
+        device: a.info ? a.info.device : null,
+        description: a.info ? a.info.description : null,
+        limits: a.limits ? Object.fromEntries(
+          Object.keys(Object.getPrototypeOf(a.limits))
+            .map(function (k) { return [k, a.limits[k]]; })
+            .filter(function (kv) { return typeof kv[1] === 'number'; })) : null,
+        features: a.features ? Array.from(a.features) : null,
+      } : null;
+      if (a) {
+        try { out.deviceOk = !!(await a.requestDevice()); }
+        catch (e) { out.deviceOk = 'reject: ' + e.name; }
+      }
+    } catch (e) { out.adapterErr = String(e); }
+
+    function readContext(kind) {
+      var gl = document.createElement('canvas').getContext(kind);
+      if (!gl) return null;
+      var r = { extensions: gl.getSupportedExtensions(), params: {}, precision: {} };
+      var dbg = gl.getExtension('WEBGL_debug_renderer_info');
+      if (dbg) {
+        r.unmaskedVendor = gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL);
+        r.unmaskedRenderer = gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL);
+      }
+      var proto = Object.getPrototypeOf(gl);
+      Object.keys(proto).forEach(function (name) {
+        var val = gl[name];
+        if (typeof val !== 'number') return;
+        try {
+          var got = gl.getParameter(val);
+          if (got === null || (typeof got === 'object' && !ArrayBuffer.isView(got))) return;
+          r.params[name] = ArrayBuffer.isView(got) ? Array.from(got) : got;
+        } catch (e) { /* not a gettable parameter */ }
+      });
+      ['VERTEX_SHADER', 'FRAGMENT_SHADER'].forEach(function (st) {
+        ['LOW_FLOAT', 'MEDIUM_FLOAT', 'HIGH_FLOAT', 'LOW_INT', 'MEDIUM_INT', 'HIGH_INT']
+          .forEach(function (pt) {
+            var f = gl.getShaderPrecisionFormat(gl[st], gl[pt]);
+            if (f) r.precision[st + '/' + pt] = [f.rangeMin, f.rangeMax, f.precision];
+          });
+      });
+      // The runtime patch receives a number from getParameter(3379) and needs
+      // this to map it back to a name.
+      r.enums = {};
+      Object.keys(proto).forEach(function (name) {
+        var val = gl[name];
+        if (typeof val === 'number' && Object.prototype.hasOwnProperty.call(r.params, name)) {
+          r.enums[name] = val;
+        }
+      });
+      return r;
+    }
+
+    out.webgl1 = readContext('webgl');
+    out.webgl2 = readContext('webgl2');
+    return out;
+  }
+
+  // A farbling extension replaces these, and a replaced function does not
+  // report [native code]. Not proof — this repo itself ships a toString mask —
+  // but it catches the ordinary privacy extension, and a capture taken through
+  // one looks perfectly well-formed while describing a GPU that does not exist.
+  function looksNative(fn) {
+    try { return /\{\s*\[native code\]\s*\}/.test(Function.prototype.toString.call(fn)); }
+    catch (e) { return false; }
+  }
+
+  function backendOf(renderer) {
+    if (!renderer) return 'unknown';
+    if (/SwiftShader/i.test(renderer)) return 'swiftshader';
+    if (/ANGLE Metal Renderer/.test(renderer)) return 'metal';
+    if (/, D3D11\)/.test(renderer)) return 'd3d11';
+    if (/D3D9/.test(renderer)) return 'd3d9';
+    if (/Vulkan/i.test(renderer)) return 'vulkan';
+    if (/OpenGL ES/i.test(renderer)) return 'gles';
+    if (/OpenGL/i.test(renderer)) return 'gl';
+    return 'unknown';
+  }
+
+  function slug(s) {
+    return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  }
+
+  // Mirrors the rules in .claude/skills/capture-gpu-tier. Only the cases whose
+  // generalization is already established get a complete name; the rest get a
+  // stem the human has to finish, because guessing a name that claims more
+  // generality than the capture has is the worst outcome available here.
+  function suggestTier(renderer, vendorTok) {
+    var backend = backendOf(renderer);
+    var isNvidia = /nvidia/i.test(renderer) || /nvidia/i.test(vendorTok || '');
+    if (backend === 'swiftshader') return 'swiftshader';
+    if (backend === 'd3d11') return isNvidia ? 'd3d11-fl11-nvidia' : 'd3d11-fl11';
+    if (backend === 'metal') {
+      var m = /ANGLE \(([^,]+),/.exec(renderer);
+      var vend = m ? m[1] : '';
+      return /apple/i.test(vend) ? 'metal-macos' : 'metal-macos-' + slug(vend);
+    }
+    if (backend === 'vulkan' || backend === 'gles') {
+      // Device-specific by construction, so the name has to carry the device
+      // and the driver. Strip the API version and the hex device IDs, which
+      // are noise in a filename, and leave the rest for a human to shorten:
+      // this is a stem, not a finished name.
+      var inner = /ANGLE \(([^,]+), (.*)\)$/.exec(renderer);
+      var body = (inner ? inner[2] : renderer)
+        .replace(/\b(Vulkan|OpenGL ES)\s+[\d.]+\s*/gi, '')
+        .replace(/\(0x[0-9A-Fa-f]+\)/g, '');
+      return backend + '-' + slug(body).slice(0, 52).replace(/-$/, '');
+    }
+    return '';
+  }
+
+  async function provenance(capture) {
+    var chrome = 'unknown';
+    var os = '';
+    var uaData = navigator.userAgentData;
+    if (uaData && uaData.getHighEntropyValues) {
+      try {
+        // The reduced UA reports "Windows NT 10.0" even on Windows 11 and pins
+        // the version to a major, so the real values have to be asked for.
+        var hi = await uaData.getHighEntropyValues(
+          ['platform', 'platformVersion', 'fullVersionList', 'model']);
+        var list = hi.fullVersionList || [];
+        for (var i = 0; i < list.length; i++) {
+          if (/Chrome|Chromium/i.test(list[i].brand)) { chrome = list[i].version; break; }
+        }
+        os = [hi.platform, hi.platformVersion].filter(Boolean).join(' ');
+        if (hi.model) os += ' (' + hi.model + ')';
+      } catch (e) { /* fall through to the UA string */ }
+    }
+    if (chrome === 'unknown') {
+      var m = /Chrome\/([\d.]+)/.exec(capture.userAgent || '');
+      if (m) chrome = m[1];
+    }
+    if (!os) {
+      var p = /\(([^)]*)\)/.exec(capture.userAgent || '');
+      os = p ? p[1] : 'unknown';
+    }
+    var prov = 'probed: Chrome ' + chrome + ' on ' + os;
+    // A Vulkan capture's numbers come off one physical device through one
+    // driver, and the renderer string already names both.
+    var r = (capture.webgl2 && capture.webgl2.unmaskedRenderer) || '';
+    var mesa = /Mesa[^),]*/.exec(r);
+    if (mesa) prov += ', ' + mesa[0].trim();
+    return prov + ' (web probe)';
+  }
+
+  // `--emit-tier` writes through serde_json, whose maps are BTreeMaps, so its
+  // files come out key-sorted. Sorting here too means a capture taken in this
+  // page and one taken through the Rust probe on the same machine are the same
+  // bytes, which is what lets them be reviewed as one format.
+  //
+  // Note this cannot be done with JSON.stringify's replacer argument: an array
+  // there is a key *filter*, applied recursively, so passing the sorted top
+  // level keys silently drops almost the entire capture.
+  function sortDeep(v) {
+    if (Array.isArray(v)) return v.map(sortDeep);
+    if (v && typeof v === 'object') {
+      var out = {};
+      Object.keys(v).sort().forEach(function (k) { out[k] = sortDeep(v[k]); });
+      return out;
+    }
+    return v;
+  }
+
+  function download(name, text) {
+    var blob = new Blob([text], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
+  function fileName() {
+    var t = (tierEl.value || '').trim();
+    return (t || 'gpu-capture') + '.json';
+  }
+
+  async function run() {
+    var capture;
+    try {
+      capture = await probe();
+    } catch (e) {
+      statusEl.textContent = 'Probe failed';
+      statusEl.className = 'status bad';
+      check(false, 'The probe threw', String(e));
+      return;
+    }
+
+    var gl2 = capture.webgl2;
+    var renderer = gl2 && gl2.unmaskedRenderer;
+    var backend = backendOf(renderer);
+    var canvasGl = document.createElement('canvas').getContext('webgl2');
+    var fatal = false;
+
+    // Secure context: navigator.gpu is [SecureContext]-gated, so an insecure
+    // page reports no adapter on a machine that has a perfectly good one.
+    if (capture.isSecureContext) {
+      check(true, 'Secure context');
+    } else {
+      check(false, 'Not a secure context',
+            'WebGPU data would be missing; open this page over https');
+      fatal = true;
+    }
+
+    if (gl2) {
+      check(true, 'WebGL 2 available',
+            Object.keys(gl2.params).length + ' parameters read');
+    } else {
+      check(false, 'No WebGL 2 context', 'nothing to capture');
+      fatal = true;
+    }
+
+    if (renderer) {
+      check(true, 'Renderer string readable');
+    } else {
+      check(false, 'No unmasked renderer',
+            'WEBGL_debug_renderer_info is blocked, so the capture cannot be named');
+      fatal = true;
+    }
+
+    var native = canvasGl
+      && looksNative(canvasGl.getParameter)
+      && looksNative(canvasGl.getExtension)
+      && looksNative(canvasGl.getSupportedExtensions)
+      && looksNative(HTMLCanvasElement.prototype.getContext);
+    if (native) {
+      check(true, 'WebGL functions are unpatched');
+    } else {
+      check(false, 'WebGL functions have been replaced',
+            'a privacy extension is farbling this surface; use a clean profile');
+      fatal = true;
+    }
+
+    if (renderer && /^ANGLE \(/.test(renderer)) {
+      check(true, 'ANGLE renderer', backend);
+    } else if (renderer) {
+      check(null, 'Not an ANGLE renderer', backend + ' — see the note below');
+    }
+
+    if (backend === 'swiftshader') {
+      check(null, 'Software rasterizer',
+            'this is SwiftShader, not the GPU; already captured upstream');
+    }
+
+    if (capture.adapter) {
+      check(true, 'WebGPU adapter present',
+            capture.adapter.vendor + ' / ' + (capture.adapter.architecture || 'no architecture'));
+    } else {
+      check(null, 'No WebGPU adapter',
+            'legitimate on Linux and on software rendering; the tier will serve no limits');
+    }
+
+    if (fatal) {
+      statusEl.textContent = 'This browser cannot produce a usable capture';
+      statusEl.className = 'status bad';
+      return;
+    }
+
+    var isAngle = !!(renderer && /^ANGLE \(/.test(renderer));
+    statusEl.textContent = isAngle ? 'Capture looks good' : 'Capture taken, with a caveat';
+    statusEl.className = 'status ' + (isAngle ? 'ok' : 'warn');
+
+    var prov = await provenance(capture);
+    tierEl.value = suggestTier(renderer, gl2 && gl2.unmaskedVendor);
+
+    field('Renderer', renderer);
+    field('Vendor', (gl2 && gl2.unmaskedVendor) || '(none)');
+    field('Backend', backend);
+    field('Provenance', prov);
+    field('WebGL1 / WebGL2', (capture.webgl1 ? Object.keys(capture.webgl1.params).length : 0)
+          + ' / ' + Object.keys(gl2.params).length + ' parameters');
+    if (capture.adapter) {
+      field('WebGPU limits', Object.keys(capture.adapter.limits || {}).length);
+      field('WebGPU features', (capture.adapter.features || []).length);
+    }
+
+    if (!isAngle) {
+      noteEl.textContent =
+        'This browser does not use ANGLE, so the capture describes a different '
+        + 'graphics stack than the tier tables model. Worth collecting, but it '
+        + 'cannot be dropped in as a tier without design work first.';
+    }
+
+    payload = { tier: tierEl.value, provenance: prov, capture: capture };
+    rawEl.textContent = JSON.stringify(sortDeep(payload), null, 2);
+    wrapEl.hidden = false;
+
+    // Share with a file attached is the mobile path: probe on the phone, send
+    // it to yourself. Feature-detected because desktop support is uneven.
+    var shareBtn = document.getElementById('share');
+    var sample = new File(['{}'], 'probe.json', { type: 'application/json' });
+    if (navigator.canShare && navigator.canShare({ files: [sample] })) {
+      shareBtn.hidden = false;
+    }
+  }
+
+  function currentJson() {
+    payload.tier = (tierEl.value || '').trim();
+    return JSON.stringify(sortDeep(payload), null, 2) + '\n';
+  }
+
+  document.getElementById('dl').addEventListener('click', function () {
+    download(fileName(), currentJson());
+  });
+
+  document.getElementById('copy').addEventListener('click', async function () {
+    try {
+      await navigator.clipboard.writeText(currentJson());
+      noteEl.textContent = 'Capture copied to the clipboard.';
+    } catch (e) {
+      noteEl.textContent = 'Clipboard blocked; use Download instead.';
+    }
+  });
+
+  document.getElementById('share').addEventListener('click', async function () {
+    var file = new File([currentJson()], fileName(), { type: 'application/json' });
+    try {
+      await navigator.share({ files: [file], title: fileName() });
+    } catch (e) {
+      if (e && e.name !== 'AbortError') {
+        noteEl.textContent = 'Sharing failed (' + e.name + '); use Download instead.';
+      }
+    }
+  });
+
+  // GitHub's new-file route accepts a filename but not a body this size, so the
+  // content goes through the clipboard and the page opens the editor with the
+  // path already set. Two steps, and no token or backend anywhere.
+  document.getElementById('pr').addEventListener('click', async function () {
+    var name = (tierEl.value || '').trim();
+    if (!name) { noteEl.textContent = 'Name the tier first.'; return; }
+    var copied = false;
+    try { await navigator.clipboard.writeText(currentJson()); copied = true; } catch (e) { /* */ }
+    var url = 'https://github.com/' + REPO + '/new/main?filename='
+      + encodeURIComponent(DATA_DIR + '/' + name + '.json');
+    window.open(url, '_blank', 'noopener');
+    noteEl.textContent = copied
+      ? 'Capture copied. Paste it into the GitHub editor that just opened, then "Commit changes" to open a PR.'
+      : 'Clipboard was blocked. Copy the raw capture below, then paste it into the GitHub editor that just opened.';
+  });
+
+  run();
+})();
+</script>
+</body>
+</html>

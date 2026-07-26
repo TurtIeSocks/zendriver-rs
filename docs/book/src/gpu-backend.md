@@ -119,6 +119,28 @@ cargo run -p zendriver --example probe_gpu -- swiftshader
 cargo run -p zendriver --example probe_gpu -- disabled
 ```
 
+### From a browser, with no toolchain
+
+The same measurement runs as a page: **[GPU tier probe](probe/index.html)**.
+Open it on the machine you want to read and it produces the identical capture
+file, which matters when that machine is an old laptop or a phone where
+installing a Rust toolchain is the whole obstacle. The measurement runs locally
+and nothing is uploaded; the page offers a download, a share sheet where the
+platform has one, and a two-step path to opening a pull request.
+
+It refuses to export rather than hand back a plausible wrong answer. A page
+served insecurely reports no WebGPU adapter on a machine that has one, and a
+privacy extension that farbles WebGL produces a capture that is well-formed and
+describes a GPU that does not exist. The page checks for both, along with
+whether the renderer is ANGLE's at all — Safari and every iOS browser use
+WebKit's own stack, so their numbers are real but belong to a graphics layer
+these tiers do not model.
+
+The browser path cannot select a backend the way the arguments above do, since
+that needs launch flags. It captures whatever the browser is already using,
+which for ordinary Chrome on a working GPU is the native backend — the one
+worth capturing.
+
 ## MCP
 
 `browser_open` exposes this as the `gpu_backend` option (`"disabled"` |
