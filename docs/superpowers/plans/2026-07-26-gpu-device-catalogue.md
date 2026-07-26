@@ -22,12 +22,19 @@
 
 ## Prerequisites
 
-- [ ] **PR #126 is merged**, and the release-plz PR it triggers has merged too.
-- [ ] Branch cut from a **freshly fetched** `origin/main` after both land:
+**This work is stacked on PR #126, not on `main`.** #126 is being tested
+against real projects before it merges, so this branch is cut from *its* head
+and its PR targets `feat/gpu-profile-tier-tables` rather than `main`. Every
+task below depends on the five capability tiers that #126 introduces; cutting
+from `main` would produce a branch where `Tier::D3d11Fl11Nvidia` does not
+exist.
+
+- [ ] Cut the branch from #126's head:
 
 ```bash
 git fetch origin
-git worktree add .claude/worktrees/gpu-catalogue -b feat/gpu-device-catalogue origin/main
+git worktree add .claude/worktrees/gpu-catalogue \
+  -b feat/gpu-device-catalogue origin/feat/gpu-profile-tier-tables
 cd .claude/worktrees/gpu-catalogue
 ```
 
@@ -39,6 +46,19 @@ ls crates/zendriver-stealth/data/gpu-tiers/
 ```
 
 Expected: tests pass, and the directory lists `d3d11-fl11.json`, `d3d11-fl11-nvidia.json`, `metal-macos.json`, `swiftshader.json`, `vulkan-mesa-intel-iris-pro-580.json`.
+
+### Merge order
+
+1. #126 merges to `main` once its real-project testing passes.
+2. Release-plz opens and merges its version PR.
+3. This branch rebases onto the new `main`, then merges.
+
+If #126 changes during testing, rebase this branch onto its new head rather
+than merging: the two share the `gpu` module, and a merge commit here would
+make #126's own diff harder to review while it is still under test.
+
+**Open this PR against `feat/gpu-profile-tier-tables`.** Targeting `main`
+would show #126's entire diff as part of this PR's changes.
 
 ## File Structure
 
