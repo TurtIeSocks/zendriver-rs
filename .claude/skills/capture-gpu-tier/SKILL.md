@@ -80,7 +80,8 @@ real GPU: a `Native` launch on a GPU-less host fails rather than falling back.
    capture is worthless — stop and fix the machine, not the data.
 
 2. **Pick the tier name** from the renderer string, using the existing files as
-   precedent: `swiftshader`, `metal-macos`, `d3d11-fl11`.
+   precedent: `swiftshader`, `metal-macos`, `d3d11-fl11`, and — the Vulkan
+   case, named for its device and driver — `vulkan-mesa-intel-iris-pro-580`.
 
    Where the values generalize, name by *backend and capability tier*, not by
    card — `d3d11-fl11` rather than `nvidia-rtx-4090`, because every D3D11

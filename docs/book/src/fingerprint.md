@@ -226,12 +226,11 @@ state-caching renderers (deck.gl's `withParameters`, Babylon's state cache)
 save and restore through `getParameter`.
 
 **Values come from measured capability tiers, not per-parameter guesses.**
-ANGLE (Chrome's GL layer) computes most numeric caps from constants branched
-on backend and feature level, not from querying the physical device — so
-values cluster by *(backend, capability tier)* rather than by exact GPU
-model. Three tiers ship today:
+How far one capture reaches depends on the backend, because ANGLE (Chrome's GL
+layer) decides these values differently per backend. Four tiers ship today, and
+the first three generalize while the fourth does not:
 
-- `SwiftShader` — Chrome's software rasterizer.
+- `SwiftShader` — Chrome's software rasterizer, the same numbers on every OS.
 - Metal on macOS — ANGLE's Metal backend, covering every Mac. The values are
   compile-time constants in ANGLE's `DisplayMtl.mm` `TARGET_OS_OSX` branch, so
   an Intel Mac and an Apple silicon one report the same numbers.
@@ -239,6 +238,23 @@ model. Three tiers ship today:
   tier covers every Intel, NVIDIA and AMD card at that feature level, because
   ANGLE derives the values from `D3D11_REQ_*` constants rather than from the
   card.
+- Intel Iris Pro Graphics 580 (Skylake GT4e) under Mesa 25.2.8 — ANGLE's
+  **Vulkan** backend on Linux. This one covers **that GPU under that driver and
+  nothing else**: `vk_caps_utils.cpp` fills its caps straight from
+  `VkPhysicalDeviceLimits` (`max2DTextureSize` is
+  `min(limitsVk.maxFramebufferWidth, limitsVk.maxImageDimension2D)`, the
+  viewport bounds come from `limitsVk.maxViewportDimensions`), so a different
+  Intel part — or the same part on a different Mesa release — is a different
+  tier and needs its own capture. That is why it is named for the device and
+  the driver rather than for the backend, and why no "Linux" or "Vulkan" tier
+  exists to generalize it.
+
+The measurement shows the split rather than just asserting it. The Vulkan
+capture is closest to SwiftShader (7 of 82 WebGL1 parameters differ and 21 of
+132 WebGL2, against 10/26 for D3D11 and 9/23 for Metal), because SwiftShader's
+renderer string also says `Vulkan 1.3.0` and it runs through the same ANGLE
+backend. The 21 that remain between two Vulkan-backed captures on one Chrome
+build are exactly the device-derived limits.
 
 A tier is shared *capability values*, never shared *identity*. Pin an Intel or
 AMD D3D11 renderer and you get that tier's numbers above your own vendor and
@@ -249,16 +265,14 @@ the tier happened to be captured on.
 **When a persona names no renderer, the default is chosen from its
 platform.** A renderer string is read beside `navigator.platform`, so the two
 have to be a pair Chrome can actually produce. A `MacIntel` persona gets the
-Apple Metal row and a `Win32` persona the D3D11 row — both ordinary hardware
+Apple Metal row, a `Win32` persona the D3D11 row, and a `LinuxX86_64` persona
+the Intel Iris Pro 580 Mesa/Vulkan row — all three ordinary hardware
 identities whose name and numbers come from the same probe.
 
-A `LinuxX86_64` persona gets a SwiftShader row, whose renderer string names no
-platform-specific API and which Chrome really does report on a GPU-blocklisted
-machine, a VM, or a headless container. The honest cost: SwiftShader says "no
-usable GPU", which some fingerprinters weight on its own. That is a real
-configuration rather than an impossible one, so it beats the alternative — a
-Linux-looking Vulkan name served above another backend's numbers — until a
-Vulkan or desktop-GL tier is captured.
+Linux used to get a SwiftShader row instead, which was real (Chrome reports it
+on a GPU-blocklisted machine, a VM, or a headless container) but announced "no
+usable GPU", something some fingerprinters weight on its own. Capturing the
+Vulkan tier retired that last fallback: every platform default is now hardware.
 
 **SwiftShader's numbers are platform-independent; its renderer string is
 not.** Probing Ubuntu 24 (Chrome 150.0.7871.114, GPU-less VM) against the
@@ -272,19 +286,21 @@ backend at build time and Chrome prints the choice:
 | Linux and Windows (both measured) | `ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)` |
 | macOS | `ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (LLVM 10.0.0) (0x0000C0DE)), SwiftShader driver)` |
 
-So one capability tier ships under two identity strings, and a Linux persona
-reports the string real Linux Chrome reports. Windows Chrome's SwiftShader
-build prints Subzero too (measured on Windows 10.0.21996, Chrome
-150.0.7871.186) — which no longer picks a default, since `Win32` resolves the
-D3D11 row, but does decide which row a Win32 persona lands on when it pins a
-SwiftShader renderer itself.
+So one capability tier ships under two identity strings. Neither picks a
+default any more — every platform resolves captured hardware — but the split
+still decides which row a persona lands on when it pins a SwiftShader renderer
+itself, and it must be the build that platform's Chrome really prints. Windows
+Chrome's SwiftShader build prints Subzero too (measured on Windows 10.0.21996,
+Chrome 150.0.7871.186).
 
 **A renderer you pin yourself that matches no tier falls back to your
 platform's default device and logs a warning.** Serving an unrecognized
 renderer's *name* above a different backend's *numbers* is its own
-incoherence — an unmatched Vulkan or desktop-GL renderer string is expected,
-since no tier covers those backends yet. Adding a tier requires probing real
-hardware with that backend; values are never invented. See the
+incoherence. A desktop-GL string is expected to be unmatched, and so is any
+Vulkan device other than the captured Iris Pro — widening that row to cover
+Linux generally is exactly what its device-derived limits forbid. Adding a tier
+requires probing real hardware with that backend; values are never invented.
+See the
 [`capture-gpu-tier` skill](https://github.com/TurtIeSocks/zendriver-rs/blob/main/.claude/skills/capture-gpu-tier/SKILL.md)
 for the procedure if you hit this warning and have the hardware to fix it.
 
@@ -301,10 +317,11 @@ not: a script that *exercises* a limit rather than reading it can tell the
 claim from the capability, and no table can fabricate the capability itself.
 Where that fidelity matters, pair the persona's tier with a
 [`gpu_backend`](gpu-backend.md) that really has those limits — a `MacIntel`
-persona (Apple Metal tier) or a `Win32` one (D3D11 tier) on
-`GpuBackend::Native` hardware, rather than over SwiftShader, which is the
-default. A `LinuxX86_64` persona already resolves the SwiftShader tier, so it
-is coherent with the default backend as shipped.
+persona (Apple Metal tier), a `Win32` one (D3D11 tier), or a `LinuxX86_64` one
+(the Mesa/Vulkan tier) on `GpuBackend::Native` hardware, rather than over
+SwiftShader, which is the default. No platform resolves the SwiftShader tier
+by default any more, so no platform is trivially coherent with that backend;
+pinning a SwiftShader renderer yourself is what makes it so.
 
 **`Persona.gpu: Option<GpuProfile>` lets you pin a whole coherent device.**
 Unset, it resolves from the persona's WebGL renderer string, matched against
@@ -336,11 +353,13 @@ By default (`Persona.webgpu = None`, or `Some(WebgpuSpec::default())`), the
 a vendor/architecture DERIVED from the `Webgl` surface's renderer (never
 fabricated) — the same behavior it always had. Only a renderer naming a GPU
 family zendriver recognizes yields a vendor and architecture; anything else —
-including the SwiftShader row a `LinuxX86_64` persona defaults to —
-derives both as `""`, which is what Chrome itself reports for an adapter it
-cannot classify. A software rasterizer has no vendor, and naming one beside a
-SwiftShader WebGL renderer would be the cross-API contradiction this derivation
-exists to prevent.
+including any SwiftShader renderer — derives both as `""`, which is what Chrome
+itself reports for an adapter it cannot classify. A software rasterizer has no
+vendor, and naming one beside a SwiftShader WebGL renderer would be the
+cross-API contradiction this derivation exists to prevent. The Mesa/Vulkan row
+a `LinuxX86_64` persona defaults to derives `intel` with an empty
+architecture — Intel is what its renderer names, and nothing measured that
+part's architecture token, so it stays empty rather than guessed.
 
 **`.limits` and `.features` come from the same measured tier the WebGL surface
 serves.** The probe captures each tier's `navigator.gpu` adapter alongside its
@@ -350,11 +369,14 @@ features, a `MacIntel` persona the Metal tier's 4 GiB - 4 and its 22. Before
 this they were left at the host's, so an adapter could name an NVIDIA card
 above a Metal buffer limit — the same gap the tier tables closed for WebGL.
 
-The `SwiftShader` tier serves **neither**, and that is the measurement rather
-than a hole: Chrome on SwiftShader resolves `requestAdapter()` to `null`, so
-there is no adapter to describe, and the host's own values are left untouched.
+Two tiers serve **neither**, and in both cases that is the measurement rather
+than a hole. Chrome on SwiftShader resolves `requestAdapter()` to `null`, and
+the Linux machine the Mesa/Vulkan tier was probed on has WebGPU off by default
+(`navigator.gpu` exists, `requestAdapter()` resolves `null`) — so neither has
+an adapter to describe, and the host's own values are left untouched.
 Substituting a neighbouring tier's numbers would hand a persona that just told
-WebGL it has a software rasterizer a hardware adapter's capabilities.
+WebGL it has a software rasterizer, or a machine with WebGPU disabled, a
+hardware adapter's capabilities.
 
 One honest caveat, the mirror of the D3D11 tier's WebGL story. The WebGL values
 generalize across every FL11+ card because ANGLE derives them from `D3D11_REQ_*`

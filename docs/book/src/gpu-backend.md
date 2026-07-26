@@ -113,22 +113,35 @@ context exist at all" question applies to it.
 | WebGL `MAX_TEXTURE_SIZE` | 8192 | 16384 |
 | WebGL extension count | 30 | 36 |
 
-`MAX_TEXTURE_SIZE` and the other numeric WebGL caps are not read from the
-GPU — ANGLE computes them from constants branched on backend and feature
-tier, not from device queries. That's why the SwiftShader row above is
-identical regardless of what real GPU sits underneath: it's a software
-rasterizer, so there's no real device to query.
+Whether `MAX_TEXTURE_SIZE` and the other numeric WebGL caps are read from the
+GPU **depends on the backend**, and that is what decides how far one probe
+generalizes:
 
-The one part of that row that *is* host-specific is the renderer string.
-Re-probing the same flags on Ubuntu 24 (Chrome 150.0.7871.114) reproduced
-every capability value above, but reported `SwiftShader Device (Subzero)`
-rather than `(LLVM 10.0.0)` — SwiftShader picks its JIT backend at build time
-and Chrome prints the choice. Windows reports Subzero too (measured on
-Windows 10.0.21996, Chrome 150.0.7871.186).
+- **D3D11 and Metal-on-macOS: not read from the device.** ANGLE computes them
+  from constants branched on the feature level (`renderer11_utils.cpp`) or
+  from plain compile-time constants (`DisplayMtl.mm`'s `TARGET_OS_OSX` arm), so
+  one probe covers every card on that backend.
+- **SwiftShader: no device to read.** It is a software rasterizer, which is why
+  the row above is identical regardless of what real GPU sits underneath.
+- **Vulkan: read straight off the device.** `vk_caps_utils.cpp` fills its caps
+  from `VkPhysicalDeviceLimits`, so a Linux probe describes that GPU under that
+  Mesa build and nothing else. zendriver's Vulkan tier is named for its device
+  for exactly this reason (Intel Iris Pro Graphics 580, Mesa 25.2.8), and
+  covering another Linux GPU means capturing it.
 
-Which of those strings the spoofed profile serves depends on the persona's
-platform — and on Windows it serves neither, because a `Win32` persona
-resolves the captured D3D11 tier rather than a software one. See
+The one part of the SwiftShader row that *is* host-specific is the renderer
+string. Re-probing the same flags on Ubuntu 24 (Chrome 150.0.7871.114)
+reproduced every capability value above, but reported `SwiftShader Device
+(Subzero)` rather than `(LLVM 10.0.0)` — SwiftShader picks its JIT backend at
+build time and Chrome prints the choice. Windows reports Subzero too (measured
+on Windows 10.0.21996, Chrome 150.0.7871.186).
+
+The spoofed profile now serves neither string by default on any platform: a
+`Win32` persona resolves the captured D3D11 tier and a `LinuxX86_64` persona
+the captured Mesa/Vulkan one, both real hardware rather than a software
+rasterizer. A SwiftShader row is reached only by pinning such a renderer
+yourself, and which of the two builds you land on then follows the persona's
+platform. See
 [the WebGL section of the fingerprint chapter](./fingerprint.md#webgl-full-surface-value-spoof-resolved-from-measured-tiers).
 
 ## `navigator.gpu` visibility is governed by the page, not by this option
