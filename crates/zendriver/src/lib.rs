@@ -268,9 +268,9 @@ pub use geo_resolver::IpApiResolver;
 /// Stealth profile + fingerprint configuration re-exported from `zendriver-stealth`.
 pub mod stealth {
     pub use zendriver_stealth::{
-        Fingerprint, GlParam, GpuBackend, GpuProfile, InputProfile, Persona, PersonaBuilder,
-        Platform, Provenance, Seed, ShaderPrecision, StealthProfile, Strategy, Surface,
-        UserAgentMetadata, WebglSpec, WebgpuSpec,
+        DeviceLookupError, Fingerprint, GlParam, GpuBackend, GpuDevice, GpuProfile, InputProfile,
+        Persona, PersonaBuilder, Platform, Provenance, Seed, ShaderPrecision, StealthProfile,
+        Strategy, Surface, UserAgentMetadata, WebglSpec, WebgpuSpec,
     };
 }
 
