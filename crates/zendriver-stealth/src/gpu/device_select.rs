@@ -235,6 +235,110 @@ impl GpuDevice {
         pool.last().map(|e| Self(e))
     }
 
+    /// The catalogued device closest to a renderer string the host reported.
+    ///
+    /// **Pure.** Probing a real host needs a browser, which this crate does not
+    /// have; `zendriver::nearest_gpu_device` does the probing and calls this.
+    /// Splitting it that way is also what makes the matching testable without
+    /// launching Chrome.
+    ///
+    /// A ladder, most specific first, because "nearest" has to mean something
+    /// checkable rather than "some entry":
+    ///
+    /// 1. the same model *and* device id — the host's exact identity;
+    /// 2. the same model — a sibling SKU of the same marketing name;
+    /// 3. the same vendor on the same tier, commonest first;
+    /// 4. the same tier, commonest first.
+    ///
+    /// `None` when the host's backend has no catalogue at all, which is the
+    /// honest answer for Linux and for SwiftShader: there is no shared tier for
+    /// an identity to layer over, and returning a Windows GPU because the
+    /// caller asked nicely is exactly the incoherence this design removes.
+    #[must_use]
+    pub fn nearest_to_renderer(renderer: &str) -> Option<Self> {
+        let host = crate::gpu::devices::device_for_renderer(renderer)?;
+        let candidates: Vec<&'static CatalogueEntry> =
+            CATALOGUE.iter().filter(|e| e.tier == host.tier).collect();
+        if candidates.is_empty() {
+            return None;
+        }
+
+        // The host's own model name and id, as ANGLE spells them.
+        let lower = renderer.to_ascii_lowercase();
+        let heaviest = |pool: &[&'static CatalogueEntry]| -> Option<Self> {
+            pool.iter()
+                .copied()
+                .max_by(|a, b| a.weight.total_cmp(&b.weight))
+                .map(Self)
+        };
+
+        // 1 + 2: the host names a device the catalogue knows. Compare against
+        // the composed string rather than parsing the host's, so the two can
+        // never disagree about what a device is called.
+        if let Some(exact) = candidates
+            .iter()
+            .copied()
+            .find(|e| compose_renderer(e).eq_ignore_ascii_case(renderer))
+        {
+            return Some(Self(exact));
+        }
+        let same_model: Vec<_> = candidates
+            .iter()
+            .copied()
+            .filter(|e| lower.contains(&e.model.to_ascii_lowercase()))
+            .collect();
+        if !same_model.is_empty() {
+            return heaviest(&same_model);
+        }
+
+        // 3: same vendor, same backend.
+        let same_vendor: Vec<_> = candidates
+            .iter()
+            .copied()
+            .filter(|e| lower.contains(&e.vendor.to_ascii_lowercase()))
+            .collect();
+        if !same_vendor.is_empty() {
+            return heaviest(&same_vendor);
+        }
+
+        // 4: same backend at least.
+        heaviest(&candidates)
+    }
+
+    /// Every catalogued device, or those matching a case-insensitive substring
+    /// of the model, most common first.
+    ///
+    /// Exists so a caller can *browse* the catalogue rather than having to
+    /// already know a model name. [`Self::by_name`] answers one device and
+    /// refuses ambiguity; this answers the ambiguity.
+    #[must_use]
+    pub fn search(query: Option<&str>, platform: Option<Platform>) -> Vec<Self> {
+        let needle = query.map(|q| q.trim().to_ascii_lowercase());
+        let mut hits: Vec<&'static CatalogueEntry> = CATALOGUE
+            .iter()
+            .filter(|e| platform.is_none_or(|p| platform_skew(p, e.tier).is_none()))
+            .filter(|e| {
+                needle.as_ref().is_none_or(|n| {
+                    n.is_empty() || e.model.to_ascii_lowercase().contains(n.as_str())
+                })
+            })
+            .collect();
+        hits.sort_by(|a, b| b.weight.total_cmp(&a.weight).then(a.model.cmp(b.model)));
+        hits.into_iter().map(Self).collect()
+    }
+
+    /// PCI device id, or `None` on Metal where Apple silicon exposes none.
+    #[must_use]
+    pub fn device_id(&self) -> Option<u32> {
+        self.0.device_id
+    }
+
+    /// Share of the corpus population, in the range `0.0..=1.0`.
+    #[must_use]
+    pub fn share(&self) -> f64 {
+        self.0.weight
+    }
+
     /// Every catalogue entry coherent with `platform`.
     ///
     /// Filtered through the same `platform_skew` check the invariants use, so
@@ -544,6 +648,76 @@ mod tests {
             hits > uniform,
             "weighting did nothing: {hits} hits vs {uniform} for a uniform draw"
         );
+    }
+
+    #[test]
+    fn nearest_matches_the_hosts_own_identity_exactly_when_it_can() {
+        let rtx = GpuDevice::by_name("NVIDIA GeForce RTX 4090").unwrap();
+        let got = GpuDevice::nearest_to_renderer(&rtx.renderer()).unwrap();
+        assert_eq!(got.renderer(), rtx.renderer());
+    }
+
+    #[test]
+    fn nearest_falls_back_through_model_then_vendor_then_tier() {
+        // A model the catalogue knows, but a device id it has never seen
+        // paired with that name: rung 2, same model, different SKU.
+        let sibling = "ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 (0x0000DEAD)                        Direct3D11 vs_5_0 ps_5_0, D3D11)";
+        let got = GpuDevice::nearest_to_renderer(sibling).unwrap();
+        assert_eq!(got.model(), "NVIDIA GeForce RTX 4090");
+
+        // A vendor it knows, a model it does not: rung 3.
+        let unknown_nvidia = "ANGLE (NVIDIA, NVIDIA GeForce RTX 9090 Ti                               (0x0000BEEF) Direct3D11 vs_5_0 ps_5_0, D3D11)";
+        let got = GpuDevice::nearest_to_renderer(unknown_nvidia).unwrap();
+        assert_eq!(got.vendor(), "NVIDIA");
+        assert_eq!(got.tier(), Tier::D3d11Fl11Nvidia);
+    }
+
+    #[test]
+    fn nearest_answers_none_where_no_catalogue_exists() {
+        // Both are real backends with no shared tier to layer an identity
+        // over. Answering a Windows GPU because the caller asked would be the
+        // exact incoherence the catalogue exists to remove.
+        for renderer in [
+            "ANGLE (Intel, Vulkan 1.4.318 (Intel(R) Iris(R) Pro Graphics 580              (SKL GT4) (0x0000193B)), Intel open-source Mesa driver)",
+            "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)              (0x0000C0DE)), SwiftShader driver)",
+        ] {
+            assert!(
+                GpuDevice::nearest_to_renderer(renderer).is_none(),
+                "{renderer} must have no nearest catalogued device"
+            );
+        }
+        // A renderer no tier covers at all.
+        assert!(GpuDevice::nearest_to_renderer("Mali-G715").is_none());
+    }
+
+    #[test]
+    fn search_browses_where_by_name_refuses() {
+        // by_name answers one device and errors on ambiguity; search is how a
+        // caller discovers what the ambiguous names actually are.
+        assert!(matches!(
+            GpuDevice::by_name("rtx 40"),
+            Err(DeviceLookupError::Ambiguous(_))
+        ));
+        let hits = GpuDevice::search(Some("rtx 40"), Some(Platform::Win32));
+        assert!(hits.len() > 1, "search found {}", hits.len());
+        assert!(hits.iter().all(|d| d.model().contains("RTX 40")));
+        // Commonest first, so a caller taking the head gets a sensible default.
+        assert!(hits[0].share() >= hits[hits.len() - 1].share());
+    }
+
+    #[test]
+    fn search_with_no_query_lists_the_platforms_devices() {
+        let win = GpuDevice::search(None, Some(Platform::Win32));
+        let mac = GpuDevice::search(None, Some(Platform::MacIntel));
+        let all = GpuDevice::search(None, None);
+        assert_eq!(all.len(), CATALOGUE.len());
+        assert_eq!(
+            win.len() + mac.len(),
+            all.len(),
+            "every entry is one or the other"
+        );
+        assert!(mac.iter().all(|d| d.tier() == Tier::MetalMacos));
+        assert!(win.iter().all(|d| d.device_id().is_some()));
     }
 
     #[test]

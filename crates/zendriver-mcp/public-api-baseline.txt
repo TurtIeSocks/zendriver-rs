@@ -8693,5 +8693,6 @@ pub fn zendriver::frame::Frame::find_all(&self) -> zendriver::query::FindAllBuil
 impl zendriver::traits::queryable::Queryable for zendriver::tab::Tab
 pub fn zendriver::tab::Tab::find(&self) -> zendriver::query::FindBuilder<'_>
 pub fn zendriver::tab::Tab::find_all(&self) -> zendriver::query::FindAllBuilder<'_>
+pub async fn zendriver::nearest_gpu_device() -> zendriver::error::Result<core::option::Option<zendriver_stealth::gpu::device_select::GpuDevice>>
 pub async fn zendriver::start() -> zendriver::error::Result<zendriver::browser::Browser>
 pub type zendriver::Result<T, E> = core::result::Result<T, E>

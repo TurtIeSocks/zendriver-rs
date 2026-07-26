@@ -46,7 +46,7 @@ use crate::tools::intercept;
 #[cfg(feature = "monitor")]
 use crate::tools::monitor;
 use crate::tools::{
-    actions, cookies, download, eval, find, frames, lifecycle, mouse, navigation, pdf, reads,
+    actions, cookies, download, eval, find, frames, gpu, lifecycle, mouse, navigation, pdf, reads,
     request, scroll, snapshot, stealth, storage, tabs, window,
 };
 
@@ -1054,6 +1054,26 @@ impl ZendriverServer {
     }
 }
 
+// ---------- gpu catalogue ------------------------------------------------
+//
+// Ungated: the catalogue is a compiled-in table with no optional dependency,
+// and browsing it needs no browser.
+
+#[tool_router(router = gpu_tool_router, vis = "pub")]
+impl ZendriverServer {
+    /// Browse the measured GPU device catalogue.
+    #[tool(
+        name = "browser_gpu_devices",
+        description = "List catalogued GPU devices, most common first, so a persona can claim a specific real GPU. Optional `query` matches a case-insensitive substring of the model (e.g. \"rtx 40\", \"iris\"); optional `platform` is `win32` or `mac_intel`; optional `limit` defaults to 25. Returns `{ devices, total_matched }` where each device has `model`, `vendor`, `device_id`, `share` (fraction of the browser population reporting it) and `renderer`. Use `renderer` verbatim as a persona's `webgl.unmasked_renderer` and pass that to `browser_open` — it selects the capability tier, WebGPU adapter and vendor by itself. No Linux devices exist: ANGLE reads Vulkan limits off the physical device, so there is no shared tier for a Linux identity."
+    )]
+    pub fn browser_gpu_devices(
+        &self,
+        Parameters(input): Parameters<gpu::GpuDevicesInput>,
+    ) -> Result<Json<gpu::GpuDevicesOutput>, ErrorData> {
+        gpu::devices(input).map(Json)
+    }
+}
+
 // ---------- fingerprints (gated) ----------------------------------------
 //
 // Same split pattern as the other gated blocks. Not in `default` — must be
@@ -1129,7 +1149,7 @@ impl ZendriverServer {
     /// this so a single `ServerHandler::call_tool` / `list_tools` reaches
     /// every tool the build was compiled with.
     pub fn combined_tool_router() -> ToolRouter<Self> {
-        let router = Self::base_tool_router();
+        let router = Self::base_tool_router() + Self::gpu_tool_router();
         #[cfg(feature = "interception")]
         let router = router + Self::intercept_tool_router();
         #[cfg(feature = "expect")]

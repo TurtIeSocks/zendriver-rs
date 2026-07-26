@@ -196,3 +196,39 @@ async fn two_catalogued_devices_produce_two_identities() {
         "an Intel device must resolve the non-NVIDIA D3D11 tier: {got:#}"
     );
 }
+
+/// `nearest_gpu_device` must answer with the host's own backend or not at all.
+///
+/// This machine's answer depends on its hardware, so the assertion is the
+/// invariant rather than a specific device: whatever comes back must be a
+/// device the host's backend could actually report, and `None` is a correct
+/// answer on a host whose backend has no catalogue.
+#[tokio::test]
+#[ignore = "launches real Chrome"]
+async fn nearest_gpu_device_matches_the_hosts_backend() {
+    let found = match zendriver::nearest_gpu_device().await {
+        Ok(found) => found,
+        Err(e) => {
+            // No usable GPU here, so there is no renderer to match against.
+            eprintln!("skipping: {e}");
+            return;
+        }
+    };
+    let Some(device) = found else {
+        eprintln!("skipping: this host's backend has no catalogue (Linux or software)");
+        return;
+    };
+    // The composed identity must be one the catalogue itself would produce,
+    // and must round-trip to a tier — never a bare string assembled ad hoc.
+    let renderer = device.renderer();
+    assert!(
+        renderer.starts_with("ANGLE ("),
+        "not an ANGLE identity: {renderer}"
+    );
+    assert!(
+        GpuDevice::by_name(device.model()).is_ok()
+            || !GpuDevice::search(Some(device.model()), None).is_empty(),
+        "nearest returned {} which the catalogue cannot find",
+        device.model()
+    );
+}

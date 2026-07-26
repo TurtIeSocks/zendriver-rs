@@ -203,6 +203,13 @@ schema_snap!(request_method, tools::request::HttpMethod);
 schema_snap!(request_in, tools::request::RequestInput);
 schema_snap!(request_out, tools::request::RequestOutput);
 
+// ---------- gpu catalogue --------------------------------------------------
+
+schema_snap!(gpu_platform, tools::gpu::GpuPlatform);
+schema_snap!(gpu_devices_input, tools::gpu::GpuDevicesInput);
+schema_snap!(gpu_device_out, tools::gpu::GpuDeviceOut);
+schema_snap!(gpu_devices_output, tools::gpu::GpuDevicesOutput);
+
 // ---------- fingerprints (feature-gated) ----------------------------------
 
 #[cfg(feature = "fingerprints")]

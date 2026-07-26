@@ -25,6 +25,7 @@ pub mod find;
 #[cfg(feature = "fingerprints")]
 pub mod fingerprints;
 pub mod frames;
+pub mod gpu;
 #[cfg(feature = "imperva")]
 pub mod imperva;
 #[cfg(feature = "interception")]

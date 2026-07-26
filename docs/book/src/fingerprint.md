@@ -412,6 +412,27 @@ this is a browser tool.
   into the renderer string as its shader model, so pre-FL11 cards are excluded
   rather than filed under an FL11 tier.
 
+**Matching the host's own GPU.** `zendriver::nearest_gpu_device()` launches a
+short-lived browser on the native backend, reads what this machine reports, and
+returns the closest catalogued device — exact identity first, then the same
+model, then the same vendor on the same backend, then the same backend.
+
+```rust,no_run
+# async fn ex() -> zendriver::Result<()> {
+if let Some(device) = zendriver::nearest_gpu_device().await? {
+    println!("closest catalogued GPU: {}", device.model());
+}
+# Ok(())
+# }
+```
+
+It is a function you call, never a default. Probing the host to decide what a
+persona claims is detect-and-adjust, which this project does not do implicitly;
+the named-opt-in shape is the same one `geo_auto` uses. It answers `None` rather
+than reaching for something plausible when the host's backend has no catalogue —
+Linux and software rendering — because a Windows GPU is not a reasonable answer
+for a Linux host merely because one was requested.
+
 `by_name` refuses ambiguity rather than guessing — `"rtx 40"` returns every
 candidate — while an exact model name always wins, since several catalogued
 names are prefixes of others.

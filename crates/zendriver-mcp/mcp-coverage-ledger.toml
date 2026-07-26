@@ -65,22 +65,28 @@ api = "zendriver::stealth::WebglSpec"
 excluded = "caller-supplied fingerprint spec; surfaced opaquely via Persona JSON in browser_open.persona, not a granular field on browser_fingerprint_generate's request (same rationale as WebgpuSpec above)"
 
 # ── GPU device catalogue ────────────────────────────────────────────────────
-# A catalogued identity is reachable through the tools already: GpuDevice's
-# whole contribution is a renderer string, and `browser_open.persona` carries
-# that inside the Persona JSON as `webgl.unmasked_renderer`. A dedicated tool
-# option would duplicate a field the persona blob already has.
-#
-# What an agent cannot do through MCP is *browse* the catalogue -- there is no
-# tool that lists or searches its 482 entries. Recorded as a gap rather than
-# excluded: it wants a `browser_gpu_devices` query tool, which is worth adding
-# once the catalogue has shipped and its shape has settled.
+# Both halves are reachable now. `browser_gpu_devices` browses the catalogue,
+# and its `renderer` field goes straight into `browser_open.persona`'s
+# `webgl.unmasked_renderer` — which is a device's whole contribution, since
+# that string selects the capability tier, the WebGPU adapter and the vendor by
+# itself. Discovery was the missing half: naming a GPU used to require already
+# knowing the exact text a driver reports.
 [[entry]]
 api = "zendriver::stealth::GpuDevice"
-excluded = "identity resolves to a renderer string, surfaced via browser_open.persona's webgl.unmasked_renderer; a catalogue-browsing tool is a known follow-up, not a coverage claim"
+covered = "browser_gpu_devices (browse) + browser_open.persona's webgl.unmasked_renderer (claim)"
+
+# Probes the host to pick a catalogued device. Deliberately not an MCP tool:
+# it launches its own browser, so exposing it through a session-oriented server
+# would give an agent a second, hidden browser lifecycle to reason about. An
+# agent that wants the host's GPU can open a browser and read the renderer
+# itself, which is the same two steps without the surprise.
+[[entry]]
+api = "zendriver::nearest_gpu_device"
+excluded = "launches its own short-lived browser; an MCP tool would hide a second browser lifecycle inside a session-scoped server"
 
 [[entry]]
 api = "zendriver::stealth::DeviceLookupError"
-excluded = "error type for the in-process GpuDevice::by_name lookup; no MCP tool performs that lookup, so there is no wire shape to cover"
+excluded = "error type for the in-process GpuDevice::by_name lookup; browser_gpu_devices searches rather than resolving a single name, so it answers an empty list instead and this type has no wire shape"
 
 [[entry]]
 api = "zendriver::stealth::Persona"
