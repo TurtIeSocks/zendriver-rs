@@ -110,12 +110,17 @@
   <p class="note">
     The Chrome version is exact, which is the part that matters: ANGLE's
     capability constants move between Chrome releases, so a capture without a
-    version is a capture nobody can date. The OS string is only what the browser
-    is willing to reveal. Chrome freezes the reported macOS version at 10.15.7
-    and reports Windows 11 as Windows 10, so a capture taken here records less
-    about the host than one taken through the Rust probe, which reads the real
-    OS. That is a limitation of this page, not a defect in the capture: nothing
-    in the tier tables is derived from the OS string.
+    version is a capture nobody can date.
+  </p>
+  <p class="note">
+    The OS string is only what the browser chooses to reveal, and that varies.
+    Client hints often return the real platform version, but the legacy user
+    agent is frozen — it says <code>Windows NT 10.0</code> on Windows 11 and
+    <code>Mac OS X 10_15_7</code> on every modern Mac — so a browser that
+    withholds the hints leaves this page recording a frozen value where the Rust
+    probe reads the true one. Treat the OS here as best-effort. Nothing in the
+    tier tables derives from it, so this costs provenance detail rather than
+    correctness.
   </p>
 
   <h2>Naming the tier</h2>
