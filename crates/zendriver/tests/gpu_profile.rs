@@ -503,8 +503,15 @@ async fn delegated_state_comes_from_the_real_context_not_the_table() {
 /// The capture behind the tier a `Win32` persona resolves — see
 /// [`webgpu_limits_come_from_the_tier_not_the_host`] for why that persona and
 /// not the `MacIntel` one the rest of this file uses.
+///
+/// **The NVIDIA capture specifically.** Two D3D11 tiers ship, split by ANGLE's
+/// `skipVSConstantRegisterZero` workaround, and `default_device(Win32)` is the
+/// RTX 4090 row — so this must be the file that row's tier was built from.
+/// The two captures agree on every WebGPU limit, which is the only thing read
+/// below, so pointing at the other one would pass today and mislead the moment
+/// they ever diverge.
 const D3D11_TIER_CAPTURE: &str =
-    include_str!("../../zendriver-stealth/data/gpu-tiers/d3d11-fl11.json");
+    include_str!("../../zendriver-stealth/data/gpu-tiers/d3d11-fl11-nvidia.json");
 
 /// Reads the WebGPU adapter the way a fingerprinter does — twice over.
 ///
