@@ -50,13 +50,14 @@
   }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button:disabled { opacity: .45; cursor: not-allowed; }
-  label.tier { display: block; margin: 1rem 0 0; font-size: .85rem; color: var(--muted); }
-  input[type=text] {
-    font: inherit; font-family: ui-monospace, Menlo, monospace; font-size: .85rem;
-    width: 100%; margin-top: .3rem; padding: .5rem .6rem;
-    border: 1px solid var(--line); border-radius: 8px;
-    background: var(--bg); color: var(--fg);
+  .tier-out { margin: 1rem 0 0; }
+  .tier-label { font-size: .85rem; color: var(--muted); }
+  #tier-name {
+    display: inline-block; margin-top: .3rem; padding: .4rem .6rem;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--card);
+    font-family: ui-monospace, Menlo, monospace; font-size: .9rem;
   }
+  #tier-name.none { color: var(--bad); }
   details { margin-top: 1rem; }
   summary { cursor: pointer; color: var(--muted); font-size: .88rem; }
   pre {
@@ -87,10 +88,11 @@
     <h2>What this machine reports</h2>
     <div class="card"><dl id="summary"></dl></div>
 
-    <label class="tier">
-      Tier name (becomes the filename; see the naming rules below)
-      <input type="text" id="tier" spellcheck="false" autocapitalize="off">
-    </label>
+    <div class="tier-out">
+      <div class="tier-label">Tier name (this becomes the filename)</div>
+      <code id="tier-name"></code>
+      <p class="note" id="tier-why"></p>
+    </div>
 
     <div class="actions">
       <button class="primary" id="dl">Download JSON</button>
@@ -123,16 +125,21 @@
     correctness.
   </p>
 
-  <h2>Naming the tier</h2>
+  <h2>Why the name is not editable</h2>
   <p class="note">
-    Name it after the code branch ANGLE actually takes, not the card. Where the
-    values generalize, that means backend and feature level
-    (<code>d3d11-fl11</code>, not <code>rtx-4090</code>). Where they do not, the
-    name has to carry the device and driver: ANGLE's Vulkan backend reads its
-    limits straight off the physical device, so a Vulkan capture describes that
-    GPU under that driver and nothing else. A vendor-conditional ANGLE feature
-    gets its own variant, named for the condition rather than the card that
-    revealed it, which is why <code>d3d11-fl11-nvidia</code> exists.
+    A tier is named after the code branch ANGLE actually takes, never after the
+    machine it was captured on. That is a rule with one right answer per
+    renderer string, so the page derives it and shows you the reasoning rather
+    than asking. A hand-typed name is how a capture ends up called
+    <code>mac-m2pro-14inch</code> when the tier it belongs to is
+    <code>metal-macos</code> &mdash; a mistake nothing catches until the file is
+    already committed, at which point it looks like a new tier and is really a
+    duplicate.
+  </p>
+  <p class="note">
+    Rename the downloaded file if you genuinely need to. Just know that the
+    <code>tier</code> field inside it is what the generator reads, not the
+    filename.
   </p>
 </main>
 
@@ -147,7 +154,9 @@
   var checksEl = document.getElementById('checks');
   var summaryEl = document.getElementById('summary');
   var wrapEl = document.getElementById('summary-wrap');
-  var tierEl = document.getElementById('tier');
+  var tierNameEl = document.getElementById('tier-name');
+  var tierWhyEl = document.getElementById('tier-why');
+  var tier = { name: '', kind: 'none', why: '' };
   var rawEl = document.getElementById('raw');
   var noteEl = document.getElementById('action-note');
 
@@ -271,32 +280,98 @@
     return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   }
 
-  // Mirrors the rules in .claude/skills/capture-gpu-tier. Only the cases whose
-  // generalization is already established get a complete name; the rest get a
-  // stem the human has to finish, because guessing a name that claims more
-  // generality than the capture has is the worst outcome available here.
-  function suggestTier(renderer, vendorTok) {
+  // Derive the tier name from the renderer string. There is no text box on
+  // purpose: the naming rules are ANGLE's branching, not a preference, and a
+  // hand-typed name is how a capture ends up as `mac-m2pro-14inch` when the
+  // tier it belongs to is `metal-macos`. That mistake is invisible until the
+  // file is already committed.
+  //
+  // Returns { name, why, kind } where kind is:
+  //   'settled'      the name is fully determined by which branch ANGLE takes
+  //   'device'       device-scoped backend; the name has to carry the device
+  //   'none'         nothing shipped models this, so there is no tier to name
+  function deriveTier(renderer, vendorTok) {
     var backend = backendOf(renderer);
-    var isNvidia = /nvidia/i.test(renderer) || /nvidia/i.test(vendorTok || '');
-    if (backend === 'swiftshader') return 'swiftshader';
-    if (backend === 'd3d11') return isNvidia ? 'd3d11-fl11-nvidia' : 'd3d11-fl11';
-    if (backend === 'metal') {
-      var m = /ANGLE \(([^,]+),/.exec(renderer);
-      var vend = m ? m[1] : '';
-      return /apple/i.test(vend) ? 'metal-macos' : 'metal-macos-' + slug(vend);
+    var vendMatch = /ANGLE \(([^,]+),/.exec(renderer);
+    var vend = vendMatch ? vendMatch[1] : '';
+
+    if (backend === 'swiftshader') {
+      return {
+        name: 'swiftshader',
+        kind: 'settled',
+        why: 'Chrome\u2019s software rasterizer reports the same values on every OS.',
+      };
     }
+
+    if (backend === 'd3d11') {
+      // ANGLE writes the feature level into the string as its shader model.
+      // Both shipped D3D11 tiers are feature level 11, so anything else is a
+      // different tier that nothing has captured yet.
+      var sm = /vs_(\d)_(\d)/.exec(renderer);
+      if (!sm || sm[1] !== '5') {
+        var model = sm ? sm[1] + '_' + sm[2] : 'unknown';
+        // Shader model 4.0 is feature level 10.0 and 4.1 is 10.1; that mapping
+        // is Direct3D's, not a guess, and the string above is the evidence.
+        var fl = sm ? 'd3d11-fl10-' + sm[2] : '';
+        return {
+          name: fl,
+          kind: fl ? 'device' : 'none',
+          why: 'This reports shader model ' + model + ', so it is feature level 10, '
+             + 'not 11. Both shipped D3D11 tiers are FL11 and would serve limits '
+             + 'this card cannot reach \u2014 so this is a genuinely new tier, and '
+             + 'worth submitting.',
+        };
+      }
+      var isNvidia = /nvidia/i.test(renderer) || /nvidia/i.test(vendorTok || '');
+      return {
+        name: isNvidia ? 'd3d11-fl11-nvidia' : 'd3d11-fl11',
+        kind: 'settled',
+        why: isNvidia
+          ? 'NVIDIA gets its own tier: ANGLE enables skipVSConstantRegisterZero '
+            + 'when and only when the vendor is NVIDIA, which docks '
+            + 'MAX_VERTEX_UNIFORM_VECTORS from 4096 to 4095.'
+          : 'Named for the backend and feature level rather than the card, because '
+            + 'ANGLE derives these values from D3D11_REQ_* constants branched on '
+            + 'the feature level. One tier covers every non-NVIDIA FL11 part.',
+      };
+    }
+
+    if (backend === 'metal') {
+      var isApple = /apple/i.test(vend);
+      return {
+        name: isApple ? 'metal-macos' : 'metal-macos-' + slug(vend),
+        kind: 'settled',
+        why: isApple
+          ? 'ANGLE\u2019s macOS arm sets these from compile-time constants, and an '
+            + 'M2 Pro and an M4 Pro measured identical on every value \u2014 so one '
+            + 'tier covers Apple silicon.'
+          : 'An Intel or AMD Mac takes a different Dawn path for its WebGPU '
+            + 'architecture (it has a real PCI id), so it is named apart from '
+            + 'Apple silicon.',
+      };
+    }
+
     if (backend === 'vulkan' || backend === 'gles') {
-      // Device-specific by construction, so the name has to carry the device
-      // and the driver. Strip the API version and the hex device IDs, which
-      // are noise in a filename, and leave the rest for a human to shorten:
-      // this is a stem, not a finished name.
       var inner = /ANGLE \(([^,]+), (.*)\)$/.exec(renderer);
       var body = (inner ? inner[2] : renderer)
         .replace(/\b(Vulkan|OpenGL ES)\s+[\d.]+\s*/gi, '')
         .replace(/\(0x[0-9A-Fa-f]+\)/g, '');
-      return backend + '-' + slug(body).slice(0, 52).replace(/-$/, '');
+      return {
+        name: backend + '-' + slug(body).slice(0, 52).replace(/-$/, ''),
+        kind: 'device',
+        why: 'This backend reads its limits off the physical device, so the name '
+           + 'carries the device and driver rather than the backend. Shorten it if '
+           + 'it is unwieldy \u2014 just keep both.',
+      };
     }
-    return '';
+
+    return {
+      name: '',
+      kind: 'none',
+      why: 'This is not an ANGLE renderer, so it describes a graphics stack the '
+         + 'tier tables do not model. The capture is still worth keeping, but it '
+         + 'cannot be dropped in as a tier.',
+    };
   }
 
   async function provenance(capture) {
@@ -362,8 +437,7 @@
   }
 
   function fileName() {
-    var t = (tierEl.value || '').trim();
-    return (t || 'gpu-capture') + '.json';
+    return (tier.name || 'gpu-capture') + '.json';
   }
 
   async function run() {
@@ -452,7 +526,14 @@
     statusEl.className = 'status ' + (isAngle ? 'ok' : 'warn');
 
     var prov = await provenance(capture);
-    tierEl.value = suggestTier(renderer, gl2 && gl2.unmaskedVendor);
+    tier = deriveTier(renderer, gl2 && gl2.unmaskedVendor);
+    tierNameEl.textContent = tier.name || '(no tier applies)';
+    tierNameEl.className = tier.name ? '' : 'none';
+    tierWhyEl.textContent = tier.why
+      + (tier.kind === 'settled'
+          ? ' If a file of this name is already in data/gpu-tiers/, your capture'
+            + ' confirms it rather than adding one \u2014 which is still useful.'
+          : '');
 
     field('Renderer', renderer);
     field('Vendor', (gl2 && gl2.unmaskedVendor) || '(none)');
@@ -472,7 +553,7 @@
         + 'cannot be dropped in as a tier without design work first.';
     }
 
-    payload = { tier: tierEl.value, provenance: prov, capture: capture };
+    payload = { tier: tier.name, provenance: prov, capture: capture };
     rawEl.textContent = JSON.stringify(sortDeep(payload), null, 2);
     wrapEl.hidden = false;
 
@@ -486,7 +567,7 @@
   }
 
   function currentJson() {
-    payload.tier = (tierEl.value || '').trim();
+    payload.tier = tier.name;
     return JSON.stringify(sortDeep(payload), null, 2) + '\n';
   }
 
@@ -518,8 +599,13 @@
   // content goes through the clipboard and the page opens the editor with the
   // path already set. Two steps, and no token or backend anywhere.
   document.getElementById('pr').addEventListener('click', async function () {
-    var name = (tierEl.value || '').trim();
-    if (!name) { noteEl.textContent = 'Name the tier first.'; return; }
+    var name = tier.name;
+    if (!name) {
+      noteEl.textContent =
+        'This capture has no tier to file under, so there is nothing to open a PR '
+        + 'against. Download it instead and say what machine it came from.';
+      return;
+    }
     var copied = false;
     try { await navigator.clipboard.writeText(currentJson()); copied = true; } catch (e) { /* */ }
     var url = 'https://github.com/' + REPO + '/new/main?filename='
