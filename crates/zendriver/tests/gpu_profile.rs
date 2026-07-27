@@ -1112,3 +1112,141 @@ async fn draw_buffers_past_a_lower_served_cap_are_suppressed() {
         served_max - 1
     );
 }
+
+/// Reads one flat-filled WebGL canvas through every path a fingerprinter has.
+const READBACK_PATHS_JS: &str = r#"(() => {
+  const c = document.createElement('canvas'); c.width = 64; c.height = 64;
+  const gl = c.getContext('webgl2', {antialias:false, preserveDrawingBuffer:true});
+  if (!gl) return {error: 'no webgl2'};
+  gl.clearColor(0.25, 0.5, 0.75, 1.0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+
+  const direct = new Uint8Array(64*64*4);
+  gl.readPixels(0,0,64,64,gl.RGBA,gl.UNSIGNED_BYTE,direct);
+  const again = new Uint8Array(64*64*4);
+  gl.readPixels(0,0,64,64,gl.RGBA,gl.UNSIGNED_BYTE,again);
+
+  const c2 = document.createElement('canvas'); c2.width=64; c2.height=64;
+  const ctx = c2.getContext('2d');
+  ctx.drawImage(c, 0, 0);
+  const viaCanvas = ctx.getImageData(0,0,64,64).data;
+
+  // A picking-shaped read off a large buffer must stay exact.
+  const big = document.createElement('canvas'); big.width=1024; big.height=1024;
+  const gl2 = big.getContext('webgl2', {antialias:false, preserveDrawingBuffer:true});
+  gl2.clearColor(0.25,0.5,0.75,1.0); gl2.clear(gl2.COLOR_BUFFER_BIT);
+  const pick = new Uint8Array(4);
+  gl2.readPixels(10,10,1,1,gl2.RGBA,gl2.UNSIGNED_BYTE,pick);
+
+  const uniq = (arr, off) => {
+    const s = new Set();
+    for (let i = off; i < arr.length; i += 4) s.add(arr[i]);
+    return [...s].sort((x, y) => x - y);
+  };
+  let stable = true;
+  for (let i = 0; i < direct.length; i++) if (direct[i] !== again[i]) { stable = false; break; }
+  return {
+    readPixelsR: uniq(direct, 0), readPixelsG: uniq(direct, 1),
+    viaCanvasR: uniq(viaCanvas, 0), viaCanvasG: uniq(viaCanvas, 1),
+    readPixelsStable: stable,
+    picking: Array.from(pick),
+    maxTexture: gl.getParameter(gl.MAX_TEXTURE_SIZE),
+  };
+})()"#;
+
+/// Every readback path off one canvas must agree, and a flat fill must come
+/// back flat.
+///
+/// Both properties were broken before the palette rewrite, and both are
+/// detectable with no device database at all — which makes them worse than
+/// anything the tier tables guard against. Measured then: `readPixels` returned
+/// a single red value while `drawImage` + `getImageData` returned three, off one
+/// uniform clear.
+///
+/// Per-pixel variance on a flat fill is the more damning of the two. Rendering
+/// is a function of its input, so identical pixels come back identical on every
+/// real GPU; independent noise per pixel is a shape no hardware produces.
+#[tokio::test]
+#[ignore = "launches real Chrome"]
+async fn every_readback_path_agrees_and_a_flat_fill_stays_flat() {
+    let browser = Browser::builder()
+        .stealth(StealthProfile::spoofed())
+        .persona(mac_persona())
+        .launch()
+        .await
+        .expect("launch");
+    let tab = browser.main_tab();
+    tab.goto(&file_url("zendriver-readback-paths.html"))
+        .await
+        .expect("navigate");
+    tab.wait_for_load().await.expect("load");
+
+    // Poll on the tier's own MAX_TEXTURE_SIZE, the signal the rest of this file
+    // uses. An earlier revision polled on "the two worlds' pixels differ",
+    // which is flaky: colour management can make one channel coincide across
+    // worlds, and the test then either passes vacuously or fails at random.
+    // A tier value the host cannot produce is unambiguous.
+    let (expected_texture, _) = resolved_tier_texture_and_viewport();
+    let mut got = Value::Null;
+    for attempt in 0..MAX_POLL_TRIES {
+        got = tab
+            .evaluate_main(READBACK_PATHS_JS)
+            .await
+            .expect("main-world probe");
+        if got["maxTexture"].as_i64() == Some(expected_texture) {
+            break;
+        }
+        if attempt + 1 < MAX_POLL_TRIES {
+            tokio::time::sleep(POLL_DELAY).await;
+        }
+    }
+    browser.close().await.ok();
+
+    assert_eq!(
+        got["maxTexture"].as_i64(),
+        Some(expected_texture),
+        "the spoof never installed, so nothing below is under test: {got:#}"
+    );
+
+    for channel in ["R", "G"] {
+        let direct = got[format!("readPixels{channel}")]
+            .as_array()
+            .unwrap_or_else(|| panic!("readPixels{channel} missing: {got:#}"));
+        let via = got[format!("viaCanvas{channel}")]
+            .as_array()
+            .unwrap_or_else(|| panic!("viaCanvas{channel} missing: {got:#}"));
+        assert_eq!(
+            direct.len(),
+            1,
+            "a uniform clear must read back uniform; readPixels {channel} gave \
+             {direct:?}, which no GPU produces: {got:#}"
+        );
+        assert_eq!(
+            via.len(),
+            1,
+            "a uniform clear must read back uniform through the 2D path too; \
+             {channel} gave {via:?}: {got:#}"
+        );
+        assert_eq!(
+            direct, via,
+            "the two readback paths disagree on {channel}, which is detectable \
+             with no reference data at all: {got:#}"
+        );
+    }
+    assert_eq!(
+        got["readPixelsStable"].as_bool(),
+        Some(true),
+        "repeat reads of identical content must reproduce identical noise: {got:#}"
+    );
+    // 0.25/0.5/0.75/1.0 as bytes. A picking read must not be perturbed.
+    assert_eq!(
+        got["picking"].as_array().map(|a| a.len()),
+        Some(4),
+        "picking read missing: {got:#}"
+    );
+    assert_eq!(
+        got["picking"][3].as_i64(),
+        Some(255),
+        "alpha must never be farbled: {got:#}"
+    );
+}
