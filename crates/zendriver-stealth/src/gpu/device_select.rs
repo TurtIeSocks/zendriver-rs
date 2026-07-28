@@ -25,7 +25,7 @@ use crate::persona::Seed;
 ///              << " vs_" << major << "_" << minor << " ps_" << ...
 /// ```
 ///
-/// The shader model is `5_0` because both shipped D3D11 tiers are feature
+/// The shader model is `5_0` because all three shipped D3D11 tiers are feature
 /// level 11 and the catalogue excludes anything lower — ANGLE writes the
 /// feature level into this field, so an FL10 part would report `vs_4_1` here
 /// and is dropped at generation time rather than misrepresented.
@@ -370,11 +370,12 @@ impl GpuDevice {
 mod tests {
     use super::*;
 
-    /// The three committed captures, read rather than restated: a hand-copied
-    /// expectation would pass even if the composer and the captures drifted
-    /// apart, which is the only thing this checks.
+    /// The four committed captures a catalogue entry can reproduce, read rather
+    /// than restated: a hand-copied expectation would pass even if the composer
+    /// and the captures drifted apart, which is the only thing this checks.
     const NVIDIA: &str = include_str!("../../data/gpu-tiers/d3d11-fl11-nvidia.json");
     const AMD: &str = include_str!("../../data/gpu-tiers/d3d11-fl11.json");
+    const INTEL_GEN9: &str = include_str!("../../data/gpu-tiers/d3d11-fl11-intel-gen9.json");
     const METAL: &str = include_str!("../../data/gpu-tiers/metal-macos.json");
 
     fn captured_renderer(raw: &str) -> String {
@@ -414,6 +415,15 @@ mod tests {
                 Tier::D3d11Fl11
             )),
             captured_renderer(AMD)
+        );
+        assert_eq!(
+            compose_renderer(&entry(
+                "Intel(R) HD Graphics 520",
+                "Intel",
+                Some(0x1916),
+                Tier::D3d11Fl11IntelGen9
+            )),
+            captured_renderer(INTEL_GEN9)
         );
         assert_eq!(
             compose_renderer(&entry("Apple M4 Pro", "Apple", None, Tier::MetalMacos)),
@@ -486,7 +496,9 @@ mod tests {
         for e in CATALOGUE {
             let platform = match e.tier {
                 Tier::MetalMacos => Platform::MacIntel,
-                Tier::D3d11Fl11 | Tier::D3d11Fl11Nvidia => Platform::Win32,
+                Tier::D3d11Fl11 | Tier::D3d11Fl11Nvidia | Tier::D3d11Fl11IntelGen9 => {
+                    Platform::Win32
+                }
                 other => panic!("{} is on {other:?}, which has no catalogue", e.model),
             };
             assert!(
@@ -572,7 +584,10 @@ mod tests {
             }
             if let Some(d) = GpuDevice::from_seed(Seed(seed), Platform::Win32) {
                 assert!(
-                    matches!(d.tier(), Tier::D3d11Fl11 | Tier::D3d11Fl11Nvidia),
+                    matches!(
+                        d.tier(),
+                        Tier::D3d11Fl11 | Tier::D3d11Fl11Nvidia | Tier::D3d11Fl11IntelGen9
+                    ),
                     "seed {seed} drew {:?} for Win32",
                     d.tier()
                 );
@@ -627,7 +642,10 @@ mod tests {
         for seed in 0..1_000u64 {
             let d = GpuDevice::by_share(Seed(seed), Platform::Win32).unwrap();
             assert!(
-                matches!(d.tier(), Tier::D3d11Fl11 | Tier::D3d11Fl11Nvidia),
+                matches!(
+                    d.tier(),
+                    Tier::D3d11Fl11 | Tier::D3d11Fl11Nvidia | Tier::D3d11Fl11IntelGen9
+                ),
                 "seed {seed} drew {:?} for Win32",
                 d.tier()
             );

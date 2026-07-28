@@ -289,6 +289,79 @@ pub struct BuildReport {
     pub unmatched: Vec<String>,
 }
 
+/// Which measured capability tier a corpus model belongs to.
+///
+/// Two of the three D3D11 answers are *measured splits*, each found by probing
+/// a second device and diffing rather than predicted from ANGLE's source:
+///
+/// - **NVIDIA.** `ANGLE_FEATURE_CONDITION(features, skipVSConstantRegisterZero,
+///   isNvidia)` docks `maxVertexUniformVectors` by one, so NVIDIA parts report
+///   4095 where every other vendor reports 4096. The condition is the vendor
+///   and nothing else, which is why this arm can be a plain vendor test.
+/// - **Intel Gen9.** Two D3D11 values are read off the device rather than off
+///   the feature level — `MAX_SAMPLES`, which ANGLE fills by asking
+///   `CheckMultisampleQualityLevels` per renderable format, and the WebGPU
+///   feature list, which is Dawn's answer for the physical adapter. An Intel HD
+///   Graphics 520 measured 16 and 16 entries against the RDNA2 capture's 8 and
+///   19.
+///
+/// **Only Gen9 moves, and that is deliberate.** [`intel_generation`] recognises
+/// Gen12 as well, and Gen12 is emphatically *not* routed here: nobody has
+/// probed it, both of the values that moved are device-derived, and Iris Xe is
+/// the single heaviest entry in this catalogue — so guessing would be wrong at
+/// the largest scale available. Gen11 and Gen12 stay on the catch-all tier
+/// until someone captures them.
+fn tier_for(backend: Backend, vendor: &str, model: &str) -> &'static str {
+    match (backend, vendor) {
+        (Backend::Metal, _) => "MetalMacos",
+        (Backend::D3d11, "NVIDIA") => "D3d11Fl11Nvidia",
+        (Backend::D3d11, _) if intel_generation(model) == "gen-9" => "D3d11Fl11IntelGen9",
+        (Backend::D3d11, _) => "D3d11Fl11",
+    }
+}
+
+/// Intel's integrated-graphics generation for a driver-reported model name, as
+/// Dawn's `gpu_info.json` names it. `""` for anything it cannot place.
+///
+/// **A copy of `zendriver-stealth`'s `intel_architecture`, and it must stay
+/// one.** That function is private to a crate this generator does not depend on
+/// — the dependency runs the other way, since this emits that crate's
+/// `catalogue.rs` — so the predicate cannot literally be shared. What keeps the
+/// two from drifting is a test rather than discipline:
+/// `every_catalogued_device_round_trips_to_its_own_tier` composes every emitted
+/// row's renderer string and asserts the stealth crate resolves the tier this
+/// function assigned it. Classify a model differently on either side and the
+/// committed catalogue stops round-tripping.
+///
+/// It reads a model name where the stealth side reads a whole renderer string.
+/// That is the same test: the model is a substring of the renderer, and every
+/// token here names part of a model.
+fn intel_generation(model: &str) -> &'static str {
+    let r = model.to_ascii_lowercase();
+    if r.contains("iris xe") || r.contains("xe graphics") {
+        return "gen-12-lp";
+    }
+    match hd_family_number(&r) {
+        Some(500..=699) => "gen-9",
+        _ => "",
+    }
+}
+
+/// The `HD`/`UHD Graphics` family number, but only when it is three digits.
+///
+/// Mirrors the stealth crate's helper of the same name. Gen9 spelled its
+/// families with three digits where Broadwell (Gen8) used four, so counting the
+/// digit run is what keeps `HD Graphics 5500` off a tier measured on Skylake.
+fn hd_family_number(model_lower: &str) -> Option<u16> {
+    const TOKEN: &str = "hd graphics ";
+    let start = model_lower.find(TOKEN)? + TOKEN.len();
+    let digits: String = model_lower[start..]
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    (digits.len() == 3).then(|| digits.parse().ok())?
+}
+
 /// Join corpus models against `pci.ids` and produce the catalogue rows.
 ///
 /// A D3D11 renderer string carries its device ID by construction, so a model
@@ -314,13 +387,7 @@ pub fn build_catalogue(network_json: &str, pci_ids: &str) -> BuildReport {
 
     let mut report = BuildReport::default();
     for m in extract_models(network_json) {
-        // The one measured vendor split: ANGLE applies
-        // skipVSConstantRegisterZero when and only when isNvidia.
-        let tier = match (m.backend, m.vendor.as_str()) {
-            (Backend::Metal, _) => "MetalMacos",
-            (Backend::D3d11, "NVIDIA") => "D3d11Fl11Nvidia",
-            (Backend::D3d11, _) => "D3d11Fl11",
-        };
+        let tier = tier_for(m.backend, &m.vendor, &m.model);
 
         if m.backend == Backend::Metal {
             report.rows.push(CatalogueRow {
@@ -699,8 +766,9 @@ mod join_tests {
             .expect("UHD 630 row");
         assert_eq!(uhd.device_id, Some(0x3e92));
         assert_eq!(
-            uhd.tier, "D3d11Fl11",
-            "only NVIDIA takes the workaround tier"
+            uhd.tier, "D3d11Fl11IntelGen9",
+            "UHD 630 is Gen9, and Gen9 has its own capture; only NVIDIA takes the \
+             skipVSConstantRegisterZero tier"
         );
     }
 
@@ -892,6 +960,8 @@ mod compose_tests {
     const NVIDIA: &str =
         include_str!("../../zendriver-stealth/data/gpu-tiers/d3d11-fl11-nvidia.json");
     const AMD: &str = include_str!("../../zendriver-stealth/data/gpu-tiers/d3d11-fl11.json");
+    const INTEL_GEN9: &str =
+        include_str!("../../zendriver-stealth/data/gpu-tiers/d3d11-fl11-intel-gen9.json");
     const METAL: &str = include_str!("../../zendriver-stealth/data/gpu-tiers/metal-macos.json");
 
     fn captured_renderer(raw: &str) -> String {
@@ -923,6 +993,15 @@ mod compose_tests {
             captured_renderer(AMD)
         );
         assert_eq!(
+            compose_renderer(
+                Backend::D3d11,
+                "Intel",
+                "Intel(R) HD Graphics 520",
+                Some(0x1916)
+            ),
+            captured_renderer(INTEL_GEN9)
+        );
+        assert_eq!(
             compose_renderer(Backend::Metal, "Apple", "Apple M4 Pro", None),
             captured_renderer(METAL)
         );
@@ -940,6 +1019,79 @@ mod compose_tests {
         // Lowercase hex would be wrong too: 0x164E, not 0x164e.
         let amd = compose_renderer(Backend::D3d11, "AMD", "X", Some(0x164E));
         assert!(amd.contains("(0x0000164E)"), "{amd}");
+    }
+
+    /// The model strings both copies of the Intel-generation predicate are
+    /// pinned against.
+    ///
+    /// The identical table lives in `zendriver-stealth`'s
+    /// `the_intel_generation_predicate_matches_the_catalogue_generators`, and
+    /// the two must agree row for row. Keep them in sync when either changes —
+    /// and note that the shipped data is guarded structurally as well, by
+    /// `every_catalogued_device_round_trips_to_its_own_tier`, which composes
+    /// every emitted row and checks the stealth crate resolves the tier this
+    /// side assigned.
+    pub(crate) const GENERATION_CASES: &[(&str, &str)] = &[
+        // Gen9: Skylake through Coffee Lake, the family that was probed.
+        ("Intel(R) HD Graphics 520", "gen-9"),
+        ("Intel(R) HD Graphics 530", "gen-9"),
+        ("Intel(R) HD Graphics 620", "gen-9"),
+        ("Intel(R) HD Graphics 630", "gen-9"),
+        ("Intel(R) UHD Graphics 620", "gen-9"),
+        ("Intel(R) UHD Graphics 630", "gen-9"),
+        // Gen12: classified, deliberately NOT routed to the Gen9 tier. The 7xx
+        // families are Gen12 as well, so the Gen9 arm is a range and not a
+        // digit count.
+        ("Intel(R) Iris(R) Xe Graphics", "gen-12-lp"),
+        ("Intel(R) UHD Graphics 770", ""),
+        ("Intel(R) UHD Graphics 730", ""),
+        // Broadwell (Gen8): four digits, never probed. A `hd graphics 5` prefix
+        // reads these as Gen9 and serves them Skylake's measurements.
+        ("Intel(R) HD Graphics 5300", ""),
+        ("Intel(R) HD Graphics 5500", ""),
+        ("Intel(R) HD Graphics 5600", ""),
+        ("Intel(R) HD Graphics 6000", ""),
+        // Unplaceable, which is the honest answer for all of these.
+        ("Intel(R) Iris(R) Plus Graphics", ""),
+        ("Intel(R) Arc(TM) A750 Graphics", ""),
+        ("Intel(R) Graphics", ""),
+        ("Intel(R) HD Graphics 4000", ""),
+        ("Intel(R) Iris(TM) Pro Graphics 5200", ""),
+        ("AMD Radeon RX 7900 XT", ""),
+    ];
+
+    #[test]
+    fn the_intel_generation_predicate_places_only_what_it_can_name() {
+        for (model, want) in GENERATION_CASES {
+            assert_eq!(&intel_generation(model), want, "{model}");
+        }
+    }
+
+    #[test]
+    fn only_gen9_intel_leaves_the_catch_all_d3d11_tier() {
+        // The over-reach guard on the generator side. Gen12 is recognised by
+        // the predicate and must still be emitted on the catch-all tier: it is
+        // unprobed, and Iris Xe is the heaviest entry in the catalogue.
+        for (model, want) in [
+            ("Intel(R) HD Graphics 520", "D3d11Fl11IntelGen9"),
+            ("Intel(R) UHD Graphics 630", "D3d11Fl11IntelGen9"),
+            ("Intel(R) Iris(R) Xe Graphics", "D3d11Fl11"),
+            ("Intel(R) Iris(R) Plus Graphics", "D3d11Fl11"),
+            ("Intel(R) Arc(TM) B580 Graphics", "D3d11Fl11"),
+            ("AMD Radeon RX 7900 XT", "D3d11Fl11"),
+        ] {
+            assert_eq!(tier_for(Backend::D3d11, "Intel", model), want, "{model}");
+        }
+        // Vendor still wins where ANGLE's own condition is the vendor, and
+        // Metal is untouched by any of this.
+        assert_eq!(
+            tier_for(Backend::D3d11, "NVIDIA", "NVIDIA GeForce RTX 4090"),
+            "D3d11Fl11Nvidia"
+        );
+        assert_eq!(
+            tier_for(Backend::Metal, "Apple", "Apple M4 Pro"),
+            "MetalMacos"
+        );
     }
 
     #[test]

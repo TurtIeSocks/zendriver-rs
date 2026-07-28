@@ -49,17 +49,28 @@ pub(crate) struct DeviceRow {
     /// express it. Splitting the D3D11 rows on `Some("nvidia")` also keeps the
     /// vendor test out of `device_for_renderer`, which stays a table sweep.
     pub vendor_token: Option<&'static str>,
+    /// Architecture [`adapter_for_renderer`] must derive for this row to
+    /// match, or `None` when the substring tokens alone decide it.
+    ///
+    /// Exists because one row is scoped to a *GPU generation*, which no single
+    /// substring names: Intel Gen9 spans `HD Graphics 5xx`, `HD Graphics 6xx`
+    /// and `UHD Graphics 6xx`. Naming the generation instead of enumerating
+    /// its spellings is what keeps the capability-tier split and the WebGPU
+    /// architecture token reading from one classifier ([`intel_architecture`])
+    /// rather than from two lists free to drift apart.
+    pub arch_token: Option<&'static str>,
 }
 
 /// Known devices, keyed by [`DeviceRow::match_token`].
 ///
 /// Order is load-bearing: [`device_for_renderer`] takes the *first* row whose
 /// tokens the renderer matches, so a specific row must precede the general one
-/// it refines. That holds twice here — the Subzero SwiftShader row before the
-/// generic one, and the NVIDIA D3D11 row before the generic D3D11 row. The
-/// second pair matters more: the SwiftShader rows share a tier, so their order
-/// decides only an identity string, while the D3D11 rows carry *different
-/// tiers* and getting them backwards serves the wrong capability values.
+/// it refines. That holds three times here — the Subzero SwiftShader row
+/// before the generic one, and both the NVIDIA and the Intel Gen9 D3D11 rows
+/// before the generic D3D11 row. The D3D11 pairs matter more: the SwiftShader
+/// rows share a tier, so their order decides only an identity string, while
+/// the three D3D11 rows carry *different tiers* and getting them backwards
+/// serves the wrong capability values.
 ///
 /// The two SwiftShader rows are one capability tier under two identity
 /// strings. SwiftShader picks its JIT backend at build time — Subzero on
@@ -77,6 +88,7 @@ const DEVICES: &[DeviceRow] = &[
         // listed first.
         match_token: "subzero",
         vendor_token: None,
+        arch_token: None,
     },
     DeviceRow {
         unmasked_vendor: "Google Inc. (Google)",
@@ -89,6 +101,7 @@ const DEVICES: &[DeviceRow] = &[
         // only the identity string, never the capability values.
         match_token: "swiftshader",
         vendor_token: None,
+        arch_token: None,
     },
     DeviceRow {
         unmasked_vendor: "Google Inc. (Apple)",
@@ -98,10 +111,12 @@ const DEVICES: &[DeviceRow] = &[
         webgpu_architecture: "metal-3",
         match_token: "apple",
         vendor_token: None,
+        arch_token: None,
     },
-    // The two D3D11 rows are one backend and feature level under two capability
-    // tiers, and the NVIDIA row must be listed first because its token is a
-    // strict refinement of the generic one below.
+    // The three D3D11 rows are one backend and feature level under three
+    // capability tiers. Both refinements — NVIDIA below, then Intel Gen9 —
+    // must precede the catch-all, because each of their tokens selects a
+    // subset of what it matches.
     //
     // Splitting them is measured, not defensive. An RTX 4090 and an AMD Radeon
     // probed on the same machine and the same Chrome build differ in
@@ -118,6 +133,35 @@ const DEVICES: &[DeviceRow] = &[
         webgpu_architecture: "lovelace",
         match_token: "d3d11",
         vendor_token: Some("nvidia"),
+        arch_token: None,
+    },
+    // The third D3D11 row, and the one whose scope is a GPU *generation*.
+    // Probed on an Intel HD Graphics 520 (Skylake, 0x1916): 131 of the 132
+    // WebGL2 parameters, all 82 WebGL1 ones, both extension lists and every
+    // shader precision matched the AMD capture below, but two values did not,
+    // and both are ones ANGLE reads off the device rather than off the feature
+    // level — `MAX_SAMPLES` (16 against 8) and the WebGPU feature list (16
+    // entries against 19). See [`Tier::D3d11Fl11IntelGen9`].
+    //
+    // Listed above the generic row it refines, like the NVIDIA row, and for
+    // the same reason: the generic row's token alone would swallow it and
+    // serve a Gen9 machine the Radeon's numbers.
+    //
+    // `arch_token` rather than a substring, because Gen9 has no single
+    // spelling — and because deriving it through [`intel_architecture`] is
+    // what keeps this split and the WebGPU architecture token from disagreeing
+    // about which silicon a persona claims. Gen11 and Gen12 deliberately do
+    // **not** match: neither has been probed, so they stay on the generic tier
+    // rather than being served numbers measured on Skylake.
+    DeviceRow {
+        unmasked_vendor: "Google Inc. (Intel)",
+        unmasked_renderer: "ANGLE (Intel, Intel(R) HD Graphics 520 (0x00001916) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+        tier: Tier::D3d11Fl11IntelGen9,
+        webgpu_vendor: "intel",
+        webgpu_architecture: "gen-9",
+        match_token: "d3d11",
+        vendor_token: None,
+        arch_token: Some("gen-9"),
     },
     DeviceRow {
         unmasked_vendor: "Google Inc. (AMD)",
@@ -132,11 +176,14 @@ const DEVICES: &[DeviceRow] = &[
         // shader model, and it would tie a backend-and-feature-level tier to a
         // spelling only some vendors emit.
         //
-        // No vendor token: this row is every non-NVIDIA D3D11 device, AMD and
-        // Intel alike, which is what `skipVSConstantRegisterZero` being keyed
-        // on `isNvidia` means.
+        // No tokens beyond the backend tag: this row is the catch-all for the
+        // backend, every D3D11 device the two refinements above did not take.
+        // That is AMD, NVIDIA-less by construction, and every Intel generation
+        // but Gen9 — including Gen11 and Gen12, which land here because nobody
+        // has probed them rather than because they were measured to belong.
         match_token: "d3d11",
         vendor_token: None,
+        arch_token: None,
     },
     DeviceRow {
         unmasked_vendor: "Google Inc. (Intel)",
@@ -164,6 +211,7 @@ const DEVICES: &[DeviceRow] = &[
         // resolving the D3D11 tier it belongs to.
         match_token: "iris(r) pro graphics 580 (skl gt4)",
         vendor_token: None,
+        arch_token: None,
     },
 ];
 
@@ -255,18 +303,21 @@ const SWIFTSHADER_LLVM: DeviceRow = DEVICES[1];
 const METAL_APPLE: DeviceRow = DEVICES[2];
 const NVIDIA_D3D11: DeviceRow = DEVICES[3];
 #[allow(dead_code)]
-const AMD_D3D11: DeviceRow = DEVICES[4];
-const VULKAN_INTEL_IRIS_PRO_580: DeviceRow = DEVICES[5];
+const INTEL_GEN9_D3D11: DeviceRow = DEVICES[4];
+#[allow(dead_code)]
+const AMD_D3D11: DeviceRow = DEVICES[5];
+const VULKAN_INTEL_IRIS_PRO_580: DeviceRow = DEVICES[6];
 
 /// Pick the device row a renderer string belongs to, by explicit
 /// [`DeviceRow::match_token`] — never by a key derived from a row's own
 /// reference string.
 ///
-/// A row matches when the renderer contains its `match_token` and, where it
-/// declares one, its [`vendor_token`](DeviceRow::vendor_token) as well.
+/// A row matches when the renderer contains its `match_token`, plus — where it
+/// declares them — its [`vendor_token`](DeviceRow::vendor_token) and the
+/// architecture its [`arch_token`](DeviceRow::arch_token) names.
 ///
 /// First match in [`DEVICES`] order wins, so a specific row must be listed
-/// ahead of one it is a special case of. Two pairs depend on that:
+/// ahead of one it is a special case of. Three pairs depend on that:
 ///
 /// - `"subzero"` before `"swiftshader"`, or every Subzero string would resolve
 ///   to the LLVM row's identity. Both carry the same tier, so ordering decides
@@ -277,13 +328,17 @@ const VULKAN_INTEL_IRIS_PRO_580: DeviceRow = DEVICES[5];
 ///   tiers, and the generic row's `match_token` alone would swallow every
 ///   NVIDIA string. Getting this backwards serves an RTX its 4096 instead of
 ///   its measured 4095, which is one `getParameter` call from being read.
+/// - The Intel Gen9 D3D11 row before the generic one, for the same reason and
+///   with the same consequence: a Gen9 machine would otherwise report
+///   `MAX_SAMPLES` 8 and 19 WebGPU features where it measures 16 and 16.
 ///
 /// The remaining tokens (`"apple"` and the Iris Pro's Mesa device name) are
 /// disjoint from those and from each other, so their position is not
 /// load-bearing.
 ///
-/// Five tiers ship today (SwiftShader, Apple Metal, D3D11 FL11+ in its NVIDIA
-/// and non-NVIDIA forms, and the Intel Iris Pro 580 under Mesa), so `None` is
+/// Six tiers ship today (SwiftShader, Apple Metal, D3D11 FL11+ in its NVIDIA,
+/// Intel Gen9 and catch-all forms, and the Intel Iris Pro 580 under Mesa), so
+/// `None` is
 /// still expected for the backends none of them covers — a desktop-GL renderer, a D3D9 string, or **any Vulkan
 /// device other than that one Iris Pro**. That last one is not a gap waiting
 /// to be filled by widening the token: ANGLE's Vulkan caps come off
@@ -300,8 +355,14 @@ const VULKAN_INTEL_IRIS_PRO_580: DeviceRow = DEVICES[5];
 /// inventing values for an existing row.
 pub(crate) fn device_for_renderer(renderer: &str) -> Option<DeviceRow> {
     let r = renderer.to_ascii_lowercase();
+    // Derived once, from the same classifier that names the WebGPU adapter, so
+    // a renderer resolves the Gen9 capability tier exactly when it reports the
+    // `gen-9` architecture. Two lists would let those answers disagree.
+    let architecture = adapter_for_renderer(&r).architecture;
     DEVICES.iter().copied().find(|d| {
-        r.contains(d.match_token) && d.vendor_token.is_none_or(|vendor| r.contains(vendor))
+        r.contains(d.match_token)
+            && d.vendor_token.is_none_or(|vendor| r.contains(vendor))
+            && d.arch_token.is_none_or(|arch| arch == architecture)
     })
 }
 
@@ -471,21 +532,69 @@ pub(crate) fn adapter_for_renderer(renderer: &str) -> GpuAdapterInfo {
     }
 
     // Intel + everything unrecognized → Intel (the common integrated default).
-    let arch = if r.contains("iris xe") || r.contains("xe graphics") {
-        "gen-12-lp"
-    } else if r.contains("uhd graphics 6")
-        || r.contains("hd graphics 6")
-        || r.contains("uhd graphics 5")
-        || r.contains("hd graphics 5")
-    {
-        "gen-9"
-    } else {
-        ""
-    };
     GpuAdapterInfo {
         vendor: "intel".into(),
-        architecture: arch.into(),
+        architecture: intel_architecture(&r).into(),
     }
+}
+
+/// Intel's integrated-graphics generation, as Dawn's `gpu_info.json` names it,
+/// from an already-lowercased renderer string. `""` for a model this cannot
+/// place, which is what Chrome itself answers for an adapter it does not
+/// classify.
+///
+/// Extracted from [`adapter_for_renderer`] because it now decides two things
+/// rather than one. It still names the WebGPU adapter's architecture, and it
+/// also selects the Gen9 capability tier in [`DEVICES`] (through that row's
+/// [`arch_token`](DeviceRow::arch_token)) — `MAX_SAMPLES` and the WebGPU
+/// feature list are read off the device on D3D11, so Intel Gen9 measured
+/// differently from the AMD part the generic tier was probed on. One function
+/// for both means a renderer cannot be served Gen9's numbers while reporting
+/// some other generation's adapter, or the reverse.
+///
+/// The token set is deliberately narrow. `gen-12-lp` names Iris Xe and `gen-9`
+/// the Skylake-through-Coffee-Lake `HD`/`UHD` 5xx and 6xx families; everything
+/// else — Arc, Gen11's `Iris Plus`, the bare `Intel(R) Graphics` the corpus is
+/// full of — stays empty, because a *wrong* architecture token reads as a
+/// device that does not exist where an empty one reads as an ordinary
+/// unclassified adapter.
+///
+/// It sorts by *marketing name*, which is not quite a die: no token here
+/// reaches the Gen9 parts Intel sold as `Iris` (`Iris Graphics 540`/`550`,
+/// `Iris Plus Graphics 640`/`655`), so those stay empty and ride the catch-all
+/// tier. Under-reaching is the safe direction, and the fix for that one is a
+/// D3D11 capture of such a part — see [`Tier::D3d11Fl11IntelGen9`].
+fn intel_architecture(renderer_lower: &str) -> &'static str {
+    if renderer_lower.contains("iris xe") || renderer_lower.contains("xe graphics") {
+        return "gen-12-lp";
+    }
+    match hd_family_number(renderer_lower) {
+        Some(500..=699) => "gen-9",
+        _ => "",
+    }
+}
+
+/// The `HD`/`UHD Graphics` family number, but only when it is three digits.
+///
+/// Counting the digit run is what keeps Broadwell off a tier measured on
+/// Skylake silicon. Gen9 spelled its families with three digits (`HD Graphics
+/// 520`, `UHD Graphics 630`) where Gen8 before it used four (`HD Graphics
+/// 5300`, `5500`, `5600`, `6000`), so a plain `hd graphics 5` prefix takes both
+/// generations and serves the older one values nobody measured on it. A
+/// four-digit model answers `None` and gets an empty architecture token, which
+/// reads as an ordinary unclassified adapter rather than as a device that does
+/// not exist.
+///
+/// One search covers both spellings, since `uhd graphics` contains
+/// `hd graphics`.
+fn hd_family_number(renderer_lower: &str) -> Option<u16> {
+    const TOKEN: &str = "hd graphics ";
+    let start = renderer_lower.find(TOKEN)? + TOKEN.len();
+    let digits: String = renderer_lower[start..]
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    (digits.len() == 3).then(|| digits.parse().ok())?
 }
 
 #[cfg(test)]
@@ -619,13 +728,19 @@ mod tests {
         // before the derivation existed: `Google Inc. (NVIDIA)` beside an Intel
         // renderer, silently.
         //
-        // Vendor now decides the *tier* as well, but only for NVIDIA and only
-        // by one cap — see `d3d11_splits_nvidia_from_every_other_vendor`. The
-        // vendor string stays derived from the renderer either way, which is
-        // what keeps a shared row from lending its name to another card.
+        // The renderer now decides the *tier* as well — by vendor for NVIDIA
+        // and by Intel generation for Gen9, each worth a handful of values —
+        // so all three D3D11 rows are exercised here. The vendor string stays
+        // derived from the renderer whichever row supplies the numbers, which
+        // is what keeps a shared row from lending its name to another card.
         for (renderer, expected_vendor, expected_tier) in [
             (
                 "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+                "Google Inc. (Intel)",
+                Tier::D3d11Fl11IntelGen9,
+            ),
+            (
+                "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)",
                 "Google Inc. (Intel)",
                 Tier::D3d11Fl11,
             ),
@@ -990,9 +1105,15 @@ mod tests {
         // and the same Chrome build disproved it. Vendor is therefore
         // load-bearing in row selection, and the match token alone is not
         // enough to pick a tier.
+        //
+        // The Intel example is Gen12 rather than the UHD 630 it used to be,
+        // because Gen9 has since been probed and split off — the vendor axis
+        // this test is about is unaffected by that, but the example has to be
+        // an Intel part that is still on the catch-all tier. The generation
+        // axis is `only_gen9_intel_leaves_the_generic_d3d11_tier`.
         for (r, want) in [
             (
-                "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+                "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)",
                 Tier::D3d11Fl11,
             ),
             ("ANGLE (AMD, AMD Radeon RX 7900 XT, D3D11)", Tier::D3d11Fl11),
@@ -1007,6 +1128,158 @@ mod tests {
                 "expected {want:?} for {r}"
             );
         }
+    }
+
+    #[test]
+    fn only_gen9_intel_leaves_the_generic_d3d11_tier() {
+        // The over-reach guard, and the reason it is written both ways round.
+        //
+        // Gen9 was probed (Intel HD Graphics 520, Skylake) and measured two
+        // device-derived differences from the generic tier. Gen11 and Gen12
+        // were **not** probed, and Gen12 is where the heaviest Intel rows in
+        // the catalogue live — Iris Xe is the single heaviest entry in it. A
+        // routing rule that swept all Intel into the Gen9 tier would serve
+        // several hundred Xe machines a MAX_SAMPLES and a WebGPU feature list
+        // nobody has measured on that silicon, which is the invented-value
+        // failure this project refuses. So the newer parts stay on the generic
+        // tier, where at least the value they get was measured on *some*
+        // FL11 device, and this test fails the moment someone widens the rule.
+        for (renderer, want) in [
+            // Gen9 (Skylake through Coffee Lake), the capture's own family.
+            (
+                "ANGLE (Intel, Intel(R) HD Graphics 520 (0x00001916) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+                Tier::D3d11Fl11IntelGen9,
+            ),
+            (
+                "ANGLE (Intel, Intel(R) UHD Graphics 630 (0x00003E9B) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+                Tier::D3d11Fl11IntelGen9,
+            ),
+            // Gen12: unprobed, and the heaviest Intel silicon in the catalogue.
+            (
+                "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics (0x00009A49) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+                Tier::D3d11Fl11,
+            ),
+            // Gen11 (Iris Plus G4/G7): unprobed, likewise generic.
+            (
+                "ANGLE (Intel, Intel(R) Iris(R) Plus Graphics (0x00008A52) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+                Tier::D3d11Fl11,
+            ),
+            // Broadwell (Gen8) is the over-reach in the *older* direction, and
+            // it is the one a substring rule gets wrong silently. Intel spelled
+            // these with four digits, so `hd graphics 5` as a prefix takes them
+            // too — and a Gen8 die was never probed. Their PCI ids say it
+            // plainly: 0x16xx is Broadwell where the capture's own part is
+            // 0x1916, Skylake.
+            (
+                "ANGLE (Intel, Intel(R) HD Graphics 5500 (0x00001616) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+                Tier::D3d11Fl11,
+            ),
+            (
+                "ANGLE (Intel, Intel(R) HD Graphics 6000 (0x00001626) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+                Tier::D3d11Fl11,
+            ),
+            // Neither other vendor moves: the split is Intel-Gen9-shaped.
+            (
+                "ANGLE (AMD, AMD Radeon(TM) Graphics (0x0000164E) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+                Tier::D3d11Fl11,
+            ),
+            ("ANGLE (AMD, AMD Radeon RX 7900 XT, D3D11)", Tier::D3d11Fl11),
+            (
+                "ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 (0x00002684) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+                Tier::D3d11Fl11Nvidia,
+            ),
+        ] {
+            assert_eq!(
+                device_for_renderer(renderer).map(|d| d.tier),
+                Some(want),
+                "expected {want:?} for {renderer}"
+            );
+        }
+    }
+
+    #[test]
+    fn intel_architecture_places_only_the_generations_it_can_name() {
+        // Named for what it checks. It does *not* compare against
+        // `gpu-catalogue-gen`'s copy of this predicate — that claim belongs to
+        // `every_catalogued_device_round_trips_to_its_own_tier`, which composes
+        // all 482 emitted renderers and asserts this crate resolves the tier
+        // the generator assigned. That is the real anti-drift guard, and it is
+        // stronger than any hand-copied table. This one says which side is
+        // wrong when it fires.
+        for (model, want) in [
+            ("Intel(R) HD Graphics 520", "gen-9"),
+            ("Intel(R) HD Graphics 530", "gen-9"),
+            ("Intel(R) HD Graphics 620", "gen-9"),
+            ("Intel(R) HD Graphics 630", "gen-9"),
+            ("Intel(R) UHD Graphics 620", "gen-9"),
+            ("Intel(R) UHD Graphics 630", "gen-9"),
+            // Gen12 keeps its own token, and the 7xx families are Gen12 too —
+            // three digits alone does not mean Gen9, which is why the arm is a
+            // range and not a length check.
+            ("Intel(R) Iris(R) Xe Graphics", "gen-12-lp"),
+            ("Intel(R) UHD Graphics 770", ""),
+            ("Intel(R) UHD Graphics 730", ""),
+            // Broadwell (Gen8): four digits, never probed, must stay empty.
+            // A prefix rule reads these as Gen9 and hands them Skylake's
+            // numbers.
+            ("Intel(R) HD Graphics 5300", ""),
+            ("Intel(R) HD Graphics 5500", ""),
+            ("Intel(R) HD Graphics 5600", ""),
+            ("Intel(R) HD Graphics 6000", ""),
+            ("Intel(R) Iris(R) Plus Graphics", ""),
+            ("Intel(R) Arc(TM) A750 Graphics", ""),
+            ("Intel(R) Graphics", ""),
+            ("Intel(R) HD Graphics 4000", ""),
+            ("Intel(R) Iris(TM) Pro Graphics 5200", ""),
+            ("AMD Radeon RX 7900 XT", ""),
+        ] {
+            assert_eq!(
+                intel_architecture(&model.to_ascii_lowercase()),
+                want,
+                "{model}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_gen9_row_is_selected_by_the_same_classifier_that_names_its_adapter() {
+        // One source of truth, asserted rather than assumed: the row is
+        // selected by `arch_token`, which is compared against
+        // `adapter_for_renderer`'s own answer. So a renderer resolves the Gen9
+        // tier exactly when its WebGPU adapter reports `gen-9`, and the two
+        // cannot drift into disagreeing about which silicon a persona is on.
+        for renderer in [
+            "ANGLE (Intel, Intel(R) HD Graphics 520 (0x00001916) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+            "ANGLE (Intel, Intel(R) UHD Graphics 630 (0x00003E9B) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+            "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics (0x00009A49) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+            "ANGLE (Intel, Intel(R) Iris(R) Plus Graphics (0x00008A52) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+            "ANGLE (AMD, AMD Radeon RX 7900 XT, D3D11)",
+        ] {
+            let on_gen9 =
+                device_for_renderer(renderer).map(|d| d.tier) == Some(Tier::D3d11Fl11IntelGen9);
+            let says_gen9 = adapter_for_renderer(renderer).architecture == "gen-9";
+            assert_eq!(
+                on_gen9, says_gen9,
+                "{renderer} resolves the Gen9 tier and reports the gen-9 architecture \
+                 inconsistently"
+            );
+        }
+    }
+
+    #[test]
+    fn the_gen9_row_declares_the_adapter_its_own_renderer_derives() {
+        let d = device_for_renderer(INTEL_GEN9_D3D11.unmasked_renderer)
+            .expect("the captured Gen9 renderer must match its own row");
+        assert_eq!(d, INTEL_GEN9_D3D11);
+        let a = adapter_for_renderer(INTEL_GEN9_D3D11.unmasked_renderer);
+        assert_eq!(
+            (a.vendor.as_str(), a.architecture.as_str()),
+            (
+                INTEL_GEN9_D3D11.webgpu_vendor,
+                INTEL_GEN9_D3D11.webgpu_architecture
+            ),
+            "the derived adapter must match the device row's own declaration"
+        );
     }
 
     #[test]
@@ -1065,9 +1338,9 @@ mod tests {
 
     #[test]
     fn renderers_with_no_shipped_tier_return_none() {
-        // Five tiers ship (SwiftShader, Apple Metal, D3D11 FL11+ in its NVIDIA
-        // and non-NVIDIA forms, and the Intel Iris Pro 580 under Mesa/Vulkan).
-        // A backend none of them covers still
+        // Six tiers ship (SwiftShader, Apple Metal, D3D11 FL11+ in its NVIDIA,
+        // Intel Gen9 and catch-all forms, and the Intel Iris Pro 580 under
+        // Mesa/Vulkan). A backend none of them covers still
         // has no measured tier, and guessing one would pair its name with
         // another backend's numbers. Desktop-GL is such a backend, and so is
         // every Vulkan device but the captured one: the Vulkan tier is

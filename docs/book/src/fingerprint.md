@@ -262,23 +262,46 @@ save and restore through `getParameter`.
 
 **Values come from measured capability tiers, not per-parameter guesses.**
 How far one capture reaches depends on the backend, because ANGLE (Chrome's GL
-layer) decides these values differently per backend. Five tiers ship today, and
+layer) decides these values differently per backend. Six tiers ship today, and
 all but the last generalize:
 
 - `SwiftShader` — Chrome's software rasterizer, the same numbers on every OS.
 - Metal on macOS — ANGLE's Metal backend, covering every Mac. The values are
   compile-time constants in ANGLE's `DisplayMtl.mm` `TARGET_OS_OSX` branch, so
   an Intel Mac and an Apple silicon one report the same numbers.
-- D3D11 (feature level 11_0+) — ANGLE's Direct3D 11 backend on Windows, in two
-  tiers. ANGLE derives the values from `D3D11_REQ_*` constants rather than from
-  the card, so one tier covers every Intel and AMD part at that feature level.
-  NVIDIA gets its own: `renderer11_utils.cpp` enables
-  `skipVSConstantRegisterZero` when and only when the vendor is NVIDIA, which
-  docks `MAX_VERTEX_UNIFORM_VECTORS` from 4096 to 4095 and shifts the two
-  values derived from it. Everything else matches — probing an RTX 4090 and an
-  AMD Radeon on one machine found no other difference in either WebGL
-  parameter set, the extension lists, the shader precisions, or any WebGPU
-  limit or feature.
+- D3D11 (feature level 11_0+) — ANGLE's Direct3D 11 backend on Windows, in
+  three tiers. ANGLE derives almost all of these values from `D3D11_REQ_*`
+  constants rather than from the card, so a catch-all tier covers most parts at
+  that feature level. Two refinements sit above it, and both were found by
+  probing a second device rather than predicted:
+  - NVIDIA. `renderer11_utils.cpp` enables `skipVSConstantRegisterZero` when
+    and only when the vendor is NVIDIA, which docks
+    `MAX_VERTEX_UNIFORM_VECTORS` from 4096 to 4095 and shifts the two values
+    derived from it. Nothing else moves: probing an RTX 4090 and an AMD Radeon
+    on one machine found no other difference in either WebGL parameter set, the
+    extension lists, the shader precisions, or any WebGPU limit or feature.
+  - Intel Gen9. Two values on this backend are read off the device rather than
+    off the feature level, and an Intel HD Graphics 520 reports both
+    differently from the Radeon: `MAX_SAMPLES` is 16 against 8 (ANGLE fills it
+    by asking `CheckMultisampleQualityLevels` per renderable format), and the
+    WebGPU adapter enumerates 16 features against 19, lacking `shader-f16`,
+    `subgroups` and `bgra8unorm-storage`. Everything else matched, including
+    all 82 WebGL1 parameters, the other 131 WebGL2 ones, both extension lists
+    in content and order, and all 36 WebGPU limits.
+
+  **Only Gen9 is routed to that third tier**, which is a deliberate limit
+  rather than an oversight. Gen11 (Iris Plus G4/G7) and Gen12 (Iris Xe, Arc)
+  stay on the catch-all one: nobody has probed them, both of the values that
+  moved are device-derived, and Iris Xe is the heaviest single entry in the
+  device catalogue — so a guess there would be wrong at the largest available
+  scale. Closing that gap needs a Gen11 and a Gen12 capture.
+
+  The limit applies backwards too, and it turns on a detail worth knowing
+  before extending the routing. Intel spelled Broadwell (Gen8) with four
+  digits, `HD Graphics 5500`, where Gen9 used three, `HD Graphics 520` — so
+  matching on an `HD Graphics 5` prefix quietly takes a generation nobody
+  probed. Routing counts the digits instead, and Broadwell stays on the
+  catch-all tier.
 - Intel Iris Pro Graphics 580 (Skylake GT4e) under Mesa 25.2.8 — ANGLE's
   **Vulkan** backend on Linux. This one covers **that GPU under that driver and
   nothing else**: `vk_caps_utils.cpp` fills its caps straight from
@@ -563,10 +586,11 @@ part's architecture token, so it stays empty rather than guessed.
 **`.limits` and `.features` come from the same measured tier the WebGL surface
 serves.** The probe captures each tier's `navigator.gpu` adapter alongside its
 WebGL blocks, in one run on one machine, so the two APIs answer for one device:
-a `Win32` persona reports the D3D11 tier's 2 GiB `maxBufferSize` and its 19
-features, a `MacIntel` persona the Metal tier's 4 GiB - 4 and its 22. Before
-this they were left at the host's, so an adapter could name an NVIDIA card
-above a Metal buffer limit — the same gap the tier tables closed for WebGL.
+a `Win32` persona reports the D3D11 tiers' 2 GiB `maxBufferSize` and 19 features
+(16 on Intel Gen9), a `MacIntel` persona the Metal tier's 4 GiB - 4 and its 22.
+Before this they were left at the host's, so an adapter could name an NVIDIA
+card above a Metal buffer limit — the same gap the tier tables closed for
+WebGL.
 
 Two tiers serve **neither**, and in both cases that is the measurement rather
 than a hole. Chrome on SwiftShader resolves `requestAdapter()` to `null`, and
@@ -577,15 +601,21 @@ Substituting a neighbouring tier's numbers would hand a persona that just told
 WebGL it has a software rasterizer, or a machine with WebGPU disabled, a
 hardware adapter's capabilities.
 
-One honest caveat, the mirror of the D3D11 tier's WebGL story. The WebGL values
-generalize across every FL11+ card because ANGLE derives them from `D3D11_REQ_*`
-constants; the *limits* generalize the same way (Dawn's D3D12 backend derives
-them from binding-tier constants), but a few *features* are genuinely
-hardware-gated — `shader-f16`, `subgroups`, `clip-distances`, `primitive-index`.
-The tier's list was measured on an RTX 4090, so pinning an old Intel iGPU's
-renderer under that tier can claim a feature that card would not have. Nothing
-in the tables can tell the two apart without a capture from such a card; if that
-fidelity matters, pin `features` yourself through `WebgpuSpec`.
+One honest caveat, the mirror of the D3D11 tier's WebGL story — and one that has
+since been half-measured. Most WebGL values generalize across FL11+ cards
+because ANGLE derives them from `D3D11_REQ_*` constants, and the WebGPU *limits*
+generalize the same way (Dawn's D3D12 backend derives them from binding-tier
+constants). A few *features* are genuinely hardware-gated, though —
+`shader-f16`, `subgroups`, `bgra8unorm-storage` — and the catch-all tier's list
+was measured on desktop hardware.
+
+Taking the capture this predicted is what closed half of it: an Intel HD
+Graphics 520 enumerates exactly those three fewer features, and Gen9 iGPUs now
+resolve their own tier with its own 16-feature list rather than borrowing the
+desktop one. What is still open is Gen11 and Gen12, which remain on the
+catch-all tier because nobody has probed them — so pinning an Iris Xe renderer
+still serves a feature list measured on another card. If that fidelity matters
+before someone captures those, pin `features` yourself through `WebgpuSpec`.
 
 `WebgpuSpec` (mirroring `WebglSpec`'s strategy+values shape) adds two OPT-IN
 capabilities on top:

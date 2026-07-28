@@ -136,16 +136,38 @@ pub(crate) enum Tier {
     /// generations, not merely read out of the `#if`.
     MetalMacos,
     /// Direct3D 11 at feature level 11_0 or above, as ANGLE reports it for
-    /// every vendor **except NVIDIA**. Probed on an AMD Radeon (Raphael
-    /// integrated, `0x164E`) under Windows.
+    /// every vendor **except NVIDIA** and for every Intel generation except
+    /// Gen9. Probed on an AMD Radeon (Raphael integrated, `0x164E`) under
+    /// Windows.
     ///
     /// Named for the backend and feature level rather than the card, because
-    /// `renderer11_utils.cpp` derives these values from `D3D11_REQ_*` constants
-    /// branched on the feature level and asks the device nothing. This tier
-    /// therefore covers AMD and Intel alike.
+    /// `renderer11_utils.cpp` derives almost all of these values from
+    /// `D3D11_REQ_*` constants branched on the feature level rather than from
+    /// the device. That is what lets one capture stand for many cards, and it
+    /// is measured: an Intel Gen9 part and this AMD one agree on all 82 WebGL1
+    /// parameters, on 131 of the 132 WebGL2 ones, on both extension lists in
+    /// content *and* order, on every shader precision, and on all 36 WebGPU
+    /// limits.
     ///
-    /// **It does not cover NVIDIA**, and that exception is measured rather than
-    /// assumed — see [`D3d11Fl11Nvidia`](Self::D3d11Fl11Nvidia).
+    /// **Two values are device-derived, and both were found by probing rather
+    /// than predicted.**
+    ///
+    /// - `MAX_SAMPLES` is not a `D3D11_REQ_*` constant. ANGLE fills the
+    ///   per-format caps by asking the device —
+    ///   `ID3D11Device::CheckMultisampleQualityLevels` per renderable format —
+    ///   and takes the largest count that comes back, so this one really is the
+    ///   driver's answer. Intel Gen9 reports 16 where this capture reports 8.
+    /// - The WebGPU feature list is Dawn's answer for the physical adapter, not
+    ///   a feature-level constant at all. Gen9 enumerates 16 features against
+    ///   this capture's 19, lacking `shader-f16`, `subgroups` and
+    ///   `bgra8unorm-storage`.
+    ///
+    /// Both differences live in [`D3d11Fl11IntelGen9`](Self::D3d11Fl11IntelGen9),
+    /// which is why the sentence above says "except Gen9" instead of "AMD and
+    /// Intel alike", as it did before that tier was captured.
+    ///
+    /// **It does not cover NVIDIA** either, and that exception is likewise
+    /// measured — see [`D3d11Fl11Nvidia`](Self::D3d11Fl11Nvidia).
     D3d11Fl11,
     /// The same backend and feature level as [`D3d11Fl11`](Self::D3d11Fl11),
     /// with ANGLE's NVIDIA-only workaround applied. Probed on an RTX 4090,
@@ -172,6 +194,73 @@ pub(crate) enum Tier {
     /// computed adjustment. Both values were measured; neither is derived at
     /// runtime.
     D3d11Fl11Nvidia,
+    /// The same backend and feature level as [`D3d11Fl11`](Self::D3d11Fl11),
+    /// on **Intel Gen9 graphics**. Probed on an Intel HD Graphics 520
+    /// (Skylake, `0x1916`) in a Surface Book 1, Chrome 150.0.7871.187 on
+    /// Windows 10.
+    ///
+    /// **Exactly two values differ**, and both are the ones the D3D11 tier
+    /// cannot derive from a feature level:
+    ///
+    /// - `MAX_SAMPLES` is 16 here against 8 there. ANGLE asks the device
+    ///   (`CheckMultisampleQualityLevels` per renderable format) rather than
+    ///   reading a `D3D11_REQ_*` constant, so this number belongs to the
+    ///   driver.
+    /// - The WebGPU adapter enumerates 16 features against 19, missing
+    ///   `shader-f16`, `subgroups` and `bgra8unorm-storage`. Dawn reports what
+    ///   the physical adapter supports, and Gen9 supports neither packed fp16
+    ///   nor subgroup ops.
+    ///
+    /// Everything else is identical to [`D3d11Fl11`](Self::D3d11Fl11): all 82
+    /// WebGL1 parameters, the other 131 WebGL2 ones, both extension lists in
+    /// content and order, every shader precision, and all 36 WebGPU limits.
+    /// That is the measurement behind the split being two values wide rather
+    /// than a whole second table.
+    ///
+    /// **Only Gen9 routes here, and the newer Intel generations are a known
+    /// unknown rather than a decision.** Gen11 (Iris Plus G4/G7) and Gen12
+    /// (Iris Xe, and the Arc parts above it) stay on
+    /// [`D3d11Fl11`](Self::D3d11Fl11). Nothing has probed either: both values
+    /// that moved here are device-derived, so a newer part could plausibly
+    /// report a different `MAX_SAMPLES` and almost certainly does expose
+    /// `shader-f16`, which Intel added with Gen12. Sweeping all Intel into this
+    /// tier would hand those machines two numbers nobody measured on that
+    /// silicon — and Iris Xe is the single heaviest entry in the whole device
+    /// catalogue, so the blast radius of guessing is at its largest exactly
+    /// where the evidence is absent. Leaving them on the generic tier is not a
+    /// claim that they match it; it is the choice to serve a value measured on
+    /// *some* FL11 device over one measured on none. **Closing the gap needs a
+    /// Gen11 and a Gen12 capture**, taken the same way this one was.
+    ///
+    /// **What "Gen9" means here is a marketing name, not a die.** Routing goes
+    /// through `devices::intel_architecture`, the same classifier that names
+    /// the WebGPU adapter's architecture, so a renderer resolves this tier
+    /// exactly when its adapter reports `gen-9` and the two cannot contradict
+    /// each other. That takes the three-digit `HD`/`UHD Graphics` 5xx and 6xx
+    /// families — 29 of the catalogue's 482 rows, carrying about 9% of the
+    /// corpus population (13% of the catalogue's own mass; the weights are
+    /// marginal probabilities over the whole corpus and do not sum to 1 across
+    /// the catalogue).
+    ///
+    /// The digit count is load-bearing rather than incidental. Intel spelled
+    /// Broadwell (Gen8) with four digits — `HD Graphics 5300`, `5500`, `5600`,
+    /// `6000` — so matching `hd graphics 5` as a *prefix* sweeps in a
+    /// generation nobody probed, and their PCI ids say so plainly: 0x16xx is
+    /// Broadwell where this capture's own part is 0x1916, Skylake. Those models
+    /// stay on [`D3d11Fl11`](Self::D3d11Fl11) with an empty architecture token,
+    /// which reads as an ordinary unclassified adapter rather than as a device
+    /// that does not exist.
+    ///
+    /// One imprecision remains, in the safe direction: several genuine Gen9
+    /// parts are **not** matched, because Intel sold them under an `Iris` name
+    /// (`Iris Graphics 540`/`550`, `Iris Plus Graphics 640`/`655`). They stay
+    /// on the catch-all tier. There is circumstantial support for moving them —
+    /// the committed [`VulkanMesaIntelIrisPro580`](Self::VulkanMesaIntelIrisPro580)
+    /// capture is Gen9 silicon on a different backend and also reports
+    /// `MAX_SAMPLES` 16, against 8 on both non-Gen9 D3D11 captures — but a
+    /// cross-backend inference is not a measurement, so the fix for this one is
+    /// a D3D11 capture of such a part.
+    D3d11Fl11IntelGen9,
     /// ANGLE's **Vulkan** backend on Linux, on an Intel Iris Pro Graphics 580
     /// (Skylake GT4e) under Mesa 25.2.8. Probed on Linux Mint with Chrome
     /// 150.0.7871.186 in a NUC6i7KYK.
@@ -253,6 +342,7 @@ impl Tier {
         Tier::MetalMacos,
         Tier::D3d11Fl11,
         Tier::D3d11Fl11Nvidia,
+        Tier::D3d11Fl11IntelGen9,
         Tier::VulkanMesaIntelIrisPro580,
     ];
 }

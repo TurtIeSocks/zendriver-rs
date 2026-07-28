@@ -98,6 +98,7 @@ fn tier_key(tier: Tier) -> &'static str {
         Tier::MetalMacos => "metal-macos",
         Tier::D3d11Fl11 => "d3d11-fl11",
         Tier::D3d11Fl11Nvidia => "d3d11-fl11-nvidia",
+        Tier::D3d11Fl11IntelGen9 => "d3d11-fl11-intel-gen9",
         Tier::VulkanMesaIntelIrisPro580 => "vulkan-mesa-intel-iris-pro-580",
     }
 }
@@ -425,6 +426,62 @@ mod tests {
         // Measured 8 where both other tiers measured 4 — the value that moved
         // MAX_SAMPLES out of the shared base table when this tier landed.
         assert_eq!(p.params_webgl2["MAX_SAMPLES"], GlParam::Int(8));
+    }
+
+    #[test]
+    fn the_intel_gen9_tier_differs_from_the_generic_d3d11_one_in_max_samples_alone() {
+        // ANGLE derives the rest of the D3D11 caps from `D3D11_REQ_*`
+        // constants, but not this one: `GenerateCaps` walks the renderable
+        // formats calling `CheckMultisampleQualityLevels` on the device, so
+        // MAX_SAMPLES is whatever the driver answers. An Intel Gen9 part
+        // answers 16 where the RDNA2 Radeon the generic tier was probed on
+        // answered 8 — one value, measured on both sides.
+        let gen9 = profile_for_tier(types::Tier::D3d11Fl11IntelGen9);
+        let generic = profile_for_tier(types::Tier::D3d11Fl11);
+        assert_eq!(gen9.params_webgl2["MAX_SAMPLES"], GlParam::Int(16));
+        assert_eq!(generic.params_webgl2["MAX_SAMPLES"], GlParam::Int(8));
+
+        let differing: Vec<&str> = generic
+            .params_webgl2
+            .iter()
+            .filter(|(name, value)| gen9.params_webgl2.get(*name) != Some(*value))
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert_eq!(
+            differing,
+            ["MAX_SAMPLES"],
+            "the Gen9 capture matched the generic D3D11 one on every other WebGL2 parameter; a \
+             wider split means a capture changed and the tier's scope needs re-reading"
+        );
+        assert_eq!(gen9.params_webgl1, generic.params_webgl1);
+        assert_eq!(gen9.precision, generic.precision);
+        assert_eq!(gen9.extensions_webgl1, generic.extensions_webgl1);
+        assert_eq!(gen9.extensions_webgl2, generic.extensions_webgl2);
+    }
+
+    #[test]
+    fn the_intel_gen9_tier_reports_the_three_webgpu_features_its_silicon_lacks() {
+        // The second value the D3D11 tier tables cannot generalize. WebGPU
+        // features are Dawn's answer for the physical adapter, not a
+        // feature-level constant: Gen9 enumerates 16 where the RDNA2 capture
+        // enumerated 19.
+        let gen9 =
+            webgpu_for_tier(types::Tier::D3d11Fl11IntelGen9).expect("Gen9 has a WebGPU adapter");
+        let generic = webgpu_for_tier(types::Tier::D3d11Fl11).expect("D3D11 has a WebGPU adapter");
+        assert_eq!(gen9.features.len(), 16);
+        assert_eq!(generic.features.len(), 19);
+        for absent in ["shader-f16", "subgroups", "bgra8unorm-storage"] {
+            assert!(
+                !gen9.features.iter().any(|f| f == absent),
+                "Gen9 does not expose {absent}"
+            );
+            assert!(
+                generic.features.iter().any(|f| f == absent),
+                "the generic D3D11 capture does expose {absent}, so the split is real"
+            );
+        }
+        // The limits are the part that *is* backend-shaped: all 36 matched.
+        assert_eq!(gen9.limits, generic.limits);
     }
 
     #[test]

@@ -600,6 +600,10 @@ const CAPTURES: &[(&str, &str)] = &[
         include_str!("../../zendriver-stealth/data/gpu-tiers/d3d11-fl11-nvidia.json"),
     ),
     (
+        "d3d11-fl11-intel-gen9",
+        include_str!("../../zendriver-stealth/data/gpu-tiers/d3d11-fl11-intel-gen9.json"),
+    ),
+    (
         "vulkan-mesa-intel-iris-pro-580",
         include_str!("../../zendriver-stealth/data/gpu-tiers/vulkan-mesa-intel-iris-pro-580.json"),
     ),
