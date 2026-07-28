@@ -20,7 +20,7 @@ You can mix any persona source with any per-surface strategy independently.
 
 | Surface | Kind | Default strategy | What it affects |
 |---------|------|-----------------|-----------------|
-| `Canvas` | Noise | `Seeded` | `getImageData`, `toDataURL` pixel data |
+| `Canvas` | Noise | `Seeded` | Pixel readback: `getImageData`, `toDataURL`, `toBlob`, and probe-shaped `readPixels` |
 | `Audio` | Noise | `Seeded` | `AnalyserNode` frequency / time-domain data |
 | `ClientRects` | Noise | `Seeded` | `getBoundingClientRect` sub-pixel dimensions |
 | `Webgl` | Value | `Value` | Every static device capability `getParameter` reports (WebGL1 + WebGL2), both extension lists, and `getShaderPrecisionFormat` — not just `UNMASKED_VENDOR_WEBGL`/`UNMASKED_RENDERER_WEBGL`. Per-context mutable state stays the backend's |
@@ -199,6 +199,41 @@ let browser = Browser::builder()
     .launch().await?;
 ```
 
+## Canvas (pixel readback farbling)
+
+The `Canvas` surface perturbs pixels on their way out, so the image a probe
+hashes differs per persona while the visible canvas is untouched. The
+perturbation is a **palette**: one table per colour channel, built from the
+seed, mapping each 8-bit value to itself plus or minus one. Alpha is left
+alone, since perturbing it changes compositing and it rarely carries
+fingerprint weight.
+
+**A palette rather than per-pixel noise, because per-pixel noise is
+self-refuting.** Keying the noise on a pixel's position gives every pixel an
+independent draw, and that fails two checks a page can run in a few lines:
+
+- **A flat fill must come back flat.** Rendering is a function of its input, so
+  identical pixels come back identical on every real GPU. Position-keyed noise
+  broke that. Measured before the rewrite: a uniform WebGL clear read back with
+  three different red values.
+- **Every readback path must agree.** `readPixels` returns rows bottom-up and
+  `getImageData` returns them top-down, so a position-keyed scheme cannot agree
+  with itself across paths even in principle. A page could render one scene,
+  read it both ways and compare. A palette has no position to disagree about.
+
+Anti-linkage survives the change: a different seed permutes the palette
+differently, so the hash still differs per persona, and it stays stable across
+repeat reads because the mapping is a pure function.
+
+**`readPixels` is farbled only when the read looks like a probe** — a whole
+small drawing buffer, read as `RGBA`/`UNSIGNED_BYTE`. GPU picking reads a 1x1
+rectangle off a large buffer and compares it against an exact id colour, so
+perturbing that breaks real pages; float readbacks are compute output, where a
+one-LSB change is meaningless at best. The residue, stated rather than hidden: a
+page that reads 1x1 *and* reads the full buffer can see that only one of them
+moved. That is a contrived probe, and the alternative is breaking picking on
+sites that use it.
+
 ## WebGL (full-surface value spoof, resolved from measured tiers)
 
 The `Webgl` surface's default `Value` strategy no longer substitutes a
@@ -352,6 +387,39 @@ crate from committed probe captures
 and fails the build on any diff, so the shipped file can never drift from
 its source captures.
 
+### What the tier tables buy, and what they do not
+
+Worth stating plainly, because the mechanism above is easy to mistake for more
+than it is.
+
+**What they remove is a positive signal.** Before, a persona reported
+`MAX_VIEWPORT_DIMS` from one backend beside `MAX_TEXTURE_SIZE` from another — a
+pair no device produces, checkable in two lines. Same for NVIDIA's 4095 under an
+AMD name, and for `DRAW_BUFFER6` answering past its own advertised cap. Those
+were *detectably fake*, and they are gone. Going from wrong to not-wrong is
+worth doing, and it is not the same as convincing.
+
+**What they cannot do is survive a render.** A page that hashes canvas or WebGL
+pixels reads what actually rendered, and on the default software rasterizer that
+is not what the claimed device would produce. No amount of metadata fixes it,
+and nothing here could: matching a specific GPU's pixels means reproducing a
+proprietary shader compiler's optimisation choices bit-for-bit and tracking them
+across driver releases. Fused multiply-add alone rounds differently from a
+separate multiply and add, which is a different last bit and a different hash.
+
+So treat this as a floor rather than a defence. It is sufficient against a
+checker that reads values only — common, because rendering and reading back
+costs real time — and insufficient against one that renders. For the latter the
+honest answer is [`GpuBackend::Native`](gpu-backend.md) on hardware that matches
+the persona, where pixels and values agree because both come from the same
+machine.
+
+**The catalogue's strongest justification is a different one.** It is not
+fooling a hardware check. Before it existed, every zendriver user on Windows
+reported the same RTX 4090 — a constant shared across the entire user base,
+which is a *library* fingerprint rather than a GPU one. That signal is
+independent of pixels, no render defeats it, and the catalogue kills it.
+
 ### Naming a GPU from the device catalogue
 
 The tiers decide what a device *can do*. The catalogue decides *which device*
@@ -465,6 +533,13 @@ the named-opt-in shape is the same one `geo_auto` uses. It answers `None` rather
 than reaching for something plausible when the host's backend has no catalogue —
 Linux and software rendering — because a Windows GPU is not a reasonable answer
 for a Linux host merely because one was requested.
+
+Pairing it with [`GpuBackend::Native`](gpu-backend.md) is the one configuration
+where the values and the pixels agree by construction, because both come off the
+same physical card. Everywhere else they are two separate claims that happen to
+be consistent with each other, and only one of them survives being rendered. If
+a target is known to run WebGL challenges, this pairing is the answer and no
+amount of catalogue work substitutes for it.
 
 `by_name` refuses ambiguity rather than guessing — `"rtx 40"` returns every
 candidate — while an exact model name always wins, since several catalogued

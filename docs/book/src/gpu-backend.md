@@ -57,6 +57,16 @@ identities across a fleet, `Native` is not that tool; look at
 for caller-supplied adapter values instead. `Native` makes the GPU surface
 *coherent*; it does not give you *control* over what it says.
 
+The reverse is also worth knowing. Everything in
+[the fingerprint chapter](fingerprint.md#webgl-full-surface-value-spoof-resolved-from-measured-tiers)
+gives you control without coherence past the metadata: it can make a page read
+any catalogued GPU's values, but the pixels still come from whatever actually
+rendered. `Native` is the only backend where a page that renders and hashes the
+result sees a real device, which is why
+[`nearest_gpu_device()`](fingerprint.md#naming-a-gpu-from-the-device-catalogue)
+exists — it names the catalogued identity closest to the card you are already
+rendering on, so the claim and the pixels point at the same hardware.
+
 ## The launch is validated, and there is no automatic fallback
 
 Chrome *starting* is not evidence that it got a GPU. On a GPU-less Ubuntu 24
