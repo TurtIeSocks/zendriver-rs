@@ -313,6 +313,14 @@ all but the last generalize:
   the driver rather than for the backend, and why no "Linux" or "Vulkan" tier
   exists to generalize it.
 
+  That reasoning has since been measured rather than left as a reading of
+  ANGLE's source. A second Mesa/Vulkan device — AMD RDNA2 under RADV, same
+  Chrome build — differs from this tier in 12 WebGL2 parameters, including
+  `MAX_3D_TEXTURE_SIZE` 8192 against 2048 and
+  `UNIFORM_BUFFER_OFFSET_ALIGNMENT` 4 against 64, and the two disagree on
+  extensions as well. Worth having, because `D3D11_REQ_*` was the other
+  source-argument in this chapter and it turned out to have two escapes.
+
 The measurement shows the split rather than just asserting it. The Vulkan
 capture is closest to SwiftShader (7 of 82 WebGL1 parameters differ and 21 of
 132 WebGL2, against 10/26 for D3D11 and 9/23 for Metal), because SwiftShader's

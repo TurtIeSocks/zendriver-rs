@@ -83,6 +83,34 @@ afterwards. A capture on a vendor no shipped tier has seen is worth taking even
 when the theory says it will match — a confirmed match costs one probe, and an
 unexamined assumption costs a wrong value served under a real name.
 
+**A capture that is not a tier may still be evidence.** Some probes settle a
+claim without producing a table anybody should be served: a second generation
+that reproduces an existing tier exactly, or a backend no persona can claim.
+Those go in `crates/zendriver-stealth/data/gpu-confirmations/` — never in
+`CAPTURES`, never compiled into `tiers.rs` — with a row in that directory's
+README saying which claim they support. The bar is that a shipped rustdoc
+cites them; a capture that merely duplicates a tier is clutter, not
+corroboration, and belongs nowhere. Pin whatever they establish with a test in
+`gpu-tier-gen` so the evidence cannot rot silently when the capture format
+moves.
+
+What they have established so far, and the reason the Gen9 tier exists:
+
+| Architecture | D3D11 | ANGLE-GL | ANGLE-Vulkan |
+|---|---|---|---|
+| AMD RDNA2 | 8 | 8 | 8 |
+| Intel Gen9 | 16 | — | 16 |
+
+`MAX_SAMPLES` is constant per architecture across every backend measured, and
+differs between architectures on the backend they share. A backend-derived
+value would look the other way round.
+
+**Record the flags a capture was taken under.** Two of the confirmations were
+taken with `--use-gl=angle --use-angle=vulkan` to force a backend the machine
+does not pick by itself. That is sound as evidence about ANGLE and unsound as a
+description of what that machine's visitors report, and the difference is
+invisible in the JSON.
+
 **Never hand-write or edit a tier's values.** A wrong value is more detectable
 than no spoof at all, and `tiers.rs` carries a `DO NOT EDIT` header enforced by
 a CI regeneration check. The only way to add a tier is to run this skill on

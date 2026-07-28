@@ -193,6 +193,17 @@ pub(crate) enum Tier {
     /// This is why the two are separate tiers rather than one tier with a
     /// computed adjustment. Both values were measured; neither is derived at
     /// runtime.
+    ///
+    /// **It generalizes across NVIDIA generations, measured rather than
+    /// assumed.** A Maxwell GM108 (`0x134B`) reproduces this tier exactly —
+    /// every WebGL1 and WebGL2 parameter, every shader precision, both
+    /// extension lists in content and order — seven years and three process
+    /// nodes from the Lovelace part it was probed on. The capture is
+    /// `data/gpu-confirmations/d3d11-nvidia-maxwell-gm108.json`, pinned by
+    /// `maxwell_reproduces_the_nvidia_tier_exactly`. That result is also why
+    /// [`D3d11Fl11IntelGen9`](Self::D3d11Fl11IntelGen9) is a third tier rather
+    /// than a reason to doubt the model: the generalization holds, and Gen9's
+    /// two device-derived values are the exception to it.
     D3d11Fl11Nvidia,
     /// The same backend and feature level as [`D3d11Fl11`](Self::D3d11Fl11),
     /// on **Intel Gen9 graphics**. Probed on an Intel HD Graphics 520
@@ -210,6 +221,22 @@ pub(crate) enum Tier {
     ///   `shader-f16`, `subgroups` and `bgra8unorm-storage`. Dawn reports what
     ///   the physical adapter supports, and Gen9 supports neither packed fp16
     ///   nor subgroup ops.
+    ///
+    /// **`MAX_SAMPLES` follows the silicon, and that is measured across every
+    /// backend available**, which is what rules out reading it as a quirk of
+    /// one capture or one backend:
+    ///
+    /// | Architecture | D3D11 | ANGLE-GL | ANGLE-Vulkan |
+    /// |---|---|---|---|
+    /// | AMD RDNA2 | 8 | 8 | 8 |
+    /// | Intel Gen9 | 16 | — | 16 |
+    ///
+    /// Constant per architecture across three backends, and different between
+    /// the two architectures on the backend they share. A backend-derived
+    /// value would look the other way round. The RDNA2 rows come from
+    /// `data/gpu-confirmations/`, and
+    /// `max_samples_follows_the_silicon_across_every_measured_backend` pins the
+    /// whole table.
     ///
     /// Everything else is identical to [`D3d11Fl11`](Self::D3d11Fl11): all 82
     /// WebGL1 parameters, the other 131 WebGL2 ones, both extension lists in
@@ -266,7 +293,15 @@ pub(crate) enum Tier {
     /// 150.0.7871.186 in a NUC6i7KYK.
     ///
     /// **Named for the device and the driver, because a Vulkan tier does not
-    /// generalize.** The other two hardware tiers do, and that is why they are
+    /// generalize — now measured rather than argued.** A second Mesa/Vulkan
+    /// device (AMD RDNA2 Van Gogh under RADV, same Chrome build) differs from
+    /// this tier in 12 WebGL2 parameters: `MAX_3D_TEXTURE_SIZE` 8192 against
+    /// 2048, `UNIFORM_BUFFER_OFFSET_ALIGNMENT` 4 against 64,
+    /// `MIN`/`MAX_PROGRAM_TEXEL_OFFSET` -32/31 against -8/7, and the extension
+    /// lists disagree too. Those are `VkPhysicalDeviceLimits` entries reaching
+    /// the page unchanged. See
+    /// `data/gpu-confirmations/vulkan-amd-rdna2-vangogh.json` and
+    /// `a_vulkan_tier_does_not_generalize_across_devices`. The other two hardware tiers do, and that is why they are
     /// named for a backend: `renderer11_utils.cpp` branches on the
     /// `D3D_FEATURE_LEVEL`, and `DisplayMtl.mm`'s `TARGET_OS_OSX` arm uses
     /// plain compile-time constants — neither asks the device anything. ANGLE's

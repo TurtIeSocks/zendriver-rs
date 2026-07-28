@@ -1757,4 +1757,154 @@ mod tests {
             "a malformed capture value must not be silently dropped"
         );
     }
+
+    /// The captures under `data/gpu-confirmations/`, kept as evidence for
+    /// claims the tier rustdocs make rather than as capability tables.
+    ///
+    /// They are deliberately absent from [`CAPTURES`], so nothing else in this
+    /// crate reads them and no persona is ever served their numbers.
+    const CONFIRMATIONS: &[(&str, &str)] = &[
+        (
+            "d3d11-nvidia-maxwell-gm108",
+            include_str!(
+                "../../zendriver-stealth/data/gpu-confirmations/d3d11-nvidia-maxwell-gm108.json"
+            ),
+        ),
+        (
+            "gl-amd-rdna2-vangogh",
+            include_str!(
+                "../../zendriver-stealth/data/gpu-confirmations/gl-amd-rdna2-vangogh.json"
+            ),
+        ),
+        (
+            "vulkan-amd-rdna2-vangogh",
+            include_str!(
+                "../../zendriver-stealth/data/gpu-confirmations/vulkan-amd-rdna2-vangogh.json"
+            ),
+        ),
+    ];
+
+    fn confirmation(name: &str) -> TierData {
+        let (_, raw) = CONFIRMATIONS
+            .iter()
+            .find(|(n, _)| *n == name)
+            .expect("the confirmation capture is registered above");
+        let doc: Value = serde_json::from_str(raw).expect("confirmation is valid JSON");
+        let provenance = doc["provenance"].as_str().unwrap_or("unknown").to_string();
+        tier_from_capture(name, &provenance, &doc["capture"])
+    }
+
+    #[test]
+    fn confirmation_captures_are_not_tiers() {
+        // The whole point of the directory. A confirmation that leaked into
+        // CAPTURES would start being emitted into `tiers.rs`, and two of these
+        // describe backends no persona should ever claim.
+        for (name, _) in CONFIRMATIONS {
+            assert!(
+                !CAPTURES.iter().any(|(n, _)| n == name),
+                "{name} is a confirmation and must not be a shipped tier"
+            );
+        }
+    }
+
+    #[test]
+    fn maxwell_reproduces_the_nvidia_tier_exactly() {
+        // Why Intel Gen9 became a third tier instead of a reason to distrust
+        // the tier model. Maxwell and Lovelace are seven years and three
+        // process nodes apart and differ in nothing a page can read, so the
+        // D3D11 generalization holds and the Gen9 escapes are the exception
+        // rather than the rule.
+        let maxwell = confirmation("d3d11-nvidia-maxwell-gm108");
+        let lovelace = committed_tiers()
+            .into_iter()
+            .find(|t| t.name == "d3d11-fl11-nvidia")
+            .expect("the NVIDIA tier ships");
+
+        // The renderer string is the identity, not a capability, so it is the
+        // one thing expected to differ.
+        assert_eq!(maxwell.params_webgl1, lovelace.params_webgl1);
+        assert_eq!(maxwell.params_webgl2, lovelace.params_webgl2);
+        assert_eq!(maxwell.precision, lovelace.precision);
+        assert_eq!(maxwell.extensions_webgl1, lovelace.extensions_webgl1);
+        assert_eq!(maxwell.extensions_webgl2, lovelace.extensions_webgl2);
+        assert_eq!(maxwell.enums, lovelace.enums);
+    }
+
+    #[test]
+    fn max_samples_follows_the_silicon_across_every_measured_backend() {
+        // The measurement `Tier::D3d11Fl11IntelGen9` rests on. ANGLE fills
+        // MAX_SAMPLES by asking the device rather than reading a
+        // `D3D11_REQ_*` constant, so it is constant per architecture and
+        // differs between architectures on one backend — not the other way
+        // round, which is what a backend-derived value would look like.
+        // `None` rather than a panic on a missing or wrongly-typed value, so a
+        // capture that stops carrying MAX_SAMPLES fails as a mismatch naming
+        // the backend rather than as an opaque unwrap.
+        let samples = |t: &TierData| match t.params_webgl2.get("MAX_SAMPLES") {
+            Some(ParamValue::Int(n)) => Some(*n),
+            _ => None,
+        };
+        let tiers = committed_tiers();
+        let tier = |name: &str| {
+            tiers
+                .iter()
+                .find(|t| t.name == name)
+                .expect("every name here is a shipped tier")
+        };
+
+        // AMD RDNA2, three backends.
+        assert_eq!(samples(tier("d3d11-fl11")), Some(8), "RDNA2 on D3D11");
+        assert_eq!(
+            samples(&confirmation("gl-amd-rdna2-vangogh")),
+            Some(8),
+            "RDNA2 on ANGLE's GL backend"
+        );
+        assert_eq!(
+            samples(&confirmation("vulkan-amd-rdna2-vangogh")),
+            Some(8),
+            "RDNA2 on ANGLE's Vulkan backend"
+        );
+
+        // Intel Gen9, two backends, and a different answer from RDNA2 on the
+        // backend they share.
+        assert_eq!(
+            samples(tier("d3d11-fl11-intel-gen9")),
+            Some(16),
+            "Gen9 on D3D11"
+        );
+        assert_eq!(
+            samples(tier("vulkan-mesa-intel-iris-pro-580")),
+            Some(16),
+            "Gen9 on ANGLE's Vulkan backend"
+        );
+    }
+
+    #[test]
+    fn a_vulkan_tier_does_not_generalize_across_devices() {
+        // `Tier::VulkanMesaIntelIrisPro580` is named for one device and one
+        // driver because `vk_caps_utils.cpp` fills its caps straight from
+        // `VkPhysicalDeviceLimits`. That was read out of ANGLE's source; this
+        // measures it. Two Mesa/Vulkan devices, same Chrome build, and the
+        // limits reach the page unchanged.
+        let radv = confirmation("vulkan-amd-rdna2-vangogh");
+        let anv = committed_tiers()
+            .into_iter()
+            .find(|t| t.name == "vulkan-mesa-intel-iris-pro-580")
+            .expect("the Vulkan tier ships");
+
+        for (param, want_radv, want_anv) in [
+            ("MAX_3D_TEXTURE_SIZE", 8192, 2048),
+            ("MAX_ARRAY_TEXTURE_LAYERS", 4096, 2048),
+            ("MAX_PROGRAM_TEXEL_OFFSET", 31, 7),
+            ("MIN_PROGRAM_TEXEL_OFFSET", -32, -8),
+            ("UNIFORM_BUFFER_OFFSET_ALIGNMENT", 4, 64),
+        ] {
+            let got = |t: &TierData| match t.params_webgl2.get(param) {
+                Some(ParamValue::Int(n)) => Some(*n),
+                _ => None,
+            };
+            assert_eq!(got(&radv), Some(want_radv), "{param} on RADV VanGogh");
+            assert_eq!(got(&anv), Some(want_anv), "{param} on ANV Iris Pro 580");
+        }
+    }
 }
