@@ -8,5 +8,6 @@ publish = false
 workspace = true
 
 [dependencies]
+rustls = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "json"] }
 serde_json.workspace = true

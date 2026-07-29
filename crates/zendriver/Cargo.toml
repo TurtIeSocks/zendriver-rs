@@ -47,7 +47,7 @@ datadome = ["interception", "dep:zendriver-datadome"]
 # Network-touching DataDome nightly tests (real protected sites).
 datadome-tests = ["datadome", "integration-tests"]
 # Country -> coherent locale/languages (BrowserBuilder::geo_locale).
-geo = ["zendriver-stealth/geo", "dep:reqwest"]
+geo = ["zendriver-stealth/geo", "dep:reqwest", "dep:rustls"]
 # Chrome for Testing binary downloader.
 fetcher = ["dep:zendriver-fetcher"]
 # Network-touching fetcher tests (CfT manifest, real downloads).
@@ -57,7 +57,7 @@ monitor = []
 # Opt-in third-party tracker/fingerprinter host blocking (bundled curated
 # list + runtime BYO). Implies interception; the bundled list (`include_str!`)
 # only adds binary size when this feature is on.
-tracker-blocking = ["interception", "dep:reqwest", "dep:dirs"]
+tracker-blocking = ["interception", "dep:reqwest", "dep:dirs", "dep:rustls"]
 
 [dependencies]
 zendriver-transport.workspace = true
@@ -91,6 +91,8 @@ zip.workspace                 = true
 wiremock    = { workspace = true, optional = true }
 serial_test = { workspace = true, optional = true }
 reqwest     = { workspace = true, optional = true, features = ["json"] }
+# Only needed to name the ring provider; tracks reqwest's optionality exactly.
+rustls      = { workspace = true, optional = true }
 dirs        = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]

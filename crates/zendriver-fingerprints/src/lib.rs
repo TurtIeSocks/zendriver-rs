@@ -9,6 +9,9 @@ mod cache;
 pub mod generative;
 #[cfg(feature = "pool")]
 pub mod pool;
+// Gated to match reqwest: the module exists only where an HTTP client can.
+#[cfg(any(feature = "pool", feature = "generative"))]
+pub mod tls;
 
 #[cfg(any(feature = "pool", feature = "generative"))]
 pub use cache::CachePolicy;

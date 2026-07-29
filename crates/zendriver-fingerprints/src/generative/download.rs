@@ -34,6 +34,7 @@ pub(super) async fn fetch_or_cached_bytes(
         }
     }
     tracing::debug!(url, "fp network cache miss — downloading");
+    crate::tls::install_default_crypto_provider();
     let bytes = reqwest::get(url).await?.bytes().await?.to_vec();
     if let Some(parent) = cache.parent() {
         fs::create_dir_all(parent)?;

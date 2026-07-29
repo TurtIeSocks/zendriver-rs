@@ -75,6 +75,7 @@
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+// Mirrors reqwest's gating: the module exists only where an HTTP client can.
 pub mod browser;
 pub mod browser_context;
 pub mod cookies;
@@ -100,6 +101,8 @@ pub mod response_body;
 pub mod screenshot;
 pub mod storage;
 pub mod tab;
+#[cfg(any(feature = "geo", feature = "tracker-blocking"))]
+pub mod tls;
 #[cfg(feature = "tracker-blocking")]
 mod tracker;
 pub mod traits;

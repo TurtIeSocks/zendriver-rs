@@ -16,6 +16,9 @@ use gpu_catalogue_gen::sources::{CORPUS_COMMIT, PCI_IDS_COMMIT, corpus_url, pci_
 const OUT: &str = "crates/zendriver-stealth/src/gpu/catalogue.rs";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // reqwest 0.13 (`rustls-no-provider`) needs a crypto provider before any Client is built.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let pci_ids = reqwest::blocking::get(pci_ids_url())?
         .error_for_status()?
         .text()?;

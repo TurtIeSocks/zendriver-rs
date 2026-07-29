@@ -53,6 +53,12 @@ impl From<StealthProfileArg> for StealthProfileChoice {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // reqwest 0.13 uses `rustls-no-provider`, so a provider must be installed before ANY reqwest
+    // Client is built — including one built inside a dependency, and including for plain-HTTP
+    // requests, since the TLS config is constructed with the client rather than per request.
+    // Doing it first thing in main covers every path the server can reach.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let cli = Cli::parse();
 
     tracing_subscriber::fmt()

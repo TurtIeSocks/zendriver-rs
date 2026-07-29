@@ -86,6 +86,10 @@ impl IpApiResolver {
 #[async_trait]
 impl GeoResolver for IpApiResolver {
     async fn resolve(&self) -> Option<ResolvedGeo> {
+        // reqwest 0.13 installs no rustls crypto provider of its own (see the workspace manifest),
+        // and the omission surfaces as a runtime panic rather than a build error. Install before
+        // the client exists.
+        crate::tls::install_default_crypto_provider();
         let mut builder = reqwest::Client::builder().timeout(self.timeout);
         if let Some(p) = &self.proxy {
             match reqwest::Proxy::all(p) {
