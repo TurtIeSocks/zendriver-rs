@@ -3419,7 +3419,7 @@ dependencies = [
 
 [[package]]
 name = "zendriver"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "async-trait",
  "base64",
@@ -3461,7 +3461,7 @@ dependencies = [
 
 [[package]]
 name = "zendriver-cloudflare"
-version = "0.2.11"
+version = "0.2.12"
 dependencies = [
  "serde",
  "serde_json",
@@ -3474,7 +3474,7 @@ dependencies = [
 
 [[package]]
 name = "zendriver-datadome"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "futures",
  "psl",
@@ -3491,7 +3491,7 @@ dependencies = [
 
 [[package]]
 name = "zendriver-fetcher"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "dirs",
  "futures",
@@ -3511,7 +3511,7 @@ dependencies = [
 
 [[package]]
 name = "zendriver-fingerprints"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "dirs",
  "fastrand",
@@ -3530,7 +3530,7 @@ dependencies = [
 
 [[package]]
 name = "zendriver-imperva"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "futures",
  "serde",
@@ -3546,7 +3546,7 @@ dependencies = [
 
 [[package]]
 name = "zendriver-interception"
-version = "0.3.14"
+version = "0.3.15"
 dependencies = [
  "async-trait",
  "base64",
@@ -3567,7 +3567,7 @@ dependencies = [
 
 [[package]]
 name = "zendriver-mcp"
-version = "0.16.2"
+version = "0.16.3"
 dependencies = [
  "async-trait",
  "axum",
@@ -3601,7 +3601,7 @@ dependencies = [
 
 [[package]]
 name = "zendriver-stealth"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "async-trait",
  "chromiumoxide_cdp",
@@ -3622,7 +3622,7 @@ dependencies = [
 
 [[package]]
 name = "zendriver-transport"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "async-trait",
  "chromiumoxide_cdp",

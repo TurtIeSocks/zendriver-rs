@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-07-29
+
+### Internal
+
+- Update Cargo.toml dependencies
+
+
 ## [0.2.3] - 2026-07-23
 
 ### Added
