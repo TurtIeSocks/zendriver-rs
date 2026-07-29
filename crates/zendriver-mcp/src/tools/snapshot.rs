@@ -9,7 +9,7 @@
 //! ## Image return shape
 //!
 //! `browser_screenshot` returns a raw [`rmcp::model::CallToolResult`]
-//! rather than a typed wrapper. The inline `Content::image` block is the
+//! rather than a typed wrapper. The inline `ContentBlock::image` block is the
 //! affordance MCP clients use to surface images to the model — wrapping
 //! the bytes in a JSON struct would force clients to do base64 decoding
 //! themselves and lose the multimodal hook entirely. The optional
@@ -30,7 +30,7 @@ use std::sync::Arc;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use rmcp::ErrorData;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::{CallToolResult, ContentBlock};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -165,7 +165,7 @@ const fn default_format() -> ImgFormat {
 }
 
 impl ImgFormat {
-    /// Mime type for this format — fed into the `Content::image` block.
+    /// Mime type for this format — fed into the `ContentBlock::image` block.
     fn mime(self) -> &'static str {
         match self {
             Self::Png => "image/png",
@@ -216,7 +216,7 @@ pub struct ScreenshotInput {
 /// Capture a screenshot of the current tab.
 ///
 /// Returns a [`CallToolResult`] carrying:
-/// - One `Content::image` block with base64-encoded image bytes + mime.
+/// - One `ContentBlock::image` block with base64-encoded image bytes + mime.
 /// - `structured_content: { format, byte_len, saved_path? }` for callers
 ///   that want metadata without decoding the image block.
 pub async fn screenshot(
@@ -277,7 +277,7 @@ pub async fn screenshot(
     }
 
     let encoded = BASE64.encode(&bytes);
-    let image = Content::image(encoded, input.format.mime());
+    let image = ContentBlock::image(encoded, input.format.mime());
 
     let mut meta = serde_json::Map::new();
     meta.insert("format".into(), json!(input.format.as_str()));

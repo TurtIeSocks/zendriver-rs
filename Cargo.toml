@@ -37,8 +37,13 @@ zendriver-datadome      = { path = "crates/zendriver-datadome", version = "0.1.1
 zendriver-fingerprints  = { path = "crates/zendriver-fingerprints", version = "0.3.9" }
 
 # MCP server
-rmcp        = { version = "1.7", default-features = false }
-rmcp-macros = { version = "1.7" }
+# Pinned exactly, matching proxybroker-rs: rmcp's macro and transport surface moves across
+# releases. proxybroker already pins `=2.2.0`, so a project depending on both crates is held
+# to 2.2.0 regardless — a looser range here would buy nobody freedom, only a second copy.
+# Relax in both repos together or not at all.
+# rmcp-macros dropped: 2.x ships the macros behind rmcp's own `macros` feature, and no crate
+# ever depended on it directly.
+rmcp        = { version = "=2.2.0", default-features = false }
 schemars    = "1.0"
 clap        = { version = "4", features = ["derive"] }
 axum        = { version = "0.7" }
