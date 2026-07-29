@@ -51,7 +51,7 @@
 <a href=#51 id=51 data-nosnippet>51</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>fetch_manifest_from(
 <a href=#52 id=52 data-nosnippet>52</a>    url: <span class="kw-2">&amp;</span>str,
 <a href=#53 id=53 data-nosnippet>53</a>) -&gt; <span class="prelude-ty">Result</span>&lt;KnownGoodVersionsResponse, FetcherError&gt; {
-<a href=#54 id=54 data-nosnippet>54</a>    <span class="kw">let </span>resp = reqwest::get(url).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#54 id=54 data-nosnippet>54</a>    <span class="kw">let </span>resp = <span class="kw">crate</span>::tls::get(url).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#55 id=55 data-nosnippet>55</a>    <span class="kw">let </span>text = resp.text().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#56 id=56 data-nosnippet>56</a>    <span class="kw">let </span>parsed: KnownGoodVersionsResponse = serde_json::from_str(<span class="kw-2">&amp;</span>text)<span class="question-mark">?</span>;
 <a href=#57 id=57 data-nosnippet>57</a>    <span class="prelude-val">Ok</span>(parsed)
@@ -85,7 +85,7 @@
 <a href=#85 id=85 data-nosnippet>85</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>fetch_channels_manifest_from(
 <a href=#86 id=86 data-nosnippet>86</a>    url: <span class="kw-2">&amp;</span>str,
 <a href=#87 id=87 data-nosnippet>87</a>) -&gt; <span class="prelude-ty">Result</span>&lt;ChannelsResponse, FetcherError&gt; {
-<a href=#88 id=88 data-nosnippet>88</a>    <span class="kw">let </span>resp = reqwest::get(url).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#88 id=88 data-nosnippet>88</a>    <span class="kw">let </span>resp = <span class="kw">crate</span>::tls::get(url).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#89 id=89 data-nosnippet>89</a>    <span class="kw">let </span>text = resp.text().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#90 id=90 data-nosnippet>90</a>    <span class="kw">let </span>parsed: ChannelsResponse = serde_json::from_str(<span class="kw-2">&amp;</span>text)<span class="question-mark">?</span>;
 <a href=#91 id=91 data-nosnippet>91</a>    <span class="prelude-val">Ok</span>(parsed)

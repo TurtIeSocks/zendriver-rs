@@ -3,7 +3,7 @@
 <a href="../builder/struct.InterceptBuilder.html#method.start" title="method zendriver_interception::builder::InterceptBuilder::start"><code>InterceptBuilder::start</code></a>. It
 owns a single tab’s <code>Fetch.*</code> interception lifecycle:</p>
 <ol>
-<li>Subscribes to <code>Fetch.requestPaused</code> on the supplied [<code>SessionHandle</code>]
+<li>Subscribes to <code>Fetch.requestPaused</code> on the supplied <a href="../../zendriver_transport/session/struct.SessionHandle.html" title="struct zendriver_transport::session::SessionHandle"><code>SessionHandle</code></a>
 <strong>before</strong> firing <code>Fetch.enable</code>. Mirrors the subscriber pattern used
 by the zendriver core’s frame-lifecycle and network-idle trackers —
 events Chrome fires between the enable round-trip and our subscription

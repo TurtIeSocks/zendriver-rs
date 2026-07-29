@@ -9,7 +9,7 @@
 <a href=#9 id=9 data-nosnippet>9</a>//! ## Image return shape
 <a href=#10 id=10 data-nosnippet>10</a>//!
 <a href=#11 id=11 data-nosnippet>11</a>//! `browser_screenshot` returns a raw [`rmcp::model::CallToolResult`]
-<a href=#12 id=12 data-nosnippet>12</a>//! rather than a typed wrapper. The inline `Content::image` block is the
+<a href=#12 id=12 data-nosnippet>12</a>//! rather than a typed wrapper. The inline `ContentBlock::image` block is the
 <a href=#13 id=13 data-nosnippet>13</a>//! affordance MCP clients use to surface images to the model — wrapping
 <a href=#14 id=14 data-nosnippet>14</a>//! the bytes in a JSON struct would force clients to do base64 decoding
 <a href=#15 id=15 data-nosnippet>15</a>//! themselves and lose the multimodal hook entirely. The optional
@@ -30,7 +30,7 @@
 <a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span>base64::Engine <span class="kw">as _</span>;
 <a href=#31 id=31 data-nosnippet>31</a><span class="kw">use </span>base64::engine::general_purpose::STANDARD <span class="kw">as </span>BASE64;
 <a href=#32 id=32 data-nosnippet>32</a><span class="kw">use </span>rmcp::ErrorData;
-<a href=#33 id=33 data-nosnippet>33</a><span class="kw">use </span>rmcp::model::{CallToolResult, Content};
+<a href=#33 id=33 data-nosnippet>33</a><span class="kw">use </span>rmcp::model::{CallToolResult, ContentBlock};
 <a href=#34 id=34 data-nosnippet>34</a><span class="kw">use </span>schemars::JsonSchema;
 <a href=#35 id=35 data-nosnippet>35</a><span class="kw">use </span>serde::{Deserialize, Serialize};
 <a href=#36 id=36 data-nosnippet>36</a><span class="kw">use </span>serde_json::json;
@@ -165,7 +165,7 @@
 <a href=#165 id=165 data-nosnippet>165</a>}
 <a href=#166 id=166 data-nosnippet>166</a>
 <a href=#167 id=167 data-nosnippet>167</a><span class="kw">impl </span>ImgFormat {
-<a href=#168 id=168 data-nosnippet>168</a>    <span class="doccomment">/// Mime type for this format — fed into the `Content::image` block.
+<a href=#168 id=168 data-nosnippet>168</a>    <span class="doccomment">/// Mime type for this format — fed into the `ContentBlock::image` block.
 <a href=#169 id=169 data-nosnippet>169</a>    </span><span class="kw">fn </span>mime(<span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str {
 <a href=#170 id=170 data-nosnippet>170</a>        <span class="kw">match </span><span class="self">self </span>{
 <a href=#171 id=171 data-nosnippet>171</a>            <span class="self">Self</span>::Png =&gt; <span class="string">"image/png"</span>,
@@ -216,7 +216,7 @@
 <a href=#216 id=216 data-nosnippet>216</a><span class="doccomment">/// Capture a screenshot of the current tab.
 <a href=#217 id=217 data-nosnippet>217</a>///
 <a href=#218 id=218 data-nosnippet>218</a>/// Returns a [`CallToolResult`] carrying:
-<a href=#219 id=219 data-nosnippet>219</a>/// - One `Content::image` block with base64-encoded image bytes + mime.
+<a href=#219 id=219 data-nosnippet>219</a>/// - One `ContentBlock::image` block with base64-encoded image bytes + mime.
 <a href=#220 id=220 data-nosnippet>220</a>/// - `structured_content: { format, byte_len, saved_path? }` for callers
 <a href=#221 id=221 data-nosnippet>221</a>///   that want metadata without decoding the image block.
 <a href=#222 id=222 data-nosnippet>222</a></span><span class="kw">pub async fn </span>screenshot(
@@ -277,7 +277,7 @@
 <a href=#277 id=277 data-nosnippet>277</a>    }
 <a href=#278 id=278 data-nosnippet>278</a>
 <a href=#279 id=279 data-nosnippet>279</a>    <span class="kw">let </span>encoded = BASE64.encode(<span class="kw-2">&amp;</span>bytes);
-<a href=#280 id=280 data-nosnippet>280</a>    <span class="kw">let </span>image = Content::image(encoded, input.format.mime());
+<a href=#280 id=280 data-nosnippet>280</a>    <span class="kw">let </span>image = ContentBlock::image(encoded, input.format.mime());
 <a href=#281 id=281 data-nosnippet>281</a>
 <a href=#282 id=282 data-nosnippet>282</a>    <span class="kw">let </span><span class="kw-2">mut </span>meta = serde_json::Map::new();
 <a href=#283 id=283 data-nosnippet>283</a>    meta.insert(<span class="string">"format"</span>.into(), <span class="macro">json!</span>(input.format.as_str()));

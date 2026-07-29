@@ -711,7 +711,7 @@
 <a href=#711 id=711 data-nosnippet>711</a><span class="doccomment">/// Returns a plausible nearby QWERTY key for `c`, or None for non-alphanumeric.
 <a href=#712 id=712 data-nosnippet>712</a>/// Used by realistic typing to inject occasional typos.
 <a href=#713 id=713 data-nosnippet>713</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>neighbor_key(c: char, rng: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>rand::Rng) -&gt; <span class="prelude-ty">Option</span>&lt;char&gt; {
-<a href=#714 id=714 data-nosnippet>714</a>    <span class="kw">use </span>rand::seq::SliceRandom;
+<a href=#714 id=714 data-nosnippet>714</a>    <span class="kw">use </span>rand::seq::IndexedRandom;
 <a href=#715 id=715 data-nosnippet>715</a>    <span class="kw">let </span>lower = c.to_ascii_lowercase();
 <a href=#716 id=716 data-nosnippet>716</a>    <span class="kw">let </span>neighbors: <span class="kw-2">&amp;</span>[char] = <span class="kw">match </span>lower {
 <a href=#717 id=717 data-nosnippet>717</a>        <span class="string">'q' </span>=&gt; <span class="kw-2">&amp;</span>[<span class="string">'w'</span>, <span class="string">'a'</span>, <span class="string">'s'</span>],
@@ -1199,13 +1199,13 @@
 <a href=#1199 id=1199 data-nosnippet>1199</a>            </span>{
 <a href=#1200 id=1200 data-nosnippet>1200</a>                <span class="number">0
 <a href=#1201 id=1201 data-nosnippet>1201</a>            </span>} <span class="kw">else </span>{
-<a href=#1202 id=1202 data-nosnippet>1202</a>                rand::Rng::gen_range(
+<a href=#1202 id=1202 data-nosnippet>1202</a>                rand::Rng::random_range(
 <a href=#1203 id=1203 data-nosnippet>1203</a>                    <span class="kw-2">&amp;mut </span>s.rng,
 <a href=#1204 id=1204 data-nosnippet>1204</a>                    profile.per_char_delay_ms_range.<span class="number">0</span>..=profile.per_char_delay_ms_range.<span class="number">1</span>,
 <a href=#1205 id=1205 data-nosnippet>1205</a>                )
 <a href=#1206 id=1206 data-nosnippet>1206</a>            };
 <a href=#1207 id=1207 data-nosnippet>1207</a>            <span class="kw">let </span>do_typo =
-<a href=#1208 id=1208 data-nosnippet>1208</a>                profile.typo_rate &gt; <span class="number">0.0 </span>&amp;&amp; rand::Rng::r#gen::&lt;f32&gt;(<span class="kw-2">&amp;mut </span>s.rng) &lt; profile.typo_rate;
+<a href=#1208 id=1208 data-nosnippet>1208</a>                profile.typo_rate &gt; <span class="number">0.0 </span>&amp;&amp; rand::Rng::random::&lt;f32&gt;(<span class="kw-2">&amp;mut </span>s.rng) &lt; profile.typo_rate;
 <a href=#1209 id=1209 data-nosnippet>1209</a>            <span class="kw">let </span>typo_char = <span class="kw">if </span>do_typo {
 <a href=#1210 id=1210 data-nosnippet>1210</a>                neighbor_key(lead, <span class="kw-2">&amp;mut </span>s.rng)
 <a href=#1211 id=1211 data-nosnippet>1211</a>            } <span class="kw">else </span>{
@@ -1213,9 +1213,9 @@
 <a href=#1213 id=1213 data-nosnippet>1213</a>            </span>};
 <a href=#1214 id=1214 data-nosnippet>1214</a>            <span class="kw">let </span>thinking = <span class="kw">if </span>lead == <span class="string">' '
 <a href=#1215 id=1215 data-nosnippet>1215</a>                </span>&amp;&amp; profile.thinking_pause_ms_range.<span class="number">0 </span>&gt; <span class="number">0
-<a href=#1216 id=1216 data-nosnippet>1216</a>                </span>&amp;&amp; rand::Rng::r#gen::&lt;f32&gt;(<span class="kw-2">&amp;mut </span>s.rng) &lt; <span class="number">0.05
+<a href=#1216 id=1216 data-nosnippet>1216</a>                </span>&amp;&amp; rand::Rng::random::&lt;f32&gt;(<span class="kw-2">&amp;mut </span>s.rng) &lt; <span class="number">0.05
 <a href=#1217 id=1217 data-nosnippet>1217</a>            </span>{
-<a href=#1218 id=1218 data-nosnippet>1218</a>                rand::Rng::gen_range(
+<a href=#1218 id=1218 data-nosnippet>1218</a>                rand::Rng::random_range(
 <a href=#1219 id=1219 data-nosnippet>1219</a>                    <span class="kw-2">&amp;mut </span>s.rng,
 <a href=#1220 id=1220 data-nosnippet>1220</a>                    profile.thinking_pause_ms_range.<span class="number">0</span>..=profile.thinking_pause_ms_range.<span class="number">1</span>,
 <a href=#1221 id=1221 data-nosnippet>1221</a>                )
