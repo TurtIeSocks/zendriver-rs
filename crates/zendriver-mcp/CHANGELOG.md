@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.16.1] - 2026-07-29
+
+### Added
+
+- Re-export GpuProfile and its value types
+
+
 ## [0.16.0] - 2026-07-25
 
 ### Added
