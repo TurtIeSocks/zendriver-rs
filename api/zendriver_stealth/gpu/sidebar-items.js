@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["GlParam","Provenance"],"struct":["GpuProfile","ShaderPrecision"]};
+window.SIDEBAR_ITEMS = {"enum":["GlParam","Provenance"],"mod":["device_select"],"struct":["GpuProfile","ShaderPrecision"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Backend","IdSource"],"fn":["build_catalogue","compose_renderer","emit_rust","extract_models","normalize_model","parse_pci_ids","unzip_network_json"],"mod":["sources"],"struct":["BuildReport","CatalogueRow","CorpusModel","PciDevice"]};

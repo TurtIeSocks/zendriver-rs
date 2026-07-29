@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["CORPUS_COMMIT","PCI_IDS_COMMIT"],"fn":["corpus_url","pci_ids_url"]};

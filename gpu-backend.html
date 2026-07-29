@@ -231,6 +231,15 @@ identities across a fleet, <code>Native</code> is not that tool; look at
 <a href="fingerprint.html#webgpu-opt-in-adapter-override--fabrication"><code>WebgpuSpec</code></a>
 for caller-supplied adapter values instead. <code>Native</code> makes the GPU surface
 <em>coherent</em>; it does not give you <em>control</em> over what it says.</p>
+<p>The reverse is also worth knowing. Everything in
+<a href="fingerprint.html#webgl-full-surface-value-spoof-resolved-from-measured-tiers">the fingerprint chapter</a>
+gives you control without coherence past the metadata: it can make a page read
+any catalogued GPU's values, but the pixels still come from whatever actually
+rendered. <code>Native</code> is the only backend where a page that renders and hashes the
+result sees a real device, which is why
+<a href="fingerprint.html#naming-a-gpu-from-the-device-catalogue"><code>nearest_gpu_device()</code></a>
+exists — it names the catalogued identity closest to the card you are already
+rendering on, so the claim and the pixels point at the same hardware.</p>
 <h2 id="the-launch-is-validated-and-there-is-no-automatic-fallback"><a class="header" href="#the-launch-is-validated-and-there-is-no-automatic-fallback">The launch is validated, and there is no automatic fallback</a></h2>
 <p>Chrome <em>starting</em> is not evidence that it got a GPU. On a GPU-less Ubuntu 24
 VM, Chrome 150 launched successfully under <code>Native</code> and then returned <code>null</code>

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["GpuPlatform"],"fn":["devices"],"struct":["GpuDeviceOut","GpuDevicesInput","GpuDevicesOutput"]};
