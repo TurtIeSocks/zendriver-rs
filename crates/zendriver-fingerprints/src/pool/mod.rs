@@ -110,6 +110,7 @@ pub async fn load_or_download(url: &str, policy: CachePolicy) -> Result<PoolSet,
     }
 
     tracing::debug!(url, "pool cache miss — downloading");
+    crate::tls::install_default_crypto_provider();
     let body = reqwest::get(url).await?.text().await?;
     let set = PoolSet::from_json(&body)?;
 

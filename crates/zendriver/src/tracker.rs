@@ -68,6 +68,7 @@ pub(crate) async fn load_or_download_blocklist(url: &str) -> Result<Vec<String>,
     }
 
     tracing::debug!(url, "tracker blocklist cache miss — downloading");
+    crate::tls::install_default_crypto_provider();
     let body = reqwest::get(url)
         .await
         .and_then(reqwest::Response::error_for_status)

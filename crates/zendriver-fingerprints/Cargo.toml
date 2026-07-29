@@ -13,8 +13,8 @@ workspace = true
 
 [features]
 default = []
-pool = ["dep:reqwest", "dep:dirs"]
-generative = ["dep:reqwest", "dep:dirs", "dep:zip"]
+pool = ["dep:reqwest", "dep:dirs", "dep:rustls"]
+generative = ["dep:reqwest", "dep:dirs", "dep:zip", "dep:rustls"]
 # Overlay a coherent country locale onto a generated persona.
 geo = ["zendriver-stealth/geo"]
 
@@ -26,6 +26,8 @@ thiserror.workspace         = true
 tracing.workspace           = true
 fastrand                    = "2"
 reqwest  = { workspace = true, optional = true }
+# Only to name the ring provider; tracks reqwest's optionality exactly.
+rustls   = { workspace = true, optional = true }
 dirs     = { workspace = true, optional = true }
 zip      = { workspace = true, optional = true }
 

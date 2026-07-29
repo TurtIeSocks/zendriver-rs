@@ -31,7 +31,7 @@ pub(crate) async fn download(
     dest_path: &Path,
     progress_cb: Option<&(dyn Fn(FetcherProgress) + Send + Sync)>,
 ) -> Result<(), FetcherError> {
-    let resp = reqwest::get(url).await?.error_for_status()?;
+    let resp = crate::tls::get(url).await?.error_for_status()?;
     let total = resp.content_length();
 
     let mut file = File::create(dest_path).await?;

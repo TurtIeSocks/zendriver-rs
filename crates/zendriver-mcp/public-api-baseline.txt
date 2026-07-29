@@ -4579,6 +4579,8 @@ impl<T> typenum::type_operators::Same for zendriver::tab::UserAgentOverride
 pub type zendriver::tab::UserAgentOverride::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for zendriver::tab::UserAgentOverride where V: ppv_lite86::types::MultiLane<T>
 pub fn zendriver::tab::UserAgentOverride::vzip(self) -> V
+pub mod zendriver::tls
+pub fn zendriver::tls::install_default_crypto_provider()
 pub mod zendriver::traits
 pub mod zendriver::traits::evaluable
 pub trait zendriver::traits::evaluable::Evaluable

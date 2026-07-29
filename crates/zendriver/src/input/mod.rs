@@ -84,7 +84,7 @@ impl InputController {
                 pointer_y: 0.0,
                 buttons_held: MouseButtonSet::empty(),
                 modifiers_held: KeyModifiers::empty(),
-                rng: rand::rngs::SmallRng::from_entropy(),
+                rng: rand::rngs::SmallRng::from_os_rng(),
             }),
             profile,
         })

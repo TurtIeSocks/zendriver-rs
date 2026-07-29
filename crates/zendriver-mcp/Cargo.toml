@@ -39,6 +39,7 @@ integration-tests = []
 public-api-check  = []
 
 [dependencies]
+rustls = { workspace = true }
 zendriver           = { workspace = true }
 rmcp                = { workspace = true, features = ["server", "macros", "schemars", "transport-io", "transport-streamable-http-server"] }
 schemars            = { workspace = true }

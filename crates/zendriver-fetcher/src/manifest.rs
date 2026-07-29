@@ -51,7 +51,7 @@ pub(crate) async fn fetch_manifest() -> Result<KnownGoodVersionsResponse, Fetche
 pub(crate) async fn fetch_manifest_from(
     url: &str,
 ) -> Result<KnownGoodVersionsResponse, FetcherError> {
-    let resp = reqwest::get(url).await?;
+    let resp = crate::tls::get(url).await?;
     let text = resp.text().await?;
     let parsed: KnownGoodVersionsResponse = serde_json::from_str(&text)?;
     Ok(parsed)
@@ -85,7 +85,7 @@ pub(crate) struct ChannelEntry {
 pub(crate) async fn fetch_channels_manifest_from(
     url: &str,
 ) -> Result<ChannelsResponse, FetcherError> {
-    let resp = reqwest::get(url).await?;
+    let resp = crate::tls::get(url).await?;
     let text = resp.text().await?;
     let parsed: ChannelsResponse = serde_json::from_str(&text)?;
     Ok(parsed)

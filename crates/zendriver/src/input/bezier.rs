@@ -21,7 +21,7 @@ impl BezierPath {
             if jitter_px == 0.0 {
                 return 0.0;
             }
-            rand::Rng::gen_range(rng, -jitter_px..jitter_px)
+            rand::Rng::random_range(rng, -jitter_px..jitter_px)
         };
         let c1 = (
             start.0 + dx * 0.25 + jitter(rng),

@@ -37,8 +37,13 @@ zendriver-datadome      = { path = "crates/zendriver-datadome", version = "0.1.1
 zendriver-fingerprints  = { path = "crates/zendriver-fingerprints", version = "0.3.9" }
 
 # MCP server
-rmcp        = { version = "1.7", default-features = false }
-rmcp-macros = { version = "1.7" }
+# Pinned exactly, matching proxybroker-rs: rmcp's macro and transport surface moves across
+# releases. proxybroker already pins `=2.2.0`, so a project depending on both crates is held
+# to 2.2.0 regardless — a looser range here would buy nobody freedom, only a second copy.
+# Relax in both repos together or not at all.
+# rmcp-macros dropped: 2.x ships the macros behind rmcp's own `macros` feature, and no crate
+# ever depended on it directly.
+rmcp        = { version = "=2.2.0", default-features = false }
 schemars    = "1.0"
 clap        = { version = "4", features = ["derive"] }
 axum        = { version = "0.7" }
@@ -59,7 +64,7 @@ serde              = { version = "1",     features = ["derive"] }
 serde_json         = { version = "1" }
 
 # External — errors / logging
-thiserror          = { version = "1" }
+thiserror          = { version = "2" }
 tracing            = { version = "0.1" }
 
 # External — utilities
@@ -71,9 +76,23 @@ num_cpus           = "1"
 regex              = "1"
 bitflags           = "2"
 unicode-segmentation = "1"
-rand               = { version = "0.8", default-features = false, features = ["std", "std_rng", "small_rng"] }
+rand               = { version = "0.9", default-features = false, features = ["std", "std_rng", "small_rng", "os_rng"] }
 base64             = "0.22"
-reqwest            = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "deflate", "stream"] }
+# 0.13, matching proxybroker-rs so a project using both compiles one HTTP stack.
+#
+# `rustls-no-provider`, NOT `rustls`: the latter enables `__rustls-aws-lc-rs`, whose -sys
+# C/asm crate is the musl cross-compile blocker. 0.12 wired a provider in for you via the
+# feature name (`rustls-tls` -> `__rustls-ring`); 0.13 stopped guessing, so the provider is
+# now installed explicitly at startup — see `install_default_crypto_provider`. Getting that
+# wrong is a RUNTIME panic ("no process-level CryptoProvider available"), not a build error.
+#
+# Roots come from `rustls-platform-verifier`, which `rustls-no-provider` pulls in. proxybroker
+# additionally enables reqwest's `webpki-roots` for bundled roots because it ships a FROM-scratch
+# image with no OS trust store; that optional dependency was dropped after reqwest 0.13.1, so
+# asking for it here would pin us below the latest patch for no benefit.
+reqwest            = { version = "0.13", default-features = false, features = ["rustls-no-provider", "gzip", "deflate", "stream"] }
+# Direct dep purely to name the ring provider in `install_default_crypto_provider`.
+rustls             = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }
 zip                = { version = "2",    default-features = false, features = ["deflate"] }
 sha2               = "0.10"
 dirs               = "5"

@@ -75,6 +75,12 @@ async fn wait_for_server_ready(addr: &str, attempts: usize) -> std::io::Result<(
 
 #[tokio::test]
 async fn browser_status_round_trip_over_http() {
+    // The rmcp streamable-HTTP client builds a reqwest Client internally, and reqwest 0.13's
+    // `rustls-no-provider` panics on client construction without a provider — even for plain
+    // HTTP, because the TLS config is built with the client rather than per request. This test
+    // is what caught that; the install belongs here as much as in the binary under test.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let child = Command::new(BIN_PATH)
         .arg("--http")
         .arg(TEST_ADDR)

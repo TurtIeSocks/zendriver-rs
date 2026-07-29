@@ -711,7 +711,7 @@ impl KeySequence {
 /// Returns a plausible nearby QWERTY key for `c`, or None for non-alphanumeric.
 /// Used by realistic typing to inject occasional typos.
 pub(crate) fn neighbor_key(c: char, rng: &mut impl rand::Rng) -> Option<char> {
-    use rand::seq::SliceRandom;
+    use rand::seq::IndexedRandom;
     let lower = c.to_ascii_lowercase();
     let neighbors: &[char] = match lower {
         'q' => &['w', 'a', 's'],
@@ -1199,13 +1199,13 @@ pub(crate) async fn type_text_realistic(
             {
                 0
             } else {
-                rand::Rng::gen_range(
+                rand::Rng::random_range(
                     &mut s.rng,
                     profile.per_char_delay_ms_range.0..=profile.per_char_delay_ms_range.1,
                 )
             };
             let do_typo =
-                profile.typo_rate > 0.0 && rand::Rng::r#gen::<f32>(&mut s.rng) < profile.typo_rate;
+                profile.typo_rate > 0.0 && rand::Rng::random::<f32>(&mut s.rng) < profile.typo_rate;
             let typo_char = if do_typo {
                 neighbor_key(lead, &mut s.rng)
             } else {
@@ -1213,9 +1213,9 @@ pub(crate) async fn type_text_realistic(
             };
             let thinking = if lead == ' '
                 && profile.thinking_pause_ms_range.0 > 0
-                && rand::Rng::r#gen::<f32>(&mut s.rng) < 0.05
+                && rand::Rng::random::<f32>(&mut s.rng) < 0.05
             {
-                rand::Rng::gen_range(
+                rand::Rng::random_range(
                     &mut s.rng,
                     profile.thinking_pause_ms_range.0..=profile.thinking_pause_ms_range.1,
                 )

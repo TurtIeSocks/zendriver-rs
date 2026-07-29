@@ -34,6 +34,7 @@ pub mod fetcher;
 pub mod manifest;
 pub mod platform;
 pub mod resolver;
+pub mod tls;
 pub mod version;
 
 pub use error::FetcherError;
