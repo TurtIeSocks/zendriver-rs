@@ -3,6 +3,56 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.11.0] - 2026-07-29
+
+### Added
+
+- Add GPU profile value types
+- Add the capture reader and committed tier captures
+- Emit the tier tables and guard them against drift
+- Resolve a flat GpuProfile from the tier tables
+- Enforce GPU parameter coherence invariants
+- Carry a resolved GpuProfile on Persona
+- Drive webgl.js from the resolved GPU profile **(BREAKING)**
+- Resolve persona.gpu and report platform skew
+- Capture the d3d11-fl11 GPU capability tier
+- Serve each tier's measured WebGPU limits and features
+- Capture the Intel Iris Pro 580 Vulkan tier
+- Register the Mesa/Vulkan Intel Iris Pro 580 tier
+
+### Changed
+
+- Fold webgpu_adapter into the GPU device table
+- Rename the Metal tier to metal-macos
+
+### Fixed
+
+- Surface the enum-aliasing caveat in the emitted doc comment
+- Match renderers against an explicit token, not a derived key
+- Delegate WebGL reads on a lost context
+- Gate the unmasked pair on the debug extension
+- Build the inert extension stub over its real prototype
+- Cache the synthesized extension object per context
+- Move the precision-format accessors onto a prototype
+- Derive the WebGPU adapter from the served renderer
+- Suppress the WebGPU value spoof under a Native WebGL surface
+- Give spoofed precision formats the real prototype
+- Let getExtension() with no argument throw as Chrome does
+- Forget debug_renderer_info enablement on context loss
+- Serve only static device capabilities, delegate mutable state **(BREAKING)**
+- Keep Chrome's extension order instead of sorting
+- Derive the default GPU renderer from the persona's platform
+- Stop pairing an Intel WebGPU adapter with SwiftShader WebGL
+- Report SwiftShader's Subzero build on Linux personas
+- Fail a Native launch that has no hardware WebGL
+- Fill the DRAW_BUFFERn gap the served cap opens
+- Match the DRAW_BUFFERn gap fill to the bound framebuffer
+- Make requestDevice agree with the served adapter
+- Stop a comma-less renderer mangling the derived vendor
+- Split the D3D11 tier on ANGLE's NVIDIA-only workaround
+- Suppress DRAW_BUFFERn past the served cap
+
+
 ## [0.10.0] - 2026-07-25
 
 ### Added

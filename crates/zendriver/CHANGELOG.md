@@ -5,6 +5,32 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-07-29
+
+### Added
+
+- Record GL enum numbers in the probe output
+- Add capture-gpu-tier for probing a backend on other machines
+- Re-export GpuProfile and its value types
+- Capture the d3d11-fl11 GPU capability tier
+- Serve each tier's measured WebGPU limits and features
+- Register the Mesa/Vulkan Intel Iris Pro 580 tier
+- Write GPU tier captures from probe_gpu itself
+
+### Changed
+
+- Rename the Metal tier to metal-macos
+
+### Fixed
+
+- Derive the default GPU renderer from the persona's platform
+- Fail a Native launch that has no hardware WebGL
+- Fill the DRAW_BUFFERn gap the served cap opens
+- Match the DRAW_BUFFERn gap fill to the bound framebuffer
+- Make requestDevice agree with the served adapter
+- Report which Windows a GPU capture came from
+
+
 ## [0.4.4] - 2026-07-25
 
 ### Added
