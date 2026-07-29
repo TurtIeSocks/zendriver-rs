@@ -1,0 +1,50 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::gpu::GpuDevicesOutput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: GpuDevicesOutput
+description: "Output for `browser_gpu_devices`."
+type: object
+properties:
+  devices:
+    description: "Matching devices, most common first."
+    type: array
+    items:
+      $ref: "#/$defs/GpuDeviceOut"
+  total_matched:
+    description: "How many matched before `limit` was applied, so a caller can tell a\nshort list from a truncated one."
+    type: integer
+    format: uint
+    minimum: 0
+required:
+  - devices
+  - total_matched
+$defs:
+  GpuDeviceOut:
+    description: "How common a device is, and how to claim it."
+    type: object
+    properties:
+      device_id:
+        description: "PCI device id as hex, or absent on Apple silicon, which exposes none."
+        type:
+          - string
+          - "null"
+      model:
+        description: "Driver-reported model text, e.g. `NVIDIA GeForce RTX 4090`. This is the\nexact string `browser_gpu_devices`' own `query` matches on."
+        type: string
+      renderer:
+        description: "The full `UNMASKED_RENDERER_WEBGL` string a page reads for this device.\n\n**This is the field to use.** Put it in a persona's\n`webgl.unmasked_renderer` and pass that to `browser_open` — it selects\nthe capability tier, the WebGPU adapter and the vendor on its own."
+        type: string
+      share:
+        description: "Share of the browser population reporting this device, `0.0..=1.0`.\nMeasured from the fingerprint corpus, not from a hardware survey."
+        type: number
+        format: double
+      vendor:
+        description: "ANGLE's vendor token, e.g. `NVIDIA`."
+        type: string
+    required:
+      - model
+      - vendor
+      - share
+      - renderer

@@ -1,7 +1,7 @@
 # MCP server (`zendriver-mcp`)
 
 `zendriver-mcp` is a [Model Context Protocol](https://modelcontextprotocol.io/)
-server that exposes zendriver-rs through 71 MCP tools (72 with the
+server that exposes zendriver-rs through 72 MCP tools (73 with the
 optional `fingerprints` feature), so any
 MCP-compatible client (Claude Desktop, Claude Code, custom agents) can
 drive a real, stealth-by-default Chrome browser.
@@ -66,7 +66,7 @@ OPTIONS:
 
 ## Tool surface
 
-71 tools across these categories (72 with the optional `fingerprints`
+72 tools across these categories (73 with the optional `fingerprints`
 feature):
 
 | Category               | Tools                                                                                                                       | Count |
@@ -89,11 +89,18 @@ feature):
 | Interception (gated)   | `browser_intercept_add_rule / _remove_rule / _list_rules / _clear_rules`                                                    |     4 |
 | Expect (gated)         | `browser_expect_register / _await / _cancel`                                                                                |     3 |
 | Cloudflare (gated)     | `browser_solve_turnstile`                                                                                                   |     1 |
+| GPU catalogue          | `browser_gpu_devices`                                                                                                       |     1 |
 | Imperva (gated)        | `browser_solve_imperva`                                                                                                     |     1 |
 | DataDome (gated)       | `browser_solve_datadome`                                                                                                   |     1 |
 | Fetcher (gated)        | `browser_install_chrome`                                                                                                    |     1 |
 | Monitor (gated)        | `browser_monitor_start / _read / _stop`                                                                                    |     3 |
 | Fingerprint (gated)    | `browser_fingerprint_generate`                                                                                             |     1 |
+
+`browser_gpu_devices` lists the measured GPU device catalogue so an agent can
+claim a specific real GPU. Its `renderer` field goes straight into a persona's
+`webgl.unmasked_renderer` and selects the capability tier, WebGPU adapter and
+vendor by itself — see the
+[fingerprint chapter](fingerprint.md#naming-a-gpu-from-the-device-catalogue).
 
 All find / action tools share a `Selector` arg — one-of `css | xpath |
 text | text_exact | text_regex | role`, or bs4-like predicate mode (`tag`

@@ -123,7 +123,10 @@ pub(crate) fn platform_skew(platform: Platform, tier: Tier) -> Option<String> {
     let ok = matches!(
         (platform, tier),
         (Platform::MacIntel, Tier::MetalMacos)
-            | (Platform::Win32, Tier::D3d11Fl11 | Tier::D3d11Fl11Nvidia)
+            | (
+                Platform::Win32,
+                Tier::D3d11Fl11 | Tier::D3d11Fl11Nvidia | Tier::D3d11Fl11IntelGen9
+            )
             | (Platform::LinuxX86_64, Tier::VulkanMesaIntelIrisPro580)
     );
     (!ok).then(|| format!("persona claims {platform:?} but its GPU values come from {tier:?}"))
@@ -365,6 +368,21 @@ mod tests {
         assert!(platform_skew(Platform::Win32, Tier::D3d11Fl11).is_none());
         assert!(platform_skew(Platform::MacIntel, Tier::D3d11Fl11).is_some());
         assert!(platform_skew(Platform::LinuxX86_64, Tier::D3d11Fl11).is_some());
+        // All three D3D11 tiers are the same backend, so all three are Windows'
+        // and none is anyone else's. Omitting the Intel Gen9 one here would
+        // leave every Gen9 persona logging a skew warning on the platform it
+        // actually belongs to.
+        for tier in [Tier::D3d11Fl11Nvidia, Tier::D3d11Fl11IntelGen9] {
+            assert!(platform_skew(Platform::Win32, tier).is_none(), "{tier:?}");
+            assert!(
+                platform_skew(Platform::MacIntel, tier).is_some(),
+                "{tier:?}"
+            );
+            assert!(
+                platform_skew(Platform::LinuxX86_64, tier).is_some(),
+                "{tier:?}"
+            );
+        }
         // And the Vulkan/Mesa capture is Linux's: coherent there, impossible on
         // either other OS, which no longer has to fall back to software.
         assert!(platform_skew(Platform::LinuxX86_64, Tier::VulkanMesaIntelIrisPro580).is_none());

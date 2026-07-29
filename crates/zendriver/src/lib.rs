@@ -268,9 +268,9 @@ pub use geo_resolver::IpApiResolver;
 /// Stealth profile + fingerprint configuration re-exported from `zendriver-stealth`.
 pub mod stealth {
     pub use zendriver_stealth::{
-        Fingerprint, GlParam, GpuBackend, GpuProfile, InputProfile, Persona, PersonaBuilder,
-        Platform, Provenance, Seed, ShaderPrecision, StealthProfile, Strategy, Surface,
-        UserAgentMetadata, WebglSpec, WebgpuSpec,
+        DeviceLookupError, Fingerprint, GlParam, GpuBackend, GpuDevice, GpuProfile, InputProfile,
+        Persona, PersonaBuilder, Platform, Provenance, Seed, ShaderPrecision, StealthProfile,
+        Strategy, Surface, UserAgentMetadata, WebglSpec, WebgpuSpec,
     };
 }
 
@@ -287,6 +287,58 @@ pub mod stealth {
 /// ```
 pub async fn start() -> Result<Browser> {
     Browser::builder().launch().await
+}
+
+/// The catalogued GPU closest to the one this machine actually has.
+///
+/// **Opt-in, and deliberately a function you call rather than a default.**
+/// Probing the host to choose what a persona claims is detect-and-adjust, which
+/// this project does not do implicitly — the named-opt-in shape is the same one
+/// `geo_auto` uses. Nothing calls this for you.
+///
+/// It launches a short-lived browser on [`GpuBackend::Native`], reads the
+/// renderer string the host reports, and matches it against the catalogue by
+/// [`GpuDevice::nearest_to_renderer`]'s ladder: exact identity, then the same
+/// model, then the same vendor on the same backend, then the same backend.
+///
+/// Answers `Ok(None)` rather than reaching for something plausible when the
+/// host's backend has no catalogue to draw from — Linux, whose Vulkan tier is
+/// device-scoped, and software rendering. A Windows GPU is not a reasonable
+/// answer for a Linux host merely because one was asked for.
+///
+/// # Errors
+/// [`BrowserError::GpuBackendUnavailable`] on a host with no usable GPU, since
+/// there is then no renderer to read.
+///
+/// ```no_run
+/// # async fn ex() -> zendriver::Result<()> {
+/// if let Some(device) = zendriver::nearest_gpu_device().await? {
+///     println!("closest catalogued GPU: {}", device.model());
+/// }
+/// # Ok(())
+/// # }
+/// ```
+pub async fn nearest_gpu_device() -> Result<Option<zendriver_stealth::GpuDevice>> {
+    /// Reads only the unmasked renderer. Kept minimal on purpose: this runs on
+    /// a caller's machine, and the host's GPU string is the single value the
+    /// match needs.
+    const RENDERER_JS: &str = r"(() => {
+      const gl = document.createElement('canvas').getContext('webgl2')
+              || document.createElement('canvas').getContext('webgl');
+      if (!gl) return '';
+      const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+      return dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : '';
+    })()";
+
+    let browser = Browser::builder()
+        .gpu_backend(GpuBackend::Native)
+        .launch()
+        .await?;
+    let tab = browser.main_tab();
+    let renderer: String = tab.evaluate(RENDERER_JS).await.unwrap_or_default();
+    browser.close().await.ok();
+
+    Ok(zendriver_stealth::GpuDevice::nearest_to_renderer(&renderer))
 }
 
 #[cfg(test)]

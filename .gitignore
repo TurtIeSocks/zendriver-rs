@@ -21,3 +21,6 @@ target/
 #.idea/
 # Superpowers SDD scratch (task briefs, reports, ledgers) — never commit
 .superpowers/
+
+# Local GPU capture staging (not committed)
+.capture-staging/

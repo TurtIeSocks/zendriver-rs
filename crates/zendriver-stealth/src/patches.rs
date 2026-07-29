@@ -641,6 +641,28 @@ mod tests {
     // --- Migrated identity tests (the original three) --------------------
 
     #[test]
+    fn a_catalogued_device_reaches_the_patch_with_its_own_tier_values() {
+        // The builder is only worth having if the renderer it pins actually
+        // selects that device's tier downstream. The RTX 4090 sits on the
+        // NVIDIA D3D11 tier, whose MAX_VERTEX_UNIFORM_VECTORS is 4095; the
+        // non-NVIDIA tier reports 4096, so this tells the two apart.
+        let device = crate::GpuDevice::by_name("NVIDIA GeForce RTX 4090").expect("catalogued");
+        let persona = Persona {
+            platform: Some(crate::Platform::Win32),
+            ..Persona::builder().gpu_device(device).build()
+        };
+        let s = bootstrap_script(&persona, &mock_identity());
+        assert!(
+            s.contains("NVIDIA GeForce RTX 4090 (0x00002684)"),
+            "the catalogued renderer never reached the patch"
+        );
+        assert!(
+            s.contains("4095"),
+            "did not resolve the NVIDIA D3D11 tier for a catalogued NVIDIA device"
+        );
+    }
+
+    #[test]
     fn bootstrap_includes_all_nine_patches() {
         let s = bootstrap_script(&Persona::default(), &mock_identity());
         assert!(s.contains("webdriver"), "webdriver patch missing");

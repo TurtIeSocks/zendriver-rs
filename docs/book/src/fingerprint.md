@@ -20,7 +20,7 @@ You can mix any persona source with any per-surface strategy independently.
 
 | Surface | Kind | Default strategy | What it affects |
 |---------|------|-----------------|-----------------|
-| `Canvas` | Noise | `Seeded` | `getImageData`, `toDataURL` pixel data |
+| `Canvas` | Noise | `Seeded` | Pixel readback: `getImageData`, `toDataURL`, `toBlob`, and probe-shaped `readPixels` |
 | `Audio` | Noise | `Seeded` | `AnalyserNode` frequency / time-domain data |
 | `ClientRects` | Noise | `Seeded` | `getBoundingClientRect` sub-pixel dimensions |
 | `Webgl` | Value | `Value` | Every static device capability `getParameter` reports (WebGL1 + WebGL2), both extension lists, and `getShaderPrecisionFormat` — not just `UNMASKED_VENDOR_WEBGL`/`UNMASKED_RENDERER_WEBGL`. Per-context mutable state stays the backend's |
@@ -199,6 +199,41 @@ let browser = Browser::builder()
     .launch().await?;
 ```
 
+## Canvas (pixel readback farbling)
+
+The `Canvas` surface perturbs pixels on their way out, so the image a probe
+hashes differs per persona while the visible canvas is untouched. The
+perturbation is a **palette**: one table per colour channel, built from the
+seed, mapping each 8-bit value to itself plus or minus one. Alpha is left
+alone, since perturbing it changes compositing and it rarely carries
+fingerprint weight.
+
+**A palette rather than per-pixel noise, because per-pixel noise is
+self-refuting.** Keying the noise on a pixel's position gives every pixel an
+independent draw, and that fails two checks a page can run in a few lines:
+
+- **A flat fill must come back flat.** Rendering is a function of its input, so
+  identical pixels come back identical on every real GPU. Position-keyed noise
+  broke that. Measured before the rewrite: a uniform WebGL clear read back with
+  three different red values.
+- **Every readback path must agree.** `readPixels` returns rows bottom-up and
+  `getImageData` returns them top-down, so a position-keyed scheme cannot agree
+  with itself across paths even in principle. A page could render one scene,
+  read it both ways and compare. A palette has no position to disagree about.
+
+Anti-linkage survives the change: a different seed permutes the palette
+differently, so the hash still differs per persona, and it stays stable across
+repeat reads because the mapping is a pure function.
+
+**`readPixels` is farbled only when the read looks like a probe** — a whole
+small drawing buffer, read as `RGBA`/`UNSIGNED_BYTE`. GPU picking reads a 1x1
+rectangle off a large buffer and compares it against an exact id colour, so
+perturbing that breaks real pages; float readbacks are compute output, where a
+one-LSB change is meaningless at best. The residue, stated rather than hidden: a
+page that reads 1x1 *and* reads the full buffer can see that only one of them
+moved. That is a contrived probe, and the alternative is breaking picking on
+sites that use it.
+
 ## WebGL (full-surface value spoof, resolved from measured tiers)
 
 The `Webgl` surface's default `Value` strategy no longer substitutes a
@@ -227,23 +262,46 @@ save and restore through `getParameter`.
 
 **Values come from measured capability tiers, not per-parameter guesses.**
 How far one capture reaches depends on the backend, because ANGLE (Chrome's GL
-layer) decides these values differently per backend. Five tiers ship today, and
+layer) decides these values differently per backend. Six tiers ship today, and
 all but the last generalize:
 
 - `SwiftShader` — Chrome's software rasterizer, the same numbers on every OS.
 - Metal on macOS — ANGLE's Metal backend, covering every Mac. The values are
   compile-time constants in ANGLE's `DisplayMtl.mm` `TARGET_OS_OSX` branch, so
   an Intel Mac and an Apple silicon one report the same numbers.
-- D3D11 (feature level 11_0+) — ANGLE's Direct3D 11 backend on Windows, in two
-  tiers. ANGLE derives the values from `D3D11_REQ_*` constants rather than from
-  the card, so one tier covers every Intel and AMD part at that feature level.
-  NVIDIA gets its own: `renderer11_utils.cpp` enables
-  `skipVSConstantRegisterZero` when and only when the vendor is NVIDIA, which
-  docks `MAX_VERTEX_UNIFORM_VECTORS` from 4096 to 4095 and shifts the two
-  values derived from it. Everything else matches — probing an RTX 4090 and an
-  AMD Radeon on one machine found no other difference in either WebGL
-  parameter set, the extension lists, the shader precisions, or any WebGPU
-  limit or feature.
+- D3D11 (feature level 11_0+) — ANGLE's Direct3D 11 backend on Windows, in
+  three tiers. ANGLE derives almost all of these values from `D3D11_REQ_*`
+  constants rather than from the card, so a catch-all tier covers most parts at
+  that feature level. Two refinements sit above it, and both were found by
+  probing a second device rather than predicted:
+  - NVIDIA. `renderer11_utils.cpp` enables `skipVSConstantRegisterZero` when
+    and only when the vendor is NVIDIA, which docks
+    `MAX_VERTEX_UNIFORM_VECTORS` from 4096 to 4095 and shifts the two values
+    derived from it. Nothing else moves: probing an RTX 4090 and an AMD Radeon
+    on one machine found no other difference in either WebGL parameter set, the
+    extension lists, the shader precisions, or any WebGPU limit or feature.
+  - Intel Gen9. Two values on this backend are read off the device rather than
+    off the feature level, and an Intel HD Graphics 520 reports both
+    differently from the Radeon: `MAX_SAMPLES` is 16 against 8 (ANGLE fills it
+    by asking `CheckMultisampleQualityLevels` per renderable format), and the
+    WebGPU adapter enumerates 16 features against 19, lacking `shader-f16`,
+    `subgroups` and `bgra8unorm-storage`. Everything else matched, including
+    all 82 WebGL1 parameters, the other 131 WebGL2 ones, both extension lists
+    in content and order, and all 36 WebGPU limits.
+
+  **Only Gen9 is routed to that third tier**, which is a deliberate limit
+  rather than an oversight. Gen11 (Iris Plus G4/G7) and Gen12 (Iris Xe, Arc)
+  stay on the catch-all one: nobody has probed them, both of the values that
+  moved are device-derived, and Iris Xe is the heaviest single entry in the
+  device catalogue — so a guess there would be wrong at the largest available
+  scale. Closing that gap needs a Gen11 and a Gen12 capture.
+
+  The limit applies backwards too, and it turns on a detail worth knowing
+  before extending the routing. Intel spelled Broadwell (Gen8) with four
+  digits, `HD Graphics 5500`, where Gen9 used three, `HD Graphics 520` — so
+  matching on an `HD Graphics 5` prefix quietly takes a generation nobody
+  probed. Routing counts the digits instead, and Broadwell stays on the
+  catch-all tier.
 - Intel Iris Pro Graphics 580 (Skylake GT4e) under Mesa 25.2.8 — ANGLE's
   **Vulkan** backend on Linux. This one covers **that GPU under that driver and
   nothing else**: `vk_caps_utils.cpp` fills its caps straight from
@@ -254,6 +312,14 @@ all but the last generalize:
   tier and needs its own capture. That is why it is named for the device and
   the driver rather than for the backend, and why no "Linux" or "Vulkan" tier
   exists to generalize it.
+
+  That reasoning has since been measured rather than left as a reading of
+  ANGLE's source. A second Mesa/Vulkan device — AMD RDNA2 under RADV, same
+  Chrome build — differs from this tier in 12 WebGL2 parameters, including
+  `MAX_3D_TEXTURE_SIZE` 8192 against 2048 and
+  `UNIFORM_BUFFER_OFFSET_ALIGNMENT` 4 against 64, and the two disagree on
+  extensions as well. Worth having, because `D3D11_REQ_*` was the other
+  source-argument in this chapter and it turned out to have two escapes.
 
 The measurement shows the split rather than just asserting it. The Vulkan
 capture is closest to SwiftShader (7 of 82 WebGL1 parameters differ and 21 of
@@ -352,6 +418,164 @@ crate from committed probe captures
 and fails the build on any diff, so the shipped file can never drift from
 its source captures.
 
+### What the tier tables buy, and what they do not
+
+Worth stating plainly, because the mechanism above is easy to mistake for more
+than it is.
+
+**What they remove is a positive signal.** Before, a persona reported
+`MAX_VIEWPORT_DIMS` from one backend beside `MAX_TEXTURE_SIZE` from another — a
+pair no device produces, checkable in two lines. Same for NVIDIA's 4095 under an
+AMD name, and for `DRAW_BUFFER6` answering past its own advertised cap. Those
+were *detectably fake*, and they are gone. Going from wrong to not-wrong is
+worth doing, and it is not the same as convincing.
+
+**What they cannot do is survive a render.** A page that hashes canvas or WebGL
+pixels reads what actually rendered, and on the default software rasterizer that
+is not what the claimed device would produce. No amount of metadata fixes it,
+and nothing here could: matching a specific GPU's pixels means reproducing a
+proprietary shader compiler's optimisation choices bit-for-bit and tracking them
+across driver releases. Fused multiply-add alone rounds differently from a
+separate multiply and add, which is a different last bit and a different hash.
+
+So treat this as a floor rather than a defence. It is sufficient against a
+checker that reads values only — common, because rendering and reading back
+costs real time — and insufficient against one that renders. For the latter the
+honest answer is [`GpuBackend::Native`](gpu-backend.md) on hardware that matches
+the persona, where pixels and values agree because both come from the same
+machine.
+
+**The catalogue's strongest justification is a different one.** It is not
+fooling a hardware check. Before it existed, every zendriver user on Windows
+reported the same RTX 4090 — a constant shared across the entire user base,
+which is a *library* fingerprint rather than a GPU one. That signal is
+independent of pixels, no render defeats it, and the catalogue kills it.
+
+### Naming a GPU from the device catalogue
+
+The tiers decide what a device *can do*. The catalogue decides *which device*
+it is — 482 identities, against the one default each platform used to get.
+
+```rust,no_run
+use zendriver::stealth::{GpuDevice, Persona, Platform};
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let persona = Persona {
+    platform: Some(Platform::Win32),
+    ..Persona::builder()
+        .gpu_device(GpuDevice::by_name("NVIDIA GeForce RTX 4090")?)
+        .build()
+};
+# Ok(())
+# }
+```
+
+`gpu_device` sets nothing but the renderer string, because that string is a
+device's whole contribution: it already selects the capability tier, the WebGPU
+adapter, and the vendor through the machinery above. There is no separate GPU
+field to keep in sync.
+
+**Drawing one instead of naming it.** A fleet wants variety, and ten personas
+that agree on every readable GPU value are ten personas that can be grouped:
+
+```rust,no_run
+use zendriver::stealth::{GpuDevice, Platform, Seed};
+
+// Same seed, same device, every run.
+let uniform = GpuDevice::from_seed(Seed(42), Platform::Win32);
+// Weighted by how common the device actually is.
+let realistic = GpuDevice::by_share(Seed(42), Platform::Win32);
+```
+
+`by_share` is usually the one you want. Over 5000 Win32 draws it yields 238
+distinct devices led by Intel UHD Graphics at 15%, Iris Xe at 15% and AMD
+integrated at 9% — a browser population, laptop iGPUs first. `from_seed` draws
+uniformly, which makes a GeForce 210 as likely as the commonest laptop chip.
+
+Those weights come from the same fingerprint corpus the device names do, as
+marginal probabilities over its user-agent prior. They are deliberately *not*
+Steam Hardware Survey numbers: Steam skews toward discrete gaming cards, and
+this is a browser tool.
+
+### Why the weighting matters more than it looks
+
+The instinct is that a spoof succeeds by being *correct*. For fingerprinting it
+succeeds by being *common*, and those are different targets.
+
+A detection vendor sitting in the request path sees hundreds of millions of real
+sessions, each handing over a renderer string, a canvas hash, a font list, an
+audio hash, and timings, all correlated. That is a continuously-updating census
+of what real browsers report, and it costs them nothing beyond being there — it
+even self-updates through driver releases, because real users update drivers.
+Nobody needs a reference lab of every GPU on every driver version when the
+population reports itself.
+
+So the practical check is not "is this what an RTX 4090 should render?" but
+"does this combination show up across thousands of unrelated sessions?" Rarity
+is the signal, not incorrectness. A device nobody else reports is conspicuous
+even when every value in it is internally perfect.
+
+That is the real argument for `by_share`: it lands in the dense part of the
+distribution. A uniform draw is just as coherent and considerably rarer, and a
+GeForce 210 in current traffic is a small population to hide in.
+
+It also sharpens a tradeoff the surface farbling makes. Per-persona noise
+defeats *linkage* — two sessions cannot be tied together by a shared canvas
+hash — while making each session's hash unique, and uniqueness is the anomaly a
+consensus check looks for. Those goals genuinely oppose each other. Defending
+against being followed and defending against being spotted are not the same
+problem, and no single setting wins both.
+
+(Reasoning about incentives and cost, not inside knowledge of any vendor's
+implementation. The conclusion is robust either way: a common device is never
+the worse choice.)
+
+**What the catalogue will not do.**
+
+- **Invent a device id.** A D3D11 renderer string carries one by construction,
+  so a model the sources never pair with an id is dropped rather than given a
+  placeholder. The generated table names the ones it dropped.
+- **Cross a platform.** Every draw is filtered through the same skew check the
+  invariants use, so a Win32 persona cannot draw an Apple identity.
+- **Cover Linux.** ANGLE's Vulkan backend reads its limits off the physical
+  device, so there is no shared tier for a Linux identity to layer over and
+  `from_seed` answers `None` there.
+- **Claim a feature level it does not have.** ANGLE writes the feature level
+  into the renderer string as its shader model, so pre-FL11 cards are excluded
+  rather than filed under an FL11 tier.
+
+**Matching the host's own GPU.** `zendriver::nearest_gpu_device()` launches a
+short-lived browser on the native backend, reads what this machine reports, and
+returns the closest catalogued device — exact identity first, then the same
+model, then the same vendor on the same backend, then the same backend.
+
+```rust,no_run
+# async fn ex() -> zendriver::Result<()> {
+if let Some(device) = zendriver::nearest_gpu_device().await? {
+    println!("closest catalogued GPU: {}", device.model());
+}
+# Ok(())
+# }
+```
+
+It is a function you call, never a default. Probing the host to decide what a
+persona claims is detect-and-adjust, which this project does not do implicitly;
+the named-opt-in shape is the same one `geo_auto` uses. It answers `None` rather
+than reaching for something plausible when the host's backend has no catalogue —
+Linux and software rendering — because a Windows GPU is not a reasonable answer
+for a Linux host merely because one was requested.
+
+Pairing it with [`GpuBackend::Native`](gpu-backend.md) is the one configuration
+where the values and the pixels agree by construction, because both come off the
+same physical card. Everywhere else they are two separate claims that happen to
+be consistent with each other, and only one of them survives being rendered. If
+a target is known to run WebGL challenges, this pairing is the answer and no
+amount of catalogue work substitutes for it.
+
+`by_name` refuses ambiguity rather than guessing — `"rtx 40"` returns every
+candidate — while an exact model name always wins, since several catalogued
+names are prefixes of others.
+
 ## WebGPU (opt-in adapter override / fabrication)
 
 By default (`Persona.webgpu = None`, or `Some(WebgpuSpec::default())`), the
@@ -370,10 +594,11 @@ part's architecture token, so it stays empty rather than guessed.
 **`.limits` and `.features` come from the same measured tier the WebGL surface
 serves.** The probe captures each tier's `navigator.gpu` adapter alongside its
 WebGL blocks, in one run on one machine, so the two APIs answer for one device:
-a `Win32` persona reports the D3D11 tier's 2 GiB `maxBufferSize` and its 19
-features, a `MacIntel` persona the Metal tier's 4 GiB - 4 and its 22. Before
-this they were left at the host's, so an adapter could name an NVIDIA card
-above a Metal buffer limit — the same gap the tier tables closed for WebGL.
+a `Win32` persona reports the D3D11 tiers' 2 GiB `maxBufferSize` and 19 features
+(16 on Intel Gen9), a `MacIntel` persona the Metal tier's 4 GiB - 4 and its 22.
+Before this they were left at the host's, so an adapter could name an NVIDIA
+card above a Metal buffer limit — the same gap the tier tables closed for
+WebGL.
 
 Two tiers serve **neither**, and in both cases that is the measurement rather
 than a hole. Chrome on SwiftShader resolves `requestAdapter()` to `null`, and
@@ -384,15 +609,21 @@ Substituting a neighbouring tier's numbers would hand a persona that just told
 WebGL it has a software rasterizer, or a machine with WebGPU disabled, a
 hardware adapter's capabilities.
 
-One honest caveat, the mirror of the D3D11 tier's WebGL story. The WebGL values
-generalize across every FL11+ card because ANGLE derives them from `D3D11_REQ_*`
-constants; the *limits* generalize the same way (Dawn's D3D12 backend derives
-them from binding-tier constants), but a few *features* are genuinely
-hardware-gated — `shader-f16`, `subgroups`, `clip-distances`, `primitive-index`.
-The tier's list was measured on an RTX 4090, so pinning an old Intel iGPU's
-renderer under that tier can claim a feature that card would not have. Nothing
-in the tables can tell the two apart without a capture from such a card; if that
-fidelity matters, pin `features` yourself through `WebgpuSpec`.
+One honest caveat, the mirror of the D3D11 tier's WebGL story — and one that has
+since been half-measured. Most WebGL values generalize across FL11+ cards
+because ANGLE derives them from `D3D11_REQ_*` constants, and the WebGPU *limits*
+generalize the same way (Dawn's D3D12 backend derives them from binding-tier
+constants). A few *features* are genuinely hardware-gated, though —
+`shader-f16`, `subgroups`, `bgra8unorm-storage` — and the catch-all tier's list
+was measured on desktop hardware.
+
+Taking the capture this predicted is what closed half of it: an Intel HD
+Graphics 520 enumerates exactly those three fewer features, and Gen9 iGPUs now
+resolve their own tier with its own 16-feature list rather than borrowing the
+desktop one. What is still open is Gen11 and Gen12, which remain on the
+catch-all tier because nobody has probed them — so pinning an Iris Xe renderer
+still serves a feature list measured on another card. If that fidelity matters
+before someone captures those, pin `features` yourself through `WebgpuSpec`.
 
 `WebgpuSpec` (mirroring `WebglSpec`'s strategy+values shape) adds two OPT-IN
 capabilities on top:

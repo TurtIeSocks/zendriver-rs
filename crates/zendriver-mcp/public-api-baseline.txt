@@ -4067,9 +4067,11 @@ pub type zendriver::screenshot::ScreenshotBuilder<'tab>::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for zendriver::screenshot::ScreenshotBuilder<'tab> where V: ppv_lite86::types::MultiLane<T>
 pub fn zendriver::screenshot::ScreenshotBuilder<'tab>::vzip(self) -> V
 pub mod zendriver::stealth
+pub use zendriver::stealth::DeviceLookupError
 pub use zendriver::stealth::Fingerprint
 pub use zendriver::stealth::GlParam
 pub use zendriver::stealth::GpuBackend
+pub use zendriver::stealth::GpuDevice
 pub use zendriver::stealth::GpuProfile
 pub use zendriver::stealth::InputProfile
 pub use zendriver::stealth::Persona
@@ -8691,5 +8693,6 @@ pub fn zendriver::frame::Frame::find_all(&self) -> zendriver::query::FindAllBuil
 impl zendriver::traits::queryable::Queryable for zendriver::tab::Tab
 pub fn zendriver::tab::Tab::find(&self) -> zendriver::query::FindBuilder<'_>
 pub fn zendriver::tab::Tab::find_all(&self) -> zendriver::query::FindAllBuilder<'_>
+pub async fn zendriver::nearest_gpu_device() -> zendriver::error::Result<core::option::Option<zendriver_stealth::gpu::device_select::GpuDevice>>
 pub async fn zendriver::start() -> zendriver::error::Result<zendriver::browser::Browser>
 pub type zendriver::Result<T, E> = core::result::Result<T, E>

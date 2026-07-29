@@ -1,0 +1,29 @@
+#
+#	List of PCI ID's
+#
+#	Trimmed from the real pci.ids to the shapes the parser has to survive:
+#	comments, a blank line, three vendor blocks, subsystem lines, and the
+#	device-class sections that close the real file.
+#
+
+10de  NVIDIA Corporation
+	2484  GA104 [GeForce RTX 3070]
+		1043 87b3  TUF Gaming
+		1462 3910  GeForce RTX 3070 VENTUS
+	2684  AD102 [GeForce RTX 4090]
+1002  Advanced Micro Devices, Inc. [AMD/ATI]
+	164e  Raphael
+	73df  Navi 22 [Radeon RX 6700/6700 XT/6750 XT / 6800M/6850M XT]
+
+8086  Intel Corporation
+	3e92  CoffeeLake-S GT2 [UHD Graphics 630]
+
+# Device classes follow the vendor list in the real file. Their subclass lines
+# are indented exactly like device lines, so a parser that keeps the previous
+# vendor when a heading fails to parse files all of them under Intel.
+C 00  Unclassified device
+	00  Non-VGA unclassified device
+	01  VGA compatible unclassified device
+C 03  Display controller
+	00  VGA compatible controller
+		00  VGA controller

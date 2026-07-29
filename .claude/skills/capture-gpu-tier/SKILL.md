@@ -22,27 +22,47 @@ Whether a capture generalizes beyond the machine it was taken on depends
 entirely on the backend, because ANGLE decides these values differently per
 backend. Know which case you are in before you name the tier:
 
-- **D3D11 — generalizes by feature level, except across the NVIDIA line.**
-  `renderer11_utils.cpp` branches on the `D3D_FEATURE_LEVEL` for its caps, so
-  FL11+ cards agree on all but one of them. The exception is a vendor-
-  conditional workaround in the same file:
-  `ANGLE_FEATURE_CONDITION(features, skipVSConstantRegisterZero, isNvidia)`,
-  which then applies `caps->maxVertexUniformVectors -= 1`. NVIDIA parts
-  therefore report `MAX_VERTEX_UNIFORM_VECTORS` 4095 where AMD and Intel report
-  4096, and the two values derived from it shift with it. Two tiers ship for
-  this reason — `d3d11-fl11` and `d3d11-fl11-nvidia` — and one capture per side
-  of that condition covers every card on it.
+- **D3D11 — generalizes by feature level, with two measured exceptions.**
+  `renderer11_utils.cpp` branches on the `D3D_FEATURE_LEVEL` for most of its
+  caps, so FL11+ cards agree on nearly all of them. Three tiers ship —
+  `d3d11-fl11`, `d3d11-fl11-nvidia`, `d3d11-fl11-intel-gen9` — because two
+  things escape that branch:
 
-  Everything else really is shared: an RTX 4090 and an AMD Radeon probed on one
-  machine under one Chrome build matched byte-for-byte on every other WebGL
-  parameter, both extension lists, all shader precisions, all 36 WebGPU limits
-  and all 19 WebGPU features. So the vendor axis here is one integer wide, not
-  a second capability tier — but it is real, and it was found only by probing a
-  second vendor.
-- **Metal on macOS — generalizes across Macs.** `DisplayMtl.mm`'s
-  `TARGET_OS_OSX` arm sets its caps from plain compile-time constants. (The
-  runtime `supportsAppleGPUFamily` test that would vary them is in the iOS arm
-  — see step 2.)
+  1. **A vendor-conditional workaround**, in the same file:
+     `ANGLE_FEATURE_CONDITION(features, skipVSConstantRegisterZero, isNvidia)`,
+     which then applies `caps->maxVertexUniformVectors -= 1`. NVIDIA parts
+     report `MAX_VERTEX_UNIFORM_VECTORS` 4095 where everyone else reports 4096,
+     and the two values derived from it shift with it. The condition is the
+     vendor and nothing else, so one capture per side covers every card.
+  2. **Two genuinely device-derived values.** `MAX_SAMPLES` is *not* a
+     `D3D11_REQ_*` constant — ANGLE fills the per-format caps by calling
+     `CheckMultisampleQualityLevels` on the device — and the WebGPU feature
+     list is Dawn's answer for the physical adapter. An Intel HD Graphics 520
+     reports 16 samples and 16 features where an AMD Radeon reports 8 and 19.
+
+  Everything else really is shared. An RTX 4090, an AMD Radeon and an Intel
+  Gen9 iGPU, probed under one Chrome build, matched byte-for-byte on every
+  other WebGL parameter, both extension lists (content *and* order), all shader
+  precisions and all 36 WebGPU limits.
+
+  **Both exceptions were found by probing, not predicted**, which is the whole
+  argument for taking a capture on hardware no tier has seen even when the
+  theory says it will match. Note the asymmetry that follows: a *vendor*
+  condition can be read out of ANGLE's source and trusted to cover every card
+  on that side, while a *device-derived* value covers exactly the silicon that
+  was probed. That is why only Gen9 routes to the Intel tier and Gen11/Gen12
+  stay on the catch-all one — they are unprobed, and guessing a device-derived
+  value is the failure this whole skill exists to prevent.
+- **Metal on macOS — generalizes across Macs, confirmed by measurement.**
+  `DisplayMtl.mm`'s `TARGET_OS_OSX` arm sets its caps from plain compile-time
+  constants. (The runtime `supportsAppleGPUFamily` test that would vary them is
+  in the iOS arm — see step 2.) An M2 Pro and an M4 Pro, on different Chrome
+  patches and different macOS builds, agree on every value: 82 WebGL1
+  parameters, 132 WebGL2, both extension lists, every precision, all 36 WebGPU
+  limits and all 22 features. Only the renderer string differs. **A second
+  Apple silicon capture is therefore not worth taking** — it will reproduce
+  `metal-macos` exactly, and the useful Mac capture now is an *Intel* one,
+  which takes a different Dawn path entirely.
 - **Vulkan — does NOT generalize.** `vk_caps_utils.cpp` reads the caps straight
   off the physical device: `max2DTextureSize` is
   `min(limitsVk.maxFramebufferWidth, limitsVk.maxImageDimension2D)`, the
@@ -62,6 +82,34 @@ vendor and diffing, and the ANGLE condition explaining it was only looked up
 afterwards. A capture on a vendor no shipped tier has seen is worth taking even
 when the theory says it will match — a confirmed match costs one probe, and an
 unexamined assumption costs a wrong value served under a real name.
+
+**A capture that is not a tier may still be evidence.** Some probes settle a
+claim without producing a table anybody should be served: a second generation
+that reproduces an existing tier exactly, or a backend no persona can claim.
+Those go in `crates/zendriver-stealth/data/gpu-confirmations/` — never in
+`CAPTURES`, never compiled into `tiers.rs` — with a row in that directory's
+README saying which claim they support. The bar is that a shipped rustdoc
+cites them; a capture that merely duplicates a tier is clutter, not
+corroboration, and belongs nowhere. Pin whatever they establish with a test in
+`gpu-tier-gen` so the evidence cannot rot silently when the capture format
+moves.
+
+What they have established so far, and the reason the Gen9 tier exists:
+
+| Architecture | D3D11 | ANGLE-GL | ANGLE-Vulkan |
+|---|---|---|---|
+| AMD RDNA2 | 8 | 8 | 8 |
+| Intel Gen9 | 16 | — | 16 |
+
+`MAX_SAMPLES` is constant per architecture across every backend measured, and
+differs between architectures on the backend they share. A backend-derived
+value would look the other way round.
+
+**Record the flags a capture was taken under.** Two of the confirmations were
+taken with `--use-gl=angle --use-angle=vulkan` to force a backend the machine
+does not pick by itself. That is sound as evidence about ANGLE and unsound as a
+description of what that machine's visitors report, and the difference is
+invisible in the JSON.
 
 **Never hand-write or edit a tier's values.** A wrong value is more detectable
 than no spoof at all, and `tiers.rs` carries a `DO NOT EDIT` header enforced by
@@ -130,8 +178,9 @@ real GPU: a `Native` launch on a GPU-less host fails rather than falling back.
 
 2. **Pick the tier name** from the renderer string, using the existing files as
    precedent: `swiftshader`, `metal-macos`, `d3d11-fl11`, its NVIDIA variant
-   `d3d11-fl11-nvidia`, and — the Vulkan case, named for its device and
-   driver — `vulkan-mesa-intel-iris-pro-580`.
+   `d3d11-fl11-nvidia`, its Intel Gen9 variant `d3d11-fl11-intel-gen9`, and —
+   the Vulkan case, named for its device and driver —
+   `vulkan-mesa-intel-iris-pro-580`.
 
    Where the values generalize, name by *backend and capability tier*, not by
    card — `d3d11-fl11` rather than `amd-radeon-780m`, because every non-NVIDIA
@@ -144,6 +193,12 @@ real GPU: a `Native` launch on a GPU-less host fails rather than falling back.
      `d3d11-fl11-nvidia`, because `skipVSConstantRegisterZero` is keyed on
      `isNvidia`, so the name covers every NVIDIA part rather than the one RTX
      that was probed.
+   - A **device-derived value** on an otherwise general backend splits it too,
+     but the name must claim only as far as the measurement reaches:
+     `d3d11-fl11-intel-gen9`, not `d3d11-fl11-intel`. `MAX_SAMPLES` and the
+     WebGPU feature list come off the device, so a Gen9 capture says nothing
+     about Gen12 — and the broader name would quietly route the heaviest Intel
+     rows in the catalogue onto numbers nobody measured on that silicon.
    - A **Vulkan** tier's numbers come off the physical device, so the device and
      the driver *are* the tier and the name has to carry both —
      `vulkan-intel-uhd620-mesa24`, not `vulkan-linux`. A backend-general name on
@@ -164,7 +219,7 @@ real GPU: a `Native` launch on a GPU-less host fails rather than falling back.
    from `ANGLE (Intel, Intel(R) UHD Graphics 620 (KBL GT2), Mesa 24.0.9)`,
    pass `"Intel UHD Graphics 620, Mesa 24.0.9"`.
 
-3. **Register the tier in the code.** Six places, all small. Miss one and the
+3. **Register the tier in the code.** Eight places, all small. Miss one and the
    tier is half-registered:
    - `crates/zendriver-stealth/src/gpu/types.rs` — add a `Tier` variant.
    - `crates/zendriver-stealth/src/gpu/types.rs` — add it to `Tier::ALL` too.
@@ -182,22 +237,44 @@ real GPU: a `Native` launch on a GPU-less host fails rather than falling back.
      string), and the WebGPU vendor/architecture the capture reported. Set
      `vendor_token` when the tier is one vendor's variant of a backend others
      also use — ANGLE puts the vendor at the front of the string and the
-     backend tag at the end, so no single substring can express that pair.
+     backend tag at the end, so no single substring can express that pair. Set
+     `arch_token` when the tier is scoped to a GPU *generation* that no single
+     substring names: it is compared against `adapter_for_renderer`'s derived
+     architecture, so the served tier and the reported WebGPU architecture
+     cannot drift apart. Both are `None` on a row that needs neither.
      **Order matters here:** `device_for_renderer` takes the first matching
-     row, so a row carrying a `vendor_token` must be listed above the general
-     row it refines, or the general row swallows it and serves the wrong tier's
-     numbers.
+     row, so a row carrying a `vendor_token` or an `arch_token` must be listed
+     above the general row it refines, or the general row swallows it and
+     serves the wrong tier's numbers.
    - `crates/zendriver-stealth/src/gpu/invariants.rs` — add the tier to
      `platform_skew`'s coherent-pair arm if its backend belongs to one OS
      (Metal → `MacIntel`, D3D11 → `Win32`), or return early like SwiftShader
      if it is platform-neutral. Otherwise every persona on the new tier logs a
      skew warning.
+   - `crates/zendriver-stealth/src/gpu/device_select.rs` — the tier-to-platform
+     `match` in `no_catalogued_device_is_platform_skewed_against_its_own_tier`
+     panics on a tier it does not name, and the `matches!` guards in the
+     seeded- and share-draw tests assert which tiers a platform may draw.
+     Both are test-only, and both fail loudly, so this one is self-announcing
+     rather than silent.
+   - `crates/gpu-catalogue-gen/src/lib.rs` — **only if catalogued devices
+     should route to the new tier.** `tier_for` maps `(backend, vendor, model)`
+     to a tier name; extend it, then regenerate with
+     `cargo run -p gpu-catalogue-gen` (needs network — both inputs are fetched
+     at pinned commits) and `cargo fmt`. Skip it for a tier no catalogued
+     device belongs to, such as a device-scoped Vulkan capture.
+
+     Route **only what was probed**. The Gen9 Intel tier is the precedent: the
+     same classifier also recognises Gen12, and Gen12 is deliberately left on
+     the catch-all tier because nobody has captured it. A capture is the only
+     thing that may move a device between tiers.
 
 4. **Regenerate and verify.**
 
    ```bash
    cargo run -p gpu-tier-gen
    cargo test -p gpu-tier-gen
+   cargo test -p gpu-catalogue-gen
    cargo test -p zendriver-stealth
    cargo fmt --all
    cargo clippy --workspace --all-targets --locked -- -D warnings

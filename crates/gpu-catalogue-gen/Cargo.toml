@@ -1,0 +1,13 @@
+[package]
+name = "gpu-catalogue-gen"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+reqwest = { workspace = true, features = ["blocking"] }
+serde_json.workspace = true
+zip.workspace = true

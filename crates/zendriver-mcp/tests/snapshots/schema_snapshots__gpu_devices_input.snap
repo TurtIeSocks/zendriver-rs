@@ -1,0 +1,37 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::gpu::GpuDevicesInput)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: GpuDevicesInput
+description: "Input for `browser_gpu_devices`."
+type: object
+properties:
+  limit:
+    description: "Cap the number of devices returned. Defaults to 25; the catalogue holds\nseveral hundred, and an agent rarely wants all of them at once."
+    type:
+      - integer
+      - "null"
+    format: uint
+    minimum: 0
+  platform:
+    description: "Restrict to one platform's devices. Omit for all.\n\nThere is no Linux option on purpose: ANGLE's Vulkan backend reads its\nlimits off the physical device, so there is no shared capability tier\nfor a Linux identity to layer over and nothing is catalogued for it."
+    anyOf:
+      - $ref: "#/$defs/GpuPlatform"
+      - type: "null"
+  query:
+    description: "Case-insensitive substring of the model name, e.g. `\"rtx 40\"` or\n`\"iris\"`. Omit to list everything."
+    type:
+      - string
+      - "null"
+additionalProperties: false
+$defs:
+  GpuPlatform:
+    description: "Which platform's devices to list."
+    oneOf:
+      - description: "Direct3D 11 devices, feature level 11 and above."
+        type: string
+        const: win32
+      - description: "Apple silicon under ANGLE's Metal backend."
+        type: string
+        const: mac_intel

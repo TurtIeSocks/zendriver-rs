@@ -4,7 +4,7 @@
 
 **Goal:** Let a caller name a specific GPU, or draw one, and get a coherent identity (renderer string, device ID, WebGPU architecture) composed over one of the already-measured capability tiers.
 
-**Architecture:** A generator crate (`gpu-catalogue-gen`) fetches model names from a pinned `fingerprint-suite` commit and device IDs from a pinned `pciutils/pciids` commit, then emits a committed Rust table. At runtime the catalogue supplies only *identity*: the capability values still come from `gpu::tiers`. Selection is four small strategies over that one table.
+**Architecture:** A generator crate (`gpu-catalogue-gen`) fetches model names, device IDs and population weights from a pinned `fingerprint-suite` commit, falling back to a pinned `pciutils/pciids` commit for the few IDs the corpus never reports, then emits a committed Rust table. At runtime the catalogue supplies only *identity*: the capability values still come from `gpu::tiers`. Selection is four small strategies over that one table.
 
 **Tech Stack:** Rust 2024 (MSRV 1.85), `serde_json`, `reqwest` (blocking, generator only), the existing `gpu-tier-gen` / `locale-gen` generator pattern.
 
@@ -633,11 +633,8 @@ git commit -m "feat(gpu-catalogue-gen): extract model names from the fingerprint
 **Interfaces:**
 - Consumes: everything from Tasks 2 to 4.
 - Produces, in `zendriver_stealth::gpu::catalogue`:
-  - `pub(crate) struct CatalogueEntry { pub model: &'static str, pub vendor: &'static str, pub device_id: Option<u32>, pub tier: Tier, pub generation: Option<Generation> }`
-  - `pub(crate) const CATALOGUE: &[CatalogueEntry]`
-  - `pub(crate) enum Generation { Ampere, Lovelace, Rdna2, MetalConstant }`
-  - `pub(crate) struct FeatureSet { pub generation: Option<Generation>, pub tier: Tier, pub features: &'static [&'static str], pub provenance: FeatureProvenance }`
-  - `pub(crate) enum FeatureProvenance { Probed { chrome: &'static str, device: &'static str }, Estimated { carried_from: Tier } }`
+  - `pub(crate) struct CatalogueEntry { pub model: &'static str, pub vendor: &'static str, pub device_id: Option<u32>, pub tier: Tier, pub weight: f64 }` — hand-written in `gpu::types`; the generated file carries data only, as `tiers.rs` does.
+  - `pub(crate) const CATALOGUE: &[CatalogueEntry]` — generated.
 
 - [ ] **Step 1: Write the pinned entry point**
 
@@ -738,14 +735,10 @@ pub fn emit_rust(corpus_commit: &str, pci_ids_commit: &str, rows: &[CatalogueRow
         let device_id = row
             .device_id
             .map_or_else(|| "None".to_string(), |id| format!("Some(0x{id:04X})"));
-        let generation = row
-            .generation
-            .as_ref()
-            .map_or_else(|| "None".to_string(), |g| format!("Some(Generation::{g})"));
         out.push_str(&format!(
             "    CatalogueEntry {{ model: {:?}, vendor: {:?}, device_id: {device_id}, \
-             tier: Tier::{}, generation: {generation} }},\n",
-            row.model, row.vendor, row.tier
+             tier: Tier::{}, weight: {:.9} }},\n",
+            row.model, row.vendor, row.tier, row.weight
         ));
     }
     out.push_str("];\n");
@@ -779,110 +772,47 @@ git commit -m "feat(gpu-catalogue-gen): emit the committed device catalogue"
 
 ---
 
-### Task 6: Feature sets keyed by generation, with provenance
+### Task 6: No feature-set table. Record why.
 
-**Files:**
-- Modify: `crates/gpu-catalogue-gen/src/lib.rs`
-- Modify: `crates/zendriver-stealth/src/gpu/catalogue.rs` (regenerated)
+**Files:** none. This task builds nothing.
 
-**Interfaces:**
-- Consumes: `Tier`, `Generation` from Task 5.
-- Produces: `pub(crate) const FEATURE_SETS: &[FeatureSet]`, and
-  `pub(crate) fn features_for(tier: Tier, generation: Option<Generation>) -> &'static FeatureSet`.
+**It was going to key WebGPU feature sets by `Generation`**, with a
+`Probed`/`Estimated` provenance tag and a rule that estimated entries omit five
+silicon-gated names. That design is removed. See the revision note in the
+spec's data-model section for the full reasoning; the short version is that it
+modelled two axes, vendor and generation, that have since been measured and
+found flat:
 
-- [ ] **Step 1: Write the failing test**
+- An AMD Radeon (RDNA2) and an RTX 4090 (Lovelace), same machine, same Chrome,
+  report **identical** 19-feature sets and identical 36 limits — including all
+  five names the rule would have withheld.
+- Two vendors and two years apart still agreeing is evidence the set is decided
+  by the backend, not the silicon.
 
-In `crates/zendriver-stealth/src/gpu/catalogue.rs`'s sibling test module (create `crates/zendriver-stealth/src/gpu/catalogue_tests.rs` and `#[cfg(test)] mod catalogue_tests;` in `mod.rs`, so the generated file stays generated):
+So features come from the tier, which `profile_for_tier` already does. There is
+no second table to build, no key, and no entry that is "listed but not
+selectable": the probed-only default has nothing left to exclude.
 
-```rust
-use super::catalogue::*;
-use super::types::Tier;
-
-/// The five names ANGLE/Dawn gate on shader model and driver rather than on
-/// the backend. An estimated entry omits them; a probed one may carry them.
-const SILICON_GATED: &[&str] = &[
-    "shader-f16",
-    "subgroups",
-    "dual-source-blending",
-    "clip-distances",
-    "primitive-index",
-];
-
-#[test]
-fn an_estimated_feature_set_omits_every_silicon_gated_name() {
-    for set in FEATURE_SETS {
-        if matches!(set.provenance, FeatureProvenance::Estimated { .. }) {
-            for gated in SILICON_GATED {
-                assert!(
-                    !set.features.contains(gated),
-                    "estimated set for {:?} claims {gated}, which nothing measured",
-                    set.generation
-                );
-            }
-        }
-    }
-}
-
-#[test]
-fn every_probed_set_carries_the_browser_level_features() {
-    // Present because a given Chrome implements that spec revision, not
-    // because of the card. Their absence would describe no real browser.
-    for set in FEATURE_SETS {
-        if matches!(set.provenance, FeatureProvenance::Probed { .. }) {
-            for browser_level in ["core-features-and-limits", "texture-formats-tier1"] {
-                assert!(
-                    set.features.contains(&browser_level),
-                    "probed set for {:?} is missing {browser_level}",
-                    set.generation
-                );
-            }
-        }
-    }
-}
-
-#[test]
-fn the_probed_sets_match_the_captures_they_came_from() {
-    // Lovelace and RDNA2 were both measured, on the same machine and Chrome,
-    // and reported identical 19-feature sets.
-    let lovelace = features_for(Tier::D3d11Fl11Nvidia, Some(Generation::Lovelace));
-    let rdna2 = features_for(Tier::D3d11Fl11, Some(Generation::Rdna2));
-    assert_eq!(lovelace.features, rdna2.features);
-    assert_eq!(lovelace.features.len(), 19);
-}
-```
-
-- [ ] **Step 2: Run it and watch it fail**
-
-Run: `cargo test -p zendriver-stealth catalogue`
-Expected: FAIL, `FEATURE_SETS` not found.
-
-- [ ] **Step 3: Extend the emitter**
-
-Emit `FEATURE_SETS` from the committed captures: for each capture with an
-adapter, one `Probed` set carrying its measured feature list, its Chrome
-version, and its device. For each generation named in `CATALOGUE` with no
-capture, one `Estimated` set equal to its tier's probed features minus
-`SILICON_GATED`. Emit `features_for` as a linear scan over `FEATURE_SETS`
-matching on `(tier, generation)`, falling back to the tier's own set when the
-generation is `None`.
-
-- [ ] **Step 4: Regenerate and run**
+- [ ] **Step 1: Confirm no code is needed**
 
 ```bash
-cargo run -p gpu-catalogue-gen && cargo fmt -p zendriver-stealth
-cargo test -p zendriver-stealth catalogue
+grep -rn "Generation\|FeatureSet\|FeatureProvenance" crates/zendriver-stealth/src crates/gpu-catalogue-gen/src
 ```
 
-Expected: PASS, 3 tests.
+Expected: no hits. If any appear, they are leftovers from the removed design
+and should go.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 2: Confirm features still reach a catalogued device**
 
-```bash
-git add crates/gpu-catalogue-gen crates/zendriver-stealth/src/gpu
-git commit -m "feat(stealth): key catalogue feature sets by generation with provenance"
-```
+Covered by Task 11's real-Chrome test, which reads the served feature set
+beside the renderer string. Nothing to add here.
 
----
+**Do not reintroduce a generation axis without a capture that shows one.** The
+open question is real — both probed parts are modern, and an early
+feature-level-11 card is served a 2022 part's feature set — but the answer to
+an unmeasured gap is a probe, not a model of it. Feature-level-10 cards are
+already excluded outright, since ANGLE writes the feature level into the
+renderer string as its shader model.
 
 ### Task 7: The four selection strategies
 
@@ -987,79 +917,85 @@ git commit -m "feat(stealth): add catalogue selection strategies"
 
 ---
 
-### Task 8: Share-weighted selection from a dated snapshot
+### Task 8: Share-weighted selection from the catalogue's own weights
 
 **Files:**
-- Create: `crates/zendriver-stealth/data/gpu-share-2026-07.json`
 - Modify: `crates/zendriver-stealth/src/gpu/device_select.rs`
 
 **Interfaces:**
-- Consumes: `CATALOGUE`, `from_seed` from Task 7.
+- Consumes: `CATALOGUE` (whose rows carry a `weight`) and `from_seed` from Task 7.
 - Produces: `pub fn by_share(seed: Seed, platform: Platform) -> Option<GpuDevice>`.
 
-- [ ] **Step 1: Write the snapshot**
+**No snapshot file, and no Steam dependency.** This task originally vendored a
+dated Steam Hardware Survey extract. The corpus already carries the
+frequencies, so the generator emits a `weight` on every row and there is
+nothing to fetch, date, or license. See the revision note in the spec's
+Selection section for why that is a fidelity gain rather than a shortcut: it is
+the browser population rather than the gamer population, and Steam has no
+pinnable URL.
 
-A dated JSON file mapping catalogue model names to shares, derived from the
-Steam Hardware Survey. The date is in the filename so staleness is visible:
+The weights are raw marginals, so they do **not** sum to 1 over the catalogue —
+the excluded categories hold the remainder. `by_share` therefore renormalizes
+over the rows it is actually drawing from, which is also what makes the
+platform filter correct rather than merely approximate.
 
-```json
-{
-  "source": "Steam Hardware Survey",
-  "captured": "2026-07",
-  "shares": {
-    "NVIDIA GeForce RTX 3060": 0.0412,
-    "NVIDIA GeForce RTX 4090": 0.0091
-  }
-}
-```
-
-- [ ] **Step 2: Write the failing test**
+- [ ] **Step 1: Write the failing test**
 
 ```rust
-#[test]
-fn every_share_entry_names_a_catalogued_device() {
-    // A distribution naming a device the catalogue lacks would silently
-    // reweight everything else.
-    let snapshot: serde_json::Value = serde_json::from_str(SHARE_SNAPSHOT).unwrap();
-    for model in snapshot["shares"].as_object().unwrap().keys() {
-        assert!(
-            CATALOGUE.iter().any(|e| e.model == model),
-            "share data names {model}, which is not in the catalogue"
-        );
-    }
-}
-
 #[test]
 fn share_weighted_selection_is_deterministic_per_seed() {
     let a = by_share(Seed(7), Platform::Win32);
     let b = by_share(Seed(7), Platform::Win32);
     assert_eq!(a.map(|d| d.model()), b.map(|d| d.model()));
 }
+
+#[test]
+fn every_catalogued_row_carries_a_usable_weight() {
+    // A zero-weight row can never be drawn by share, which would make it
+    // invisible to fleet diversity while still being selectable by name.
+    for entry in CATALOGUE {
+        assert!(entry.weight > 0.0, "{} has no share weight", entry.model);
+    }
+}
+
+#[test]
+fn share_selection_respects_the_platform_and_renormalizes() {
+    // Drawing from a platform subset must still cover that subset: with the
+    // raw marginals summing to well under 1, a naive cumulative scan would
+    // fall off the end and always answer the last row.
+    let mut seen = std::collections::BTreeSet::new();
+    for seed in 0..500u64 {
+        if let Some(d) = by_share(Seed(seed), Platform::MacIntel) {
+            assert_eq!(d.tier(), Tier::MetalMacos, "seed {seed} crossed platforms");
+            seen.insert(d.model());
+        }
+    }
+    assert!(seen.len() > 1, "share draw collapsed to one device: {seen:?}");
+}
 ```
 
-- [ ] **Step 3: Run and watch them fail**
+- [ ] **Step 2: Run and watch them fail**
 
 Run: `cargo test -p zendriver-stealth share`
-Expected: FAIL, `SHARE_SNAPSHOT` not found.
+Expected: FAIL, `by_share` not found.
 
-- [ ] **Step 4: Implement**
+- [ ] **Step 3: Implement**
 
-`include_str!` the snapshot, parse it once into a cumulative-weight vector
-filtered to the platform, and index with `seed.0` scaled across the total.
+Filter `CATALOGUE` to the platform, sum those rows' weights, and walk a
+cumulative scan indexed by `seed.0` scaled across **that** sum rather than
+across 1.0.
 
-- [ ] **Step 5: Run the tests**
+- [ ] **Step 4: Run the tests**
 
 Run: `cargo test -p zendriver-stealth share`
-Expected: PASS, 2 tests.
+Expected: PASS, 3 tests.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add crates/zendriver-stealth/data crates/zendriver-stealth/src/gpu
-git commit -m "feat(stealth): draw catalogue devices by market share"
+git add crates/zendriver-stealth/src/gpu
+git commit -m "feat(stealth): draw catalogue devices by their corpus share"
 ```
-
----
 
 ### Task 9: Coherence rules over the whole catalogue
 
@@ -1376,21 +1312,57 @@ its test.
 
 **Known gaps the implementer must resolve, not paper over:**
 
-1. **Task 5's `build_catalogue` joins model names against `pci.ids` names, and
-   they do not match textually.** `pci.ids` says `GA104 [GeForce RTX 3070]`
-   where the driver says `NVIDIA GeForce RTX 3070`. The join needs a
-   normalization step: strip the vendor prefix from the driver name, then look
-   for it inside the bracketed part of the `pci.ids` name. Entries that fail to
-   join must be **dropped with a logged count**, never given a fabricated
-   device ID. Expect a meaningful drop rate and report it.
-2. **Task 8's share snapshot needs real numbers.** The two rows shown are
-   placeholders for format only. Pull the actual Steam Hardware Survey figures
-   when implementing, and if they cannot be obtained, ship `by_share` returning
-   `None` with a documented reason rather than inventing a distribution.
-3. **Generation assignment is unspecified above.** Deriving `Ampere` vs
-   `Lovelace` from a model name needs a table; take the tokens from Dawn's
-   `gpu_info.json` as `adapter_for_renderer` already does, and reuse that
-   function rather than writing a second mapping.
+1. ~~**Task 5's `build_catalogue` joins model names against `pci.ids` names,
+   and they do not match textually.**~~ **Measured after Task 2, against the
+   real corpus and the real `pci.ids`: 216 of 315 D3D11 models join (68%).**
+
+   The working algorithm, in the order the steps matter:
+
+   - Normalize both sides: lowercase, remove the literal substrings `(tm)`,
+     `(r)`, `(c)`, drop the words `nvidia|amd|ati|intel|corporation|inc|series`,
+     then squash everything non-alphanumeric to single spaces.
+   - Build the alias set for a `pci.ids` entry from its **bracketed** parts as
+     well as its whole name: `GA104 [GeForce RTX 3070]` must match
+     `NVIDIA GeForce RTX 3070`.
+   - Expand slash groups **with prefix inheritance**. One entry often covers
+     several marketing names — `Navi 22 [Radeon RX 6700/6700 XT/6750 XT]` — and
+     only the first segment carries the `Radeon RX` prefix, so each later
+     segment must be tried both bare and with that prefix prepended.
+
+   Two mistakes are already paid for, so do not repeat them. Writing the
+   `(tm)`/`(r)` strip as `\b\(tm\)\b` matches nothing, because `\b` before `(`
+   is not a word boundary; that alone cost 13 points and took Intel to 0%.
+   Skipping slash expansion cost another 11, almost all AMD.
+
+   Rates by vendor: NVIDIA 132/160, Intel 34/56, AMD 50/94. The residual AMD
+   misses are integrated parts (`AMD Radeon 780M Graphics`) whose `pci.ids`
+   entries carry a codename and no marketing name, so no string rule reaches
+   them. **Drop a miss, with a logged count.** A D3D11 renderer string has a
+   device ID in it by construction, so an entry without one cannot be composed,
+   and inventing the number is the one thing this design forbids.
+2. ~~**Task 8's share snapshot needs real numbers.**~~ **Resolved: no snapshot
+   is needed.** The corpus's `videoCard` node carries real frequencies, so the
+   generator emits a `weight` per row and the Steam dependency is gone along
+   with its unpinnable URL and its licensing question. Weights are marginals,
+   `Σ_ua P(ua) · P(device | ua)`, because `videoCard` is conditioned on
+   `userAgent`; a raw sum over buckets over-weights whatever is common to many
+   user agents. They sum to well under 1 over the catalogue, since the excluded
+   categories hold the rest, so `by_share` must renormalize over the rows it
+   draws from.
+
+   The same discovery moved device IDs off `pci.ids`: the corpus reports 467
+   exact `(name, id)` pairs covering 308 of 310 names, which is an observation
+   rather than a reconstruction, and it preserves the real multi-SKU spread
+   that a name lookup flattens. `pci.ids` stays as a fallback and resolves 9
+   further rows; 2 names resist both and are dropped. Gap 1's join algorithm
+   still matters, but only for those few.
+3. ~~**Generation assignment is unspecified above.**~~ **Resolved: there is no
+   generation field.** The concern was that deriving `Ampere` vs `Lovelace`
+   needed a model-to-architecture table, and that a copy in the generator would
+   drift from `adapter_for_renderer`. Both go away: the catalogue stores no
+   generation, and Task 9 derives the architecture from the composed renderer
+   string through `adapter_for_renderer` itself, keeping one source of truth.
+   See Task 6 for why the axis was dropped.
 
 4. **Regeneration is not verified by PR CI.** Task 12 explains why: fetched
    inputs cannot be diffed hermetically. Anyone extending this should not

@@ -1,0 +1,14 @@
+---
+source: crates/zendriver-mcp/tests/schema_snapshots.rs
+expression: "schema_for! (tools::gpu::GpuPlatform)"
+---
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: GpuPlatform
+description: "Which platform's devices to list."
+oneOf:
+  - description: "Direct3D 11 devices, feature level 11 and above."
+    type: string
+    const: win32
+  - description: "Apple silicon under ANGLE's Metal backend."
+    type: string
+    const: mac_intel

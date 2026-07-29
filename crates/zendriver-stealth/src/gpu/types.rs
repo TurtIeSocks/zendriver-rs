@@ -126,18 +126,48 @@ pub(crate) enum Tier {
     /// pointed at a branch macOS cannot take. Renaming it is what stops someone
     /// capturing an Intel Mac in the expectation of a second, lower Metal tier —
     /// it would reproduce this one exactly.
+    ///
+    /// **Confirmed on a second generation.** An M2 Pro, on a different Chrome
+    /// patch and a different macOS, matches this capture on every value: all 82
+    /// WebGL1 parameters, all 132 WebGL2, both extension lists, every shader
+    /// precision, all 36 WebGPU limits and all 22 WebGPU features. Only the
+    /// renderer string differs, which is the identity rather than a capability.
+    /// So the generalization claimed above is measured across Apple silicon
+    /// generations, not merely read out of the `#if`.
     MetalMacos,
     /// Direct3D 11 at feature level 11_0 or above, as ANGLE reports it for
-    /// every vendor **except NVIDIA**. Probed on an AMD Radeon (Raphael
-    /// integrated, `0x164E`) under Windows.
+    /// every vendor **except NVIDIA** and for every Intel generation except
+    /// Gen9. Probed on an AMD Radeon (Raphael integrated, `0x164E`) under
+    /// Windows.
     ///
     /// Named for the backend and feature level rather than the card, because
-    /// `renderer11_utils.cpp` derives these values from `D3D11_REQ_*` constants
-    /// branched on the feature level and asks the device nothing. This tier
-    /// therefore covers AMD and Intel alike.
+    /// `renderer11_utils.cpp` derives almost all of these values from
+    /// `D3D11_REQ_*` constants branched on the feature level rather than from
+    /// the device. That is what lets one capture stand for many cards, and it
+    /// is measured: an Intel Gen9 part and this AMD one agree on all 82 WebGL1
+    /// parameters, on 131 of the 132 WebGL2 ones, on both extension lists in
+    /// content *and* order, on every shader precision, and on all 36 WebGPU
+    /// limits.
     ///
-    /// **It does not cover NVIDIA**, and that exception is measured rather than
-    /// assumed — see [`D3d11Fl11Nvidia`](Self::D3d11Fl11Nvidia).
+    /// **Two values are device-derived, and both were found by probing rather
+    /// than predicted.**
+    ///
+    /// - `MAX_SAMPLES` is not a `D3D11_REQ_*` constant. ANGLE fills the
+    ///   per-format caps by asking the device —
+    ///   `ID3D11Device::CheckMultisampleQualityLevels` per renderable format —
+    ///   and takes the largest count that comes back, so this one really is the
+    ///   driver's answer. Intel Gen9 reports 16 where this capture reports 8.
+    /// - The WebGPU feature list is Dawn's answer for the physical adapter, not
+    ///   a feature-level constant at all. Gen9 enumerates 16 features against
+    ///   this capture's 19, lacking `shader-f16`, `subgroups` and
+    ///   `bgra8unorm-storage`.
+    ///
+    /// Both differences live in [`D3d11Fl11IntelGen9`](Self::D3d11Fl11IntelGen9),
+    /// which is why the sentence above says "except Gen9" instead of "AMD and
+    /// Intel alike", as it did before that tier was captured.
+    ///
+    /// **It does not cover NVIDIA** either, and that exception is likewise
+    /// measured — see [`D3d11Fl11Nvidia`](Self::D3d11Fl11Nvidia).
     D3d11Fl11,
     /// The same backend and feature level as [`D3d11Fl11`](Self::D3d11Fl11),
     /// with ANGLE's NVIDIA-only workaround applied. Probed on an RTX 4090,
@@ -163,13 +193,115 @@ pub(crate) enum Tier {
     /// This is why the two are separate tiers rather than one tier with a
     /// computed adjustment. Both values were measured; neither is derived at
     /// runtime.
+    ///
+    /// **It generalizes across NVIDIA generations, measured rather than
+    /// assumed.** A Maxwell GM108 (`0x134B`) reproduces this tier exactly —
+    /// every WebGL1 and WebGL2 parameter, every shader precision, both
+    /// extension lists in content and order — seven years and three process
+    /// nodes from the Lovelace part it was probed on. The capture is
+    /// `data/gpu-confirmations/d3d11-nvidia-maxwell-gm108.json`, pinned by
+    /// `maxwell_reproduces_the_nvidia_tier_exactly`. That result is also why
+    /// [`D3d11Fl11IntelGen9`](Self::D3d11Fl11IntelGen9) is a third tier rather
+    /// than a reason to doubt the model: the generalization holds, and Gen9's
+    /// two device-derived values are the exception to it.
     D3d11Fl11Nvidia,
+    /// The same backend and feature level as [`D3d11Fl11`](Self::D3d11Fl11),
+    /// on **Intel Gen9 graphics**. Probed on an Intel HD Graphics 520
+    /// (Skylake, `0x1916`) in a Surface Book 1, Chrome 150.0.7871.187 on
+    /// Windows 10.
+    ///
+    /// **Exactly two values differ**, and both are the ones the D3D11 tier
+    /// cannot derive from a feature level:
+    ///
+    /// - `MAX_SAMPLES` is 16 here against 8 there. ANGLE asks the device
+    ///   (`CheckMultisampleQualityLevels` per renderable format) rather than
+    ///   reading a `D3D11_REQ_*` constant, so this number belongs to the
+    ///   driver.
+    /// - The WebGPU adapter enumerates 16 features against 19, missing
+    ///   `shader-f16`, `subgroups` and `bgra8unorm-storage`. Dawn reports what
+    ///   the physical adapter supports, and Gen9 supports neither packed fp16
+    ///   nor subgroup ops.
+    ///
+    /// **`MAX_SAMPLES` follows the silicon, and that is measured across every
+    /// backend available**, which is what rules out reading it as a quirk of
+    /// one capture or one backend:
+    ///
+    /// | Architecture | D3D11 | ANGLE-GL | ANGLE-Vulkan |
+    /// |---|---|---|---|
+    /// | AMD RDNA2 | 8 | 8 | 8 |
+    /// | Intel Gen9 | 16 | — | 16 |
+    ///
+    /// Constant per architecture across three backends, and different between
+    /// the two architectures on the backend they share. A backend-derived
+    /// value would look the other way round. The RDNA2 rows come from
+    /// `data/gpu-confirmations/`, and
+    /// `max_samples_follows_the_silicon_across_every_measured_backend` pins the
+    /// whole table.
+    ///
+    /// Everything else is identical to [`D3d11Fl11`](Self::D3d11Fl11): all 82
+    /// WebGL1 parameters, the other 131 WebGL2 ones, both extension lists in
+    /// content and order, every shader precision, and all 36 WebGPU limits.
+    /// That is the measurement behind the split being two values wide rather
+    /// than a whole second table.
+    ///
+    /// **Only Gen9 routes here, and the newer Intel generations are a known
+    /// unknown rather than a decision.** Gen11 (Iris Plus G4/G7) and Gen12
+    /// (Iris Xe, and the Arc parts above it) stay on
+    /// [`D3d11Fl11`](Self::D3d11Fl11). Nothing has probed either: both values
+    /// that moved here are device-derived, so a newer part could plausibly
+    /// report a different `MAX_SAMPLES` and almost certainly does expose
+    /// `shader-f16`, which Intel added with Gen12. Sweeping all Intel into this
+    /// tier would hand those machines two numbers nobody measured on that
+    /// silicon — and Iris Xe is the single heaviest entry in the whole device
+    /// catalogue, so the blast radius of guessing is at its largest exactly
+    /// where the evidence is absent. Leaving them on the generic tier is not a
+    /// claim that they match it; it is the choice to serve a value measured on
+    /// *some* FL11 device over one measured on none. **Closing the gap needs a
+    /// Gen11 and a Gen12 capture**, taken the same way this one was.
+    ///
+    /// **What "Gen9" means here is a marketing name, not a die.** Routing goes
+    /// through `devices::intel_architecture`, the same classifier that names
+    /// the WebGPU adapter's architecture, so a renderer resolves this tier
+    /// exactly when its adapter reports `gen-9` and the two cannot contradict
+    /// each other. That takes the three-digit `HD`/`UHD Graphics` 5xx and 6xx
+    /// families — 29 of the catalogue's 482 rows, carrying about 9% of the
+    /// corpus population (13% of the catalogue's own mass; the weights are
+    /// marginal probabilities over the whole corpus and do not sum to 1 across
+    /// the catalogue).
+    ///
+    /// The digit count is load-bearing rather than incidental. Intel spelled
+    /// Broadwell (Gen8) with four digits — `HD Graphics 5300`, `5500`, `5600`,
+    /// `6000` — so matching `hd graphics 5` as a *prefix* sweeps in a
+    /// generation nobody probed, and their PCI ids say so plainly: 0x16xx is
+    /// Broadwell where this capture's own part is 0x1916, Skylake. Those models
+    /// stay on [`D3d11Fl11`](Self::D3d11Fl11) with an empty architecture token,
+    /// which reads as an ordinary unclassified adapter rather than as a device
+    /// that does not exist.
+    ///
+    /// One imprecision remains, in the safe direction: several genuine Gen9
+    /// parts are **not** matched, because Intel sold them under an `Iris` name
+    /// (`Iris Graphics 540`/`550`, `Iris Plus Graphics 640`/`655`). They stay
+    /// on the catch-all tier. There is circumstantial support for moving them —
+    /// the committed [`VulkanMesaIntelIrisPro580`](Self::VulkanMesaIntelIrisPro580)
+    /// capture is Gen9 silicon on a different backend and also reports
+    /// `MAX_SAMPLES` 16, against 8 on both non-Gen9 D3D11 captures — but a
+    /// cross-backend inference is not a measurement, so the fix for this one is
+    /// a D3D11 capture of such a part.
+    D3d11Fl11IntelGen9,
     /// ANGLE's **Vulkan** backend on Linux, on an Intel Iris Pro Graphics 580
     /// (Skylake GT4e) under Mesa 25.2.8. Probed on Linux Mint with Chrome
     /// 150.0.7871.186 in a NUC6i7KYK.
     ///
     /// **Named for the device and the driver, because a Vulkan tier does not
-    /// generalize.** The other two hardware tiers do, and that is why they are
+    /// generalize — now measured rather than argued.** A second Mesa/Vulkan
+    /// device (AMD RDNA2 Van Gogh under RADV, same Chrome build) differs from
+    /// this tier in 12 WebGL2 parameters: `MAX_3D_TEXTURE_SIZE` 8192 against
+    /// 2048, `UNIFORM_BUFFER_OFFSET_ALIGNMENT` 4 against 64,
+    /// `MIN`/`MAX_PROGRAM_TEXEL_OFFSET` -32/31 against -8/7, and the extension
+    /// lists disagree too. Those are `VkPhysicalDeviceLimits` entries reaching
+    /// the page unchanged. See
+    /// `data/gpu-confirmations/vulkan-amd-rdna2-vangogh.json` and
+    /// `a_vulkan_tier_does_not_generalize_across_devices`. The other two hardware tiers do, and that is why they are
     /// named for a backend: `renderer11_utils.cpp` branches on the
     /// `D3D_FEATURE_LEVEL`, and `DisplayMtl.mm`'s `TARGET_OS_OSX` arm uses
     /// plain compile-time constants — neither asks the device anything. ANGLE's
@@ -202,6 +334,40 @@ pub(crate) enum Tier {
     VulkanMesaIntelIrisPro580,
 }
 
+/// One catalogued GPU **identity**, layered over a measured capability
+/// [`Tier`].
+///
+/// The catalogue widens which device a persona can claim; it never widens what
+/// any device can do. Every capability value still comes from `tiers.rs`, which
+/// is what stops a catalogue entry from being able to invent one.
+///
+/// The renderer string is deliberately **not** stored. It is composed on demand
+/// from ANGLE's own format, so a Chrome format change is one fix in one place
+/// rather than a rewrite of several hundred rows — and that format has already
+/// changed once, gaining the device id current ANGLE always appends.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct CatalogueEntry {
+    /// Driver-reported model text: `Description` on D3D11, `MTLDevice.name` on
+    /// Metal.
+    pub model: &'static str,
+    /// ANGLE's vendor token, the first field of the renderer string.
+    pub vendor: &'static str,
+    /// PCI device id. `None` on Metal, where Apple silicon exposes none and the
+    /// string has nowhere to put one.
+    pub device_id: Option<u32>,
+    /// Which measured tier supplies this device's capability values.
+    pub tier: Tier,
+    /// Share of the corpus population, for the share-weighted draw.
+    ///
+    /// A marginal probability, `Σ_ua P(ua) · P(device | ua)`, since the corpus
+    /// reports device frequency conditioned on user agent. These do **not** sum
+    /// to 1 across the catalogue: the categories the catalogue excludes (iOS,
+    /// Windows-on-ARM, WARP, VM adapters, unmodelled backends) hold the rest,
+    /// so a caller drawing by share renormalizes over the subset it draws from.
+    pub weight: f64,
+}
+
 impl Tier {
     /// Every shipped tier, in one place: the invariant checks and the tests
     /// that sweep "all tiers" iterate this, so adding a tier cannot quietly
@@ -211,6 +377,7 @@ impl Tier {
         Tier::MetalMacos,
         Tier::D3d11Fl11,
         Tier::D3d11Fl11Nvidia,
+        Tier::D3d11Fl11IntelGen9,
         Tier::VulkanMesaIntelIrisPro580,
     ];
 }

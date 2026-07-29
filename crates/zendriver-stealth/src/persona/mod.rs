@@ -121,6 +121,38 @@ impl PersonaBuilder {
         self.0.webgl = Some(w);
         self
     }
+    /// Claim a catalogued GPU.
+    ///
+    /// Deliberately **not** a new [`Persona`] field. A device's whole
+    /// contribution is its renderer string, and pinning that already selects
+    /// the capability tier, the WebGPU adapter, and the vendor through
+    /// machinery that exists — so this sets [`WebglSpec::unmasked_renderer`]
+    /// and nothing else. A dedicated field would add a fourth precedence layer
+    /// and a serde problem (a [`GpuDevice`] is a pointer into a generated
+    /// table) to buy nothing.
+    ///
+    /// Overwrites only the renderer, so a caller can still pin the vendor or a
+    /// strategy alongside it:
+    ///
+    /// ```no_run
+    /// use zendriver_stealth::{GpuDevice, Persona, Platform};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let persona = Persona {
+    ///     platform: Some(Platform::Win32),
+    ///     ..Persona::builder()
+    ///         .gpu_device(GpuDevice::by_name("NVIDIA GeForce RTX 4090")?)
+    ///         .build()
+    /// };
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn gpu_device(mut self, device: crate::GpuDevice) -> Self {
+        let mut spec = self.0.webgl.unwrap_or_default();
+        spec.unmasked_renderer = Some(device.renderer());
+        self.0.webgl = Some(spec);
+        self
+    }
     pub fn build(self) -> Persona {
         self.0
     }
@@ -393,6 +425,29 @@ mod persona_tests {
         assert_eq!(p.seed, Some(Seed::from_u64(3)));
         assert_eq!(p.device_memory_gb, Some(16));
         assert_eq!(p.timezone.as_deref(), Some("UTC"));
+    }
+
+    #[test]
+    fn gpu_device_pins_the_renderer_and_keeps_the_rest_of_the_spec() {
+        let device = crate::GpuDevice::by_name("NVIDIA GeForce RTX 4090").expect("catalogued");
+        let p = Persona::builder()
+            .webgl(crate::WebglSpec {
+                unmasked_vendor: Some("Google Inc. (NVIDIA)".into()),
+                ..Default::default()
+            })
+            .gpu_device(device)
+            .build();
+        let spec = p.webgl.expect("webgl spec");
+        assert_eq!(
+            spec.unmasked_renderer.as_deref(),
+            Some(device.renderer().as_str())
+        );
+        assert!(spec.unmasked_renderer.unwrap().contains("(0x00002684)"));
+        // Only the renderer is overwritten; a vendor pinned alongside survives.
+        assert_eq!(
+            spec.unmasked_vendor.as_deref(),
+            Some("Google Inc. (NVIDIA)")
+        );
     }
 
     #[test]

@@ -1,0 +1,64 @@
+{
+  "nodes": [
+    {
+      "name": "userAgent",
+      "parentNames": [],
+      "conditionalProbabilities": {
+        "ua-win": 0.48,
+        "ua-win-newer-chrome": 0.2,
+        "ua-win-arm": 0.02,
+        "ua-win-software": 0.03,
+        "ua-win-vm": 0.01,
+        "ua-mac": 0.15,
+        "ua-ios": 0.04,
+        "ua-linux": 0.03,
+        "ua-android": 0.02,
+        "ua-win-old-gpu": 0.02
+      }
+    },
+    {
+      "name": "videoCard",
+      "parentNames": [
+        "userAgent"
+      ],
+      "conditionalProbabilities": {
+        "deeper": {
+          "ua-win": {
+            "*STRINGIFIED*{\"renderer\":\"ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)\",\"vendor\":\"Google Inc. (NVIDIA)\"}": 0.5,
+            "*STRINGIFIED*{\"renderer\":\"ANGLE (AMD, AMD Radeon RX 6700 XT Direct3D11 vs_5_0 ps_5_0, D3D11)\",\"vendor\":\"Google Inc. (AMD)\"}": 0.3,
+            "*STRINGIFIED*{\"renderer\":\"ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)\",\"vendor\":\"Google Inc. (Intel)\"}": 0.2
+          },
+          "ua-win-newer-chrome": {
+            "*STRINGIFIED*{\"renderer\":\"ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 (0x00002684) Direct3D11 vs_5_0 ps_5_0, D3D11)\",\"vendor\":\"Google Inc. (NVIDIA)\"}": 1.0
+          },
+          "ua-win-arm": {
+            "*STRINGIFIED*{\"renderer\":\"ANGLE (Qualcomm, Qualcomm(R) Adreno(TM) X1-85 GPU Direct3D11 vs_5_0 ps_5_0, D3D11)\",\"vendor\":\"Google Inc. (Qualcomm)\"}": 1.0
+          },
+          "ua-win-software": {
+            "*STRINGIFIED*{\"renderer\":\"ANGLE (Microsoft, Microsoft Basic Render Driver Direct3D11 vs_5_0 ps_5_0, D3D11)\",\"vendor\":\"Google Inc. (Microsoft)\"}": 1.0
+          },
+          "ua-win-vm": {
+            "*STRINGIFIED*{\"renderer\":\"ANGLE (0x05404C42, Parallels Display Adapter (WDDM) Direct3D11 vs_5_0 ps_5_0, D3D11)\",\"vendor\":\"Google Inc. (0x05404C42)\"}": 1.0
+          },
+          "ua-mac": {
+            "*STRINGIFIED*{\"renderer\":\"ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)\",\"vendor\":\"Google Inc. (Apple)\"}": 0.5,
+            "*STRINGIFIED*{\"renderer\":\"ANGLE (Intel, ANGLE Metal Renderer: Intel(R) UHD Graphics 630, Unspecified Version)\",\"vendor\":\"Google Inc. (Intel)\"}": 0.3,
+            "*STRINGIFIED*{\"renderer\":\"ANGLE (AMD, ANGLE Metal Renderer: AMD Radeon Pro 5500M, Unspecified Version)\",\"vendor\":\"Google Inc. (AMD)\"}": 0.2
+          },
+          "ua-ios": {
+            "*STRINGIFIED*{\"renderer\":\"ANGLE (Apple, ANGLE Metal Renderer: Apple A18 Pro, Unspecified Version)\",\"vendor\":\"Google Inc. (Apple)\"}": 1.0
+          },
+          "ua-linux": {
+            "*STRINGIFIED*{\"renderer\":\"ANGLE (Mesa, llvmpipe (LLVM 15.0.7 256 bits), OpenGL 4.5)\",\"vendor\":\"Google Inc. (Mesa)\"}": 1.0
+          },
+          "ua-android": {
+            "*STRINGIFIED*{\"renderer\":\"ANGLE (Qualcomm, Adreno (TM) 730, OpenGL ES 3.2)\",\"vendor\":\"Google Inc. (Qualcomm)\"}": 1.0
+          },
+          "ua-win-old-gpu": {
+            "*STRINGIFIED*{\"renderer\":\"ANGLE (NVIDIA, NVIDIA GeForce 210 (0x00000A65) Direct3D11 vs_4_1 ps_4_1, D3D11)\",\"vendor\":\"Google Inc. (NVIDIA)\"}": 1.0
+          }
+        }
+      }
+    }
+  ]
+}

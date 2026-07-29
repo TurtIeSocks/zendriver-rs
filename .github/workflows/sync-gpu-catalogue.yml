@@ -1,0 +1,90 @@
+name: Sync GPU catalogue
+
+# The catalogue is generated from two *fetched* sources, so its regeneration
+# cannot be a PR-CI diff the way `gpu-tier-gen`'s is: that generator's inputs
+# are committed captures and reproduce offline, while this one needs GitHub to
+# be reachable. Putting a network call in the PR gate would fail builds on an
+# upstream outage rather than on a defect.
+#
+# So this follows `sync-cldr-locale.yml`: bump the pins on a schedule,
+# regenerate, and open a PR that goes through normal review. The coherence
+# sweeps in `zendriver-stealth` run against the result like any other change.
+on:
+  schedule:
+    # Monthly. The corpus and pci.ids both move slowly, and every run that
+    # finds nothing still costs a PR to close.
+    - cron: "0 5 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Bump both pins to their current heads
+        id: pins
+        run: |
+          set -euo pipefail
+          pci=$(gh api repos/pciutils/pciids/commits/master --jq '.sha')
+          corpus=$(gh api repos/apify/fingerprint-suite/commits/master --jq '.sha')
+          # Both go straight into a Rust source file, so refuse anything that
+          # is not a full hex SHA rather than writing it and finding out at
+          # compile time. Also catches an API response that is not what we
+          # asked for.
+          for sha in "$pci" "$corpus"; do
+            if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
+              echo "::error::refusing to pin a non-SHA value: ${sha}"
+              exit 1
+            fi
+          done
+          src=crates/gpu-catalogue-gen/src/sources.rs
+          sed -i "s/^pub const PCI_IDS_COMMIT: &str = \".*\";/pub const PCI_IDS_COMMIT: \&str = \"${pci}\";/" "$src"
+          sed -i "s/^pub const CORPUS_COMMIT: &str = \".*\";/pub const CORPUS_COMMIT: \&str = \"${corpus}\";/" "$src"
+          echo "pci=${pci}" >> "$GITHUB_OUTPUT"
+          echo "corpus=${corpus}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Regenerate
+        run: |
+          cargo run -p gpu-catalogue-gen
+          cargo fmt -p zendriver-stealth -p gpu-catalogue-gen
+
+      - name: Verify the regenerated catalogue is still coherent
+        # Not a formality. These sweeps are what catch an upstream change that
+        # introduces a device the composer cannot round-trip, or an entry whose
+        # backend has no shipped tier.
+        run: "cargo test -p zendriver-stealth gpu:: --locked"
+
+      - name: Open a PR if anything moved
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: chore/sync-gpu-catalogue
+          title: "chore(stealth): sync the GPU device catalogue"
+          commit-message: |
+            chore(stealth): sync the GPU device catalogue
+
+            Automated monthly regeneration.
+            pci.ids  -> ${{ steps.pins.outputs.pci }}
+            corpus   -> ${{ steps.pins.outputs.corpus }}
+          body: |
+            Automated monthly regeneration of the GPU device catalogue.
+
+            Pins moved to:
+            - `pciutils/pciids` → `${{ steps.pins.outputs.pci }}`
+            - `apify/fingerprint-suite` → `${{ steps.pins.outputs.corpus }}`
+
+            **Review the entry count and the dropped-model list in the
+            generated header.** A catalogue that shrinks sharply, or drops
+            models it used to resolve, means an upstream format changed —
+            renderer strings and `pci.ids` naming have both moved before.
+
+            The coherence sweeps passed, so every entry still round-trips to
+            its own tier and derives its own vendor.
