@@ -592,9 +592,11 @@ Navigator-prototype checks.</p>
 arrays).</li>
 <li><code>navigator.chrome</code> (installs the runtime object headless Chrome
 doesn't ship).</li>
-<li>WebGL vendor / renderer (returns <code>"Google Inc. (Intel)"</code> /
-<code>"ANGLE (Intel, Mesa Intel(R) UHD Graphics, OpenGL 4.6)"</code> by
-default).</li>
+<li>WebGL vendor / renderer, plus every other readable WebGL value,
+resolved from one capability tier (defaults to a captured Apple Metal
+device: <code>"Google Inc. (Apple)"</code> / <code>"ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)"</code>). The WebGPU adapter is
+derived from that same renderer string, so the two APIs never name
+different GPUs.</li>
 <li>ChunkSplit + iframe-contentWindow guards so the patches survive
 cross-realm escape attempts.</li>
 </ul>
@@ -654,8 +656,9 @@ specific UA.</p>
 isolation (<code>--disable-features=IsolateOrigins,...,site-per-process</code>),
 and <code>spoofed()</code> additionally patches
 <code>WebGLRenderingContext.getParameter()</code> /<code>getSupportedExtensions()</code> to
-report a coherent ANGLE/Direct3D11 Intel identity regardless of the
-host's actual GPU. <code>.native_isolation(true)</code> opts a profile <strong>out</strong> of
+report a coherent GPU identity — every readable parameter resolved from
+one capability tier, defaulting to an Apple Metal device — regardless of
+the host's actual GPU. <code>.native_isolation(true)</code> opts a profile <strong>out</strong> of
 both:</p>
 <pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -700,9 +703,11 @@ driven by the
 <a href="https://docs.rs/zendriver-stealth/latest/zendriver_stealth/struct.Persona.html"><code>Persona</code></a>
 <code>webgpu</code> surface) is skipped along with it, so <code>navigator.gpu</code> reports
 the real host adapter instead of one derived from a renderer the WebGL
-patch no longer applies — no cross-API mismatch. An explicit <code>Webgpu</code>
-<code>Block</code> (hiding <code>navigator.gpu</code>) is renderer-neutral, so it is still
-honored if you set it.</p>
+patch no longer applies — no cross-API mismatch. The same holds for the
+per-surface <code>Strategy::Native</code> on <code>Webgl</code>, which leaves the real renderer
+in place for one persona rather than the whole profile. An explicit
+<code>Webgpu</code> <code>Block</code> (hiding <code>navigator.gpu</code>) is renderer-neutral, so it is
+still honored if you set it.</p>
 <h2 id="end-to-end-example"><a class="header" href="#end-to-end-example">End-to-end example</a></h2>
 <p>This example launches with a custom UA, locale, and platform, then
 reads them back via <code>navigator.*</code> to prove the overrides took:</p>
@@ -802,7 +807,7 @@ touching any CDP internals directly.</p>
 <tr><td><code>Canvas</code></td><td>Noise</td><td><code>Seeded</code></td><td><code>getImageData</code>, <code>toDataURL</code> pixel data</td></tr>
 <tr><td><code>Audio</code></td><td>Noise</td><td><code>Seeded</code></td><td><code>AnalyserNode</code> frequency / time-domain data</td></tr>
 <tr><td><code>ClientRects</code></td><td>Noise</td><td><code>Seeded</code></td><td><code>getBoundingClientRect</code> sub-pixel dimensions</td></tr>
-<tr><td><code>Webgl</code></td><td>Value</td><td><code>Value</code></td><td><code>UNMASKED_VENDOR_WEBGL</code>, <code>UNMASKED_RENDERER_WEBGL</code></td></tr>
+<tr><td><code>Webgl</code></td><td>Value</td><td><code>Value</code></td><td>Every static device capability <code>getParameter</code> reports (WebGL1 + WebGL2), both extension lists, and <code>getShaderPrecisionFormat</code> — not just <code>UNMASKED_VENDOR_WEBGL</code>/<code>UNMASKED_RENDERER_WEBGL</code>. Per-context mutable state stays the backend's</td></tr>
 <tr><td><code>Webgpu</code></td><td>Value</td><td><code>Value</code></td><td><code>GPUAdapterInfo</code> (vendor/architecture/device/description) + optional <code>.limits</code>/<code>.features</code></td></tr>
 <tr><td><code>Fonts</code></td><td>Value</td><td><code>Value</code></td><td><code>measureText</code> width noise + <code>FontFaceSet.check</code> allow-list</td></tr>
 <tr><td><code>Hardware</code></td><td>Value</td><td><code>Value</code></td><td>Battery level, media-device count, speech voices</td></tr>
@@ -827,6 +832,15 @@ in a way that makes repeat reads of the same content diverge.</p>
 <code>Native</code>, <code>Value</code>, <code>Block</code>. The policy surface (Webrtc) accepts <code>Native</code>,
 <code>Block</code>, <code>Value</code> (fake IP). Requesting a meaningless combination logs a
 warning and falls back to the surface's kind default.</p>
+<p><strong><code>Native</code> on <code>Webgl</code> also silences the <code>Webgpu</code> value spoof.</strong> A native
+WebGL surface reports the host's real renderer, so a substituted
+<code>GPUAdapterInfo</code> — derived from the renderer that was <em>not</em> applied — would
+have <code>navigator.gpu</code> naming a GPU that <code>getParameter(UNMASKED_RENDERER_WEBGL)</code>
+never claimed, which is exactly the cross-API mismatch a fingerprinter looks
+for. The same coupling applies to
+<a href="stealth.html#opting-into-real-site-isolation--real-webgl-native_isolation"><code>native_isolation</code></a>,
+which drops the WebGL patch profile-wide. An explicit <code>Webgpu</code> <code>Block</code> names
+no GPU at all, so it stays honored either way.</p>
 <h2 id="persona-sources"><a class="header" href="#persona-sources">Persona sources</a></h2>
 <h3 id="personasystem--host-probed-cached"><a class="header" href="#personasystem--host-probed-cached"><code>Persona::system()</code> — host-probed, cached</a></h3>
 <p>Reads the real machine's platform, CPU count, and memory via <code>sysinfo</code>. The
@@ -948,17 +962,192 @@ let browser = Browser::builder()
     .surface(Surface::Canvas, Strategy::Random)  // fresh per-page-load seed
     .launch().await?;
 <span class="boring">}</span></code></pre></pre>
+<h2 id="webgl-full-surface-value-spoof-resolved-from-measured-tiers"><a class="header" href="#webgl-full-surface-value-spoof-resolved-from-measured-tiers">WebGL (full-surface value spoof, resolved from measured tiers)</a></h2>
+<p>The <code>Webgl</code> surface's default <code>Value</code> strategy no longer substitutes a
+handful of hand-picked numbers. It resolves and serves every static <strong>device
+capability</strong> a page can read — 18 <code>getParameter</code> values on a WebGL1 context
+and 47 on a WebGL2 one — plus both contexts' <code>getSupportedExtensions</code> lists
+(in Chrome's own order, which is itself a fingerprint input) and every
+<code>getShaderPrecisionFormat</code> result. That is the whole surface that identifies
+the GPU, not just the vendor/renderer pair.</p>
+<p><strong>The rest of <code>getParameter</code> is deliberately left to the real backend.</strong> The
+other ~85 values it answers are not device capabilities: they are per-context
+<em>mutable state</em> (<code>VIEWPORT</code>, <code>BLEND</code>, <code>SCISSOR_BOX</code>, the <code>STENCIL_*</code>,
+<code>PACK_*</code> and <code>UNPACK_*</code> families, <code>DRAW_BUFFERn</code>, …), values fixed by the
+context attributes the page asked for (<code>RED_BITS</code>, <code>STENCIL_BITS</code>, <code>SAMPLES</code>
+— <code>getContext('webgl', {stencil: true})</code> changes them), or the
+extension-dependent <code>COMPRESSED_TEXTURE_FORMATS</code>. Every real Chrome reports
+the same defaults for all of them, so they carry no entropy to spoof (with one
+partial exception, <code>DRAW_BUFFERn</code>, covered below), and serving them from a
+table would be a tell rather than a disguise:
+<code>gl.enable(gl.BLEND); gl.getParameter(gl.BLEND)</code> would answer <code>false</code>
+forever, and a resized canvas would report a stale viewport beside its real
+<code>drawingBufferWidth</code>. Delegating also keeps real WebGL pages working —
+state-caching renderers (deck.gl's <code>withParameters</code>, Babylon's state cache)
+save and restore through <code>getParameter</code>.</p>
+<p><strong>Values come from measured capability tiers, not per-parameter guesses.</strong>
+How far one capture reaches depends on the backend, because ANGLE (Chrome's GL
+layer) decides these values differently per backend. Five tiers ship today, and
+all but the last generalize:</p>
+<ul>
+<li><code>SwiftShader</code> — Chrome's software rasterizer, the same numbers on every OS.</li>
+<li>Metal on macOS — ANGLE's Metal backend, covering every Mac. The values are
+compile-time constants in ANGLE's <code>DisplayMtl.mm</code> <code>TARGET_OS_OSX</code> branch, so
+an Intel Mac and an Apple silicon one report the same numbers.</li>
+<li>D3D11 (feature level 11_0+) — ANGLE's Direct3D 11 backend on Windows, in two
+tiers. ANGLE derives the values from <code>D3D11_REQ_*</code> constants rather than from
+the card, so one tier covers every Intel and AMD part at that feature level.
+NVIDIA gets its own: <code>renderer11_utils.cpp</code> enables
+<code>skipVSConstantRegisterZero</code> when and only when the vendor is NVIDIA, which
+docks <code>MAX_VERTEX_UNIFORM_VECTORS</code> from 4096 to 4095 and shifts the two
+values derived from it. Everything else matches — probing an RTX 4090 and an
+AMD Radeon on one machine found no other difference in either WebGL
+parameter set, the extension lists, the shader precisions, or any WebGPU
+limit or feature.</li>
+<li>Intel Iris Pro Graphics 580 (Skylake GT4e) under Mesa 25.2.8 — ANGLE's
+<strong>Vulkan</strong> backend on Linux. This one covers <strong>that GPU under that driver and
+nothing else</strong>: <code>vk_caps_utils.cpp</code> fills its caps straight from
+<code>VkPhysicalDeviceLimits</code> (<code>max2DTextureSize</code> is
+<code>min(limitsVk.maxFramebufferWidth, limitsVk.maxImageDimension2D)</code>, the
+viewport bounds come from <code>limitsVk.maxViewportDimensions</code>), so a different
+Intel part — or the same part on a different Mesa release — is a different
+tier and needs its own capture. That is why it is named for the device and
+the driver rather than for the backend, and why no "Linux" or "Vulkan" tier
+exists to generalize it.</li>
+</ul>
+<p>The measurement shows the split rather than just asserting it. The Vulkan
+capture is closest to SwiftShader (7 of 82 WebGL1 parameters differ and 21 of
+132 WebGL2, against 10/26 for D3D11 and 9/23 for Metal), because SwiftShader's
+renderer string also says <code>Vulkan 1.3.0</code> and it runs through the same ANGLE
+backend. The 21 that remain between two Vulkan-backed captures on one Chrome
+build are exactly the device-derived limits.</p>
+<p>A tier is shared <em>capability values</em>, never shared <em>identity</em>. Pin an Intel or
+AMD D3D11 renderer and you get that tier's numbers above your own vendor and
+renderer strings — <code>UNMASKED_VENDOR_WEBGL</code> is derived from the renderer you
+pinned (<code>ANGLE (Intel, …)</code> → <code>Google Inc. (Intel)</code>), not from the NVIDIA card
+the tier happened to be captured on.</p>
+<p><strong>When a persona names no renderer, the default is chosen from its
+platform.</strong> A renderer string is read beside <code>navigator.platform</code>, so the two
+have to be a pair Chrome can actually produce. A <code>MacIntel</code> persona gets the
+Apple Metal row, a <code>Win32</code> persona the D3D11 row, and a <code>LinuxX86_64</code> persona
+the Intel Iris Pro 580 Mesa/Vulkan row — all three ordinary hardware
+identities whose name and numbers come from the same probe.</p>
+<p>Linux used to get a SwiftShader row instead, which was real (Chrome reports it
+on a GPU-blocklisted machine, a VM, or a headless container) but announced "no
+usable GPU", something some fingerprinters weight on its own. Capturing the
+Vulkan tier retired that last fallback: every platform default is now hardware.</p>
+<p><strong>SwiftShader's numbers are platform-independent; its renderer string is
+not.</strong> Probing Ubuntu 24 (Chrome 150.0.7871.114, GPU-less VM) against the
+flags used for the macOS capture reproduced it exactly — no WebGL1 or WebGL2
+parameter differed, and the extension and precision lists matched — while the
+renderer string differed in one token, because SwiftShader chooses its JIT
+backend at build time and Chrome prints the choice:</p>
+<div class="table-wrapper"><table><thead><tr><th>SwiftShader build</th><th>renderer string</th></tr></thead><tbody>
+<tr><td>Linux and Windows (both measured)</td><td><code>ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)</code></td></tr>
+<tr><td>macOS</td><td><code>ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (LLVM 10.0.0) (0x0000C0DE)), SwiftShader driver)</code></td></tr>
+</tbody></table>
+</div>
+<p>So one capability tier ships under two identity strings. Neither picks a
+default any more — every platform resolves captured hardware — but the split
+still decides which row a persona lands on when it pins a SwiftShader renderer
+itself, and it must be the build that platform's Chrome really prints. Windows
+Chrome's SwiftShader build prints Subzero too (measured on Windows 10.0.21996,
+Chrome 150.0.7871.186).</p>
+<p><strong>A renderer you pin yourself that matches no tier falls back to your
+platform's default device and logs a warning.</strong> Serving an unrecognized
+renderer's <em>name</em> above a different backend's <em>numbers</em> is its own
+incoherence. A desktop-GL string is expected to be unmatched, and so is any
+Vulkan device other than the captured Iris Pro — widening that row to cover
+Linux generally is exactly what its device-derived limits forbid. Adding a tier
+requires probing real hardware with that backend; values are never invented.
+See the
+<a href="https://github.com/TurtIeSocks/zendriver-rs/blob/main/.claude/skills/capture-gpu-tier/SKILL.md"><code>capture-gpu-tier</code> skill</a>
+for the procedure if you hit this warning and have the hardware to fix it.</p>
+<p><strong>The tables describe the claimed device, not the host that runs the page.</strong>
+A served capability can exceed what the backend underneath can actually do,
+and nothing in the tables can change that — the numbers are read from a table,
+the work is done by real hardware. <code>MAX_TEXTURE_SIZE</code> 16384 sits above a
+backend that fails a 16384 <code>texImage2D</code>; <code>MAX_SAMPLES</code> 8 sits above one whose
+<code>getInternalformatParameter</code> offers fewer; <code>MAX_DRAW_BUFFERS</code> 8 sits above one
+with six real <code>DRAW_BUFFERn</code> enums. The last of those is cheap enough to close
+outright, and the patch does close it (it answers the ES 3.0 default for any
+index the served cap claims and the backend has no constant for). The rest are
+not: a script that <em>exercises</em> a limit rather than reading it can tell the
+claim from the capability, and no table can fabricate the capability itself.
+Where that fidelity matters, pair the persona's tier with a
+<a href="gpu-backend.html"><code>gpu_backend</code></a> that really has those limits — a <code>MacIntel</code>
+persona (Apple Metal tier), a <code>Win32</code> one (D3D11 tier), or a <code>LinuxX86_64</code> one
+(the Mesa/Vulkan tier) on <code>GpuBackend::Native</code> hardware, rather than over
+SwiftShader, which is the default. No platform resolves the SwiftShader tier
+by default any more, so no platform is trivially coherent with that backend;
+pinning a SwiftShader renderer yourself is what makes it so.</p>
+<p><strong><code>Persona.gpu: Option&lt;GpuProfile&gt;</code> lets you pin a whole coherent device.</strong>
+Unset, it resolves from the persona's WebGL renderer string, matched against
+the shipped devices above. Set, it overlays the resolved tier key-wise,
+so a partial profile only overrides the keys it sets. It merges as one
+atomic value across personas (like <code>screen</code>), never field-by-field —
+composing two devices' values could describe hardware that exists nowhere.
+The finer-grained <code>WebglSpec</code> (the <code>unmasked_vendor</code>/<code>unmasked_renderer</code>
+strings) still overlays on top of whatever <code>Persona.gpu</code> produces, so you can
+pin just the renderer string without restating an entire device's parameter
+table.</p>
+<p><strong><code>Strategy::Native</code> on <code>Webgl</code> emits no WebGL patch at all</strong> — <code>getParameter</code>
+and friends return the host's real, unmodified values. As covered above,
+this also suppresses the <code>Webgpu</code> value spoof, so neither surface serves a
+value that contradicts the other.</p>
+<p><strong>The tables are generated, never hand-edited.</strong>
+<code>crates/zendriver-stealth/src/gpu/tiers.rs</code> is produced by the <code>gpu-tier-gen</code>
+crate from committed probe captures
+(<code>crates/zendriver-stealth/data/gpu-tiers/*.json</code>); a CI step regenerates it
+and fails the build on any diff, so the shipped file can never drift from
+its source captures.</p>
 <h2 id="webgpu-opt-in-adapter-override--fabrication"><a class="header" href="#webgpu-opt-in-adapter-override--fabrication">WebGPU (opt-in adapter override / fabrication)</a></h2>
 <p>By default (<code>Persona.webgpu = None</code>, or <code>Some(WebgpuSpec::default())</code>), the
 <code>Webgpu</code> surface only DECORATES a real <code>navigator.gpu</code> adapter's <code>.info</code> with
 a vendor/architecture DERIVED from the <code>Webgl</code> surface's renderer (never
-fabricated) — the same behavior it always had. <code>WebgpuSpec</code> (mirroring
-<code>WebglSpec</code>'s strategy+values shape) adds two OPT-IN capabilities on top:</p>
+fabricated) — the same behavior it always had. Only a renderer naming a GPU
+family zendriver recognizes yields a vendor and architecture; anything else —
+including any SwiftShader renderer — derives both as <code>""</code>, which is what Chrome
+itself reports for an adapter it cannot classify. A software rasterizer has no
+vendor, and naming one beside a SwiftShader WebGL renderer would be the
+cross-API contradiction this derivation exists to prevent. The Mesa/Vulkan row
+a <code>LinuxX86_64</code> persona defaults to derives <code>intel</code> with an empty
+architecture — Intel is what its renderer names, and nothing measured that
+part's architecture token, so it stays empty rather than guessed.</p>
+<p><strong><code>.limits</code> and <code>.features</code> come from the same measured tier the WebGL surface
+serves.</strong> The probe captures each tier's <code>navigator.gpu</code> adapter alongside its
+WebGL blocks, in one run on one machine, so the two APIs answer for one device:
+a <code>Win32</code> persona reports the D3D11 tier's 2 GiB <code>maxBufferSize</code> and its 19
+features, a <code>MacIntel</code> persona the Metal tier's 4 GiB - 4 and its 22. Before
+this they were left at the host's, so an adapter could name an NVIDIA card
+above a Metal buffer limit — the same gap the tier tables closed for WebGL.</p>
+<p>Two tiers serve <strong>neither</strong>, and in both cases that is the measurement rather
+than a hole. Chrome on SwiftShader resolves <code>requestAdapter()</code> to <code>null</code>, and
+the Linux machine the Mesa/Vulkan tier was probed on has WebGPU off by default
+(<code>navigator.gpu</code> exists, <code>requestAdapter()</code> resolves <code>null</code>) — so neither has
+an adapter to describe, and the host's own values are left untouched.
+Substituting a neighbouring tier's numbers would hand a persona that just told
+WebGL it has a software rasterizer, or a machine with WebGPU disabled, a
+hardware adapter's capabilities.</p>
+<p>One honest caveat, the mirror of the D3D11 tier's WebGL story. The WebGL values
+generalize across every FL11+ card because ANGLE derives them from <code>D3D11_REQ_*</code>
+constants; the <em>limits</em> generalize the same way (Dawn's D3D12 backend derives
+them from binding-tier constants), but a few <em>features</em> are genuinely
+hardware-gated — <code>shader-f16</code>, <code>subgroups</code>, <code>clip-distances</code>, <code>primitive-index</code>.
+The tier's list was measured on an RTX 4090, so pinning an old Intel iGPU's
+renderer under that tier can claim a feature that card would not have. Nothing
+in the tables can tell the two apart without a capture from such a card; if that
+fidelity matters, pin <code>features</code> yourself through <code>WebgpuSpec</code>.</p>
+<p><code>WebgpuSpec</code> (mirroring <code>WebglSpec</code>'s strategy+values shape) adds two OPT-IN
+capabilities on top:</p>
 <ol>
 <li>
 <p><strong>Caller-supplied adapter identity.</strong> Set <code>vendor</code> / <code>architecture</code> /
 <code>device</code> / <code>description</code> / <code>limits</code> / <code>features</code> explicitly instead of
-letting <code>vendor</code>/<code>architecture</code> derive from the WebGL renderer.</p>
+letting <code>vendor</code>/<code>architecture</code> derive from the WebGL renderer and
+<code>limits</code>/<code>features</code> come from its tier. <code>limits</code> overlays key-wise, so
+pinning one limit keeps the tier's value for every other; <code>features</code>
+replaces the tier's list wholesale.</p>
 </li>
 <li>
 <p><strong>Synthetic adapter fabrication</strong> (<code>fabricate_when_absent: true</code>) — when
@@ -1025,8 +1214,36 @@ against a real device.</p>
 REJECTS — there is no way to fabricate a working <code>GPUDevice</code> without a real
 GPU behind it. Fabrication only makes <code>requestAdapter()</code> resolve a coherent
 adapter for detection scripts that stop there; it does not unlock actual
-WebGPU rendering on a GPU-less host. The synthetic adapter and (when created)
-the synthetic <code>navigator.gpu</code> are plain objects, so <code>adapter instanceof GPUAdapter</code> and <code>navigator.gpu instanceof GPU</code> are <code>false</code>.</p>
+WebGPU rendering on a GPU-less host.</p>
+<p><code>adapter.limits</code> and <code>adapter.features</code> are the <strong>real</strong> <code>GPUSupportedLimits</code>
+and <code>GPUSupportedFeatures</code> objects wherever those classes exist: the patch
+overrides their prototypes' accessors and setlike members rather than handing
+back a plain object and a <code>Set</code>, so <code>constructor.name</code>, <code>instanceof</code>,
+<code>Object.prototype.toString</code> and own-property count all read as a genuine
+adapter's while the values are the claimed device's (verified against real
+Chrome in <code>crates/zendriver/tests/gpu_profile.rs</code>). What still differs: the
+iterators <code>features.keys()</code> / <code>values()</code> / <code>entries()</code> return are ordinary
+<code>Array Iterator</code>s rather than <code>GPUSupportedFeatures Iterator</code>s — <code>has</code>, <code>size</code>,
+spread and <code>for...of</code> all read correctly, only the iterator's own type tag
+differs.</p>
+<p><strong><code>requestDevice()</code> is held to the same claim.</strong> A served limit that only
+survives being <em>read</em> is a fingerprint of its own: the adapter advertises the
+tier's numbers, so a page can ask for exactly what it was just told, and the
+request would go straight to hardware that never had it (a <code>Win32</code> persona
+advertises 16 storage buffers per shader stage; a Metal host supports 10). On
+the decorate path the patch wraps <code>requestDevice</code> so both directions agree with
+the advertisement — a <code>requiredLimits</code> / <code>requiredFeatures</code> request beyond it
+rejects with Chrome's own error and message, and one within it is translated
+down to what the hardware can actually give so the call succeeds. The resulting
+<code>GPUDevice</code> reports the <strong>requested</strong> values on its <code>.limits</code> (and the spec
+defaults for everything it did not request, exactly as a real device does), on a
+genuine <code>GPUSupportedLimits</code>. Its <code>adapterInfo</code> names the same adapter too —
+before this it answered the host's, so <code>adapter.info.vendor</code> read <code>nvidia</code> and
+<code>device.adapterInfo.vendor</code> read <code>apple</code> one line later.</p>
+<p>That closes the <em>interrogation</em> divergence, not the capability gap. A page that
+goes on to <strong>allocate</strong> at the claimed capability still fails, because no patch
+can conjure hardware — the same honest limit as SwiftShader's pixels not being
+an NVIDIA GPU's pixels.</p>
 <p><strong>On a GPU-equipped host, <a href="gpu-backend.html"><code>GpuBackend::Native</code></a> sidesteps
 <code>WebgpuSpec</code> fabrication entirely.</strong> Instead of faking an adapter and
 accepting the <code>requestDevice()</code>-rejects / no-real-rendering limitations
@@ -1220,16 +1437,33 @@ identities across a fleet, <code>Native</code> is not that tool; look at
 <a href="fingerprint.html#webgpu-opt-in-adapter-override--fabrication"><code>WebgpuSpec</code></a>
 for caller-supplied adapter values instead. <code>Native</code> makes the GPU surface
 <em>coherent</em>; it does not give you <em>control</em> over what it says.</p>
-<h2 id="no-automatic-fallback"><a class="header" href="#no-automatic-fallback">No automatic fallback</a></h2>
-<p>If <code>Native</code> is selected and Chrome's GPU process cannot start — no GPU
-present, a crashed GPU process, a missing sandbox — the launch fails with
-<a href="https://docs.rs/zendriver/latest/zendriver/enum.BrowserError.html"><code>BrowserError::GpuBackendUnavailable</code></a> rather than silently retrying with a
-software rasterizer. That's deliberate: falling back automatically would
-restore the same incoherent, mixed software/hardware fingerprint that
-choosing a backend explicitly exists to avoid. If a launch might land on a
-GPU-less host, catch <code>GpuBackendUnavailable</code> (along with <code>DevtoolsParse</code> and
-<code>EarlyExit</code>, the other failure shapes a missing GPU process produces) and
-retry with <code>GpuBackend::SwiftShader</code> or <code>GpuBackend::Disabled</code> yourself.</p>
+<h2 id="the-launch-is-validated-and-there-is-no-automatic-fallback"><a class="header" href="#the-launch-is-validated-and-there-is-no-automatic-fallback">The launch is validated, and there is no automatic fallback</a></h2>
+<p>Chrome <em>starting</em> is not evidence that it got a GPU. On a GPU-less Ubuntu 24
+VM, Chrome 150 launched successfully under <code>Native</code> and then returned <code>null</code>
+from both <code>canvas.getContext('webgl')</code> and <code>getContext('webgl2')</code>. That is a
+browser strictly <strong>more</strong> detectable than the default — a missing WebGL
+context is one of the oldest and cheapest headless tells, and the stealth
+WebGL patch cannot repair it, because it patches prototypes and there is no
+context to patch.</p>
+<p>So <code>Native</code> verifies the launch. After the CDP handshake, zendriver asks
+Chrome what it actually initialized (<code>SystemInfo.getInfo</code>, a browser-level
+domain — no page, no navigation, one round-trip) and reads
+<code>gpu.featureStatus.webgl</code>. Measured on Chrome 150.0.7871.186 on the darwin
+dev host: <code>Native</code> reports <code>enabled</code>, <code>SwiftShader</code> reports
+<code>enabled_readback</code>, <code>Disabled</code> reports <code>disabled_off</code>. Anything but a
+hardware status terminates the Chrome that was just spawned and fails the
+launch with <a href="https://docs.rs/zendriver/latest/zendriver/enum.BrowserError.html"><code>BrowserError::GpuBackendUnavailable</code></a>.</p>
+<p>If the GPU cannot be <em>verified</em> — <code>SystemInfo.getInfo</code> unavailable, or
+answering with a status string zendriver does not recognize — the launch logs
+a warning and proceeds. A missing diagnostic API is not evidence of a missing
+GPU, and refusing to launch over one would be worse than the problem the
+check addresses.</p>
+<p>There is no fallback. Failing rather than retrying on SwiftShader is
+deliberate: falling back automatically would serve a software rasterizer's
+values under a "native" label — the same incoherent, mixed software/hardware
+fingerprint that choosing a backend explicitly exists to avoid. If a launch
+might land on a GPU-less host, catch <code>GpuBackendUnavailable</code> and retry with
+<code>GpuBackend::SwiftShader</code> or <code>GpuBackend::Disabled</code> yourself.</p>
 <h2 id="measured-comparison"><a class="header" href="#measured-comparison">Measured comparison</a></h2>
 <p>All figures below are from real Chrome (150.0.7871.186) on this project's
 darwin dev host (Apple M4 Pro), probed with the
@@ -1250,11 +1484,34 @@ context exist at all" question applies to it.</p>
 <tr><td>WebGL extension count</td><td>30</td><td>36</td></tr>
 </tbody></table>
 </div>
-<p><code>MAX_TEXTURE_SIZE</code> and the other numeric WebGL caps are not read from the
-GPU — ANGLE computes them from constants branched on backend and feature
-tier, not from device queries. That's why the SwiftShader row above is
-identical regardless of what real GPU sits underneath: it's a software
-rasterizer, so there's no real device to query.</p>
+<p>Whether <code>MAX_TEXTURE_SIZE</code> and the other numeric WebGL caps are read from the
+GPU <strong>depends on the backend</strong>, and that is what decides how far one probe
+generalizes:</p>
+<ul>
+<li><strong>D3D11 and Metal-on-macOS: not read from the device.</strong> ANGLE computes them
+from constants branched on the feature level (<code>renderer11_utils.cpp</code>) or
+from plain compile-time constants (<code>DisplayMtl.mm</code>'s <code>TARGET_OS_OSX</code> arm), so
+one probe covers every card on that backend.</li>
+<li><strong>SwiftShader: no device to read.</strong> It is a software rasterizer, which is why
+the row above is identical regardless of what real GPU sits underneath.</li>
+<li><strong>Vulkan: read straight off the device.</strong> <code>vk_caps_utils.cpp</code> fills its caps
+from <code>VkPhysicalDeviceLimits</code>, so a Linux probe describes that GPU under that
+Mesa build and nothing else. zendriver's Vulkan tier is named for its device
+for exactly this reason (Intel Iris Pro Graphics 580, Mesa 25.2.8), and
+covering another Linux GPU means capturing it.</li>
+</ul>
+<p>The one part of the SwiftShader row that <em>is</em> host-specific is the renderer
+string. Re-probing the same flags on Ubuntu 24 (Chrome 150.0.7871.114)
+reproduced every capability value above, but reported <code>SwiftShader Device (Subzero)</code> rather than <code>(LLVM 10.0.0)</code> — SwiftShader picks its JIT backend at
+build time and Chrome prints the choice. Windows reports Subzero too (measured
+on Windows 10.0.21996, Chrome 150.0.7871.186).</p>
+<p>The spoofed profile now serves neither string by default on any platform: a
+<code>Win32</code> persona resolves the captured D3D11 tier and a <code>LinuxX86_64</code> persona
+the captured Mesa/Vulkan one, both real hardware rather than a software
+rasterizer. A SwiftShader row is reached only by pinning such a renderer
+yourself, and which of the two builds you land on then follows the persona's
+platform. See
+<a href="./fingerprint.html#webgl-full-surface-value-spoof-resolved-from-measured-tiers">the WebGL section of the fingerprint chapter</a>.</p>
 <h2 id="navigatorgpu-visibility-is-governed-by-the-page-not-by-this-option"><a class="header" href="#navigatorgpu-visibility-is-governed-by-the-page-not-by-this-option"><code>navigator.gpu</code> visibility is governed by the page, not by this option</a></h2>
 <p><code>navigator.gpu</code> is <code>[SecureContext]</code>-gated. On an opaque-origin page —
 <code>about:blank</code>, a bare <code>data:</code> URL — <code>navigator.gpu</code> is absent no matter which
@@ -3936,8 +4193,9 @@ historical flags). <code>"swift_shader"</code> forces ANGLE's software rasterize
 explicitly. <code>"native"</code> drops <code>--disable-gpu</code> and renders on the host's real
 GPU — a fully coherent WebGL/WebGPU surface, but it reports <strong>the host's</strong>
 GPU (no identity control) and requires a usable GPU with no automatic
-fallback: a launch that can't start the GPU process fails outright rather
-than silently falling back to software rendering. See the
+fallback: the launch is validated against what Chrome actually initialized,
+and a host without hardware-accelerated WebGL fails outright rather than
+silently serving software rendering. See the
 <a href="gpu-backend.html">GPU backend chapter</a> for the measured comparison and the
 <code>--disable-gpu</code>-alone hang this option exists to avoid.</li>
 </ul>
@@ -5035,7 +5293,7 @@ new variants may land in minor releases.</p>
 <tr><td><code>SpawnFailed(io::Error)</code></td><td>OS refused to spawn the binary (permissions, missing libs).</td><td>Check the wrapped <code>io::Error</code>; <code>Permission denied</code> → chmod, <code>No such file</code> → bad path.</td></tr>
 <tr><td><code>EarlyExit(ExitStatus)</code></td><td>Chrome exited before printing <code>DevTools listening on</code>. Typical: <code>user_data_dir</code> locked by another Chrome, missing GPU sandbox on Linux.</td><td>Free the user-data-dir (kill stale Chrome processes), or pass <code>.arg("--no-sandbox")</code> if running in a container.</td></tr>
 <tr><td><code>WsTimeout</code></td><td>Chrome printed nothing within the WS-endpoint wait window.</td><td>Try headed mode (<code>headless(false)</code>) to see Chrome's window — usually reveals a missing dependency.</td></tr>
-<tr><td><code>GpuBackendUnavailable</code></td><td>Chrome never advertised its WS endpoint on a launch that requested <a href="https://docs.rs/zendriver/latest/zendriver/enum.GpuBackend.html"><code>GpuBackend::Native</code></a> — typically no GPU present, a crashed GPU process, or a missing GPU sandbox.</td><td>See <a href="./gpu-backend.html#no-automatic-fallback">GPU backend</a>. Catch this error and retry with <code>GpuBackend::SwiftShader</code> or <code>GpuBackend::Disabled</code>; zendriver does not fall back automatically.</td></tr>
+<tr><td><code>GpuBackendUnavailable</code></td><td>A launch that requested <a href="https://docs.rs/zendriver/latest/zendriver/enum.GpuBackend.html"><code>GpuBackend::Native</code></a> could not get a hardware GPU: either Chrome never advertised its WS endpoint (no GPU present, a crashed GPU process, a missing GPU sandbox), or Chrome started and the launch-time check found its WebGL pipeline was not hardware-accelerated.</td><td>See <a href="./gpu-backend.html#no-automatic-fallback">GPU backend</a>. Catch this error and retry with <code>GpuBackend::SwiftShader</code> or <code>GpuBackend::Disabled</code>; zendriver does not fall back automatically.</td></tr>
 <tr><td><code>DevtoolsParse</code></td><td>Stderr line matched expected pattern but URL didn't parse.</td><td>Should not happen with stable Chrome; file a bug.</td></tr>
 <tr><td><code>Cleanup(io::Error)</code></td><td><code>tempfile</code> cleanup of the <code>user_data_dir</code> failed.</td><td>Usually harmless; check filesystem permissions if persistent.</td></tr>
 </tbody></table>

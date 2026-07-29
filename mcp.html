@@ -323,8 +323,9 @@ historical flags). <code>"swift_shader"</code> forces ANGLE's software rasterize
 explicitly. <code>"native"</code> drops <code>--disable-gpu</code> and renders on the host's real
 GPU — a fully coherent WebGL/WebGPU surface, but it reports <strong>the host's</strong>
 GPU (no identity control) and requires a usable GPU with no automatic
-fallback: a launch that can't start the GPU process fails outright rather
-than silently falling back to software rendering. See the
+fallback: the launch is validated against what Chrome actually initialized,
+and a host without hardware-accelerated WebGL fails outright rather than
+silently serving software rendering. See the
 <a href="gpu-backend.html">GPU backend chapter</a> for the measured comparison and the
 <code>--disable-gpu</code>-alone hang this option exists to avoid.</li>
 </ul>

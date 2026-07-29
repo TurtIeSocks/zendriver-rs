@@ -1,0 +1,1084 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/zendriver-stealth/src/gpu/devices.rs`."><title>devices.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="zendriver_stealth" data-themes="" data-resource-suffix="" data-rustdoc-version="1.97.1 (8bab26f4f 2026-07-14)" data-channel="1.97.1" data-search-js="search-fd9372ac.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-fcd733ba.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">zendriver_stealth/gpu/</div>devices.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="doccomment">//! Device rows: tie a WebGL renderer string to a capability [`Tier`] and to a
+<a href=#2 id=2 data-nosnippet>2</a>//! coherent WebGPU adapter, so one renderer drives both surfaces.
+<a href=#3 id=3 data-nosnippet>3</a>//!
+<a href=#4 id=4 data-nosnippet>4</a>//! `adapter_for_renderer` derives a WebGPU adapter (vendor + architecture)
+<a href=#5 id=5 data-nosnippet>5</a>//! from the spoofed WebGL renderer string. Dataset-mapped, deterministic —
+<a href=#6 id=6 data-nosnippet>6</a>//! NEVER randomized (WAFs hash the WebGPU fingerprint; a random/unknown value
+<a href=#7 id=7 data-nosnippet>7</a>//! reads as a bot).
+<a href=#8 id=8 data-nosnippet>8</a>//!
+<a href=#9 id=9 data-nosnippet>9</a>//! Architecture tokens come from Dawn's `gpu_info.json`, normalized
+<a href=#10 id=10 data-nosnippet>10</a>//! (lowercase, spaces→hyphens) — the scheme Chrome's WebGPU backend uses for
+<a href=#11 id=11 data-nosnippet>11</a>//! `GPUAdapterInfo.architecture`. Validated: Apple M4 Pro → "metal-3";
+<a href=#12 id=12 data-nosnippet>12</a>//! NVIDIA Turing → "turing" (MDN). Only confident model→µarch mappings emit a
+<a href=#13 id=13 data-nosnippet>13</a>//! token; unrecognized models get "" — Chrome legitimately returns "" for
+<a href=#14 id=14 data-nosnippet>14</a>//! unclassified GPUs, so empty is coherent and safe. A WRONG token reads as an
+<a href=#15 id=15 data-nosnippet>15</a>//! unknown device to a fingerprinting WAF.
+<a href=#16 id=16 data-nosnippet>16</a>
+<a href=#17 id=17 data-nosnippet>17</a></span><span class="kw">use </span><span class="kw">crate</span>::Platform;
+<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span><span class="kw">crate</span>::gpu::types::Tier;
+<a href=#19 id=19 data-nosnippet>19</a>
+<a href=#20 id=20 data-nosnippet>20</a><span class="doccomment">/// One device's identity. Only what genuinely varies per device lives here;
+<a href=#21 id=21 data-nosnippet>21</a>/// the capability values come from the device's [`Tier`].
+<a href=#22 id=22 data-nosnippet>22</a>///
+<a href=#23 id=23 data-nosnippet>23</a>/// `unmasked_renderer` is read both by this module's tests and by
+<a href=#24 id=24 data-nosnippet>24</a>/// [`default_renderer`], which is what `push_webgl` falls back to when the
+<a href=#25 id=25 data-nosnippet>25</a>/// caller pins no renderer of its own. The two `webgpu_*` fields are reference
+<a href=#26 id=26 data-nosnippet>26</a>/// data only: `push_webgpu` derives its adapter through
+<a href=#27 id=27 data-nosnippet>27</a>/// [`adapter_for_renderer`] rather than from a row. They are still the row's
+<a href=#28 id=28 data-nosnippet>28</a>/// declaration of what that device's adapter *is*, so the tests assert the
+<a href=#29 id=29 data-nosnippet>29</a>/// derivation agrees with them — the two must never describe different GPUs.
+<a href=#30 id=30 data-nosnippet>30</a></span><span class="attr">#[allow(dead_code)]
+<a href=#31 id=31 data-nosnippet>31</a>#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+<a href=#32 id=32 data-nosnippet>32</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>DeviceRow {
+<a href=#33 id=33 data-nosnippet>33</a>    <span class="kw">pub </span>unmasked_vendor: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str,
+<a href=#34 id=34 data-nosnippet>34</a>    <span class="kw">pub </span>unmasked_renderer: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str,
+<a href=#35 id=35 data-nosnippet>35</a>    <span class="kw">pub </span>tier: Tier,
+<a href=#36 id=36 data-nosnippet>36</a>    <span class="kw">pub </span>webgpu_vendor: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str,
+<a href=#37 id=37 data-nosnippet>37</a>    <span class="kw">pub </span>webgpu_architecture: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str,
+<a href=#38 id=38 data-nosnippet>38</a>    <span class="doccomment">/// Lowercase substring that identifies this device in a renderer string.
+<a href=#39 id=39 data-nosnippet>39</a>    /// Explicit and independent of `unmasked_renderer` / `adapter_for_renderer`
+<a href=#40 id=40 data-nosnippet>40</a>    /// — matching must never be derived from the row's own reference string.
+<a href=#41 id=41 data-nosnippet>41</a>    </span><span class="kw">pub </span>match_token: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str,
+<a href=#42 id=42 data-nosnippet>42</a>    <span class="doccomment">/// Extra lowercase substring that must *also* be present, or `None` when
+<a href=#43 id=43 data-nosnippet>43</a>    /// `match_token` alone decides the row.
+<a href=#44 id=44 data-nosnippet>44</a>    ///
+<a href=#45 id=45 data-nosnippet>45</a>    /// Exists because one row needs two facts that are not adjacent in the
+<a href=#46 id=46 data-nosnippet>46</a>    /// string. ANGLE puts the vendor first and the backend tag last —
+<a href=#47 id=47 data-nosnippet>47</a>    /// `ANGLE (NVIDIA, … Direct3D11 …, D3D11)` — and the NVIDIA D3D11 tier is
+<a href=#48 id=48 data-nosnippet>48</a>    /// selected by exactly that pair, so no single contiguous substring can
+<a href=#49 id=49 data-nosnippet>49</a>    /// express it. Splitting the D3D11 rows on `Some("nvidia")` also keeps the
+<a href=#50 id=50 data-nosnippet>50</a>    /// vendor test out of `device_for_renderer`, which stays a table sweep.
+<a href=#51 id=51 data-nosnippet>51</a>    </span><span class="kw">pub </span>vendor_token: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>str&gt;,
+<a href=#52 id=52 data-nosnippet>52</a>}
+<a href=#53 id=53 data-nosnippet>53</a>
+<a href=#54 id=54 data-nosnippet>54</a><span class="doccomment">/// Known devices, keyed by [`DeviceRow::match_token`].
+<a href=#55 id=55 data-nosnippet>55</a>///
+<a href=#56 id=56 data-nosnippet>56</a>/// Order is load-bearing: [`device_for_renderer`] takes the *first* row whose
+<a href=#57 id=57 data-nosnippet>57</a>/// tokens the renderer matches, so a specific row must precede the general one
+<a href=#58 id=58 data-nosnippet>58</a>/// it refines. That holds twice here — the Subzero SwiftShader row before the
+<a href=#59 id=59 data-nosnippet>59</a>/// generic one, and the NVIDIA D3D11 row before the generic D3D11 row. The
+<a href=#60 id=60 data-nosnippet>60</a>/// second pair matters more: the SwiftShader rows share a tier, so their order
+<a href=#61 id=61 data-nosnippet>61</a>/// decides only an identity string, while the D3D11 rows carry *different
+<a href=#62 id=62 data-nosnippet>62</a>/// tiers* and getting them backwards serves the wrong capability values.
+<a href=#63 id=63 data-nosnippet>63</a>///
+<a href=#64 id=64 data-nosnippet>64</a>/// The two SwiftShader rows are one capability tier under two identity
+<a href=#65 id=65 data-nosnippet>65</a>/// strings. SwiftShader picks its JIT backend at build time — Subzero on
+<a href=#66 id=66 data-nosnippet>66</a>/// Linux, LLVM on macOS — and Chrome prints the chosen one inside the
+<a href=#67 id=67 data-nosnippet>67</a>/// renderer string, so the string is platform-specific even though the
+<a href=#68 id=68 data-nosnippet>68</a>/// capabilities behind it are not (measured; see [`default_device`]).
+<a href=#69 id=69 data-nosnippet>69</a></span><span class="kw">const </span>DEVICES: <span class="kw-2">&amp;</span>[DeviceRow] = <span class="kw-2">&amp;</span>[
+<a href=#70 id=70 data-nosnippet>70</a>    DeviceRow {
+<a href=#71 id=71 data-nosnippet>71</a>        unmasked_vendor: <span class="string">"Google Inc. (Google)"</span>,
+<a href=#72 id=72 data-nosnippet>72</a>        unmasked_renderer: <span class="string">"ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)"</span>,
+<a href=#73 id=73 data-nosnippet>73</a>        tier: Tier::SwiftShader,
+<a href=#74 id=74 data-nosnippet>74</a>        webgpu_vendor: <span class="string">""</span>,
+<a href=#75 id=75 data-nosnippet>75</a>        webgpu_architecture: <span class="string">""</span>,
+<a href=#76 id=76 data-nosnippet>76</a>        <span class="comment">// Specific enough to beat the generic row below, which is why it is
+<a href=#77 id=77 data-nosnippet>77</a>        // listed first.
+<a href=#78 id=78 data-nosnippet>78</a>        </span>match_token: <span class="string">"subzero"</span>,
+<a href=#79 id=79 data-nosnippet>79</a>        vendor_token: <span class="prelude-val">None</span>,
+<a href=#80 id=80 data-nosnippet>80</a>    },
+<a href=#81 id=81 data-nosnippet>81</a>    DeviceRow {
+<a href=#82 id=82 data-nosnippet>82</a>        unmasked_vendor: <span class="string">"Google Inc. (Google)"</span>,
+<a href=#83 id=83 data-nosnippet>83</a>        unmasked_renderer: <span class="string">"ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (LLVM 10.0.0) (0x0000C0DE)), SwiftShader driver)"</span>,
+<a href=#84 id=84 data-nosnippet>84</a>        tier: Tier::SwiftShader,
+<a href=#85 id=85 data-nosnippet>85</a>        webgpu_vendor: <span class="string">""</span>,
+<a href=#86 id=86 data-nosnippet>86</a>        webgpu_architecture: <span class="string">""</span>,
+<a href=#87 id=87 data-nosnippet>87</a>        <span class="comment">// The catch-all for the tier: any SwiftShader string that is not
+<a href=#88 id=88 data-nosnippet>88</a>        // Subzero's lands here. Both rows carry the same tier, so a miss costs
+<a href=#89 id=89 data-nosnippet>89</a>        // only the identity string, never the capability values.
+<a href=#90 id=90 data-nosnippet>90</a>        </span>match_token: <span class="string">"swiftshader"</span>,
+<a href=#91 id=91 data-nosnippet>91</a>        vendor_token: <span class="prelude-val">None</span>,
+<a href=#92 id=92 data-nosnippet>92</a>    },
+<a href=#93 id=93 data-nosnippet>93</a>    DeviceRow {
+<a href=#94 id=94 data-nosnippet>94</a>        unmasked_vendor: <span class="string">"Google Inc. (Apple)"</span>,
+<a href=#95 id=95 data-nosnippet>95</a>        unmasked_renderer: <span class="string">"ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)"</span>,
+<a href=#96 id=96 data-nosnippet>96</a>        tier: Tier::MetalMacos,
+<a href=#97 id=97 data-nosnippet>97</a>        webgpu_vendor: <span class="string">"apple"</span>,
+<a href=#98 id=98 data-nosnippet>98</a>        webgpu_architecture: <span class="string">"metal-3"</span>,
+<a href=#99 id=99 data-nosnippet>99</a>        match_token: <span class="string">"apple"</span>,
+<a href=#100 id=100 data-nosnippet>100</a>        vendor_token: <span class="prelude-val">None</span>,
+<a href=#101 id=101 data-nosnippet>101</a>    },
+<a href=#102 id=102 data-nosnippet>102</a>    <span class="comment">// The two D3D11 rows are one backend and feature level under two capability
+<a href=#103 id=103 data-nosnippet>103</a>    // tiers, and the NVIDIA row must be listed first because its token is a
+<a href=#104 id=104 data-nosnippet>104</a>    // strict refinement of the generic one below.
+<a href=#105 id=105 data-nosnippet>105</a>    //
+<a href=#106 id=106 data-nosnippet>106</a>    // Splitting them is measured, not defensive. An RTX 4090 and an AMD Radeon
+<a href=#107 id=107 data-nosnippet>107</a>    // probed on the same machine and the same Chrome build differ in
+<a href=#108 id=108 data-nosnippet>108</a>    // `MAX_VERTEX_UNIFORM_VECTORS` (4095 against 4096) and in the two values
+<a href=#109 id=109 data-nosnippet>109</a>    // derived from it. ANGLE's cause is a vendor-conditional workaround —
+<a href=#110 id=110 data-nosnippet>110</a>    // `ANGLE_FEATURE_CONDITION(features, skipVSConstantRegisterZero, isNvidia)`,
+<a href=#111 id=111 data-nosnippet>111</a>    // which then does `caps-&gt;maxVertexUniformVectors -= 1` — so the condition
+<a href=#112 id=112 data-nosnippet>112</a>    // is the vendor and nothing else. See [`Tier::D3d11Fl11Nvidia`].
+<a href=#113 id=113 data-nosnippet>113</a>    </span>DeviceRow {
+<a href=#114 id=114 data-nosnippet>114</a>        unmasked_vendor: <span class="string">"Google Inc. (NVIDIA)"</span>,
+<a href=#115 id=115 data-nosnippet>115</a>        unmasked_renderer: <span class="string">"ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 (0x00002684) Direct3D11 vs_5_0 ps_5_0, D3D11)"</span>,
+<a href=#116 id=116 data-nosnippet>116</a>        tier: Tier::D3d11Fl11Nvidia,
+<a href=#117 id=117 data-nosnippet>117</a>        webgpu_vendor: <span class="string">"nvidia"</span>,
+<a href=#118 id=118 data-nosnippet>118</a>        webgpu_architecture: <span class="string">"lovelace"</span>,
+<a href=#119 id=119 data-nosnippet>119</a>        match_token: <span class="string">"d3d11"</span>,
+<a href=#120 id=120 data-nosnippet>120</a>        vendor_token: <span class="prelude-val">Some</span>(<span class="string">"nvidia"</span>),
+<a href=#121 id=121 data-nosnippet>121</a>    },
+<a href=#122 id=122 data-nosnippet>122</a>    DeviceRow {
+<a href=#123 id=123 data-nosnippet>123</a>        unmasked_vendor: <span class="string">"Google Inc. (AMD)"</span>,
+<a href=#124 id=124 data-nosnippet>124</a>        unmasked_renderer: <span class="string">"ANGLE (AMD, AMD Radeon(TM) Graphics (0x0000164E) Direct3D11 vs_5_0 ps_5_0, D3D11)"</span>,
+<a href=#125 id=125 data-nosnippet>125</a>        tier: Tier::D3d11Fl11,
+<a href=#126 id=126 data-nosnippet>126</a>        webgpu_vendor: <span class="string">"amd"</span>,
+<a href=#127 id=127 data-nosnippet>127</a>        webgpu_architecture: <span class="string">"rdna-2"</span>,
+<a href=#128 id=128 data-nosnippet>128</a>        <span class="comment">// ANGLE's D3D11 renderer string always ends in the backend tag
+<a href=#129 id=129 data-nosnippet>129</a>        // ", D3D11)", whatever the card — which is exactly the granularity the
+<a href=#130 id=130 data-nosnippet>130</a>        // tier has. `direct3d11` would be wrong twice over: it misses the AMD
+<a href=#131 id=131 data-nosnippet>131</a>        // form ("ANGLE (AMD, AMD Radeon RX 7900 XT, D3D11)"), which names no
+<a href=#132 id=132 data-nosnippet>132</a>        // shader model, and it would tie a backend-and-feature-level tier to a
+<a href=#133 id=133 data-nosnippet>133</a>        // spelling only some vendors emit.
+<a href=#134 id=134 data-nosnippet>134</a>        //
+<a href=#135 id=135 data-nosnippet>135</a>        // No vendor token: this row is every non-NVIDIA D3D11 device, AMD and
+<a href=#136 id=136 data-nosnippet>136</a>        // Intel alike, which is what `skipVSConstantRegisterZero` being keyed
+<a href=#137 id=137 data-nosnippet>137</a>        // on `isNvidia` means.
+<a href=#138 id=138 data-nosnippet>138</a>        </span>match_token: <span class="string">"d3d11"</span>,
+<a href=#139 id=139 data-nosnippet>139</a>        vendor_token: <span class="prelude-val">None</span>,
+<a href=#140 id=140 data-nosnippet>140</a>    },
+<a href=#141 id=141 data-nosnippet>141</a>    DeviceRow {
+<a href=#142 id=142 data-nosnippet>142</a>        unmasked_vendor: <span class="string">"Google Inc. (Intel)"</span>,
+<a href=#143 id=143 data-nosnippet>143</a>        unmasked_renderer: <span class="string">"ANGLE (Intel, Vulkan 1.4.318 (Intel(R) Iris(R) Pro Graphics 580 (SKL GT4) (0x0000193B)), Intel open-source Mesa driver)"</span>,
+<a href=#144 id=144 data-nosnippet>144</a>        tier: Tier::VulkanMesaIntelIrisPro580,
+<a href=#145 id=145 data-nosnippet>145</a>        <span class="comment">// The probed machine has no WebGPU adapter at all (Chrome does not
+<a href=#146 id=146 data-nosnippet>146</a>        // enable WebGPU by default on Linux), so the tier serves no limits and
+<a href=#147 id=147 data-nosnippet>147</a>        // no features. What this pair still declares is the adapter *identity*
+<a href=#148 id=148 data-nosnippet>148</a>        // `adapter_for_renderer` derives from the string above, which is what
+<a href=#149 id=149 data-nosnippet>149</a>        // decorates whatever adapter a host does resolve: an Intel renderer
+<a href=#150 id=150 data-nosnippet>150</a>        // must not be paired with any other vendor's name. The architecture
+<a href=#151 id=151 data-nosnippet>151</a>        // stays empty because nothing measured this part's Dawn token — and
+<a href=#152 id=152 data-nosnippet>152</a>        // Chrome legitimately answers "" for a device it does not classify,
+<a href=#153 id=153 data-nosnippet>153</a>        // where a wrong token reads as an unknown device.
+<a href=#154 id=154 data-nosnippet>154</a>        </span>webgpu_vendor: <span class="string">"intel"</span>,
+<a href=#155 id=155 data-nosnippet>155</a>        webgpu_architecture: <span class="string">""</span>,
+<a href=#156 id=156 data-nosnippet>156</a>        <span class="comment">// Names the *device as Mesa spells it*, not the backend, because a
+<a href=#157 id=157 data-nosnippet>157</a>        // Vulkan tier's numbers are read off one physical device under one
+<a href=#158 id=158 data-nosnippet>158</a>        // driver (see [`Tier::VulkanMesaIntelIrisPro580`]). `"vulkan"` would be
+<a href=#159 id=159 data-nosnippet>159</a>        // wrong twice over: SwiftShader's own renderer string carries
+<a href=#160 id=160 data-nosnippet>160</a>        // `Vulkan 1.3.0`, and every other Linux GPU would then be served this
+<a href=#161 id=161 data-nosnippet>161</a>        // Iris Pro's device-derived limits. `"(SKL GT4)"` is Mesa's naming, so
+<a href=#162 id=162 data-nosnippet>162</a>        // the same card on Windows — `Intel(R) Iris(R) Pro Graphics 580
+<a href=#163 id=163 data-nosnippet>163</a>        // Direct3D11 vs_5_0 ps_5_0, D3D11` — does not match this row and keeps
+<a href=#164 id=164 data-nosnippet>164</a>        // resolving the D3D11 tier it belongs to.
+<a href=#165 id=165 data-nosnippet>165</a>        </span>match_token: <span class="string">"iris(r) pro graphics 580 (skl gt4)"</span>,
+<a href=#166 id=166 data-nosnippet>166</a>        vendor_token: <span class="prelude-val">None</span>,
+<a href=#167 id=167 data-nosnippet>167</a>    },
+<a href=#168 id=168 data-nosnippet>168</a>];
+<a href=#169 id=169 data-nosnippet>169</a>
+<a href=#170 id=170 data-nosnippet>170</a><span class="doccomment">/// The device row assumed for a platform, used both when a persona pins no
+<a href=#171 id=171 data-nosnippet>171</a>/// WebGL renderer at all and when the renderer it pins matches no shipped
+<a href=#172 id=172 data-nosnippet>172</a>/// tier.
+<a href=#173 id=173 data-nosnippet>173</a>///
+<a href=#174 id=174 data-nosnippet>174</a>/// **The rule: pick a row whose renderer string real Chrome could report on
+<a href=#175 id=175 data-nosnippet>175</a>/// that platform.** A renderer string is read beside `navigator.platform`, and
+<a href=#176 id=176 data-nosnippet>176</a>/// the two have to be a pair Chrome can produce. Choosing the string needs no
+<a href=#177 id=177 data-nosnippet>177</a>/// new hardware capture — only choosing new *capability values* would.
+<a href=#178 id=178 data-nosnippet>178</a>///
+<a href=#179 id=179 data-nosnippet>179</a>/// - macOS gets the Apple Metal row, which is both coherent and real hardware.
+<a href=#180 id=180 data-nosnippet>180</a>/// - Windows gets the D3D11 row. ANGLE's D3D11 backend is what Chrome uses on
+<a href=#181 id=181 data-nosnippet>181</a>///   Windows by default, so the renderer string, `navigator.platform`, and the
+<a href=#182 id=182 data-nosnippet>182</a>///   capability values beside them all describe one ordinary Windows machine.
+<a href=#183 id=183 data-nosnippet>183</a>/// - Linux gets the Intel Iris Pro 580 Vulkan row. ANGLE's Vulkan backend is
+<a href=#184 id=184 data-nosnippet>184</a>///   what Chrome uses on Linux, so this is real hardware under the API real
+<a href=#185 id=185 data-nosnippet>185</a>///   Linux Chrome runs — the same standing macOS and Windows already had.
+<a href=#186 id=186 data-nosnippet>186</a>///   Linux used to get a SwiftShader row instead, which was honest but said
+<a href=#187 id=187 data-nosnippet>187</a>///   "this machine has no usable GPU", something some fingerprinters weight on
+<a href=#188 id=188 data-nosnippet>188</a>///   its own; capturing the tier is what retired that last fallback. What the
+<a href=#189 id=189 data-nosnippet>189</a>///   Vulkan row cannot claim is generality: its numbers are this Iris Pro's
+<a href=#190 id=190 data-nosnippet>190</a>///   under this Mesa build, not Linux's or Vulkan's (see
+<a href=#191 id=191 data-nosnippet>191</a>///   [`Tier::VulkanMesaIntelIrisPro580`]).
+<a href=#192 id=192 data-nosnippet>192</a>///
+<a href=#193 id=193 data-nosnippet>193</a>/// **Which SwiftShader row, and why there are two.** SwiftShader's
+<a href=#194 id=194 data-nosnippet>194</a>/// *capability values* are platform-independent; its *renderer string* is
+<a href=#195 id=195 data-nosnippet>195</a>/// not. Measured on 2026-07-25: the same flag set probed on Ubuntu 24
+<a href=#196 id=196 data-nosnippet>196</a>/// (Chrome 150.0.7871.114, GPU-less VM) reproduced the macOS capture exactly
+<a href=#197 id=197 data-nosnippet>197</a>/// — 0 of 82 WebGL1 parameters differed, 0 of 130 WebGL2, extension lists
+<a href=#198 id=198 data-nosnippet>198</a>/// identical in content and order, all 12 precision entries identical — while
+<a href=#199 id=199 data-nosnippet>199</a>/// the renderer string differed in one token, because SwiftShader selects its
+<a href=#200 id=200 data-nosnippet>200</a>/// JIT backend at build time and Chrome prints the choice:
+<a href=#201 id=201 data-nosnippet>201</a>///
+<a href=#202 id=202 data-nosnippet>202</a>/// - Linux: `SwiftShader Device (Subzero)`
+<a href=#203 id=203 data-nosnippet>203</a>/// - Windows: `SwiftShader Device (Subzero)`
+<a href=#204 id=204 data-nosnippet>204</a>/// - macOS: `SwiftShader Device (LLVM 10.0.0)`
+<a href=#205 id=205 data-nosnippet>205</a>///
+<a href=#206 id=206 data-nosnippet>206</a>/// That is one capability tier and two identity rows, which is why the split
+<a href=#207 id=207 data-nosnippet>207</a>/// lives in [`DEVICES`] rather than in [`Tier`], and why it needed no capture
+<a href=#208 id=208 data-nosnippet>208</a>/// and no table regeneration. Neither row decides a *default* any more, now
+<a href=#209 id=209 data-nosnippet>209</a>/// that Linux resolves the captured Vulkan row above — but Subzero is still
+<a href=#210 id=210 data-nosnippet>210</a>/// what a Linux persona lands on when it pins a SwiftShader renderer itself,
+<a href=#211 id=211 data-nosnippet>211</a>/// so it has to stay the build real Linux Chrome prints.
+<a href=#212 id=212 data-nosnippet>212</a>///
+<a href=#213 id=213 data-nosnippet>213</a>/// Windows' entry there was previously **inferred** from the Linux
+<a href=#214 id=214 data-nosnippet>214</a>/// measurement; it is now measured too. `cargo run -p zendriver --example
+<a href=#215 id=215 data-nosnippet>215</a>/// probe_gpu -- swiftshader` on Windows 10.0.21996 (Chrome 150.0.7871.186)
+<a href=#216 id=216 data-nosnippet>216</a>/// prints `SwiftShader Device (Subzero)`, confirming the guess. It no longer
+<a href=#217 id=217 data-nosnippet>217</a>/// decides a *default* — `Win32` resolves the D3D11 row above — but it is what
+<a href=#218 id=218 data-nosnippet>218</a>/// a Win32 persona gets if it pins a SwiftShader renderer, so the row it lands
+<a href=#219 id=219 data-nosnippet>219</a>/// on still has to be the right build.
+<a href=#220 id=220 data-nosnippet>220</a>///
+<a href=#221 id=221 data-nosnippet>221</a>/// The rejected alternative for Windows was a D3D11 *string* with no D3D11
+<a href=#222 id=222 data-nosnippet>222</a>/// *tier*, which is what shipped before the tier tables existed: it looks like
+<a href=#223 id=223 data-nosnippet>223</a>/// ordinary hardware, but [`device_for_renderer`] returned `None` for it, so an
+<a href=#224 id=224 data-nosnippet>224</a>/// Intel name was served above *Apple Metal's* numbers. Capturing the tier is
+<a href=#225 id=225 data-nosnippet>225</a>/// what makes the D3D11 row honest rather than plausible-looking — the row's
+<a href=#226 id=226 data-nosnippet>226</a>/// name and its numbers now come from the same probe. The earlier default was
+<a href=#227 id=227 data-nosnippet>227</a>/// worse still, reporting the Apple Metal string itself under a Win32 or Linux
+<a href=#228 id=228 data-nosnippet>228</a>/// `navigator.platform`, a pair Chrome cannot produce and which
+<a href=#229 id=229 data-nosnippet>229</a>/// [`platform_skew`](crate::gpu::invariants::platform_skew) flagged on every
+<a href=#230 id=230 data-nosnippet>230</a>/// launch.
+<a href=#231 id=231 data-nosnippet>231</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>default_device(platform: Platform) -&gt; DeviceRow {
+<a href=#232 id=232 data-nosnippet>232</a>    <span class="kw">match </span>platform {
+<a href=#233 id=233 data-nosnippet>233</a>        Platform::MacIntel =&gt; METAL_APPLE,
+<a href=#234 id=234 data-nosnippet>234</a>        Platform::Win32 =&gt; NVIDIA_D3D11,
+<a href=#235 id=235 data-nosnippet>235</a>        Platform::LinuxX86_64 =&gt; VULKAN_INTEL_IRIS_PRO_580,
+<a href=#236 id=236 data-nosnippet>236</a>    }
+<a href=#237 id=237 data-nosnippet>237</a>}
+<a href=#238 id=238 data-nosnippet>238</a>
+<a href=#239 id=239 data-nosnippet>239</a><span class="doccomment">/// Renderer string assumed for a platform. See [`default_device`].
+<a href=#240 id=240 data-nosnippet>240</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>default_renderer(platform: Platform) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str {
+<a href=#241 id=241 data-nosnippet>241</a>    default_device(platform).unmasked_renderer
+<a href=#242 id=242 data-nosnippet>242</a>}
+<a href=#243 id=243 data-nosnippet>243</a>
+<a href=#244 id=244 data-nosnippet>244</a><span class="doccomment">/// Named row aliases, so the platform mapping above reads as intent rather
+<a href=#245 id=245 data-nosnippet>245</a>/// than as an index into [`DEVICES`].
+<a href=#246 id=246 data-nosnippet>246</a>/// No platform defaults to either SwiftShader row any more: macOS gets Metal,
+<a href=#247 id=247 data-nosnippet>247</a>/// Windows D3D11, and Linux the captured Vulkan row. Both are still reached
+<a href=#248 id=248 data-nosnippet>248</a>/// when a caller pins a SwiftShader string itself — Subzero on Linux and
+<a href=#249 id=249 data-nosnippet>249</a>/// Windows, LLVM on macOS — and are named here so the tests can assert the two
+<a href=#250 id=250 data-nosnippet>250</a>/// never drift apart.
+<a href=#251 id=251 data-nosnippet>251</a></span><span class="attr">#[allow(dead_code)]
+<a href=#252 id=252 data-nosnippet>252</a></span><span class="kw">const </span>SWIFTSHADER_SUBZERO: DeviceRow = DEVICES[<span class="number">0</span>];
+<a href=#253 id=253 data-nosnippet>253</a><span class="attr">#[allow(dead_code)]
+<a href=#254 id=254 data-nosnippet>254</a></span><span class="kw">const </span>SWIFTSHADER_LLVM: DeviceRow = DEVICES[<span class="number">1</span>];
+<a href=#255 id=255 data-nosnippet>255</a><span class="kw">const </span>METAL_APPLE: DeviceRow = DEVICES[<span class="number">2</span>];
+<a href=#256 id=256 data-nosnippet>256</a><span class="kw">const </span>NVIDIA_D3D11: DeviceRow = DEVICES[<span class="number">3</span>];
+<a href=#257 id=257 data-nosnippet>257</a><span class="attr">#[allow(dead_code)]
+<a href=#258 id=258 data-nosnippet>258</a></span><span class="kw">const </span>AMD_D3D11: DeviceRow = DEVICES[<span class="number">4</span>];
+<a href=#259 id=259 data-nosnippet>259</a><span class="kw">const </span>VULKAN_INTEL_IRIS_PRO_580: DeviceRow = DEVICES[<span class="number">5</span>];
+<a href=#260 id=260 data-nosnippet>260</a>
+<a href=#261 id=261 data-nosnippet>261</a><span class="doccomment">/// Pick the device row a renderer string belongs to, by explicit
+<a href=#262 id=262 data-nosnippet>262</a>/// [`DeviceRow::match_token`] — never by a key derived from a row's own
+<a href=#263 id=263 data-nosnippet>263</a>/// reference string.
+<a href=#264 id=264 data-nosnippet>264</a>///
+<a href=#265 id=265 data-nosnippet>265</a>/// A row matches when the renderer contains its `match_token` and, where it
+<a href=#266 id=266 data-nosnippet>266</a>/// declares one, its [`vendor_token`](DeviceRow::vendor_token) as well.
+<a href=#267 id=267 data-nosnippet>267</a>///
+<a href=#268 id=268 data-nosnippet>268</a>/// First match in [`DEVICES`] order wins, so a specific row must be listed
+<a href=#269 id=269 data-nosnippet>269</a>/// ahead of one it is a special case of. Two pairs depend on that:
+<a href=#270 id=270 data-nosnippet>270</a>///
+<a href=#271 id=271 data-nosnippet>271</a>/// - `"subzero"` before `"swiftshader"`, or every Subzero string would resolve
+<a href=#272 id=272 data-nosnippet>272</a>///   to the LLVM row's identity. Both carry the same tier, so ordering decides
+<a href=#273 id=273 data-nosnippet>273</a>///   the identity string alone — but that string is the whole reason the rows
+<a href=#274 id=274 data-nosnippet>274</a>///   are separate.
+<a href=#275 id=275 data-nosnippet>275</a>/// - The NVIDIA D3D11 row before the generic one. Here ordering decides the
+<a href=#276 id=276 data-nosnippet>276</a>///   **capability values**, not just a name: the two rows carry different
+<a href=#277 id=277 data-nosnippet>277</a>///   tiers, and the generic row's `match_token` alone would swallow every
+<a href=#278 id=278 data-nosnippet>278</a>///   NVIDIA string. Getting this backwards serves an RTX its 4096 instead of
+<a href=#279 id=279 data-nosnippet>279</a>///   its measured 4095, which is one `getParameter` call from being read.
+<a href=#280 id=280 data-nosnippet>280</a>///
+<a href=#281 id=281 data-nosnippet>281</a>/// The remaining tokens (`"apple"` and the Iris Pro's Mesa device name) are
+<a href=#282 id=282 data-nosnippet>282</a>/// disjoint from those and from each other, so their position is not
+<a href=#283 id=283 data-nosnippet>283</a>/// load-bearing.
+<a href=#284 id=284 data-nosnippet>284</a>///
+<a href=#285 id=285 data-nosnippet>285</a>/// Five tiers ship today (SwiftShader, Apple Metal, D3D11 FL11+ in its NVIDIA
+<a href=#286 id=286 data-nosnippet>286</a>/// and non-NVIDIA forms, and the Intel Iris Pro 580 under Mesa), so `None` is
+<a href=#287 id=287 data-nosnippet>287</a>/// still expected for the backends none of them covers — a desktop-GL renderer, a D3D9 string, or **any Vulkan
+<a href=#288 id=288 data-nosnippet>288</a>/// device other than that one Iris Pro**. That last one is not a gap waiting
+<a href=#289 id=289 data-nosnippet>289</a>/// to be filled by widening the token: ANGLE's Vulkan caps come off
+<a href=#290 id=290 data-nosnippet>290</a>/// `VkPhysicalDeviceLimits`, so serving another Linux GPU this row's numbers
+<a href=#291 id=291 data-nosnippet>291</a>/// would be exactly the wrong-backend pairing the tiers exist to prevent (see
+<a href=#292 id=292 data-nosnippet>292</a>/// [`Tier::VulkanMesaIntelIrisPro580`]). A **feature-level-10** D3D11
+<a href=#293 id=293 data-nosnippet>293</a>/// renderer does *not* answer `None`: ANGLE emits the same trailing `, D3D11)`
+<a href=#294 id=294 data-nosnippet>294</a>/// tag at every feature level, so an FL10 string matches the D3D11 row's
+<a href=#295 id=295 data-nosnippet>295</a>/// `match_token` and is served the FL11 numbers silently. Telling the two
+<a href=#296 id=296 data-nosnippet>296</a>/// apart needs an FL10 capture to compare against, which nobody has taken.
+<a href=#297 id=297 data-nosnippet>297</a>/// Callers that need a value
+<a href=#298 id=298 data-nosnippet>298</a>/// regardless should reach for [`default_device`] explicitly rather than have
+<a href=#299 id=299 data-nosnippet>299</a>/// one guessed here. Adding a tier means capturing it on that hardware, not
+<a href=#300 id=300 data-nosnippet>300</a>/// inventing values for an existing row.
+<a href=#301 id=301 data-nosnippet>301</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>device_for_renderer(renderer: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Option</span>&lt;DeviceRow&gt; {
+<a href=#302 id=302 data-nosnippet>302</a>    <span class="kw">let </span>r = renderer.to_ascii_lowercase();
+<a href=#303 id=303 data-nosnippet>303</a>    DEVICES.iter().copied().find(|d| {
+<a href=#304 id=304 data-nosnippet>304</a>        r.contains(d.match_token) &amp;&amp; d.vendor_token.is_none_or(|vendor| r.contains(vendor))
+<a href=#305 id=305 data-nosnippet>305</a>    })
+<a href=#306 id=306 data-nosnippet>306</a>}
+<a href=#307 id=307 data-nosnippet>307</a>
+<a href=#308 id=308 data-nosnippet>308</a><span class="doccomment">/// The `UNMASKED_VENDOR_WEBGL` string Chrome reports beside an ANGLE renderer.
+<a href=#309 id=309 data-nosnippet>309</a>///
+<a href=#310 id=310 data-nosnippet>310</a>/// Chrome answers `Google Inc. (&lt;X&gt;)`, where `&lt;X&gt;` is the same vendor token
+<a href=#311 id=311 data-nosnippet>311</a>/// ANGLE puts first in its own renderer string — so the pair is *derivable*,
+<a href=#312 id=312 data-nosnippet>312</a>/// and a renderer the caller pinned can be answered by its own vendor instead
+<a href=#313 id=313 data-nosnippet>313</a>/// of by whichever device row happened to match it.
+<a href=#314 id=314 data-nosnippet>314</a>///
+<a href=#315 id=315 data-nosnippet>315</a>/// That distinction is load-bearing now that one row covers many cards. The
+<a href=#316 id=316 data-nosnippet>316</a>/// D3D11 row declares NVIDIA, but its [`DeviceRow::match_token`] deliberately
+<a href=#317 id=317 data-nosnippet>317</a>/// matches every FL11+ D3D11 renderer, Intel and AMD included — because the
+<a href=#318 id=318 data-nosnippet>318</a>/// capability values really are shared. Reading the *vendor* off the row too
+<a href=#319 id=319 data-nosnippet>319</a>/// would serve `Google Inc. (NVIDIA)` beside an Intel renderer, a contradiction
+<a href=#320 id=320 data-nosnippet>320</a>/// a page reads in one line. Measured before this existed: pinning
+<a href=#321 id=321 data-nosnippet>321</a>/// `ANGLE (Intel, Intel(R) UHD Graphics 630 ... D3D11)` served exactly that
+<a href=#322 id=322 data-nosnippet>322</a>/// pair, and silently, since a matched row raises no warning.
+<a href=#323 id=323 data-nosnippet>323</a>///
+<a href=#324 id=324 data-nosnippet>324</a>/// Returns `None` for anything not in ANGLE's format, leaving the caller to
+<a href=#325 id=325 data-nosnippet>325</a>/// fall back to the device row — which is right for the default renderers,
+<a href=#326 id=326 data-nosnippet>326</a>/// since each row's own string derives that row's own declared vendor (asserted
+<a href=#327 id=327 data-nosnippet>327</a>/// in `every_row_derives_its_own_declared_vendor`).
+<a href=#328 id=328 data-nosnippet>328</a>///
+<a href=#329 id=329 data-nosnippet>329</a>/// The token ends at the first comma **or** closing paren, whichever comes
+<a href=#330 id=330 data-nosnippet>330</a>/// first. ANGLE's usual string has both — `ANGLE (Apple, ANGLE Metal ...,
+<a href=#331 id=331 data-nosnippet>331</a>/// Version ...)` — but the one-field form `ANGLE (Google)` has no comma, and
+<a href=#332 id=332 data-nosnippet>332</a>/// splitting on the comma alone carried the paren into the token and answered
+<a href=#333 id=333 data-nosnippet>333</a>/// `Google Inc. (Google))`.
+<a href=#334 id=334 data-nosnippet>334</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>vendor_for_renderer(renderer: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Option</span>&lt;String&gt; {
+<a href=#335 id=335 data-nosnippet>335</a>    <span class="kw">let </span>inner = renderer.strip_prefix(<span class="string">"ANGLE ("</span>)<span class="question-mark">?</span>;
+<a href=#336 id=336 data-nosnippet>336</a>    <span class="kw">let </span>end = inner.find([<span class="string">','</span>, <span class="string">')'</span>]).unwrap_or(inner.len());
+<a href=#337 id=337 data-nosnippet>337</a>    <span class="kw">let </span>vendor = inner[..end].trim();
+<a href=#338 id=338 data-nosnippet>338</a>    (!vendor.is_empty()).then(|| <span class="macro">format!</span>(<span class="string">"Google Inc. ({vendor})"</span>))
+<a href=#339 id=339 data-nosnippet>339</a>}
+<a href=#340 id=340 data-nosnippet>340</a>
+<a href=#341 id=341 data-nosnippet>341</a><span class="doccomment">/// Extensions that may be claimed even where the backend lacks them, because
+<a href=#342 id=342 data-nosnippet>342</a>/// a synthesized stub is indistinguishable from the real object.
+<a href=#343 id=343 data-nosnippet>343</a>///
+<a href=#344 id=344 data-nosnippet>344</a>/// The bar is narrow, and both halves of it matter: the extension object must
+<a href=#345 id=345 data-nosnippet>345</a>/// carry constants **and nothing else in the API may consume them**. An
+<a href=#346 id=346 data-nosnippet>346</a>/// extension whose constants feed some other call is not inert, because the
+<a href=#347 id=347 data-nosnippet>347</a>/// stub satisfies `getExtension` while that other call still fails — a
+<a href=#348 id=348 data-nosnippet>348</a>/// contradiction the page reaches in one line.
+<a href=#349 id=349 data-nosnippet>349</a>///
+<a href=#350 id=350 data-nosnippet>350</a>/// [`WEBGL_debug_renderer_info`] qualifies in the strict sense that matters
+<a href=#351 id=351 data-nosnippet>351</a>/// here: its two constants are consumed by `getParameter`, and the patch
+<a href=#352 id=352 data-nosnippet>352</a>/// serves both of them from the tier profile, so the stub is backed all the
+<a href=#353 id=353 data-nosnippet>353</a>/// way through.
+<a href=#354 id=354 data-nosnippet>354</a>///
+<a href=#355 id=355 data-nosnippet>355</a>/// `EXT_texture_filter_anisotropic` deliberately does **not** qualify, and was
+<a href=#356 id=356 data-nosnippet>356</a>/// removed after being listed here: its constants are consumed by
+<a href=#357 id=357 data-nosnippet>357</a>/// `getParameter` **and** `texParameterf`, and neither is table-served. On a
+<a href=#358 id=358 data-nosnippet>358</a>/// backend without it, the claimed list named it, `getExtension` handed over a
+<a href=#359 id=359 data-nosnippet>359</a>/// stub, and `getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT)` answered
+<a href=#360 id=360 data-nosnippet>360</a>/// `null` with `INVALID_ENUM` — exactly the contradiction this rule exists to
+<a href=#361 id=361 data-nosnippet>361</a>/// prevent. It is now claimed only where the backend really provides it, like
+<a href=#362 id=362 data-nosnippet>362</a>/// every other functional extension.
+<a href=#363 id=363 data-nosnippet>363</a>///
+<a href=#364 id=364 data-nosnippet>364</a>/// [`WEBGL_debug_renderer_info`]: https://registry.khronos.org/webgl/extensions/WEBGL_debug_renderer_info/
+<a href=#365 id=365 data-nosnippet>365</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>inert_stubs() -&gt; serde_json::Value {
+<a href=#366 id=366 data-nosnippet>366</a>    <span class="macro">serde_json::json!</span>({
+<a href=#367 id=367 data-nosnippet>367</a>        <span class="string">"WEBGL_debug_renderer_info"</span>: {
+<a href=#368 id=368 data-nosnippet>368</a>            <span class="string">"UNMASKED_VENDOR_WEBGL"</span>: <span class="number">37445</span>,
+<a href=#369 id=369 data-nosnippet>369</a>            <span class="string">"UNMASKED_RENDERER_WEBGL"</span>: <span class="number">37446
+<a href=#370 id=370 data-nosnippet>370</a>        </span>}
+<a href=#371 id=371 data-nosnippet>371</a>    })
+<a href=#372 id=372 data-nosnippet>372</a>}
+<a href=#373 id=373 data-nosnippet>373</a>
+<a href=#374 id=374 data-nosnippet>374</a><span class="doccomment">/// vendor + architecture for the spoofed WebGPU adapter. `device` and
+<a href=#375 id=375 data-nosnippet>375</a>/// `description` are always emitted empty by the patch (Chrome masks them).
+<a href=#376 id=376 data-nosnippet>376</a></span><span class="attr">#[derive(Debug, Clone, PartialEq, Eq)]
+<a href=#377 id=377 data-nosnippet>377</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>GpuAdapterInfo {
+<a href=#378 id=378 data-nosnippet>378</a>    <span class="kw">pub </span>vendor: String,
+<a href=#379 id=379 data-nosnippet>379</a>    <span class="kw">pub </span>architecture: String,
+<a href=#380 id=380 data-nosnippet>380</a>}
+<a href=#381 id=381 data-nosnippet>381</a>
+<a href=#382 id=382 data-nosnippet>382</a><span class="doccomment">/// Map a WebGL `UNMASKED_RENDERER` string to a coherent WebGPU adapter
+<a href=#383 id=383 data-nosnippet>383</a>/// (vendor + architecture). Architecture tokens are Dawn's `gpu_info.json`
+<a href=#384 id=384 data-nosnippet>384</a>/// names normalized (lowercase, spaces→hyphens) — the scheme Chrome's WebGPU
+<a href=#385 id=385 data-nosnippet>385</a>/// backend uses for `GPUAdapterInfo.architecture` (validated: Apple M4 Pro →
+<a href=#386 id=386 data-nosnippet>386</a>/// "metal-3"; NVIDIA Turing → "turing" per MDN). Only confident model→µarch
+<a href=#387 id=387 data-nosnippet>387</a>/// mappings emit a token; unrecognized models get "" (Chrome legitimately
+<a href=#388 id=388 data-nosnippet>388</a>/// returns "" for unclassified GPUs, so empty is coherent and safe — a WRONG
+<a href=#389 id=389 data-nosnippet>389</a>/// token reads as an unknown device to a fingerprinting WAF). Add families
+<a href=#390 id=390 data-nosnippet>390</a>/// here as they're confirmed.
+<a href=#391 id=391 data-nosnippet>391</a>///
+<a href=#392 id=392 data-nosnippet>392</a>/// A software rasterizer answers empty for *both* fields, and is matched before
+<a href=#393 id=393 data-nosnippet>393</a>/// any hardware family so it cannot fall through to the Intel catch-all — see
+<a href=#394 id=394 data-nosnippet>394</a>/// the arm's own comment.
+<a href=#395 id=395 data-nosnippet>395</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>adapter_for_renderer(renderer: <span class="kw-2">&amp;</span>str) -&gt; GpuAdapterInfo {
+<a href=#396 id=396 data-nosnippet>396</a>    <span class="kw">let </span>r = renderer.to_ascii_lowercase();
+<a href=#397 id=397 data-nosnippet>397</a>
+<a href=#398 id=398 data-nosnippet>398</a>    <span class="comment">// Software rasterizer: no vendor to report, and it must be answered before
+<a href=#399 id=399 data-nosnippet>399</a>    // the hardware branches so it cannot reach the Intel catch-all below. It
+<a href=#400 id=400 data-nosnippet>400</a>    // did reach it, which is the split this arm closes: a SwiftShader row was
+<a href=#401 id=401 data-nosnippet>401</a>    // Linux's default and Windows' before either tier was captured (see
+<a href=#402 id=402 data-nosnippet>402</a>    // `default_device`), so such a persona served SwiftShader's renderer to
+<a href=#403 id=403 data-nosnippet>403</a>    // WebGL and an *Intel* adapter to WebGPU. A persona that pins a
+<a href=#404 id=404 data-nosnippet>404</a>    // SwiftShader renderer itself still lands here on every platform, which is
+<a href=#405 id=405 data-nosnippet>405</a>    // what keeps the arm load-bearing.
+<a href=#406 id=406 data-nosnippet>406</a>    // Both JIT-backend rows go through it — the token is
+<a href=#407 id=407 data-nosnippet>407</a>    // `swiftshader`, which each renderer string carries.
+<a href=#408 id=408 data-nosnippet>408</a>    // Empty matches what the SwiftShader rows themselves declare, and is what Chrome
+<a href=#409 id=409 data-nosnippet>409</a>    // answers for an adapter it cannot classify — the honest value for a
+<a href=#410 id=410 data-nosnippet>410</a>    // rasterizer that has no hardware behind it at all. (On a real SwiftShader
+<a href=#411 id=411 data-nosnippet>411</a>    // Chrome `requestAdapter()` resolves null and there is no adapter to read;
+<a href=#412 id=412 data-nosnippet>412</a>    // the patch cannot synthesize that, so it decorates whatever adapter the
+<a href=#413 id=413 data-nosnippet>413</a>    // host does resolve with a vendor that claims nothing.)
+<a href=#414 id=414 data-nosnippet>414</a>    </span><span class="kw">if </span>r.contains(<span class="string">"swiftshader"</span>) {
+<a href=#415 id=415 data-nosnippet>415</a>        <span class="kw">return </span>GpuAdapterInfo {
+<a href=#416 id=416 data-nosnippet>416</a>            vendor: String::new(),
+<a href=#417 id=417 data-nosnippet>417</a>            architecture: String::new(),
+<a href=#418 id=418 data-nosnippet>418</a>        };
+<a href=#419 id=419 data-nosnippet>419</a>    }
+<a href=#420 id=420 data-nosnippet>420</a>
+<a href=#421 id=421 data-nosnippet>421</a>    <span class="kw">if </span>r.contains(<span class="string">"nvidia"</span>) || r.contains(<span class="string">"geforce"</span>) || r.contains(<span class="string">"rtx"</span>) || r.contains(<span class="string">"gtx"</span>) {
+<a href=#422 id=422 data-nosnippet>422</a>        <span class="kw">let </span>arch = <span class="kw">if </span>r.contains(<span class="string">"rtx 50"</span>) || r.contains(<span class="string">"rtx50"</span>) {
+<a href=#423 id=423 data-nosnippet>423</a>            <span class="string">"blackwell"
+<a href=#424 id=424 data-nosnippet>424</a>        </span>} <span class="kw">else if </span>r.contains(<span class="string">"rtx 40"</span>) || r.contains(<span class="string">"rtx40"</span>) {
+<a href=#425 id=425 data-nosnippet>425</a>            <span class="string">"lovelace"
+<a href=#426 id=426 data-nosnippet>426</a>        </span>} <span class="kw">else if </span>r.contains(<span class="string">"rtx 30"</span>) || r.contains(<span class="string">"rtx30"</span>) {
+<a href=#427 id=427 data-nosnippet>427</a>            <span class="string">"ampere"
+<a href=#428 id=428 data-nosnippet>428</a>        </span>} <span class="kw">else if </span>r.contains(<span class="string">"rtx 20"</span>)
+<a href=#429 id=429 data-nosnippet>429</a>            || r.contains(<span class="string">"rtx20"</span>)
+<a href=#430 id=430 data-nosnippet>430</a>            || r.contains(<span class="string">"rtx 16"</span>)
+<a href=#431 id=431 data-nosnippet>431</a>            || r.contains(<span class="string">"gtx 16"</span>)
+<a href=#432 id=432 data-nosnippet>432</a>            || r.contains(<span class="string">"gtx16"</span>)
+<a href=#433 id=433 data-nosnippet>433</a>        {
+<a href=#434 id=434 data-nosnippet>434</a>            <span class="string">"turing"
+<a href=#435 id=435 data-nosnippet>435</a>        </span>} <span class="kw">else if </span>r.contains(<span class="string">"gtx 10"</span>) || r.contains(<span class="string">"gtx10"</span>) {
+<a href=#436 id=436 data-nosnippet>436</a>            <span class="string">"pascal"
+<a href=#437 id=437 data-nosnippet>437</a>        </span>} <span class="kw">else if </span>r.contains(<span class="string">"titan v"</span>) {
+<a href=#438 id=438 data-nosnippet>438</a>            <span class="string">"volta"
+<a href=#439 id=439 data-nosnippet>439</a>        </span>} <span class="kw">else </span>{
+<a href=#440 id=440 data-nosnippet>440</a>            <span class="string">""
+<a href=#441 id=441 data-nosnippet>441</a>        </span>};
+<a href=#442 id=442 data-nosnippet>442</a>        <span class="kw">return </span>GpuAdapterInfo {
+<a href=#443 id=443 data-nosnippet>443</a>            vendor: <span class="string">"nvidia"</span>.into(),
+<a href=#444 id=444 data-nosnippet>444</a>            architecture: arch.into(),
+<a href=#445 id=445 data-nosnippet>445</a>        };
+<a href=#446 id=446 data-nosnippet>446</a>    }
+<a href=#447 id=447 data-nosnippet>447</a>
+<a href=#448 id=448 data-nosnippet>448</a>    <span class="kw">if </span>r.contains(<span class="string">"amd"</span>) || r.contains(<span class="string">"radeon"</span>) {
+<a href=#449 id=449 data-nosnippet>449</a>        <span class="kw">let </span>arch = <span class="kw">if </span>r.contains(<span class="string">"rx 9"</span>) || r.contains(<span class="string">"rx9"</span>) {
+<a href=#450 id=450 data-nosnippet>450</a>            <span class="string">"rdna-4"
+<a href=#451 id=451 data-nosnippet>451</a>        </span>} <span class="kw">else if </span>r.contains(<span class="string">"rx 7"</span>) || r.contains(<span class="string">"rx7"</span>) {
+<a href=#452 id=452 data-nosnippet>452</a>            <span class="string">"rdna-3"
+<a href=#453 id=453 data-nosnippet>453</a>        </span>} <span class="kw">else if </span>r.contains(<span class="string">"rx 6"</span>) || r.contains(<span class="string">"rx6"</span>) {
+<a href=#454 id=454 data-nosnippet>454</a>            <span class="string">"rdna-2"
+<a href=#455 id=455 data-nosnippet>455</a>        </span>} <span class="kw">else if </span>r.contains(<span class="string">"rx 5700"</span>) || r.contains(<span class="string">"rx 5600"</span>) || r.contains(<span class="string">"rx 5500"</span>) {
+<a href=#456 id=456 data-nosnippet>456</a>            <span class="string">"rdna-1"
+<a href=#457 id=457 data-nosnippet>457</a>        </span>} <span class="kw">else </span>{
+<a href=#458 id=458 data-nosnippet>458</a>            <span class="string">""
+<a href=#459 id=459 data-nosnippet>459</a>        </span>};
+<a href=#460 id=460 data-nosnippet>460</a>        <span class="kw">return </span>GpuAdapterInfo {
+<a href=#461 id=461 data-nosnippet>461</a>            vendor: <span class="string">"amd"</span>.into(),
+<a href=#462 id=462 data-nosnippet>462</a>            architecture: arch.into(),
+<a href=#463 id=463 data-nosnippet>463</a>        };
+<a href=#464 id=464 data-nosnippet>464</a>    }
+<a href=#465 id=465 data-nosnippet>465</a>
+<a href=#466 id=466 data-nosnippet>466</a>    <span class="kw">if </span>r.contains(<span class="string">"apple"</span>) {
+<a href=#467 id=467 data-nosnippet>467</a>        <span class="kw">return </span>GpuAdapterInfo {
+<a href=#468 id=468 data-nosnippet>468</a>            vendor: <span class="string">"apple"</span>.into(),
+<a href=#469 id=469 data-nosnippet>469</a>            architecture: <span class="string">"metal-3"</span>.into(),
+<a href=#470 id=470 data-nosnippet>470</a>        };
+<a href=#471 id=471 data-nosnippet>471</a>    }
+<a href=#472 id=472 data-nosnippet>472</a>
+<a href=#473 id=473 data-nosnippet>473</a>    <span class="comment">// Intel + everything unrecognized → Intel (the common integrated default).
+<a href=#474 id=474 data-nosnippet>474</a>    </span><span class="kw">let </span>arch = <span class="kw">if </span>r.contains(<span class="string">"iris xe"</span>) || r.contains(<span class="string">"xe graphics"</span>) {
+<a href=#475 id=475 data-nosnippet>475</a>        <span class="string">"gen-12-lp"
+<a href=#476 id=476 data-nosnippet>476</a>    </span>} <span class="kw">else if </span>r.contains(<span class="string">"uhd graphics 6"</span>)
+<a href=#477 id=477 data-nosnippet>477</a>        || r.contains(<span class="string">"hd graphics 6"</span>)
+<a href=#478 id=478 data-nosnippet>478</a>        || r.contains(<span class="string">"uhd graphics 5"</span>)
+<a href=#479 id=479 data-nosnippet>479</a>        || r.contains(<span class="string">"hd graphics 5"</span>)
+<a href=#480 id=480 data-nosnippet>480</a>    {
+<a href=#481 id=481 data-nosnippet>481</a>        <span class="string">"gen-9"
+<a href=#482 id=482 data-nosnippet>482</a>    </span>} <span class="kw">else </span>{
+<a href=#483 id=483 data-nosnippet>483</a>        <span class="string">""
+<a href=#484 id=484 data-nosnippet>484</a>    </span>};
+<a href=#485 id=485 data-nosnippet>485</a>    GpuAdapterInfo {
+<a href=#486 id=486 data-nosnippet>486</a>        vendor: <span class="string">"intel"</span>.into(),
+<a href=#487 id=487 data-nosnippet>487</a>        architecture: arch.into(),
+<a href=#488 id=488 data-nosnippet>488</a>    }
+<a href=#489 id=489 data-nosnippet>489</a>}
+<a href=#490 id=490 data-nosnippet>490</a>
+<a href=#491 id=491 data-nosnippet>491</a><span class="attr">#[cfg(test)]
+<a href=#492 id=492 data-nosnippet>492</a></span><span class="kw">mod </span>tests {
+<a href=#493 id=493 data-nosnippet>493</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#494 id=494 data-nosnippet>494</a>
+<a href=#495 id=495 data-nosnippet>495</a>    <span class="attr">#[test]
+<a href=#496 id=496 data-nosnippet>496</a>    </span><span class="kw">fn </span>nvidia_rtx_generations() {
+<a href=#497 id=497 data-nosnippet>497</a>        <span class="macro">assert_eq!</span>(
+<a href=#498 id=498 data-nosnippet>498</a>            adapter_for_renderer(
+<a href=#499 id=499 data-nosnippet>499</a>                <span class="string">"ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 Direct3D11 vs_5_0 ps_5_0, D3D11)"
+<a href=#500 id=500 data-nosnippet>500</a>            </span>)
+<a href=#501 id=501 data-nosnippet>501</a>            .architecture,
+<a href=#502 id=502 data-nosnippet>502</a>            <span class="string">"lovelace"
+<a href=#503 id=503 data-nosnippet>503</a>        </span>);
+<a href=#504 id=504 data-nosnippet>504</a>        <span class="macro">assert_eq!</span>(
+<a href=#505 id=505 data-nosnippet>505</a>            adapter_for_renderer(<span class="string">"NVIDIA GeForce RTX 3080"</span>).architecture,
+<a href=#506 id=506 data-nosnippet>506</a>            <span class="string">"ampere"
+<a href=#507 id=507 data-nosnippet>507</a>        </span>);
+<a href=#508 id=508 data-nosnippet>508</a>        <span class="macro">assert_eq!</span>(
+<a href=#509 id=509 data-nosnippet>509</a>            adapter_for_renderer(<span class="string">"NVIDIA GeForce RTX 2070 SUPER"</span>).architecture,
+<a href=#510 id=510 data-nosnippet>510</a>            <span class="string">"turing"
+<a href=#511 id=511 data-nosnippet>511</a>        </span>);
+<a href=#512 id=512 data-nosnippet>512</a>        <span class="macro">assert_eq!</span>(
+<a href=#513 id=513 data-nosnippet>513</a>            adapter_for_renderer(<span class="string">"NVIDIA GeForce GTX 1080 Ti"</span>).architecture,
+<a href=#514 id=514 data-nosnippet>514</a>            <span class="string">"pascal"
+<a href=#515 id=515 data-nosnippet>515</a>        </span>);
+<a href=#516 id=516 data-nosnippet>516</a>        <span class="kw">let </span>a = adapter_for_renderer(<span class="string">"NVIDIA GeForce RTX 4090"</span>);
+<a href=#517 id=517 data-nosnippet>517</a>        <span class="macro">assert_eq!</span>(a.vendor, <span class="string">"nvidia"</span>);
+<a href=#518 id=518 data-nosnippet>518</a>    }
+<a href=#519 id=519 data-nosnippet>519</a>
+<a href=#520 id=520 data-nosnippet>520</a>    <span class="attr">#[test]
+<a href=#521 id=521 data-nosnippet>521</a>    </span><span class="kw">fn </span>nvidia_unknown_generation_is_empty() {
+<a href=#522 id=522 data-nosnippet>522</a>        <span class="comment">// Vendor still nvidia, but an unrecognized model → empty arch (safe).
+<a href=#523 id=523 data-nosnippet>523</a>        </span><span class="macro">assert_eq!</span>(adapter_for_renderer(<span class="string">"NVIDIA Quadro K2200"</span>).architecture, <span class="string">""</span>);
+<a href=#524 id=524 data-nosnippet>524</a>    }
+<a href=#525 id=525 data-nosnippet>525</a>
+<a href=#526 id=526 data-nosnippet>526</a>    <span class="attr">#[test]
+<a href=#527 id=527 data-nosnippet>527</a>    </span><span class="kw">fn </span>amd_rx_generations() {
+<a href=#528 id=528 data-nosnippet>528</a>        <span class="macro">assert_eq!</span>(
+<a href=#529 id=529 data-nosnippet>529</a>            adapter_for_renderer(<span class="string">"ANGLE (AMD, AMD Radeon RX 7900 XT, D3D11)"</span>).architecture,
+<a href=#530 id=530 data-nosnippet>530</a>            <span class="string">"rdna-3"
+<a href=#531 id=531 data-nosnippet>531</a>        </span>);
+<a href=#532 id=532 data-nosnippet>532</a>        <span class="macro">assert_eq!</span>(
+<a href=#533 id=533 data-nosnippet>533</a>            adapter_for_renderer(<span class="string">"AMD Radeon RX 6800 XT"</span>).architecture,
+<a href=#534 id=534 data-nosnippet>534</a>            <span class="string">"rdna-2"
+<a href=#535 id=535 data-nosnippet>535</a>        </span>);
+<a href=#536 id=536 data-nosnippet>536</a>        <span class="macro">assert_eq!</span>(
+<a href=#537 id=537 data-nosnippet>537</a>            adapter_for_renderer(<span class="string">"AMD Radeon RX 5700 XT"</span>).architecture,
+<a href=#538 id=538 data-nosnippet>538</a>            <span class="string">"rdna-1"
+<a href=#539 id=539 data-nosnippet>539</a>        </span>);
+<a href=#540 id=540 data-nosnippet>540</a>        <span class="macro">assert_eq!</span>(adapter_for_renderer(<span class="string">"AMD Radeon RX 7900 XT"</span>).vendor, <span class="string">"amd"</span>);
+<a href=#541 id=541 data-nosnippet>541</a>    }
+<a href=#542 id=542 data-nosnippet>542</a>
+<a href=#543 id=543 data-nosnippet>543</a>    <span class="attr">#[test]
+<a href=#544 id=544 data-nosnippet>544</a>    </span><span class="kw">fn </span>apple_is_metal3() {
+<a href=#545 id=545 data-nosnippet>545</a>        <span class="kw">let </span>a = adapter_for_renderer(
+<a href=#546 id=546 data-nosnippet>546</a>            <span class="string">"ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)"</span>,
+<a href=#547 id=547 data-nosnippet>547</a>        );
+<a href=#548 id=548 data-nosnippet>548</a>        <span class="macro">assert_eq!</span>(a.vendor, <span class="string">"apple"</span>);
+<a href=#549 id=549 data-nosnippet>549</a>        <span class="macro">assert_eq!</span>(a.architecture, <span class="string">"metal-3"</span>);
+<a href=#550 id=550 data-nosnippet>550</a>    }
+<a href=#551 id=551 data-nosnippet>551</a>
+<a href=#552 id=552 data-nosnippet>552</a>    <span class="attr">#[test]
+<a href=#553 id=553 data-nosnippet>553</a>    </span><span class="kw">fn </span>intel_integrated_generations() {
+<a href=#554 id=554 data-nosnippet>554</a>        <span class="macro">assert_eq!</span>(
+<a href=#555 id=555 data-nosnippet>555</a>            adapter_for_renderer(
+<a href=#556 id=556 data-nosnippet>556</a>                <span class="string">"ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)"
+<a href=#557 id=557 data-nosnippet>557</a>            </span>)
+<a href=#558 id=558 data-nosnippet>558</a>            .architecture,
+<a href=#559 id=559 data-nosnippet>559</a>            <span class="string">"gen-9"
+<a href=#560 id=560 data-nosnippet>560</a>        </span>);
+<a href=#561 id=561 data-nosnippet>561</a>        <span class="macro">assert_eq!</span>(
+<a href=#562 id=562 data-nosnippet>562</a>            adapter_for_renderer(<span class="string">"ANGLE (Intel, Intel(R) Iris(R) Xe Graphics, D3D11)"</span>).architecture,
+<a href=#563 id=563 data-nosnippet>563</a>            <span class="string">"gen-12-lp"
+<a href=#564 id=564 data-nosnippet>564</a>        </span>);
+<a href=#565 id=565 data-nosnippet>565</a>        <span class="macro">assert_eq!</span>(
+<a href=#566 id=566 data-nosnippet>566</a>            adapter_for_renderer(<span class="string">"Intel(R) UHD Graphics 630"</span>).vendor,
+<a href=#567 id=567 data-nosnippet>567</a>            <span class="string">"intel"
+<a href=#568 id=568 data-nosnippet>568</a>        </span>);
+<a href=#569 id=569 data-nosnippet>569</a>    }
+<a href=#570 id=570 data-nosnippet>570</a>
+<a href=#571 id=571 data-nosnippet>571</a>    <span class="attr">#[test]
+<a href=#572 id=572 data-nosnippet>572</a>    </span><span class="kw">fn </span>the_software_rasterizer_reports_no_vendor() {
+<a href=#573 id=573 data-nosnippet>573</a>        <span class="comment">// A SwiftShader row was Linux's default and Windows' before either
+<a href=#574 id=574 data-nosnippet>574</a>        // platform had a captured tier. No platform defaults to one now, so
+<a href=#575 id=575 data-nosnippet>575</a>        // this is the adapter a persona gets when it pins a SwiftShader
+<a href=#576 id=576 data-nosnippet>576</a>        // renderer itself — on any OS. It used to reach the Intel catch-all:
+<a href=#577 id=577 data-nosnippet>577</a>        // an Intel WebGPU adapter beside a SwiftShader WebGL renderer, a
+<a href=#578 id=578 data-nosnippet>578</a>        // pairing Chrome does not produce. Both JIT-backend rows, since either
+<a href=#579 id=579 data-nosnippet>579</a>        // can be served depending on the renderer resolved.
+<a href=#580 id=580 data-nosnippet>580</a>        </span><span class="kw">for </span>row <span class="kw">in </span>[SWIFTSHADER_SUBZERO, SWIFTSHADER_LLVM] {
+<a href=#581 id=581 data-nosnippet>581</a>            <span class="kw">let </span>a = adapter_for_renderer(row.unmasked_renderer);
+<a href=#582 id=582 data-nosnippet>582</a>            <span class="macro">assert_eq!</span>(
+<a href=#583 id=583 data-nosnippet>583</a>                (a.vendor.as_str(), a.architecture.as_str()),
+<a href=#584 id=584 data-nosnippet>584</a>                (row.webgpu_vendor, row.webgpu_architecture),
+<a href=#585 id=585 data-nosnippet>585</a>                <span class="string">"the derived adapter must match the device row's own declaration"
+<a href=#586 id=586 data-nosnippet>586</a>            </span>);
+<a href=#587 id=587 data-nosnippet>587</a>            <span class="macro">assert_eq!</span>(
+<a href=#588 id=588 data-nosnippet>588</a>                a.vendor, <span class="string">""</span>,
+<a href=#589 id=589 data-nosnippet>589</a>                <span class="string">"a software rasterizer has no vendor to report"
+<a href=#590 id=590 data-nosnippet>590</a>            </span>);
+<a href=#591 id=591 data-nosnippet>591</a>        }
+<a href=#592 id=592 data-nosnippet>592</a>    }
+<a href=#593 id=593 data-nosnippet>593</a>
+<a href=#594 id=594 data-nosnippet>594</a>    <span class="attr">#[test]
+<a href=#595 id=595 data-nosnippet>595</a>    </span><span class="kw">fn </span>every_row_derives_its_own_declared_vendor() {
+<a href=#596 id=596 data-nosnippet>596</a>        <span class="comment">// The self-check that makes `vendor_for_renderer` safe as the primary
+<a href=#597 id=597 data-nosnippet>597</a>        // source: for every shipped row, deriving the vendor from that row's
+<a href=#598 id=598 data-nosnippet>598</a>        // own renderer string must reproduce the vendor the row declares. If
+<a href=#599 id=599 data-nosnippet>599</a>        // this holds, replacing the row lookup with the derivation cannot
+<a href=#600 id=600 data-nosnippet>600</a>        // change any default — it only fixes the renderers a row matches but
+<a href=#601 id=601 data-nosnippet>601</a>        // does not describe.
+<a href=#602 id=602 data-nosnippet>602</a>        </span><span class="kw">for </span>row <span class="kw">in </span>DEVICES {
+<a href=#603 id=603 data-nosnippet>603</a>            <span class="macro">assert_eq!</span>(
+<a href=#604 id=604 data-nosnippet>604</a>                vendor_for_renderer(row.unmasked_renderer).as_deref(),
+<a href=#605 id=605 data-nosnippet>605</a>                <span class="prelude-val">Some</span>(row.unmasked_vendor),
+<a href=#606 id=606 data-nosnippet>606</a>                <span class="string">"{} must derive its own declared vendor"</span>,
+<a href=#607 id=607 data-nosnippet>607</a>                row.unmasked_renderer
+<a href=#608 id=608 data-nosnippet>608</a>            );
+<a href=#609 id=609 data-nosnippet>609</a>        }
+<a href=#610 id=610 data-nosnippet>610</a>    }
+<a href=#611 id=611 data-nosnippet>611</a>
+<a href=#612 id=612 data-nosnippet>612</a>    <span class="attr">#[test]
+<a href=#613 id=613 data-nosnippet>613</a>    </span><span class="kw">fn </span>a_d3d11_renderer_reports_its_own_vendor_not_the_rows() {
+<a href=#614 id=614 data-nosnippet>614</a>        <span class="comment">// The non-NVIDIA D3D11 row is deliberately shared across vendors — its
+<a href=#615 id=615 data-nosnippet>615</a>        // token matches every FL11+ renderer that is not NVIDIA's, because
+<a href=#616 id=616 data-nosnippet>616</a>        // their capability values really are the same. The identity strings are
+<a href=#617 id=617 data-nosnippet>617</a>        // not shared, so an Intel renderer must carry an Intel vendor even
+<a href=#618 id=618 data-nosnippet>618</a>        // though the row that supplied its numbers declares AMD. Measured
+<a href=#619 id=619 data-nosnippet>619</a>        // before the derivation existed: `Google Inc. (NVIDIA)` beside an Intel
+<a href=#620 id=620 data-nosnippet>620</a>        // renderer, silently.
+<a href=#621 id=621 data-nosnippet>621</a>        //
+<a href=#622 id=622 data-nosnippet>622</a>        // Vendor now decides the *tier* as well, but only for NVIDIA and only
+<a href=#623 id=623 data-nosnippet>623</a>        // by one cap — see `d3d11_splits_nvidia_from_every_other_vendor`. The
+<a href=#624 id=624 data-nosnippet>624</a>        // vendor string stays derived from the renderer either way, which is
+<a href=#625 id=625 data-nosnippet>625</a>        // what keeps a shared row from lending its name to another card.
+<a href=#626 id=626 data-nosnippet>626</a>        </span><span class="kw">for </span>(renderer, expected_vendor, expected_tier) <span class="kw">in </span>[
+<a href=#627 id=627 data-nosnippet>627</a>            (
+<a href=#628 id=628 data-nosnippet>628</a>                <span class="string">"ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)"</span>,
+<a href=#629 id=629 data-nosnippet>629</a>                <span class="string">"Google Inc. (Intel)"</span>,
+<a href=#630 id=630 data-nosnippet>630</a>                Tier::D3d11Fl11,
+<a href=#631 id=631 data-nosnippet>631</a>            ),
+<a href=#632 id=632 data-nosnippet>632</a>            (
+<a href=#633 id=633 data-nosnippet>633</a>                <span class="string">"ANGLE (AMD, AMD Radeon RX 7900 XT, D3D11)"</span>,
+<a href=#634 id=634 data-nosnippet>634</a>                <span class="string">"Google Inc. (AMD)"</span>,
+<a href=#635 id=635 data-nosnippet>635</a>                Tier::D3d11Fl11,
+<a href=#636 id=636 data-nosnippet>636</a>            ),
+<a href=#637 id=637 data-nosnippet>637</a>            (
+<a href=#638 id=638 data-nosnippet>638</a>                <span class="string">"ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 (0x00002684) Direct3D11 vs_5_0 ps_5_0, D3D11)"</span>,
+<a href=#639 id=639 data-nosnippet>639</a>                <span class="string">"Google Inc. (NVIDIA)"</span>,
+<a href=#640 id=640 data-nosnippet>640</a>                Tier::D3d11Fl11Nvidia,
+<a href=#641 id=641 data-nosnippet>641</a>            ),
+<a href=#642 id=642 data-nosnippet>642</a>        ] {
+<a href=#643 id=643 data-nosnippet>643</a>            <span class="macro">assert_eq!</span>(
+<a href=#644 id=644 data-nosnippet>644</a>                device_for_renderer(renderer).map(|d| d.tier),
+<a href=#645 id=645 data-nosnippet>645</a>                <span class="prelude-val">Some</span>(expected_tier),
+<a href=#646 id=646 data-nosnippet>646</a>                <span class="string">"{renderer} must resolve {expected_tier:?}"
+<a href=#647 id=647 data-nosnippet>647</a>            </span>);
+<a href=#648 id=648 data-nosnippet>648</a>            <span class="comment">// Whichever row supplied the numbers, none of them lends its name.
+<a href=#649 id=649 data-nosnippet>649</a>            </span><span class="macro">assert_eq!</span>(
+<a href=#650 id=650 data-nosnippet>650</a>                vendor_for_renderer(renderer).as_deref(),
+<a href=#651 id=651 data-nosnippet>651</a>                <span class="prelude-val">Some</span>(expected_vendor),
+<a href=#652 id=652 data-nosnippet>652</a>                <span class="string">"{renderer} must report its own vendor"
+<a href=#653 id=653 data-nosnippet>653</a>            </span>);
+<a href=#654 id=654 data-nosnippet>654</a>        }
+<a href=#655 id=655 data-nosnippet>655</a>    }
+<a href=#656 id=656 data-nosnippet>656</a>
+<a href=#657 id=657 data-nosnippet>657</a>    <span class="attr">#[test]
+<a href=#658 id=658 data-nosnippet>658</a>    </span><span class="kw">fn </span>a_non_angle_renderer_derives_no_vendor() {
+<a href=#659 id=659 data-nosnippet>659</a>        <span class="comment">// Nothing to parse, so the caller keeps the device row's vendor rather
+<a href=#660 id=660 data-nosnippet>660</a>        // than inventing one from a string that is not in ANGLE's format.
+<a href=#661 id=661 data-nosnippet>661</a>        </span><span class="macro">assert_eq!</span>(vendor_for_renderer(<span class="string">"Mesa OffScreen"</span>), <span class="prelude-val">None</span>);
+<a href=#662 id=662 data-nosnippet>662</a>        <span class="macro">assert_eq!</span>(vendor_for_renderer(<span class="string">"ANGLE ("</span>), <span class="prelude-val">None</span>);
+<a href=#663 id=663 data-nosnippet>663</a>    }
+<a href=#664 id=664 data-nosnippet>664</a>
+<a href=#665 id=665 data-nosnippet>665</a>    <span class="attr">#[test]
+<a href=#666 id=666 data-nosnippet>666</a>    </span><span class="kw">fn </span>a_comma_less_renderer_stops_the_vendor_at_the_paren() {
+<a href=#667 id=667 data-nosnippet>667</a>        <span class="comment">// ANGLE's usual string is three comma-separated fields, but the
+<a href=#668 id=668 data-nosnippet>668</a>        // one-field form has none — splitting on the comma alone swallowed the
+<a href=#669 id=669 data-nosnippet>669</a>        // closing paren and answered `Google Inc. (Google))`, an unbalanced
+<a href=#670 id=670 data-nosnippet>670</a>        // string no Chrome reports.
+<a href=#671 id=671 data-nosnippet>671</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#672 id=672 data-nosnippet>672</a>            vendor_for_renderer(<span class="string">"ANGLE (Google)"</span>).as_deref(),
+<a href=#673 id=673 data-nosnippet>673</a>            <span class="prelude-val">Some</span>(<span class="string">"Google Inc. (Google)"</span>)
+<a href=#674 id=674 data-nosnippet>674</a>        );
+<a href=#675 id=675 data-nosnippet>675</a>        <span class="macro">assert_eq!</span>(
+<a href=#676 id=676 data-nosnippet>676</a>            vendor_for_renderer(<span class="string">"ANGLE (Apple)"</span>).as_deref(),
+<a href=#677 id=677 data-nosnippet>677</a>            <span class="prelude-val">Some</span>(<span class="string">"Google Inc. (Apple)"</span>)
+<a href=#678 id=678 data-nosnippet>678</a>        );
+<a href=#679 id=679 data-nosnippet>679</a>        <span class="comment">// A paren after the comma is still the comma's job to stop at.
+<a href=#680 id=680 data-nosnippet>680</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#681 id=681 data-nosnippet>681</a>            vendor_for_renderer(<span class="string">"ANGLE (Intel, Intel(R) Iris)"</span>).as_deref(),
+<a href=#682 id=682 data-nosnippet>682</a>            <span class="prelude-val">Some</span>(<span class="string">"Google Inc. (Intel)"</span>)
+<a href=#683 id=683 data-nosnippet>683</a>        );
+<a href=#684 id=684 data-nosnippet>684</a>        <span class="comment">// Nothing before the paren is as empty as nothing at all.
+<a href=#685 id=685 data-nosnippet>685</a>        </span><span class="macro">assert_eq!</span>(vendor_for_renderer(<span class="string">"ANGLE ()"</span>), <span class="prelude-val">None</span>);
+<a href=#686 id=686 data-nosnippet>686</a>    }
+<a href=#687 id=687 data-nosnippet>687</a>
+<a href=#688 id=688 data-nosnippet>688</a>    <span class="attr">#[test]
+<a href=#689 id=689 data-nosnippet>689</a>    </span><span class="kw">fn </span>unknown_renderer_falls_back_to_intel_empty_arch() {
+<a href=#690 id=690 data-nosnippet>690</a>        <span class="kw">let </span>a = adapter_for_renderer(<span class="string">"Mesa OffScreen"</span>);
+<a href=#691 id=691 data-nosnippet>691</a>        <span class="macro">assert_eq!</span>(a.vendor, <span class="string">"intel"</span>);
+<a href=#692 id=692 data-nosnippet>692</a>        <span class="macro">assert_eq!</span>(a.architecture, <span class="string">""</span>);
+<a href=#693 id=693 data-nosnippet>693</a>    }
+<a href=#694 id=694 data-nosnippet>694</a>
+<a href=#695 id=695 data-nosnippet>695</a>    <span class="attr">#[test]
+<a href=#696 id=696 data-nosnippet>696</a>    </span><span class="kw">fn </span>a_known_renderer_selects_its_tier() {
+<a href=#697 id=697 data-nosnippet>697</a>        <span class="kw">let </span>d = device_for_renderer(
+<a href=#698 id=698 data-nosnippet>698</a>            <span class="string">"ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)"</span>,
+<a href=#699 id=699 data-nosnippet>699</a>        )
+<a href=#700 id=700 data-nosnippet>700</a>        .expect(<span class="string">"apple renderer must match the metal row"</span>);
+<a href=#701 id=701 data-nosnippet>701</a>        <span class="macro">assert_eq!</span>(d.tier, Tier::MetalMacos);
+<a href=#702 id=702 data-nosnippet>702</a>        <span class="macro">assert_eq!</span>(d.webgpu_vendor, <span class="string">"apple"</span>);
+<a href=#703 id=703 data-nosnippet>703</a>    }
+<a href=#704 id=704 data-nosnippet>704</a>
+<a href=#705 id=705 data-nosnippet>705</a>    <span class="attr">#[test]
+<a href=#706 id=706 data-nosnippet>706</a>    </span><span class="kw">fn </span>a_software_renderer_selects_the_swiftshader_tier() {
+<a href=#707 id=707 data-nosnippet>707</a>        <span class="comment">// Both strings verbatim as real Chrome prints them. SwiftShader picks
+<a href=#708 id=708 data-nosnippet>708</a>        // its JIT backend at build time, so the platform shows through the
+<a href=#709 id=709 data-nosnippet>709</a>        // renderer string even though nothing behind it differs — each string
+<a href=#710 id=710 data-nosnippet>710</a>        // must land on its own row, not merely on the right tier.
+<a href=#711 id=711 data-nosnippet>711</a>        </span><span class="kw">for </span>(renderer, expected) <span class="kw">in </span>[
+<a href=#712 id=712 data-nosnippet>712</a>            (
+<a href=#713 id=713 data-nosnippet>713</a>                <span class="string">"ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)"</span>,
+<a href=#714 id=714 data-nosnippet>714</a>                SWIFTSHADER_SUBZERO,
+<a href=#715 id=715 data-nosnippet>715</a>            ),
+<a href=#716 id=716 data-nosnippet>716</a>            (
+<a href=#717 id=717 data-nosnippet>717</a>                <span class="string">"ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (LLVM 10.0.0) (0x0000C0DE)), SwiftShader driver)"</span>,
+<a href=#718 id=718 data-nosnippet>718</a>                SWIFTSHADER_LLVM,
+<a href=#719 id=719 data-nosnippet>719</a>            ),
+<a href=#720 id=720 data-nosnippet>720</a>        ] {
+<a href=#721 id=721 data-nosnippet>721</a>            <span class="kw">let </span>d = device_for_renderer(renderer)
+<a href=#722 id=722 data-nosnippet>722</a>                .expect(<span class="string">"swiftshader renderer must match a software row"</span>);
+<a href=#723 id=723 data-nosnippet>723</a>            <span class="macro">assert_eq!</span>(d, expected, <span class="string">"{renderer} resolved to the wrong device row"</span>);
+<a href=#724 id=724 data-nosnippet>724</a>            <span class="macro">assert_eq!</span>(d.tier, Tier::SwiftShader);
+<a href=#725 id=725 data-nosnippet>725</a>        }
+<a href=#726 id=726 data-nosnippet>726</a>    }
+<a href=#727 id=727 data-nosnippet>727</a>
+<a href=#728 id=728 data-nosnippet>728</a>    <span class="attr">#[test]
+<a href=#729 id=729 data-nosnippet>729</a>    </span><span class="kw">fn </span>both_swiftshader_rows_serve_one_capability_tier() {
+<a href=#730 id=730 data-nosnippet>730</a>        <span class="comment">// The rows differ in identity only. Probing Ubuntu 24 (Chrome
+<a href=#731 id=731 data-nosnippet>731</a>        // 150.0.7871.114) against the flags the macOS capture used reproduced
+<a href=#732 id=732 data-nosnippet>732</a>        // it exactly — 0 of 82 WebGL1 parameters differed, 0 of 130 WebGL2,
+<a href=#733 id=733 data-nosnippet>733</a>        // extensions identical in content and order, all 12 precision entries
+<a href=#734 id=734 data-nosnippet>734</a>        // identical — and only the renderer string moved. A split that forked
+<a href=#735 id=735 data-nosnippet>735</a>        // the tier would serve two platforms different numbers off that one
+<a href=#736 id=736 data-nosnippet>736</a>        // measurement.
+<a href=#737 id=737 data-nosnippet>737</a>        </span><span class="macro">assert_eq!</span>(SWIFTSHADER_SUBZERO.tier, Tier::SwiftShader);
+<a href=#738 id=738 data-nosnippet>738</a>        <span class="macro">assert_eq!</span>(SWIFTSHADER_LLVM.tier, Tier::SwiftShader);
+<a href=#739 id=739 data-nosnippet>739</a>        <span class="macro">assert_eq!</span>(
+<a href=#740 id=740 data-nosnippet>740</a>            SWIFTSHADER_SUBZERO.unmasked_vendor,
+<a href=#741 id=741 data-nosnippet>741</a>            SWIFTSHADER_LLVM.unmasked_vendor
+<a href=#742 id=742 data-nosnippet>742</a>        );
+<a href=#743 id=743 data-nosnippet>743</a>        <span class="macro">assert_eq!</span>(
+<a href=#744 id=744 data-nosnippet>744</a>            (
+<a href=#745 id=745 data-nosnippet>745</a>                SWIFTSHADER_SUBZERO.webgpu_vendor,
+<a href=#746 id=746 data-nosnippet>746</a>                SWIFTSHADER_SUBZERO.webgpu_architecture
+<a href=#747 id=747 data-nosnippet>747</a>            ),
+<a href=#748 id=748 data-nosnippet>748</a>            (
+<a href=#749 id=749 data-nosnippet>749</a>                SWIFTSHADER_LLVM.webgpu_vendor,
+<a href=#750 id=750 data-nosnippet>750</a>                SWIFTSHADER_LLVM.webgpu_architecture
+<a href=#751 id=751 data-nosnippet>751</a>            )
+<a href=#752 id=752 data-nosnippet>752</a>        );
+<a href=#753 id=753 data-nosnippet>753</a>        <span class="macro">assert_ne!</span>(
+<a href=#754 id=754 data-nosnippet>754</a>            SWIFTSHADER_SUBZERO.unmasked_renderer, SWIFTSHADER_LLVM.unmasked_renderer,
+<a href=#755 id=755 data-nosnippet>755</a>            <span class="string">"two rows exist only because the identity string differs"
+<a href=#756 id=756 data-nosnippet>756</a>        </span>);
+<a href=#757 id=757 data-nosnippet>757</a>    }
+<a href=#758 id=758 data-nosnippet>758</a>
+<a href=#759 id=759 data-nosnippet>759</a>    <span class="attr">#[test]
+<a href=#760 id=760 data-nosnippet>760</a>    </span><span class="kw">fn </span>no_platform_defaults_to_a_software_rasterizer_any_more() {
+<a href=#761 id=761 data-nosnippet>761</a>        <span class="comment">// Every platform now resolves a captured hardware tier: Metal on
+<a href=#762 id=762 data-nosnippet>762</a>        // macOS, D3D11 on Windows, and Mesa/Vulkan on Linux. Linux was the
+<a href=#763 id=763 data-nosnippet>763</a>        // last fallback — it served SwiftShader's renderer, which is a real
+<a href=#764 id=764 data-nosnippet>764</a>        // configuration but announces "this machine has no usable GPU".
+<a href=#765 id=765 data-nosnippet>765</a>        </span><span class="kw">for </span>(platform, expected) <span class="kw">in </span>[
+<a href=#766 id=766 data-nosnippet>766</a>            (Platform::Win32, <span class="string">"D3D11"</span>),
+<a href=#767 id=767 data-nosnippet>767</a>            (Platform::MacIntel, <span class="string">"Metal"</span>),
+<a href=#768 id=768 data-nosnippet>768</a>            (Platform::LinuxX86_64, <span class="string">"Vulkan"</span>),
+<a href=#769 id=769 data-nosnippet>769</a>        ] {
+<a href=#770 id=770 data-nosnippet>770</a>            <span class="kw">let </span>r = default_renderer(platform);
+<a href=#771 id=771 data-nosnippet>771</a>            <span class="macro">assert!</span>(
+<a href=#772 id=772 data-nosnippet>772</a>                r.contains(expected),
+<a href=#773 id=773 data-nosnippet>773</a>                <span class="string">"{platform:?} must default to its captured {expected} row: {r}"
+<a href=#774 id=774 data-nosnippet>774</a>            </span>);
+<a href=#775 id=775 data-nosnippet>775</a>            <span class="macro">assert!</span>(
+<a href=#776 id=776 data-nosnippet>776</a>                !r.contains(<span class="string">"SwiftShader"</span>),
+<a href=#777 id=777 data-nosnippet>777</a>                <span class="string">"{platform:?} must not default to a software rasterizer: {r}"
+<a href=#778 id=778 data-nosnippet>778</a>            </span>);
+<a href=#779 id=779 data-nosnippet>779</a>        }
+<a href=#780 id=780 data-nosnippet>780</a>        <span class="macro">assert_eq!</span>(
+<a href=#781 id=781 data-nosnippet>781</a>            default_device(Platform::LinuxX86_64).tier,
+<a href=#782 id=782 data-nosnippet>782</a>            Tier::VulkanMesaIntelIrisPro580
+<a href=#783 id=783 data-nosnippet>783</a>        );
+<a href=#784 id=784 data-nosnippet>784</a>    }
+<a href=#785 id=785 data-nosnippet>785</a>
+<a href=#786 id=786 data-nosnippet>786</a>    <span class="attr">#[test]
+<a href=#787 id=787 data-nosnippet>787</a>    </span><span class="kw">fn </span>a_pinned_swiftshader_string_still_resolves_its_platforms_build() {
+<a href=#788 id=788 data-nosnippet>788</a>        <span class="comment">// Neither SwiftShader row is a default any more, but a persona may pin
+<a href=#789 id=789 data-nosnippet>789</a>        // one itself — a GPU-blocklisted machine, a VM, a headless container —
+<a href=#790 id=790 data-nosnippet>790</a>        // and it must land on the build that platform's Chrome really prints.
+<a href=#791 id=791 data-nosnippet>791</a>        // The bug this descends from: every non-Mac platform pointed at the
+<a href=#792 id=792 data-nosnippet>792</a>        // single SwiftShader row, which carries the *macOS* build's string, so
+<a href=#793 id=793 data-nosnippet>793</a>        // a Linux persona reported `LLVM 10.0.0` where real Linux Chrome
+<a href=#794 id=794 data-nosnippet>794</a>        // reports `Subzero`.
+<a href=#795 id=795 data-nosnippet>795</a>        </span><span class="kw">let </span>subzero = SWIFTSHADER_SUBZERO.unmasked_renderer;
+<a href=#796 id=796 data-nosnippet>796</a>        <span class="macro">assert!</span>(subzero.contains(<span class="string">"Subzero"</span>) &amp;&amp; !subzero.contains(<span class="string">"LLVM"</span>));
+<a href=#797 id=797 data-nosnippet>797</a>        <span class="macro">assert_eq!</span>(
+<a href=#798 id=798 data-nosnippet>798</a>            device_for_renderer(subzero),
+<a href=#799 id=799 data-nosnippet>799</a>            <span class="prelude-val">Some</span>(SWIFTSHADER_SUBZERO),
+<a href=#800 id=800 data-nosnippet>800</a>            <span class="string">"the Linux/Windows SwiftShader build must resolve its own row"
+<a href=#801 id=801 data-nosnippet>801</a>        </span>);
+<a href=#802 id=802 data-nosnippet>802</a>        <span class="comment">// And it stays platform-neutral, so pinning it warns on no OS.
+<a href=#803 id=803 data-nosnippet>803</a>        </span><span class="kw">for </span>platform <span class="kw">in </span>[Platform::Win32, Platform::MacIntel, Platform::LinuxX86_64] {
+<a href=#804 id=804 data-nosnippet>804</a>            <span class="macro">assert_eq!</span>(
+<a href=#805 id=805 data-nosnippet>805</a>                <span class="kw">crate</span>::gpu::invariants::platform_skew(platform, Tier::SwiftShader),
+<a href=#806 id=806 data-nosnippet>806</a>                <span class="prelude-val">None
+<a href=#807 id=807 data-nosnippet>807</a>            </span>);
+<a href=#808 id=808 data-nosnippet>808</a>        }
+<a href=#809 id=809 data-nosnippet>809</a>    }
+<a href=#810 id=810 data-nosnippet>810</a>
+<a href=#811 id=811 data-nosnippet>811</a>    <span class="attr">#[test]
+<a href=#812 id=812 data-nosnippet>812</a>    </span><span class="kw">fn </span>a_linux_vulkan_renderer_selects_only_its_own_device() {
+<a href=#813 id=813 data-nosnippet>813</a>        <span class="comment">// A Vulkan tier's numbers come off `VkPhysicalDeviceLimits`, so the row
+<a href=#814 id=814 data-nosnippet>814</a>        // describes this Iris Pro under this Mesa build and nothing else. The
+<a href=#815 id=815 data-nosnippet>815</a>        // token has to be narrow enough to say so: the captured string matches,
+<a href=#816 id=816 data-nosnippet>816</a>        // and other Vulkan devices — including the same vendor — must not.
+<a href=#817 id=817 data-nosnippet>817</a>        </span><span class="kw">let </span>d = device_for_renderer(VULKAN_INTEL_IRIS_PRO_580.unmasked_renderer)
+<a href=#818 id=818 data-nosnippet>818</a>            .expect(<span class="string">"the captured Vulkan renderer must match its own row"</span>);
+<a href=#819 id=819 data-nosnippet>819</a>        <span class="macro">assert_eq!</span>(d, VULKAN_INTEL_IRIS_PRO_580);
+<a href=#820 id=820 data-nosnippet>820</a>        <span class="macro">assert_eq!</span>(d.tier, Tier::VulkanMesaIntelIrisPro580);
+<a href=#821 id=821 data-nosnippet>821</a>        <span class="kw">for </span>other <span class="kw">in </span>[
+<a href=#822 id=822 data-nosnippet>822</a>            <span class="string">"ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 (0x00002684), Vulkan 1.3.277)"</span>,
+<a href=#823 id=823 data-nosnippet>823</a>            <span class="string">"ANGLE (Intel, Vulkan 1.3.289 (Intel(R) UHD Graphics 620 (KBL GT2) (0x00005917)), Intel open-source Mesa driver)"</span>,
+<a href=#824 id=824 data-nosnippet>824</a>        ] {
+<a href=#825 id=825 data-nosnippet>825</a>            <span class="macro">assert_eq!</span>(
+<a href=#826 id=826 data-nosnippet>826</a>                device_for_renderer(other),
+<a href=#827 id=827 data-nosnippet>827</a>                <span class="prelude-val">None</span>,
+<a href=#828 id=828 data-nosnippet>828</a>                <span class="string">"another Vulkan device must not be served this Iris Pro's limits: {other}"
+<a href=#829 id=829 data-nosnippet>829</a>            </span>);
+<a href=#830 id=830 data-nosnippet>830</a>        }
+<a href=#831 id=831 data-nosnippet>831</a>        <span class="comment">// The same card on Windows goes through ANGLE's D3D11 backend, whose
+<a href=#832 id=832 data-nosnippet>832</a>        // values come from feature-level constants instead — so it must resolve
+<a href=#833 id=833 data-nosnippet>833</a>        // the D3D11 tier, not this one.
+<a href=#834 id=834 data-nosnippet>834</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#835 id=835 data-nosnippet>835</a>            device_for_renderer(
+<a href=#836 id=836 data-nosnippet>836</a>                <span class="string">"ANGLE (Intel, Intel(R) Iris(R) Pro Graphics 580 Direct3D11 vs_5_0 ps_5_0, D3D11)"
+<a href=#837 id=837 data-nosnippet>837</a>            </span>)
+<a href=#838 id=838 data-nosnippet>838</a>            .map(|d| d.tier),
+<a href=#839 id=839 data-nosnippet>839</a>            <span class="prelude-val">Some</span>(Tier::D3d11Fl11)
+<a href=#840 id=840 data-nosnippet>840</a>        );
+<a href=#841 id=841 data-nosnippet>841</a>    }
+<a href=#842 id=842 data-nosnippet>842</a>
+<a href=#843 id=843 data-nosnippet>843</a>    <span class="attr">#[test]
+<a href=#844 id=844 data-nosnippet>844</a>    </span><span class="kw">fn </span>the_linux_default_row_has_no_measured_webgpu_adapter() {
+<a href=#845 id=845 data-nosnippet>845</a>        <span class="comment">// Chrome does not enable WebGPU by default on Linux, so the probe
+<a href=#846 id=846 data-nosnippet>846</a>        // recorded an explicit null and the tier serves neither limits nor
+<a href=#847 id=847 data-nosnippet>847</a>        // features — the same standing SwiftShader has. What the row still
+<a href=#848 id=848 data-nosnippet>848</a>        // declares is the adapter *identity* derived from its renderer, which
+<a href=#849 id=849 data-nosnippet>849</a>        // has to name Intel and not some other vendor.
+<a href=#850 id=850 data-nosnippet>850</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#851 id=851 data-nosnippet>851</a>            <span class="kw">crate</span>::gpu::webgpu_for_tier(Tier::VulkanMesaIntelIrisPro580),
+<a href=#852 id=852 data-nosnippet>852</a>            <span class="prelude-val">None</span>,
+<a href=#853 id=853 data-nosnippet>853</a>            <span class="string">"no adapter was measured; substituting another tier's would claim a GPU the \
+<a href=#854 id=854 data-nosnippet>854</a>             persona never reported"
+<a href=#855 id=855 data-nosnippet>855</a>        </span>);
+<a href=#856 id=856 data-nosnippet>856</a>        <span class="kw">let </span>a = adapter_for_renderer(VULKAN_INTEL_IRIS_PRO_580.unmasked_renderer);
+<a href=#857 id=857 data-nosnippet>857</a>        <span class="macro">assert_eq!</span>(
+<a href=#858 id=858 data-nosnippet>858</a>            (a.vendor.as_str(), a.architecture.as_str()),
+<a href=#859 id=859 data-nosnippet>859</a>            (
+<a href=#860 id=860 data-nosnippet>860</a>                VULKAN_INTEL_IRIS_PRO_580.webgpu_vendor,
+<a href=#861 id=861 data-nosnippet>861</a>                VULKAN_INTEL_IRIS_PRO_580.webgpu_architecture
+<a href=#862 id=862 data-nosnippet>862</a>            ),
+<a href=#863 id=863 data-nosnippet>863</a>            <span class="string">"the derived adapter must match the device row's own declaration"
+<a href=#864 id=864 data-nosnippet>864</a>        </span>);
+<a href=#865 id=865 data-nosnippet>865</a>    }
+<a href=#866 id=866 data-nosnippet>866</a>
+<a href=#867 id=867 data-nosnippet>867</a>    <span class="attr">#[test]
+<a href=#868 id=868 data-nosnippet>868</a>    </span><span class="kw">fn </span>a_windows_pinned_swiftshader_string_resolves_the_subzero_row() {
+<a href=#869 id=869 data-nosnippet>869</a>        <span class="comment">// The Windows SwiftShader build used to be *inferred* from the Linux
+<a href=#870 id=870 data-nosnippet>870</a>        // measurement. It is now measured: `probe_gpu -- swiftshader` on
+<a href=#871 id=871 data-nosnippet>871</a>        // Windows 10.0.21996 (Chrome 150.0.7871.186) prints Subzero, matching
+<a href=#872 id=872 data-nosnippet>872</a>        // Linux and confirming the inference.
+<a href=#873 id=873 data-nosnippet>873</a>        //
+<a href=#874 id=874 data-nosnippet>874</a>        // It no longer decides a default — `Win32` resolves the D3D11 row — so
+<a href=#875 id=875 data-nosnippet>875</a>        // what it still governs is this: a Win32 persona that pins a
+<a href=#876 id=876 data-nosnippet>876</a>        // SwiftShader renderer itself must land on the build real Windows
+<a href=#877 id=877 data-nosnippet>877</a>        // Chrome prints, not on macOS's LLVM one.
+<a href=#878 id=878 data-nosnippet>878</a>        </span><span class="kw">let </span>d = device_for_renderer(
+<a href=#879 id=879 data-nosnippet>879</a>            <span class="string">"ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)"</span>,
+<a href=#880 id=880 data-nosnippet>880</a>        )
+<a href=#881 id=881 data-nosnippet>881</a>        .expect(<span class="string">"the measured Windows/Linux SwiftShader string must match a row"</span>);
+<a href=#882 id=882 data-nosnippet>882</a>        <span class="macro">assert_eq!</span>(d, SWIFTSHADER_SUBZERO);
+<a href=#883 id=883 data-nosnippet>883</a>        <span class="comment">// And it is a software rasterizer wherever it is pinned, so the skew
+<a href=#884 id=884 data-nosnippet>884</a>        // check stays silent on it for Win32 exactly as it does for Linux.
+<a href=#885 id=885 data-nosnippet>885</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#886 id=886 data-nosnippet>886</a>            <span class="kw">crate</span>::gpu::invariants::platform_skew(Platform::Win32, d.tier),
+<a href=#887 id=887 data-nosnippet>887</a>            <span class="prelude-val">None</span>,
+<a href=#888 id=888 data-nosnippet>888</a>            <span class="string">"SwiftShader is platform-neutral; pinning it under Win32 must not warn"
+<a href=#889 id=889 data-nosnippet>889</a>        </span>);
+<a href=#890 id=890 data-nosnippet>890</a>    }
+<a href=#891 id=891 data-nosnippet>891</a>
+<a href=#892 id=892 data-nosnippet>892</a>    <span class="attr">#[test]
+<a href=#893 id=893 data-nosnippet>893</a>    </span><span class="kw">fn </span>a_mac_persona_defaults_to_the_apple_metal_renderer() {
+<a href=#894 id=894 data-nosnippet>894</a>        <span class="comment">// Unchanged by the SwiftShader split: macOS resolves real hardware,
+<a href=#895 id=895 data-nosnippet>895</a>        // never either software row.
+<a href=#896 id=896 data-nosnippet>896</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#897 id=897 data-nosnippet>897</a>            default_renderer(Platform::MacIntel),
+<a href=#898 id=898 data-nosnippet>898</a>            <span class="string">"ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)"
+<a href=#899 id=899 data-nosnippet>899</a>        </span>);
+<a href=#900 id=900 data-nosnippet>900</a>        <span class="macro">assert_eq!</span>(default_device(Platform::MacIntel).tier, Tier::MetalMacos);
+<a href=#901 id=901 data-nosnippet>901</a>    }
+<a href=#902 id=902 data-nosnippet>902</a>
+<a href=#903 id=903 data-nosnippet>903</a>    <span class="attr">#[test]
+<a href=#904 id=904 data-nosnippet>904</a>    </span><span class="kw">fn </span>an_unknown_renderer_returns_none() {
+<a href=#905 id=905 data-nosnippet>905</a>        <span class="comment">// Unknown hardware matches no row; guessing a tier would be more
+<a href=#906 id=906 data-nosnippet>906</a>        // detectable than admitting there is none.
+<a href=#907 id=907 data-nosnippet>907</a>        </span><span class="macro">assert_eq!</span>(device_for_renderer(<span class="string">"Some Unreleased GPU"</span>), <span class="prelude-val">None</span>);
+<a href=#908 id=908 data-nosnippet>908</a>    }
+<a href=#909 id=909 data-nosnippet>909</a>
+<a href=#910 id=910 data-nosnippet>910</a>    <span class="attr">#[test]
+<a href=#911 id=911 data-nosnippet>911</a>    </span><span class="kw">fn </span>a_hardware_renderer_never_selects_the_software_tier() {
+<a href=#912 id=912 data-nosnippet>912</a>        <span class="comment">// The bug this replaces: the SwiftShader row's match key was derived
+<a href=#913 id=913 data-nosnippet>913</a>        // from its own reference string, which fell through to "intel", so
+<a href=#914 id=914 data-nosnippet>914</a>        // every Intel renderer selected the software tier.
+<a href=#915 id=915 data-nosnippet>915</a>        </span><span class="kw">let </span>intel = <span class="string">"ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)"</span>;
+<a href=#916 id=916 data-nosnippet>916</a>        <span class="macro">assert_ne!</span>(
+<a href=#917 id=917 data-nosnippet>917</a>            device_for_renderer(intel).map(|d| d.tier),
+<a href=#918 id=918 data-nosnippet>918</a>            <span class="prelude-val">Some</span>(Tier::SwiftShader),
+<a href=#919 id=919 data-nosnippet>919</a>            <span class="string">"a real Intel GPU must never resolve to the software rasterizer's values"
+<a href=#920 id=920 data-nosnippet>920</a>        </span>);
+<a href=#921 id=921 data-nosnippet>921</a>    }
+<a href=#922 id=922 data-nosnippet>922</a>
+<a href=#923 id=923 data-nosnippet>923</a>    <span class="attr">#[test]
+<a href=#924 id=924 data-nosnippet>924</a>    </span><span class="kw">fn </span>the_default_renderer_is_coherent_with_every_platform() {
+<a href=#925 id=925 data-nosnippet>925</a>        <span class="comment">// A renderer string is read beside navigator.platform, so the default
+<a href=#926 id=926 data-nosnippet>926</a>        // has to be a pair Chrome can produce. The regression this guards: the
+<a href=#927 id=927 data-nosnippet>927</a>        // default was the Apple Metal string unconditionally, so a Win32 or
+<a href=#928 id=928 data-nosnippet>928</a>        // Linux persona reported an Apple GPU.
+<a href=#929 id=929 data-nosnippet>929</a>        </span><span class="kw">for </span>platform <span class="kw">in </span>[Platform::Win32, Platform::MacIntel, Platform::LinuxX86_64] {
+<a href=#930 id=930 data-nosnippet>930</a>            <span class="kw">let </span>row = default_device(platform);
+<a href=#931 id=931 data-nosnippet>931</a>            <span class="comment">// Whatever is chosen must be a shipped row, so its renderer name
+<a href=#932 id=932 data-nosnippet>932</a>            // and its capability values come from the same backend.
+<a href=#933 id=933 data-nosnippet>933</a>            </span><span class="macro">assert!</span>(
+<a href=#934 id=934 data-nosnippet>934</a>                DEVICES.contains(<span class="kw-2">&amp;</span>row),
+<a href=#935 id=935 data-nosnippet>935</a>                <span class="string">"{platform:?} defaults to a row that is not in DEVICES"
+<a href=#936 id=936 data-nosnippet>936</a>            </span>);
+<a href=#937 id=937 data-nosnippet>937</a>            <span class="macro">assert_eq!</span>(
+<a href=#938 id=938 data-nosnippet>938</a>                device_for_renderer(row.unmasked_renderer).map(|d| d.tier),
+<a href=#939 id=939 data-nosnippet>939</a>                <span class="prelude-val">Some</span>(row.tier),
+<a href=#940 id=940 data-nosnippet>940</a>                <span class="string">"{platform:?}'s default renderer must resolve back to its own tier"
+<a href=#941 id=941 data-nosnippet>941</a>            </span>);
+<a href=#942 id=942 data-nosnippet>942</a>            <span class="comment">// An Apple renderer is only coherent on macOS.
+<a href=#943 id=943 data-nosnippet>943</a>            </span><span class="kw">if </span>platform != Platform::MacIntel {
+<a href=#944 id=944 data-nosnippet>944</a>                <span class="macro">assert!</span>(
+<a href=#945 id=945 data-nosnippet>945</a>                    !row.unmasked_renderer.contains(<span class="string">"Apple"</span>),
+<a href=#946 id=946 data-nosnippet>946</a>                    <span class="string">"{platform:?} must not default to an Apple renderer: {}"</span>,
+<a href=#947 id=947 data-nosnippet>947</a>                    row.unmasked_renderer
+<a href=#948 id=948 data-nosnippet>948</a>                );
+<a href=#949 id=949 data-nosnippet>949</a>            }
+<a href=#950 id=950 data-nosnippet>950</a>            <span class="comment">// And the default must never trip the skew check, which is what
+<a href=#951 id=951 data-nosnippet>951</a>            // fired on every non-Mac launch before.
+<a href=#952 id=952 data-nosnippet>952</a>            </span><span class="macro">assert_eq!</span>(
+<a href=#953 id=953 data-nosnippet>953</a>                <span class="kw">crate</span>::gpu::invariants::platform_skew(platform, row.tier),
+<a href=#954 id=954 data-nosnippet>954</a>                <span class="prelude-val">None</span>,
+<a href=#955 id=955 data-nosnippet>955</a>                <span class="string">"{platform:?}'s default tier must not skew against it"
+<a href=#956 id=956 data-nosnippet>956</a>            </span>);
+<a href=#957 id=957 data-nosnippet>957</a>        }
+<a href=#958 id=958 data-nosnippet>958</a>        <span class="macro">assert_eq!</span>(default_device(Platform::MacIntel).tier, Tier::MetalMacos);
+<a href=#959 id=959 data-nosnippet>959</a>    }
+<a href=#960 id=960 data-nosnippet>960</a>
+<a href=#961 id=961 data-nosnippet>961</a>    <span class="attr">#[test]
+<a href=#962 id=962 data-nosnippet>962</a>    </span><span class="kw">fn </span>only_extensions_nothing_else_consumes_are_claimed_unconditionally() {
+<a href=#963 id=963 data-nosnippet>963</a>        <span class="kw">let </span>stubs = inert_stubs();
+<a href=#964 id=964 data-nosnippet>964</a>        <span class="kw">let </span>stubs = stubs.as_object().expect(<span class="string">"inert stubs is an object"</span>);
+<a href=#965 id=965 data-nosnippet>965</a>        <span class="comment">// The unmasked pair is served from the tier profile, so the stub is
+<a href=#966 id=966 data-nosnippet>966</a>        // backed all the way through.
+<a href=#967 id=967 data-nosnippet>967</a>        </span><span class="macro">assert!</span>(stubs.contains_key(<span class="string">"WEBGL_debug_renderer_info"</span>));
+<a href=#968 id=968 data-nosnippet>968</a>        <span class="comment">// Not inert: getParameter and texParameterf both consume its
+<a href=#969 id=969 data-nosnippet>969</a>        // constants, and neither is table-served. Claiming it on a backend
+<a href=#970 id=970 data-nosnippet>970</a>        // that lacks it yields getExtension -&gt; stub but
+<a href=#971 id=971 data-nosnippet>971</a>        // getParameter(MAX_TEXTURE_MAX_ANISOTROPY_EXT) -&gt; null + INVALID_ENUM.
+<a href=#972 id=972 data-nosnippet>972</a>        </span><span class="macro">assert!</span>(
+<a href=#973 id=973 data-nosnippet>973</a>            !stubs.contains_key(<span class="string">"EXT_texture_filter_anisotropic"</span>),
+<a href=#974 id=974 data-nosnippet>974</a>            <span class="string">"EXT_texture_filter_anisotropic is not inert; it must be claimed only where the \
+<a href=#975 id=975 data-nosnippet>975</a>             backend really provides it"
+<a href=#976 id=976 data-nosnippet>976</a>        </span>);
+<a href=#977 id=977 data-nosnippet>977</a>    }
+<a href=#978 id=978 data-nosnippet>978</a>
+<a href=#979 id=979 data-nosnippet>979</a>    <span class="attr">#[test]
+<a href=#980 id=980 data-nosnippet>980</a>    </span><span class="kw">fn </span>d3d11_splits_nvidia_from_every_other_vendor() {
+<a href=#981 id=981 data-nosnippet>981</a>        <span class="comment">// The D3D11 tier is per backend and feature level rather than per card
+<a href=#982 id=982 data-nosnippet>982</a>        // — `renderer11_utils.cpp` derives these values from `D3D11_REQ_*`
+<a href=#983 id=983 data-nosnippet>983</a>        // constants branched on the feature level — with one measured
+<a href=#984 id=984 data-nosnippet>984</a>        // exception. ANGLE applies `skipVSConstantRegisterZero` when and only
+<a href=#985 id=985 data-nosnippet>985</a>        // when `isNvidia`, docking `maxVertexUniformVectors` by one, so NVIDIA
+<a href=#986 id=986 data-nosnippet>986</a>        // parts report 4095 where AMD and Intel report 4096.
+<a href=#987 id=987 data-nosnippet>987</a>        //
+<a href=#988 id=988 data-nosnippet>988</a>        // This test used to assert the opposite, that all three vendors shared
+<a href=#989 id=989 data-nosnippet>989</a>        // one tier. Probing an AMD Radeon and an RTX 4090 on the same machine
+<a href=#990 id=990 data-nosnippet>990</a>        // and the same Chrome build disproved it. Vendor is therefore
+<a href=#991 id=991 data-nosnippet>991</a>        // load-bearing in row selection, and the match token alone is not
+<a href=#992 id=992 data-nosnippet>992</a>        // enough to pick a tier.
+<a href=#993 id=993 data-nosnippet>993</a>        </span><span class="kw">for </span>(r, want) <span class="kw">in </span>[
+<a href=#994 id=994 data-nosnippet>994</a>            (
+<a href=#995 id=995 data-nosnippet>995</a>                <span class="string">"ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)"</span>,
+<a href=#996 id=996 data-nosnippet>996</a>                Tier::D3d11Fl11,
+<a href=#997 id=997 data-nosnippet>997</a>            ),
+<a href=#998 id=998 data-nosnippet>998</a>            (<span class="string">"ANGLE (AMD, AMD Radeon RX 7900 XT, D3D11)"</span>, Tier::D3d11Fl11),
+<a href=#999 id=999 data-nosnippet>999</a>            (
+<a href=#1000 id=1000 data-nosnippet>1000</a>                <span class="string">"ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 Direct3D11 vs_5_0 ps_5_0, D3D11)"</span>,
+<a href=#1001 id=1001 data-nosnippet>1001</a>                Tier::D3d11Fl11Nvidia,
+<a href=#1002 id=1002 data-nosnippet>1002</a>            ),
+<a href=#1003 id=1003 data-nosnippet>1003</a>        ] {
+<a href=#1004 id=1004 data-nosnippet>1004</a>            <span class="macro">assert_eq!</span>(
+<a href=#1005 id=1005 data-nosnippet>1005</a>                device_for_renderer(r).map(|d| d.tier),
+<a href=#1006 id=1006 data-nosnippet>1006</a>                <span class="prelude-val">Some</span>(want),
+<a href=#1007 id=1007 data-nosnippet>1007</a>                <span class="string">"expected {want:?} for {r}"
+<a href=#1008 id=1008 data-nosnippet>1008</a>            </span>);
+<a href=#1009 id=1009 data-nosnippet>1009</a>        }
+<a href=#1010 id=1010 data-nosnippet>1010</a>    }
+<a href=#1011 id=1011 data-nosnippet>1011</a>
+<a href=#1012 id=1012 data-nosnippet>1012</a>    <span class="attr">#[test]
+<a href=#1013 id=1013 data-nosnippet>1013</a>    </span><span class="kw">fn </span>the_d3d11_tiers_differ_only_in_the_nvidia_reserved_uniform_vector() {
+<a href=#1014 id=1014 data-nosnippet>1014</a>        <span class="comment">// Locks the shape of the split, so a future capture that widens it
+<a href=#1015 id=1015 data-nosnippet>1015</a>        // fails here rather than silently making the two tiers diverge.
+<a href=#1016 id=1016 data-nosnippet>1016</a>        // ANGLE's workaround touches exactly one cap; the other two reported
+<a href=#1017 id=1017 data-nosnippet>1017</a>        // values are arithmetic consequences of it.
+<a href=#1018 id=1018 data-nosnippet>1018</a>        </span><span class="kw">use </span><span class="kw">crate</span>::gpu::{GlParam, profile_for_tier};
+<a href=#1019 id=1019 data-nosnippet>1019</a>
+<a href=#1020 id=1020 data-nosnippet>1020</a>        <span class="kw">let </span>base = profile_for_tier(Tier::D3d11Fl11);
+<a href=#1021 id=1021 data-nosnippet>1021</a>        <span class="kw">let </span>nvidia = profile_for_tier(Tier::D3d11Fl11Nvidia);
+<a href=#1022 id=1022 data-nosnippet>1022</a>
+<a href=#1023 id=1023 data-nosnippet>1023</a>        <span class="kw">let </span>differing: Vec&lt;<span class="kw-2">&amp;</span>str&gt; = base
+<a href=#1024 id=1024 data-nosnippet>1024</a>            .params_webgl2
+<a href=#1025 id=1025 data-nosnippet>1025</a>            .iter()
+<a href=#1026 id=1026 data-nosnippet>1026</a>            .filter(|(name, value)| nvidia.params_webgl2.get(<span class="kw-2">*</span>name) != <span class="prelude-val">Some</span>(<span class="kw-2">*</span>value))
+<a href=#1027 id=1027 data-nosnippet>1027</a>            .map(|(name, <span class="kw">_</span>)| name.as_str())
+<a href=#1028 id=1028 data-nosnippet>1028</a>            .collect();
+<a href=#1029 id=1029 data-nosnippet>1029</a>
+<a href=#1030 id=1030 data-nosnippet>1030</a>        <span class="macro">assert_eq!</span>(
+<a href=#1031 id=1031 data-nosnippet>1031</a>            differing,
+<a href=#1032 id=1032 data-nosnippet>1032</a>            [
+<a href=#1033 id=1033 data-nosnippet>1033</a>                <span class="string">"MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS"</span>,
+<a href=#1034 id=1034 data-nosnippet>1034</a>                <span class="string">"MAX_VERTEX_UNIFORM_COMPONENTS"</span>,
+<a href=#1035 id=1035 data-nosnippet>1035</a>                <span class="string">"MAX_VERTEX_UNIFORM_VECTORS"</span>,
+<a href=#1036 id=1036 data-nosnippet>1036</a>            ],
+<a href=#1037 id=1037 data-nosnippet>1037</a>            <span class="string">"the D3D11 tiers must differ only where skipVSConstantRegisterZero reaches"
+<a href=#1038 id=1038 data-nosnippet>1038</a>        </span>);
+<a href=#1039 id=1039 data-nosnippet>1039</a>
+<a href=#1040 id=1040 data-nosnippet>1040</a>        <span class="comment">// Both sides spelled out, so the measured numbers are visible here and
+<a href=#1041 id=1041 data-nosnippet>1041</a>        // not only in the generated table.
+<a href=#1042 id=1042 data-nosnippet>1042</a>        </span><span class="kw">for </span>(profile, vectors, components, combined) <span class="kw">in
+<a href=#1043 id=1043 data-nosnippet>1043</a>            </span>[(<span class="kw-2">&amp;</span>base, <span class="number">4096</span>, <span class="number">16384</span>, <span class="number">212992</span>), (<span class="kw-2">&amp;</span>nvidia, <span class="number">4095</span>, <span class="number">16380</span>, <span class="number">212988</span>)]
+<a href=#1044 id=1044 data-nosnippet>1044</a>        {
+<a href=#1045 id=1045 data-nosnippet>1045</a>            <span class="kw">let </span>param = |k: <span class="kw-2">&amp;</span>str| profile.params_webgl2.get(k);
+<a href=#1046 id=1046 data-nosnippet>1046</a>            <span class="macro">assert_eq!</span>(
+<a href=#1047 id=1047 data-nosnippet>1047</a>                param(<span class="string">"MAX_VERTEX_UNIFORM_VECTORS"</span>),
+<a href=#1048 id=1048 data-nosnippet>1048</a>                <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>GlParam::Int(vectors))
+<a href=#1049 id=1049 data-nosnippet>1049</a>            );
+<a href=#1050 id=1050 data-nosnippet>1050</a>            <span class="macro">assert_eq!</span>(
+<a href=#1051 id=1051 data-nosnippet>1051</a>                param(<span class="string">"MAX_VERTEX_UNIFORM_COMPONENTS"</span>),
+<a href=#1052 id=1052 data-nosnippet>1052</a>                <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>GlParam::Int(components))
+<a href=#1053 id=1053 data-nosnippet>1053</a>            );
+<a href=#1054 id=1054 data-nosnippet>1054</a>            <span class="macro">assert_eq!</span>(
+<a href=#1055 id=1055 data-nosnippet>1055</a>                param(<span class="string">"MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS"</span>),
+<a href=#1056 id=1056 data-nosnippet>1056</a>                <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>GlParam::Int(combined))
+<a href=#1057 id=1057 data-nosnippet>1057</a>            );
+<a href=#1058 id=1058 data-nosnippet>1058</a>            <span class="comment">// The relations that make these one fact rather than three: the
+<a href=#1059 id=1059 data-nosnippet>1059</a>            // components are the vectors in scalars, and the combined total
+<a href=#1060 id=1060 data-nosnippet>1060</a>            // adds the same 12 * 16384 of uniform-block storage on both tiers.
+<a href=#1061 id=1061 data-nosnippet>1061</a>            </span><span class="macro">assert_eq!</span>(components, vectors * <span class="number">4</span>);
+<a href=#1062 id=1062 data-nosnippet>1062</a>            <span class="macro">assert_eq!</span>(combined, components + <span class="number">12 </span>* <span class="number">16384</span>);
+<a href=#1063 id=1063 data-nosnippet>1063</a>        }
+<a href=#1064 id=1064 data-nosnippet>1064</a>    }
+<a href=#1065 id=1065 data-nosnippet>1065</a>
+<a href=#1066 id=1066 data-nosnippet>1066</a>    <span class="attr">#[test]
+<a href=#1067 id=1067 data-nosnippet>1067</a>    </span><span class="kw">fn </span>renderers_with_no_shipped_tier_return_none() {
+<a href=#1068 id=1068 data-nosnippet>1068</a>        <span class="comment">// Five tiers ship (SwiftShader, Apple Metal, D3D11 FL11+ in its NVIDIA
+<a href=#1069 id=1069 data-nosnippet>1069</a>        // and non-NVIDIA forms, and the Intel Iris Pro 580 under Mesa/Vulkan).
+<a href=#1070 id=1070 data-nosnippet>1070</a>        // A backend none of them covers still
+<a href=#1071 id=1071 data-nosnippet>1071</a>        // has no measured tier, and guessing one would pair its name with
+<a href=#1072 id=1072 data-nosnippet>1072</a>        // another backend's numbers. Desktop-GL is such a backend, and so is
+<a href=#1073 id=1073 data-nosnippet>1073</a>        // every Vulkan device but the captured one: the Vulkan tier is
+<a href=#1074 id=1074 data-nosnippet>1074</a>        // device-scoped by construction, not a Linux catch-all.
+<a href=#1075 id=1075 data-nosnippet>1075</a>        </span><span class="kw">for </span>r <span class="kw">in </span>[
+<a href=#1076 id=1076 data-nosnippet>1076</a>            <span class="string">"ANGLE (Mesa, llvmpipe (LLVM 15.0.7, 256 bits), OpenGL ES 3.2)"</span>,
+<a href=#1077 id=1077 data-nosnippet>1077</a>            <span class="string">"ANGLE (Intel, Mesa Intel(R) UHD Graphics (TGL GT1), OpenGL ES 3.2)"</span>,
+<a href=#1078 id=1078 data-nosnippet>1078</a>            <span class="string">"ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 (0x00002684), Vulkan 1.3.277)"</span>,
+<a href=#1079 id=1079 data-nosnippet>1079</a>        ] {
+<a href=#1080 id=1080 data-nosnippet>1080</a>            <span class="macro">assert_eq!</span>(device_for_renderer(r), <span class="prelude-val">None</span>, <span class="string">"unexpected tier for {r}"</span>);
+<a href=#1081 id=1081 data-nosnippet>1081</a>        }
+<a href=#1082 id=1082 data-nosnippet>1082</a>    }
+<a href=#1083 id=1083 data-nosnippet>1083</a>}
+</code></pre></div></section></main></body></html>

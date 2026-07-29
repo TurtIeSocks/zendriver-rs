@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["DELEGATED_PARAMS","SERVED_CAPS"],"enum":["GlType","ParamValue"],"fn":["committed_tiers","emit_rust","gl_type_for","is_served_cap","split_base_and_overrides","tier_from_capture"],"struct":["TierData","WebgpuAdapter"]};

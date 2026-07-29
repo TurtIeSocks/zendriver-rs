@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["error","fingerprint","flags","geo","input_profile","lang","observer","patches","persona","profile","ua"]};
+window.SIDEBAR_ITEMS = {"mod":["error","fingerprint","flags","geo","gpu","input_profile","lang","observer","patches","persona","profile","ua"]};

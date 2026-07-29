@@ -231,16 +231,33 @@ identities across a fleet, <code>Native</code> is not that tool; look at
 <a href="fingerprint.html#webgpu-opt-in-adapter-override--fabrication"><code>WebgpuSpec</code></a>
 for caller-supplied adapter values instead. <code>Native</code> makes the GPU surface
 <em>coherent</em>; it does not give you <em>control</em> over what it says.</p>
-<h2 id="no-automatic-fallback"><a class="header" href="#no-automatic-fallback">No automatic fallback</a></h2>
-<p>If <code>Native</code> is selected and Chrome's GPU process cannot start — no GPU
-present, a crashed GPU process, a missing sandbox — the launch fails with
-<a href="https://docs.rs/zendriver/latest/zendriver/enum.BrowserError.html"><code>BrowserError::GpuBackendUnavailable</code></a> rather than silently retrying with a
-software rasterizer. That's deliberate: falling back automatically would
-restore the same incoherent, mixed software/hardware fingerprint that
-choosing a backend explicitly exists to avoid. If a launch might land on a
-GPU-less host, catch <code>GpuBackendUnavailable</code> (along with <code>DevtoolsParse</code> and
-<code>EarlyExit</code>, the other failure shapes a missing GPU process produces) and
-retry with <code>GpuBackend::SwiftShader</code> or <code>GpuBackend::Disabled</code> yourself.</p>
+<h2 id="the-launch-is-validated-and-there-is-no-automatic-fallback"><a class="header" href="#the-launch-is-validated-and-there-is-no-automatic-fallback">The launch is validated, and there is no automatic fallback</a></h2>
+<p>Chrome <em>starting</em> is not evidence that it got a GPU. On a GPU-less Ubuntu 24
+VM, Chrome 150 launched successfully under <code>Native</code> and then returned <code>null</code>
+from both <code>canvas.getContext('webgl')</code> and <code>getContext('webgl2')</code>. That is a
+browser strictly <strong>more</strong> detectable than the default — a missing WebGL
+context is one of the oldest and cheapest headless tells, and the stealth
+WebGL patch cannot repair it, because it patches prototypes and there is no
+context to patch.</p>
+<p>So <code>Native</code> verifies the launch. After the CDP handshake, zendriver asks
+Chrome what it actually initialized (<code>SystemInfo.getInfo</code>, a browser-level
+domain — no page, no navigation, one round-trip) and reads
+<code>gpu.featureStatus.webgl</code>. Measured on Chrome 150.0.7871.186 on the darwin
+dev host: <code>Native</code> reports <code>enabled</code>, <code>SwiftShader</code> reports
+<code>enabled_readback</code>, <code>Disabled</code> reports <code>disabled_off</code>. Anything but a
+hardware status terminates the Chrome that was just spawned and fails the
+launch with <a href="https://docs.rs/zendriver/latest/zendriver/enum.BrowserError.html"><code>BrowserError::GpuBackendUnavailable</code></a>.</p>
+<p>If the GPU cannot be <em>verified</em> — <code>SystemInfo.getInfo</code> unavailable, or
+answering with a status string zendriver does not recognize — the launch logs
+a warning and proceeds. A missing diagnostic API is not evidence of a missing
+GPU, and refusing to launch over one would be worse than the problem the
+check addresses.</p>
+<p>There is no fallback. Failing rather than retrying on SwiftShader is
+deliberate: falling back automatically would serve a software rasterizer's
+values under a "native" label — the same incoherent, mixed software/hardware
+fingerprint that choosing a backend explicitly exists to avoid. If a launch
+might land on a GPU-less host, catch <code>GpuBackendUnavailable</code> and retry with
+<code>GpuBackend::SwiftShader</code> or <code>GpuBackend::Disabled</code> yourself.</p>
 <h2 id="measured-comparison"><a class="header" href="#measured-comparison">Measured comparison</a></h2>
 <p>All figures below are from real Chrome (150.0.7871.186) on this project's
 darwin dev host (Apple M4 Pro), probed with the
@@ -261,11 +278,34 @@ context exist at all" question applies to it.</p>
 <tr><td>WebGL extension count</td><td>30</td><td>36</td></tr>
 </tbody></table>
 </div>
-<p><code>MAX_TEXTURE_SIZE</code> and the other numeric WebGL caps are not read from the
-GPU — ANGLE computes them from constants branched on backend and feature
-tier, not from device queries. That's why the SwiftShader row above is
-identical regardless of what real GPU sits underneath: it's a software
-rasterizer, so there's no real device to query.</p>
+<p>Whether <code>MAX_TEXTURE_SIZE</code> and the other numeric WebGL caps are read from the
+GPU <strong>depends on the backend</strong>, and that is what decides how far one probe
+generalizes:</p>
+<ul>
+<li><strong>D3D11 and Metal-on-macOS: not read from the device.</strong> ANGLE computes them
+from constants branched on the feature level (<code>renderer11_utils.cpp</code>) or
+from plain compile-time constants (<code>DisplayMtl.mm</code>'s <code>TARGET_OS_OSX</code> arm), so
+one probe covers every card on that backend.</li>
+<li><strong>SwiftShader: no device to read.</strong> It is a software rasterizer, which is why
+the row above is identical regardless of what real GPU sits underneath.</li>
+<li><strong>Vulkan: read straight off the device.</strong> <code>vk_caps_utils.cpp</code> fills its caps
+from <code>VkPhysicalDeviceLimits</code>, so a Linux probe describes that GPU under that
+Mesa build and nothing else. zendriver's Vulkan tier is named for its device
+for exactly this reason (Intel Iris Pro Graphics 580, Mesa 25.2.8), and
+covering another Linux GPU means capturing it.</li>
+</ul>
+<p>The one part of the SwiftShader row that <em>is</em> host-specific is the renderer
+string. Re-probing the same flags on Ubuntu 24 (Chrome 150.0.7871.114)
+reproduced every capability value above, but reported <code>SwiftShader Device (Subzero)</code> rather than <code>(LLVM 10.0.0)</code> — SwiftShader picks its JIT backend at
+build time and Chrome prints the choice. Windows reports Subzero too (measured
+on Windows 10.0.21996, Chrome 150.0.7871.186).</p>
+<p>The spoofed profile now serves neither string by default on any platform: a
+<code>Win32</code> persona resolves the captured D3D11 tier and a <code>LinuxX86_64</code> persona
+the captured Mesa/Vulkan one, both real hardware rather than a software
+rasterizer. A SwiftShader row is reached only by pinning such a renderer
+yourself, and which of the two builds you land on then follows the persona's
+platform. See
+<a href="./fingerprint.html#webgl-full-surface-value-spoof-resolved-from-measured-tiers">the WebGL section of the fingerprint chapter</a>.</p>
 <h2 id="navigatorgpu-visibility-is-governed-by-the-page-not-by-this-option"><a class="header" href="#navigatorgpu-visibility-is-governed-by-the-page-not-by-this-option"><code>navigator.gpu</code> visibility is governed by the page, not by this option</a></h2>
 <p><code>navigator.gpu</code> is <code>[SecureContext]</code>-gated. On an opaque-origin page —
 <code>about:blank</code>, a bare <code>data:</code> URL — <code>navigator.gpu</code> is absent no matter which

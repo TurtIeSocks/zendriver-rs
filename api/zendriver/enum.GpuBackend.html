@@ -26,9 +26,24 @@ Metal, Windows → D3D11, otherwise Vulkan).</p>
 <p>Gives a fully coherent GPU surface — real capabilities, real pixels,
 real timings, a working <code>requestDevice()</code> — but reports <strong>the host’s</strong>
 GPU, not a chosen one. A fleet sharing one host shares one fingerprint.</p>
-<p>Requires a usable GPU. There is no automatic fallback: if the GPU
-process cannot start, the launch fails with an actionable error rather
-than silently degrading to software rendering.</p>
+<p>Requires a usable GPU, and the launch is <strong>validated</strong>: after the CDP
+handshake, <code>zendriver</code> asks Chrome (<code>SystemInfo.getInfo</code>) what it
+actually initialized and fails the launch with
+<code>BrowserError::GpuBackendUnavailable</code> unless <code>gpu.featureStatus.webgl</code>
+reports hardware acceleration. There is no automatic fallback — the
+caller picks the software backend, <code>zendriver</code> never picks it for them.</p>
+<p>The check exists because Chrome <em>starting</em> proves nothing. On a
+GPU-less Ubuntu 24 VM, Chrome 150 launched successfully under this
+backend and then returned <code>null</code> from both <code>canvas.getContext('webgl')</code>
+and <code>getContext('webgl2')</code> — no WebGL context at all, which is an older
+and cheaper bot tell than the software-rasterizer fingerprint
+<a href="enum.GpuBackend.html#variant.SwiftShader" title="variant zendriver::GpuBackend::SwiftShader"><code>SwiftShader</code></a> produces, and one the stealth WebGL
+patch cannot repair (it patches prototypes; a missing context has none).
+Such a host now fails the launch instead of yielding that browser.</p>
+<p>A launch whose GPU cannot be <em>verified</em> — <code>SystemInfo.getInfo</code>
+unavailable or answering with a status string zendriver does not know —
+logs a warning and proceeds. A missing diagnostic API is not evidence
+of a missing GPU.</p>
 </div></div><h2 id="implementations" class="section-header">Implementations<a href="#implementations" class="anchor">§</a></h2><div id="implementations-list"><details class="toggle implementors-toggle" open><summary><section id="impl-GpuBackend" class="impl"><a href="#impl-GpuBackend" class="anchor">§</a><h3 class="code-header">impl <a class="enum" href="enum.GpuBackend.html" title="enum zendriver::GpuBackend">GpuBackend</a></h3></section></summary><div class="impl-items"><details class="toggle method-toggle" open><summary><section id="method.angle_flags" class="method"><h4 class="code-header">pub fn <a href="#method.angle_flags" class="fn">angle_flags</a>(self) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.97.1/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.97.1/alloc/string/struct.String.html" title="struct alloc::string::String">String</a>&gt;</h4></section></summary><div class="docblock"><p>Launch flags selecting this backend. Empty for
 <a href="enum.GpuBackend.html#variant.Disabled" title="variant zendriver::GpuBackend::Disabled"><code>Disabled</code></a>.</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.allows_disable_gpu" class="method"><h4 class="code-header">pub fn <a href="#method.allows_disable_gpu" class="fn">allows_disable_gpu</a>(self) -&gt; <a class="primitive" href="https://doc.rust-lang.org/1.97.1/std/primitive.bool.html">bool</a></h4></section></summary><div class="docblock"><p>Whether <code>--disable-gpu</code> may still be emitted under headless.</p>

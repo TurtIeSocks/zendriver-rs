@@ -1,0 +1,36 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Parameters the tier tables serve: static device capabilities."><title>SERVED_CAPS in gpu_tier_gen - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="gpu_tier_gen" data-themes="" data-resource-suffix="" data-rustdoc-version="1.97.1 (8bab26f4f 2026-07-14)" data-channel="1.97.1" data-search-js="search-fd9372ac.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../static.files/storage-41dd4d93.js"></script><script defer src="sidebar-items.js"></script><script defer src="../static.files/main-fcd733ba.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc constant"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">SERVED_CAPS</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../gpu_tier_gen/index.html">gpu_<wbr>tier_<wbr>gen</a><span class="version">0.0.0</span></h2></div><div class="sidebar-elems"><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="index.html">gpu_tier_gen</a></div><h1>Constant <span class="constant">SERVED_<wbr>CAPS</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/gpu_tier_gen/lib.rs.html#88-142">Source</a> </span></div><pre class="rust item-decl"><code>pub const SERVED_CAPS: &amp;[&amp;<a class="primitive" href="https://doc.rust-lang.org/1.97.1/std/primitive.str.html">str</a>];</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Parameters the tier tables serve: static device capabilities.</p>
+<p><code>getParameter</code> answers two categories, and the probe
+(<code>crates/zendriver/examples/probe_gpu.rs</code>) captures both indiscriminately
+because it walks the context prototype. Only this first category may be
+table-served:</p>
+<ul>
+<li><strong>Static device capability</strong> — implementation-fixed for the life of the
+context and unchangeable by any GL call or context attribute. These
+differ per device and carry the fingerprint entropy. Listed here.</li>
+<li><strong>Per-context mutable state</strong> — the current blend/stencil/scissor/pixel-
+store/viewport settings. Every real Chrome reports the same defaults, so
+they carry no entropy, and they change as the page draws. Listed in
+<a href="constant.DELEGATED_PARAMS.html" title="constant gpu_tier_gen::DELEGATED_PARAMS"><code>DELEGATED_PARAMS</code></a> and emitted nowhere: serving them freezes state the
+page just set (<code>gl.enable(gl.BLEND); gl.getParameter(gl.BLEND)</code> → <code>false</code>
+forever) and breaks state-caching renderers that save and restore through
+<code>getParameter</code>.</li>
+</ul>
+<p>The rule, applied against the WebGL 1.0 / 2.0 specifications’ state tables:
+a parameter is served <strong>only</strong> if it is implementation-fixed and cannot be
+changed by any GL call or context attribute. When uncertain, delegate —
+delegating loses a little entropy, freezing a mutable value is a live
+detector.</p>
+<p>Delegation needs no support in <code>webgl.js</code>: a name absent from the table
+already falls through to the real backend, exactly as an unknown enum does.</p>
+<p>Measured against the committed captures, this partition keeps <strong>every</strong>
+parameter whose value differs between the tiers (10 of 10 in WebGL1, 29 of
+31 in WebGL2). The two exceptions are <code>DRAW_BUFFER6</code>/<code>7</code>, which differ only
+in <em>presence</em> — and presence is a property of the <strong>host backend</strong>, not of
+the number this table serves, so delegating them does cost something the
+served <code>MAX_DRAW_BUFFERS</code> cannot buy back. <code>webgl.js</code> closes that one gap
+itself (see <code>drawBufferGap</code> there), answering what a real device of the
+claimed size reports — which follows the bound framebuffer — for any index
+below the served cap that the backend has no constant for. Everything
+else delegated is byte-identical across every measured backend, so the
+entropy cost of delegating it is zero.</p>
+</div></details></section></div></main></body></html>

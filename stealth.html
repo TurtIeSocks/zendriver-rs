@@ -268,9 +268,11 @@ Navigator-prototype checks.</p>
 arrays).</li>
 <li><code>navigator.chrome</code> (installs the runtime object headless Chrome
 doesn't ship).</li>
-<li>WebGL vendor / renderer (returns <code>"Google Inc. (Intel)"</code> /
-<code>"ANGLE (Intel, Mesa Intel(R) UHD Graphics, OpenGL 4.6)"</code> by
-default).</li>
+<li>WebGL vendor / renderer, plus every other readable WebGL value,
+resolved from one capability tier (defaults to a captured Apple Metal
+device: <code>"Google Inc. (Apple)"</code> / <code>"ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)"</code>). The WebGPU adapter is
+derived from that same renderer string, so the two APIs never name
+different GPUs.</li>
 <li>ChunkSplit + iframe-contentWindow guards so the patches survive
 cross-realm escape attempts.</li>
 </ul>
@@ -330,8 +332,9 @@ specific UA.</p>
 isolation (<code>--disable-features=IsolateOrigins,...,site-per-process</code>),
 and <code>spoofed()</code> additionally patches
 <code>WebGLRenderingContext.getParameter()</code> /<code>getSupportedExtensions()</code> to
-report a coherent ANGLE/Direct3D11 Intel identity regardless of the
-host's actual GPU. <code>.native_isolation(true)</code> opts a profile <strong>out</strong> of
+report a coherent GPU identity — every readable parameter resolved from
+one capability tier, defaulting to an Apple Metal device — regardless of
+the host's actual GPU. <code>.native_isolation(true)</code> opts a profile <strong>out</strong> of
 both:</p>
 <pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -376,9 +379,11 @@ driven by the
 <a href="https://docs.rs/zendriver-stealth/latest/zendriver_stealth/struct.Persona.html"><code>Persona</code></a>
 <code>webgpu</code> surface) is skipped along with it, so <code>navigator.gpu</code> reports
 the real host adapter instead of one derived from a renderer the WebGL
-patch no longer applies — no cross-API mismatch. An explicit <code>Webgpu</code>
-<code>Block</code> (hiding <code>navigator.gpu</code>) is renderer-neutral, so it is still
-honored if you set it.</p>
+patch no longer applies — no cross-API mismatch. The same holds for the
+per-surface <code>Strategy::Native</code> on <code>Webgl</code>, which leaves the real renderer
+in place for one persona rather than the whole profile. An explicit
+<code>Webgpu</code> <code>Block</code> (hiding <code>navigator.gpu</code>) is renderer-neutral, so it is
+still honored if you set it.</p>
 <h2 id="end-to-end-example"><a class="header" href="#end-to-end-example">End-to-end example</a></h2>
 <p>This example launches with a custom UA, locale, and platform, then
 reads them back via <code>navigator.*</code> to prove the overrides took:</p>

@@ -106,8 +106,9 @@ coupled WebGPU value/fabrication spoof, kept coherent with it) for the
 <a href="struct.StealthProfile.html#method.spoofed" title="associated function zendriver::stealth::StealthProfile::spoofed"><code>spoofed</code></a> profile — the host’s real
 <code>WebGLRenderingContext.getParameter</code>/<code>getSupportedExtensions</code> (and
 <code>navigator.gpu</code>) values pass through unpatched instead of reporting the
-coherent ANGLE/Direct3D11 Intel identity <code>patches/webgl.js</code> spoofs by
-default.</p>
+coherent GPU identity <code>patches/webgl.js</code> spoofs by default (every
+readable parameter resolved from one capability tier, defaulting to an
+Apple Metal device).</p>
 <h5 id="this-is-a-trade-off-not-a-strict-improvement-1"><a class="doc-anchor" href="#this-is-a-trade-off-not-a-strict-improvement-1">§</a>This is a trade-off, not a strict improvement</h5>
 <p>The WebGL patch is itself an anti-WAF <em>coherence</em> defense — some WAFs
 (Imperva/Incapsula) cross-check the WebGL identity against other
