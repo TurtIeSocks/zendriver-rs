@@ -12,6 +12,7 @@ members = [
     "crates/zendriver-datadome",
     "crates/zendriver-fingerprints",
     "crates/locale-gen",
+    "crates/gpu-tier-gen",
 ]
 
 [workspace.package]

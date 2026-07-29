@@ -126,6 +126,21 @@ pub struct ScreenSpec {
 }
 
 /// WebGL value substitution.
+///
+/// Finer-grained than [`Persona::gpu`](super::Persona::gpu): this patches the
+/// two masked identity strings, while `gpu` carries a whole coherent device
+/// (every readable WebGL parameter plus the WebGPU adapter) resolved from the
+/// tier tables. Both can be set together — `gpu` supplies the full device,
+/// and this still overlays on top to pin just the vendor/renderer strings
+/// without restating the rest of the device.
+///
+/// A [`Strategy::Native`] strategy here emits no WebGL patch at all — the
+/// host's real renderer passes through — and therefore also suppresses the
+/// WebGPU **value** spoof, so `navigator.gpu` cannot name a GPU that
+/// `getParameter(UNMASKED_RENDERER_WEBGL)` never claimed. An explicit
+/// [`WebgpuSpec`] `Block` names no GPU at all and stays honored regardless.
+/// [`StealthProfile::native_isolation`](crate::StealthProfile::native_isolation)
+/// applies the same coupling profile-wide.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct WebglSpec {
     pub strategy: Option<Strategy>,
@@ -135,26 +150,34 @@ pub struct WebglSpec {
 
 /// WebGPU adapter value substitution + opt-in synthetic-adapter fabrication.
 ///
-/// `None`-everywhere ([`WebgpuSpec::default`]) is the regression guard: it
-/// behaves **byte-for-byte** like the pre-`WebgpuSpec` `SurfaceCfg` did — a
-/// real `navigator.gpu` adapter's `.info` is decorated with a vendor /
-/// architecture DERIVED from the [`WebglSpec`] renderer (never fabricated),
-/// `device` / `description` are emitted empty (Chrome masks them), `.limits`
-/// / `.features` are left untouched, and a GPU-less host is left alone —
-/// `navigator.gpu.requestAdapter()` still resolves `null`, same as native
-/// Chrome.
+/// `None`-everywhere ([`WebgpuSpec::default`]) resolves a whole coherent
+/// adapter rather than doing nothing: `.info`'s vendor / architecture are
+/// DERIVED from the [`WebglSpec`] renderer (never fabricated), `device` /
+/// `description` are emitted empty (Chrome masks them), and `.limits` /
+/// `.features` are the **measured** values of the same capability tier that
+/// renderer resolves — probed from a real `navigator.gpu` in the same run as
+/// that tier's WebGL blocks, so both APIs describe one device. A GPU-less host
+/// is still left alone: `requestAdapter()` resolves `null`, same as native
+/// Chrome, unless [`fabricate_when_absent`](Self::fabricate_when_absent) says
+/// otherwise.
 ///
-/// # You own value accuracy
+/// A tier whose own machine had **no** adapter (SwiftShader) serves no limits
+/// and no features, leaving the host adapter's untouched — that absence is the
+/// measurement, and filling it from another tier would claim a GPU the persona
+/// just told WebGL it does not have.
 ///
-/// Every field below is **caller-supplied** — nothing here is probed or
-/// invented from a real GPU. A `vendor` / `limits` / `features` combination
-/// that does not correspond to any real device is **more detectable than
-/// leaving the field `None`**: fingerprinting scripts cross-check
-/// `GPUAdapterInfo` against `GPUSupportedLimits` / `GPUSupportedFeatures` and
-/// against the WebGL renderer string, so an incoherent combination reads as a
-/// bot faster than honest absence does. Only set these fields to values
-/// you've verified against a real device (e.g. probed live from
-/// `navigator.gpu` on that device) — never invent plausible-looking numbers.
+/// # You own the accuracy of what you set
+///
+/// The defaults above are measured. Every field below **replaces** them with a
+/// value only you can vouch for — nothing here is probed. A `vendor` /
+/// `limits` / `features` combination that does not correspond to any real
+/// device is **more detectable than leaving the field `None`**: fingerprinting
+/// scripts cross-check `GPUAdapterInfo` against `GPUSupportedLimits` /
+/// `GPUSupportedFeatures` and against the WebGL renderer string, so an
+/// incoherent combination reads as a bot faster than honest absence does. Only
+/// set these fields to values you've verified against a real device (e.g.
+/// probed live from `navigator.gpu` on that device) — never invent
+/// plausible-looking numbers.
 ///
 /// # What fabrication does
 ///
@@ -181,9 +204,16 @@ pub struct WebglSpec {
 /// - `navigator.gpu`, the fabricated adapter, and its `.info` inherit the real
 ///   `GPU` / `GPUAdapter` / `GPUAdapterInfo` prototypes (or a synthesized
 ///   same-named constructor when the WebGPU IDL is absent), so `instanceof`
-///   holds for all three. Their `.limits` / `.features` are still a plain
-///   object / `Set`, not real `GPUSupportedLimits` / `GPUSupportedFeatures`
-///   instances — an `instanceof` check on those two still tells.
+///   holds for all three. `.limits` / `.features` are genuine
+///   `GPUSupportedLimits` / `GPUSupportedFeatures` instances wherever those
+///   classes exist — the patch overrides their prototypes' accessors and
+///   setlike members rather than substituting a plain object and a `Set`, so
+///   brand, `constructor.name` and own-property shape are a real adapter's.
+///   Only a page with no WebGPU IDL at all (the opaque origin that
+///   [`fabricate_when_absent`](Self::fabricate_when_absent) case (b) covers)
+///   falls back to the substitutes. What remains either way: the iterators
+///   `features.keys()` / `values()` / `entries()` hand back are ordinary
+///   `Array Iterator`s rather than `GPUSupportedFeatures Iterator`s.
 /// - [`fabricate_when_absent`](Self::fabricate_when_absent)'s synthetic
 ///   adapter's `requestDevice()` **always rejects**. Faking a working
 ///   `GPUDevice` needs a real GPU behind it, which this patch cannot
@@ -237,12 +267,18 @@ pub struct WebgpuSpec {
     pub description: Option<String>,
     /// Caller-supplied `GPUSupportedLimits` caps (e.g.
     /// `"maxTextureDimension2D"`). Applied to a real (or fabricated) adapter's
-    /// `.limits` getter. `None` → the adapter's own limits are left
-    /// untouched.
+    /// `.limits` getter, merged **key-wise** over the resolved tier's measured
+    /// limits — so pinning one limit overrides that one and keeps the tier's
+    /// value for every other, the same merge [`Persona::gpu`](super::Persona::gpu)
+    /// gives the WebGL parameter maps. `None` → the tier's measured limits
+    /// alone (or the adapter's own, on a tier that measured none).
     pub limits: Option<BTreeMap<String, u64>>,
     /// Caller-supplied `GPUSupportedFeatures` strings (e.g.
-    /// `"texture-compression-bc"`). `None` → the adapter's own features are
-    /// left untouched.
+    /// `"texture-compression-bc"`). Replaces the resolved tier's measured
+    /// feature list **wholesale** — a feature list is a set you either state in
+    /// full or leave alone, so a partial list would claim the absence of every
+    /// feature you did not name. `None` → the tier's measured features alone
+    /// (or the adapter's own, on a tier that measured none).
     pub features: Option<Vec<String>>,
     /// Explicit opt-in: synthesize a `navigator.gpu` adapter on a host with no
     /// real one, instead of leaving `requestAdapter()` at `null` (or

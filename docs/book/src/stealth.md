@@ -96,9 +96,12 @@ let browser = Browser::builder()
   arrays).
 - `navigator.chrome` (installs the runtime object headless Chrome
   doesn't ship).
-- WebGL vendor / renderer (returns `"Google Inc. (Intel)"` /
-  `"ANGLE (Intel, Mesa Intel(R) UHD Graphics, OpenGL 4.6)"` by
-  default).
+- WebGL vendor / renderer, plus every other readable WebGL value,
+  resolved from one capability tier (defaults to a captured Apple Metal
+  device: `"Google Inc. (Apple)"` / `"ANGLE (Apple, ANGLE Metal
+  Renderer: Apple M4 Pro, Unspecified Version)"`). The WebGPU adapter is
+  derived from that same renderer string, so the two APIs never name
+  different GPUs.
 - ChunkSplit + iframe-contentWindow guards so the patches survive
   cross-realm escape attempts.
 
@@ -167,8 +170,9 @@ specific UA.
 isolation (`--disable-features=IsolateOrigins,...,site-per-process`),
 and `spoofed()` additionally patches
 `WebGLRenderingContext.getParameter()` /`getSupportedExtensions()` to
-report a coherent ANGLE/Direct3D11 Intel identity regardless of the
-host's actual GPU. `.native_isolation(true)` opts a profile **out** of
+report a coherent GPU identity — every readable parameter resolved from
+one capability tier, defaulting to an Apple Metal device — regardless of
+the host's actual GPU. `.native_isolation(true)` opts a profile **out** of
 both:
 
 ```rust,no_run
@@ -216,9 +220,11 @@ driven by the
 [`Persona`](https://docs.rs/zendriver-stealth/latest/zendriver_stealth/struct.Persona.html)
 `webgpu` surface) is skipped along with it, so `navigator.gpu` reports
 the real host adapter instead of one derived from a renderer the WebGL
-patch no longer applies — no cross-API mismatch. An explicit `Webgpu`
-`Block` (hiding `navigator.gpu`) is renderer-neutral, so it is still
-honored if you set it.
+patch no longer applies — no cross-API mismatch. The same holds for the
+per-surface `Strategy::Native` on `Webgl`, which leaves the real renderer
+in place for one persona rather than the whole profile. An explicit
+`Webgpu` `Block` (hiding `navigator.gpu`) is renderer-neutral, so it is
+still honored if you set it.
 
 ## End-to-end example
 

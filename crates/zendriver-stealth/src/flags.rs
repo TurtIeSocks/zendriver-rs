@@ -44,9 +44,26 @@ pub enum GpuBackend {
     /// real timings, a working `requestDevice()` — but reports **the host's**
     /// GPU, not a chosen one. A fleet sharing one host shares one fingerprint.
     ///
-    /// Requires a usable GPU. There is no automatic fallback: if the GPU
-    /// process cannot start, the launch fails with an actionable error rather
-    /// than silently degrading to software rendering.
+    /// Requires a usable GPU, and the launch is **validated**: after the CDP
+    /// handshake, `zendriver` asks Chrome (`SystemInfo.getInfo`) what it
+    /// actually initialized and fails the launch with
+    /// `BrowserError::GpuBackendUnavailable` unless `gpu.featureStatus.webgl`
+    /// reports hardware acceleration. There is no automatic fallback — the
+    /// caller picks the software backend, `zendriver` never picks it for them.
+    ///
+    /// The check exists because Chrome *starting* proves nothing. On a
+    /// GPU-less Ubuntu 24 VM, Chrome 150 launched successfully under this
+    /// backend and then returned `null` from both `canvas.getContext('webgl')`
+    /// and `getContext('webgl2')` — no WebGL context at all, which is an older
+    /// and cheaper bot tell than the software-rasterizer fingerprint
+    /// [`SwiftShader`](Self::SwiftShader) produces, and one the stealth WebGL
+    /// patch cannot repair (it patches prototypes; a missing context has none).
+    /// Such a host now fails the launch instead of yielding that browser.
+    ///
+    /// A launch whose GPU cannot be *verified* — `SystemInfo.getInfo`
+    /// unavailable or answering with a status string zendriver does not know —
+    /// logs a warning and proceeds. A missing diagnostic API is not evidence
+    /// of a missing GPU.
     Native,
 }
 

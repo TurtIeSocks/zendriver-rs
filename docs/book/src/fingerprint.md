@@ -23,7 +23,7 @@ You can mix any persona source with any per-surface strategy independently.
 | `Canvas` | Noise | `Seeded` | `getImageData`, `toDataURL` pixel data |
 | `Audio` | Noise | `Seeded` | `AnalyserNode` frequency / time-domain data |
 | `ClientRects` | Noise | `Seeded` | `getBoundingClientRect` sub-pixel dimensions |
-| `Webgl` | Value | `Value` | `UNMASKED_VENDOR_WEBGL`, `UNMASKED_RENDERER_WEBGL` |
+| `Webgl` | Value | `Value` | Every static device capability `getParameter` reports (WebGL1 + WebGL2), both extension lists, and `getShaderPrecisionFormat` — not just `UNMASKED_VENDOR_WEBGL`/`UNMASKED_RENDERER_WEBGL`. Per-context mutable state stays the backend's |
 | `Webgpu` | Value | `Value` | `GPUAdapterInfo` (vendor/architecture/device/description) + optional `.limits`/`.features` |
 | `Fonts` | Value | `Value` | `measureText` width noise + `FontFaceSet.check` allow-list |
 | `Hardware` | Value | `Value` | Battery level, media-device count, speech voices |
@@ -49,6 +49,16 @@ Noise surfaces (Canvas, Audio, ClientRects) accept `Native`, `Seeded`,
 `Native`, `Value`, `Block`. The policy surface (Webrtc) accepts `Native`,
 `Block`, `Value` (fake IP). Requesting a meaningless combination logs a
 warning and falls back to the surface's kind default.
+
+**`Native` on `Webgl` also silences the `Webgpu` value spoof.** A native
+WebGL surface reports the host's real renderer, so a substituted
+`GPUAdapterInfo` — derived from the renderer that was *not* applied — would
+have `navigator.gpu` naming a GPU that `getParameter(UNMASKED_RENDERER_WEBGL)`
+never claimed, which is exactly the cross-API mismatch a fingerprinter looks
+for. The same coupling applies to
+[`native_isolation`](stealth.md#opting-into-real-site-isolation--real-webgl-native_isolation),
+which drops the WebGL patch profile-wide. An explicit `Webgpu` `Block` names
+no GPU at all, so it stays honored either way.
 
 ## Persona sources
 
@@ -189,17 +199,210 @@ let browser = Browser::builder()
     .launch().await?;
 ```
 
+## WebGL (full-surface value spoof, resolved from measured tiers)
+
+The `Webgl` surface's default `Value` strategy no longer substitutes a
+handful of hand-picked numbers. It resolves and serves every static **device
+capability** a page can read — 18 `getParameter` values on a WebGL1 context
+and 47 on a WebGL2 one — plus both contexts' `getSupportedExtensions` lists
+(in Chrome's own order, which is itself a fingerprint input) and every
+`getShaderPrecisionFormat` result. That is the whole surface that identifies
+the GPU, not just the vendor/renderer pair.
+
+**The rest of `getParameter` is deliberately left to the real backend.** The
+other ~85 values it answers are not device capabilities: they are per-context
+*mutable state* (`VIEWPORT`, `BLEND`, `SCISSOR_BOX`, the `STENCIL_*`,
+`PACK_*` and `UNPACK_*` families, `DRAW_BUFFERn`, …), values fixed by the
+context attributes the page asked for (`RED_BITS`, `STENCIL_BITS`, `SAMPLES`
+— `getContext('webgl', {stencil: true})` changes them), or the
+extension-dependent `COMPRESSED_TEXTURE_FORMATS`. Every real Chrome reports
+the same defaults for all of them, so they carry no entropy to spoof (with one
+partial exception, `DRAW_BUFFERn`, covered below), and serving them from a
+table would be a tell rather than a disguise:
+`gl.enable(gl.BLEND); gl.getParameter(gl.BLEND)` would answer `false`
+forever, and a resized canvas would report a stale viewport beside its real
+`drawingBufferWidth`. Delegating also keeps real WebGL pages working —
+state-caching renderers (deck.gl's `withParameters`, Babylon's state cache)
+save and restore through `getParameter`.
+
+**Values come from measured capability tiers, not per-parameter guesses.**
+How far one capture reaches depends on the backend, because ANGLE (Chrome's GL
+layer) decides these values differently per backend. Five tiers ship today, and
+all but the last generalize:
+
+- `SwiftShader` — Chrome's software rasterizer, the same numbers on every OS.
+- Metal on macOS — ANGLE's Metal backend, covering every Mac. The values are
+  compile-time constants in ANGLE's `DisplayMtl.mm` `TARGET_OS_OSX` branch, so
+  an Intel Mac and an Apple silicon one report the same numbers.
+- D3D11 (feature level 11_0+) — ANGLE's Direct3D 11 backend on Windows, in two
+  tiers. ANGLE derives the values from `D3D11_REQ_*` constants rather than from
+  the card, so one tier covers every Intel and AMD part at that feature level.
+  NVIDIA gets its own: `renderer11_utils.cpp` enables
+  `skipVSConstantRegisterZero` when and only when the vendor is NVIDIA, which
+  docks `MAX_VERTEX_UNIFORM_VECTORS` from 4096 to 4095 and shifts the two
+  values derived from it. Everything else matches — probing an RTX 4090 and an
+  AMD Radeon on one machine found no other difference in either WebGL
+  parameter set, the extension lists, the shader precisions, or any WebGPU
+  limit or feature.
+- Intel Iris Pro Graphics 580 (Skylake GT4e) under Mesa 25.2.8 — ANGLE's
+  **Vulkan** backend on Linux. This one covers **that GPU under that driver and
+  nothing else**: `vk_caps_utils.cpp` fills its caps straight from
+  `VkPhysicalDeviceLimits` (`max2DTextureSize` is
+  `min(limitsVk.maxFramebufferWidth, limitsVk.maxImageDimension2D)`, the
+  viewport bounds come from `limitsVk.maxViewportDimensions`), so a different
+  Intel part — or the same part on a different Mesa release — is a different
+  tier and needs its own capture. That is why it is named for the device and
+  the driver rather than for the backend, and why no "Linux" or "Vulkan" tier
+  exists to generalize it.
+
+The measurement shows the split rather than just asserting it. The Vulkan
+capture is closest to SwiftShader (7 of 82 WebGL1 parameters differ and 21 of
+132 WebGL2, against 10/26 for D3D11 and 9/23 for Metal), because SwiftShader's
+renderer string also says `Vulkan 1.3.0` and it runs through the same ANGLE
+backend. The 21 that remain between two Vulkan-backed captures on one Chrome
+build are exactly the device-derived limits.
+
+A tier is shared *capability values*, never shared *identity*. Pin an Intel or
+AMD D3D11 renderer and you get that tier's numbers above your own vendor and
+renderer strings — `UNMASKED_VENDOR_WEBGL` is derived from the renderer you
+pinned (`ANGLE (Intel, …)` → `Google Inc. (Intel)`), not from the NVIDIA card
+the tier happened to be captured on.
+
+**When a persona names no renderer, the default is chosen from its
+platform.** A renderer string is read beside `navigator.platform`, so the two
+have to be a pair Chrome can actually produce. A `MacIntel` persona gets the
+Apple Metal row, a `Win32` persona the D3D11 row, and a `LinuxX86_64` persona
+the Intel Iris Pro 580 Mesa/Vulkan row — all three ordinary hardware
+identities whose name and numbers come from the same probe.
+
+Linux used to get a SwiftShader row instead, which was real (Chrome reports it
+on a GPU-blocklisted machine, a VM, or a headless container) but announced "no
+usable GPU", something some fingerprinters weight on its own. Capturing the
+Vulkan tier retired that last fallback: every platform default is now hardware.
+
+**SwiftShader's numbers are platform-independent; its renderer string is
+not.** Probing Ubuntu 24 (Chrome 150.0.7871.114, GPU-less VM) against the
+flags used for the macOS capture reproduced it exactly — no WebGL1 or WebGL2
+parameter differed, and the extension and precision lists matched — while the
+renderer string differed in one token, because SwiftShader chooses its JIT
+backend at build time and Chrome prints the choice:
+
+| SwiftShader build | renderer string |
+|---|---|
+| Linux and Windows (both measured) | `ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)` |
+| macOS | `ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (LLVM 10.0.0) (0x0000C0DE)), SwiftShader driver)` |
+
+So one capability tier ships under two identity strings. Neither picks a
+default any more — every platform resolves captured hardware — but the split
+still decides which row a persona lands on when it pins a SwiftShader renderer
+itself, and it must be the build that platform's Chrome really prints. Windows
+Chrome's SwiftShader build prints Subzero too (measured on Windows 10.0.21996,
+Chrome 150.0.7871.186).
+
+**A renderer you pin yourself that matches no tier falls back to your
+platform's default device and logs a warning.** Serving an unrecognized
+renderer's *name* above a different backend's *numbers* is its own
+incoherence. A desktop-GL string is expected to be unmatched, and so is any
+Vulkan device other than the captured Iris Pro — widening that row to cover
+Linux generally is exactly what its device-derived limits forbid. Adding a tier
+requires probing real hardware with that backend; values are never invented.
+See the
+[`capture-gpu-tier` skill](https://github.com/TurtIeSocks/zendriver-rs/blob/main/.claude/skills/capture-gpu-tier/SKILL.md)
+for the procedure if you hit this warning and have the hardware to fix it.
+
+**The tables describe the claimed device, not the host that runs the page.**
+A served capability can exceed what the backend underneath can actually do,
+and nothing in the tables can change that — the numbers are read from a table,
+the work is done by real hardware. `MAX_TEXTURE_SIZE` 16384 sits above a
+backend that fails a 16384 `texImage2D`; `MAX_SAMPLES` 8 sits above one whose
+`getInternalformatParameter` offers fewer; `MAX_DRAW_BUFFERS` 8 sits above one
+with six real `DRAW_BUFFERn` enums. The last of those is cheap enough to close
+outright, and the patch does close it (it answers the ES 3.0 default for any
+index the served cap claims and the backend has no constant for). The rest are
+not: a script that *exercises* a limit rather than reading it can tell the
+claim from the capability, and no table can fabricate the capability itself.
+Where that fidelity matters, pair the persona's tier with a
+[`gpu_backend`](gpu-backend.md) that really has those limits — a `MacIntel`
+persona (Apple Metal tier), a `Win32` one (D3D11 tier), or a `LinuxX86_64` one
+(the Mesa/Vulkan tier) on `GpuBackend::Native` hardware, rather than over
+SwiftShader, which is the default. No platform resolves the SwiftShader tier
+by default any more, so no platform is trivially coherent with that backend;
+pinning a SwiftShader renderer yourself is what makes it so.
+
+**`Persona.gpu: Option<GpuProfile>` lets you pin a whole coherent device.**
+Unset, it resolves from the persona's WebGL renderer string, matched against
+the shipped devices above. Set, it overlays the resolved tier key-wise,
+so a partial profile only overrides the keys it sets. It merges as one
+atomic value across personas (like `screen`), never field-by-field —
+composing two devices' values could describe hardware that exists nowhere.
+The finer-grained `WebglSpec` (the `unmasked_vendor`/`unmasked_renderer`
+strings) still overlays on top of whatever `Persona.gpu` produces, so you can
+pin just the renderer string without restating an entire device's parameter
+table.
+
+**`Strategy::Native` on `Webgl` emits no WebGL patch at all** — `getParameter`
+and friends return the host's real, unmodified values. As covered above,
+this also suppresses the `Webgpu` value spoof, so neither surface serves a
+value that contradicts the other.
+
+**The tables are generated, never hand-edited.**
+`crates/zendriver-stealth/src/gpu/tiers.rs` is produced by the `gpu-tier-gen`
+crate from committed probe captures
+(`crates/zendriver-stealth/data/gpu-tiers/*.json`); a CI step regenerates it
+and fails the build on any diff, so the shipped file can never drift from
+its source captures.
+
 ## WebGPU (opt-in adapter override / fabrication)
 
 By default (`Persona.webgpu = None`, or `Some(WebgpuSpec::default())`), the
 `Webgpu` surface only DECORATES a real `navigator.gpu` adapter's `.info` with
 a vendor/architecture DERIVED from the `Webgl` surface's renderer (never
-fabricated) — the same behavior it always had. `WebgpuSpec` (mirroring
-`WebglSpec`'s strategy+values shape) adds two OPT-IN capabilities on top:
+fabricated) — the same behavior it always had. Only a renderer naming a GPU
+family zendriver recognizes yields a vendor and architecture; anything else —
+including any SwiftShader renderer — derives both as `""`, which is what Chrome
+itself reports for an adapter it cannot classify. A software rasterizer has no
+vendor, and naming one beside a SwiftShader WebGL renderer would be the
+cross-API contradiction this derivation exists to prevent. The Mesa/Vulkan row
+a `LinuxX86_64` persona defaults to derives `intel` with an empty
+architecture — Intel is what its renderer names, and nothing measured that
+part's architecture token, so it stays empty rather than guessed.
+
+**`.limits` and `.features` come from the same measured tier the WebGL surface
+serves.** The probe captures each tier's `navigator.gpu` adapter alongside its
+WebGL blocks, in one run on one machine, so the two APIs answer for one device:
+a `Win32` persona reports the D3D11 tier's 2 GiB `maxBufferSize` and its 19
+features, a `MacIntel` persona the Metal tier's 4 GiB - 4 and its 22. Before
+this they were left at the host's, so an adapter could name an NVIDIA card
+above a Metal buffer limit — the same gap the tier tables closed for WebGL.
+
+Two tiers serve **neither**, and in both cases that is the measurement rather
+than a hole. Chrome on SwiftShader resolves `requestAdapter()` to `null`, and
+the Linux machine the Mesa/Vulkan tier was probed on has WebGPU off by default
+(`navigator.gpu` exists, `requestAdapter()` resolves `null`) — so neither has
+an adapter to describe, and the host's own values are left untouched.
+Substituting a neighbouring tier's numbers would hand a persona that just told
+WebGL it has a software rasterizer, or a machine with WebGPU disabled, a
+hardware adapter's capabilities.
+
+One honest caveat, the mirror of the D3D11 tier's WebGL story. The WebGL values
+generalize across every FL11+ card because ANGLE derives them from `D3D11_REQ_*`
+constants; the *limits* generalize the same way (Dawn's D3D12 backend derives
+them from binding-tier constants), but a few *features* are genuinely
+hardware-gated — `shader-f16`, `subgroups`, `clip-distances`, `primitive-index`.
+The tier's list was measured on an RTX 4090, so pinning an old Intel iGPU's
+renderer under that tier can claim a feature that card would not have. Nothing
+in the tables can tell the two apart without a capture from such a card; if that
+fidelity matters, pin `features` yourself through `WebgpuSpec`.
+
+`WebgpuSpec` (mirroring `WebglSpec`'s strategy+values shape) adds two OPT-IN
+capabilities on top:
 
 1. **Caller-supplied adapter identity.** Set `vendor` / `architecture` /
    `device` / `description` / `limits` / `features` explicitly instead of
-   letting `vendor`/`architecture` derive from the WebGL renderer.
+   letting `vendor`/`architecture` derive from the WebGL renderer and
+   `limits`/`features` come from its tier. `limits` overlays key-wise, so
+   pinning one limit keeps the tier's value for every other; `features`
+   replaces the tier's list wholesale.
 2. **Synthetic adapter fabrication** (`fabricate_when_absent: true`) — when
    the host has no real WebGPU adapter, resolve a synthetic one built from
    your supplied values. This covers **both** GPU-less shapes:
@@ -265,9 +468,39 @@ against a real device.
 REJECTS — there is no way to fabricate a working `GPUDevice` without a real
 GPU behind it. Fabrication only makes `requestAdapter()` resolve a coherent
 adapter for detection scripts that stop there; it does not unlock actual
-WebGPU rendering on a GPU-less host. The synthetic adapter and (when created)
-the synthetic `navigator.gpu` are plain objects, so `adapter instanceof
-GPUAdapter` and `navigator.gpu instanceof GPU` are `false`.
+WebGPU rendering on a GPU-less host.
+
+`adapter.limits` and `adapter.features` are the **real** `GPUSupportedLimits`
+and `GPUSupportedFeatures` objects wherever those classes exist: the patch
+overrides their prototypes' accessors and setlike members rather than handing
+back a plain object and a `Set`, so `constructor.name`, `instanceof`,
+`Object.prototype.toString` and own-property count all read as a genuine
+adapter's while the values are the claimed device's (verified against real
+Chrome in `crates/zendriver/tests/gpu_profile.rs`). What still differs: the
+iterators `features.keys()` / `values()` / `entries()` return are ordinary
+`Array Iterator`s rather than `GPUSupportedFeatures Iterator`s — `has`, `size`,
+spread and `for...of` all read correctly, only the iterator's own type tag
+differs.
+
+**`requestDevice()` is held to the same claim.** A served limit that only
+survives being *read* is a fingerprint of its own: the adapter advertises the
+tier's numbers, so a page can ask for exactly what it was just told, and the
+request would go straight to hardware that never had it (a `Win32` persona
+advertises 16 storage buffers per shader stage; a Metal host supports 10). On
+the decorate path the patch wraps `requestDevice` so both directions agree with
+the advertisement — a `requiredLimits` / `requiredFeatures` request beyond it
+rejects with Chrome's own error and message, and one within it is translated
+down to what the hardware can actually give so the call succeeds. The resulting
+`GPUDevice` reports the **requested** values on its `.limits` (and the spec
+defaults for everything it did not request, exactly as a real device does), on a
+genuine `GPUSupportedLimits`. Its `adapterInfo` names the same adapter too —
+before this it answered the host's, so `adapter.info.vendor` read `nvidia` and
+`device.adapterInfo.vendor` read `apple` one line later.
+
+That closes the *interrogation* divergence, not the capability gap. A page that
+goes on to **allocate** at the claimed capability still fails, because no patch
+can conjure hardware — the same honest limit as SwiftShader's pixels not being
+an NVIDIA GPU's pixels.
 
 **On a GPU-equipped host, [`GpuBackend::Native`](gpu-backend.md) sidesteps
 `WebgpuSpec` fabrication entirely.** Instead of faking an adapter and

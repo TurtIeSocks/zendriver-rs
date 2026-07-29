@@ -22,7 +22,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
+      - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
+      # gpu-tier-gen's own output feeds back through rustfmt (see its
+      # main.rs), so this job's rustfmt component doubles as this step's
+      # runtime dependency.
+      - name: GPU tier table is current
+        run: |
+          cargo run -p gpu-tier-gen
+          git diff --exit-code crates/zendriver-stealth/src/gpu/tiers.rs
 
   clippy:
     runs-on: ubuntu-latest
@@ -159,6 +167,80 @@ jobs:
           Write-Host "Using preinstalled Chrome $version at $chrome"
       - run: cargo nextest run --workspace --features integration-tests --locked --profile ci-integration -E '${{ matrix.filter }}'
 
+  # The only check that puts this repo's WebGL/WebGPU spoofing in front of a
+  # real browser. Everything else guarding it -- the tier-table unit tests, the
+  # `gpu-tier-gen` regeneration diff in `fmt`, the hand-written Node model of
+  # Blink -- compares generated artifacts against each other, so all of them
+  # stay green when the tables and an actual browser disagree. Only this job
+  # can see that disagreement, which is why it blocks instead of reporting
+  # amber.
+  #
+  # Until now it ran only inside `nightly-ignored-tests`, which carries
+  # `continue-on-error: true` -- so a genuine table-versus-browser divergence
+  # produced an ignorable yellow dot on a cron run and merged anyway. Promoted
+  # as its own job rather than by dropping that lane's `continue-on-error`:
+  # the nightly deliberately sweeps every `#[ignore]` test across two crates,
+  # several of which probe live anti-bot services and are allowed to flake.
+  #
+  # Scoped to two binaries, both of which talk to a LOCAL Chrome and nothing
+  # else -- no Cloudflare, no Imperva, no egress at all. That is what makes
+  # these gate-worthy where the other nightly suites are not:
+  #  - `gpu_profile` is the payload: it reads the spoofed surface out of a real
+  #    browser and compares it against the committed tier captures.
+  #  - `gpu_backend` is the foundation those captures rest on. Its canary pins
+  #    ANGLE's SwiftShader constants, and if Chrome moves them every tier table
+  #    derived from them is stale -- exactly the state that must not merge. The
+  #    constants were measured on macOS (Chrome 150.0.7871.186) and re-measured
+  #    identical on Linux (Debian Chromium 150.0.7871.181, aarch64): the
+  #    renderer *string* differs, all four numbers do not. Crossing both OS and
+  #    arch without moving is the evidence that these are ANGLE's constants
+  #    rather than one host's. Its `Native` test, meanwhile, takes the
+  #    documented `GpuBackendUnavailable` skip on a GPU-less Linux host --
+  #    verified, not assumed. Accepted trade-off: a Chrome bump in
+  #    the runner image can turn this red on an unrelated PR. That is the canary
+  #    working rather than misfiring -- the fix is re-deriving the tables, which
+  #    has to happen either way, and finding out at PR time beats finding out
+  #    from a fingerprinter.
+  #
+  # This runner has no GPU, so the two `GpuBackend::Native` tests in
+  # `gpu_profile` take their documented skip (`GpuBackendUnavailable`, which
+  # they assert -- any other launch error still fails). What actually runs is
+  # the SwiftShader path under a Mac-pinned persona: a SwiftShader browser
+  # claiming Apple Metal, which is precisely the disagreement the tables exist
+  # to survive.
+  #
+  # `--run-ignored ignored-only` because every test in both binaries is
+  # `#[ignore]`d (they launch Chrome), and `--features integration-tests`
+  # because both files are `#![cfg(feature = "integration-tests")]`.
+  test-gpu-coherence:
+    runs-on: ubuntu-latest
+    # Backstop only, same role as `test-integration`'s: the per-test
+    # `slow-timeout` in .config/nextest.toml is what names a stuck test. The 7
+    # tests themselves run in seconds; this budget is almost entirely a cold
+    # compile against an empty rust-cache.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - name: Ensure Chrome available (preinstalled or apt fallback)
+        run: |
+          set -euo pipefail
+          if command -v google-chrome >/dev/null 2>&1; then
+            echo "Using preinstalled $(google-chrome --version) at $(command -v google-chrome)"
+          elif command -v google-chrome-stable >/dev/null 2>&1; then
+            echo "Using preinstalled $(google-chrome-stable --version) at $(command -v google-chrome-stable)"
+          elif command -v chromium-browser >/dev/null 2>&1; then
+            echo "Using preinstalled $(chromium-browser --version) at $(command -v chromium-browser)"
+          else
+            echo "No Chrome/Chromium found on PATH — falling back to apt install"
+            sudo apt-get update
+            sudo apt-get install -y chromium-browser
+            chromium-browser --version
+          fi
+      - run: cargo nextest run -p zendriver --features integration-tests --run-ignored ignored-only --locked --profile ci-integration -E 'binary(gpu_profile) or binary(gpu_backend)'
+
   # Aggregate gate. The branch ruleset requires a status check named exactly
   # `test-integration`; a matrix job never provides one, because GitHub appends
   # the matrix values to the job name. So the legs above report as
@@ -175,9 +257,18 @@ jobs:
   # Prefer this over pinning the ruleset to the expanded leg names, which
   # re-breaks the moment any matrix value changes — and the windows `filter` is
   # expected to change if that leg is ever widened to `kind(test)`.
+  #
+  # `test-gpu-coherence` is folded in here for a related reason. A red job only
+  # blocks a merge if the ruleset requires its name, and editing the ruleset is
+  # not something a PR can do — so a standalone job would report red and still
+  # be mergeable, which is the same "visible but ignorable" failure mode it was
+  # promoted out of. Routing it through the one name the ruleset already
+  # requires makes it genuinely blocking today. If it is later added to the
+  # ruleset under its own name, drop it from `needs` here so the two do not
+  # report the same failure twice.
   test-integration-gate:
     name: test-integration
-    needs: test-integration
+    needs: [test-integration, test-gpu-coherence]
     # Not stylistic. Without `always()`, a FAILED leg skips this job, and a
     # skipped check never reports a failure — the gate would fall silent in
     # exactly the case it exists to catch, which is worse than no gate at all.
@@ -187,16 +278,26 @@ jobs:
       - name: Require every integration leg to have succeeded
         run: |
           set -euo pipefail
-          result='${{ needs.test-integration.result }}'
-          echo "test-integration matrix aggregate result: ${result}"
+          matrix='${{ needs.test-integration.result }}'
+          gpu='${{ needs.test-gpu-coherence.result }}'
+          echo "test-integration matrix aggregate result: ${matrix}"
+          echo "test-gpu-coherence result: ${gpu}"
           # For a matrix dependency this is `success` only when EVERY leg
           # succeeded. Treat everything else -- failure, cancelled, and skipped
           # -- as blocking: a leg that silently stops running must not read as
-          # a pass.
-          if [ "${result}" != 'success' ]; then
-            echo "::error::integration matrix did not succeed (result=${result})"
-            exit 1
+          # a pass. Same rule for the GPU coherence job, which is a plain job
+          # rather than a matrix but earns no more leniency for it.
+          failed=0
+          if [ "${matrix}" != 'success' ]; then
+            echo "::error::integration matrix did not succeed (result=${matrix})"
+            failed=1
           fi
+          if [ "${gpu}" != 'success' ]; then
+            echo "::error::test-gpu-coherence did not succeed (result=${gpu}) — the spoofed GPU surface disagreed with the committed tier tables in a real browser, or the ANGLE canary drifted"
+            failed=1
+          fi
+          # Report BOTH before exiting, so one failure does not hide the other.
+          exit "${failed}"
 
   nightly-stealth-tests:
     if: github.event_name == 'schedule' && github.event.schedule == '0 6 * * *'
@@ -270,6 +371,14 @@ jobs:
   # `nightly-stealth-tests`: same real-Chrome setup, `--profile
   # ci-integration`, `continue-on-error: true` (a scheduled monitor, not a PR
   # gate — never added to `test-integration-gate`'s `needs:`).
+  #
+  # Seven of those tests — `gpu_profile` and `gpu_backend` — no longer depend on
+  # this lane: they were promoted to the blocking `test-gpu-coherence` job above
+  # once it became clear that the one check able to catch a table-versus-browser
+  # divergence could not fail a PR. They are deliberately left in this filter as
+  # well. The duplication is a few seconds, and running them on cron keeps the
+  # early warning for a Chrome bump that moves ANGLE's constants — which shows
+  # up here the night before it starts blocking PRs.
   #
   # `--run-ignored ignored-only` selects ONLY `#[ignore]`d tests; everything
   # else in the workspace is already covered by `test-integration` on every

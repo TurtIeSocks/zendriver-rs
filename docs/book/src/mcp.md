@@ -164,8 +164,9 @@ present in the schema but only takes effect when the `geo` feature is enabled.
   explicitly. `"native"` drops `--disable-gpu` and renders on the host's real
   GPU — a fully coherent WebGL/WebGPU surface, but it reports **the host's**
   GPU (no identity control) and requires a usable GPU with no automatic
-  fallback: a launch that can't start the GPU process fails outright rather
-  than silently falling back to software rendering. See the
+  fallback: the launch is validated against what Chrome actually initialized,
+  and a host without hardware-accelerated WebGL fails outright rather than
+  silently serving software rendering. See the
   [GPU backend chapter](gpu-backend.md) for the measured comparison and the
   `--disable-gpu`-alone hang this option exists to avoid.
 

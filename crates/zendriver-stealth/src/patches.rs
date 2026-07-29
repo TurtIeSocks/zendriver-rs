@@ -12,7 +12,7 @@ use serde_json::json;
 
 use crate::persona::surface::{Strategy, Surface};
 use crate::persona::{FontSpec, HardwareSpec, SurfaceCfg, WebglSpec, WebgpuSpec, WebrtcSpec};
-use crate::{Fingerprint, Persona, Seed, UserAgentMetadata};
+use crate::{Fingerprint, GpuProfile, Persona, Platform, Seed, UserAgentMetadata};
 
 // --- Native-function masking prelude (runs first, wraps everything) ------
 const NATIVE: &str = include_str!("patches/_native.js");
@@ -29,14 +29,10 @@ const BROKEN_IMAGE: &str = include_str!("patches/broken_image.js");
 
 // --- Persona surface patches (appended after the identity IIFE) ----------
 //
-// `webgl.js` carries BOTH the hardcoded vendor/renderer fallback block and a
-// persona-driven value-substitution IIFE, so it is emitted exactly ONCE here
-// (not in the identity IIFE) to avoid a duplicate block + unsubstituted
-// `WEBGL_VENDOR`/`WEBGL_RENDERER` tokens. It references no `fp` fields, so
-// running it at the bootstrap's top level (rather than inside the fp IIFE) is
-// behavior-preserving; its top-level `const VENDOR`/`RENDERER` are script-
-// scoped and the nested IIFE's `const VENDOR` is function-scoped — no
-// redeclaration.
+// `webgl.js` is one IIFE taking a single `WEBGL_PROFILE` object resolved from
+// the GPU tier tables, so it is emitted here (not in the identity IIFE) —
+// it references no `fp` fields, and running it at the bootstrap's top level
+// keeps the substituted profile out of the identity JSON.
 const PRNG: &str = include_str!("patches/_prng.js");
 const WEBGL: &str = include_str!("patches/webgl.js");
 const CANVAS: &str = include_str!("patches/canvas.js");
@@ -70,11 +66,12 @@ pub fn bootstrap_script(persona: &Persona, identity: &Fingerprint) -> String {
     bootstrap_script_impl(persona, identity, true)
 }
 
-/// Like [`bootstrap_script`], but omits the WebGL vendor/renderer
-/// value-substitution patch (`patches/webgl.js`) entirely — the host's real
+/// Like [`bootstrap_script`], but omits the WebGL value-substitution patch
+/// (`patches/webgl.js`) entirely — the host's real
 /// `WebGLRenderingContext.getParameter`/`getSupportedExtensions` values pass
-/// through unpatched instead of the coherent ANGLE/Direct3D11 Intel identity
-/// the patch spoofs by default.
+/// through unpatched instead of the coherent GPU identity the patch spoofs by
+/// default (every readable parameter resolved from one capability tier,
+/// defaulting to an Apple Metal device).
 ///
 /// To keep WebGL and WebGPU reporting the *same* (real) GPU, the WebGPU
 /// **value** adapter spoof is omitted here too — otherwise a spoofed
@@ -93,9 +90,10 @@ pub fn bootstrap_script_native_webgl(persona: &Persona, identity: &Fingerprint) 
 
 /// Shared implementation for [`bootstrap_script`] /
 /// [`bootstrap_script_native_webgl`]. `spoof_webgl` gates the `push_webgl`
-/// call and the WebGPU *value* spoof (which is skipped when WebGL is left
-/// real, so the two APIs stay coherent — see [`push_webgpu`]); every other
-/// patch is identical between the two public entry points.
+/// call and, together with the persona's own WebGL strategy, the WebGPU
+/// *value* spoof (which is skipped whenever WebGL is left real, so the two
+/// APIs stay coherent — see [`push_webgpu`]); every other patch is identical
+/// between the two public entry points.
 fn bootstrap_script_impl(persona: &Persona, identity: &Fingerprint, spoof_webgl: bool) -> String {
     // Prelude first: installs the toString override + closure-local helpers
     // that every patch below routes through.
@@ -141,14 +139,36 @@ fn bootstrap_script_impl(persona: &Persona, identity: &Fingerprint, spoof_webgl:
         seed,
     );
 
-    if spoof_webgl {
-        push_webgl(&mut body, persona.webgl.as_ref());
+    // Whether the WebGL value patch actually runs: the profile-level opt-in has
+    // to allow it AND the surface strategy must not be `Native`. Both leave the
+    // host's real renderer in place, so both must equally suppress the WebGPU
+    // value spoof below — a `Native` WebGL surface beside a spoofed
+    // `navigator.gpu` adapter reports two different GPUs, the cross-API
+    // contradiction the coupling exists to prevent. Resolved once here so the
+    // two calls cannot drift.
+    let webgl_spoofed = spoof_webgl
+        && Surface::Webgl.resolve_strategy(persona.webgl.as_ref().and_then(|s| s.strategy))
+            != Strategy::Native;
+
+    // Both GPU surfaces need the platform the page will claim: WebGL judges
+    // its tier against it and WebGPU derives its adapter from the same
+    // renderer, so resolving it once here is what keeps the two on one device.
+    let platform = resolved_platform(persona, identity);
+    if webgl_spoofed {
+        push_webgl(
+            &mut body,
+            persona.webgl.as_ref(),
+            persona.gpu.as_ref(),
+            platform,
+        );
     }
     push_webgpu(
         &mut body,
         persona.webgpu.as_ref(),
         persona.webgl.as_ref(),
-        spoof_webgl,
+        persona.gpu.as_ref(),
+        webgl_spoofed,
+        platform,
     );
     push_fonts(&mut body, persona.fonts.as_ref(), seed);
     push_hardware(&mut body, persona.hardware.as_ref());
@@ -159,11 +179,19 @@ fn bootstrap_script_impl(persona: &Persona, identity: &Fingerprint, spoof_webgl:
     format!("(function(){{\n{body}\n}})();")
 }
 
+/// The platform the page will claim: the persona's when it pins one, else the
+/// host's as probed. Both the identity IIFE and the WebGL profile resolve it
+/// this way — the GPU tier has to be judged against the OS the page claims,
+/// not the one the process runs on.
+fn resolved_platform(persona: &Persona, identity: &Fingerprint) -> Platform {
+    persona.platform.unwrap_or(identity.platform)
+}
+
 /// Emit the 9 identity patches wrapped in `(function(fp){ ... })(fpJson)`.
 /// Identity is resolved from `identity` with `persona` overrides applied,
 /// preserving UA coherence (see [`bootstrap_script`]).
 fn identity_iife(persona: &Persona, identity: &Fingerprint) -> String {
-    let platform = persona.platform.unwrap_or(identity.platform);
+    let platform = resolved_platform(persona, identity);
 
     // If the persona changes the platform, rebuild UA-CH metadata coherently
     // against the REAL probed Chrome version (never a fallback) so platform +
@@ -227,51 +255,179 @@ fn json_or_null(v: Option<&String>) -> String {
     )
 }
 
-/// Append the webgl value-substitution patch. The existing hardcoded webgl
-/// block (the first half of `webgl.js`) always runs; the appended IIFE's
-/// `WEBGL_VENDOR` / `WEBGL_RENDERER` args carry the persona values (or JS
-/// `null` when absent / `Native`, leaving the hardcoded block in charge).
-fn push_webgl(out: &mut String, spec: Option<&WebglSpec>) {
+/// The GPU renderer string the persona claims, finest-grained layer first:
+/// the [`WebglSpec`]'s, then a pinned [`Persona::gpu`]'s, then the default
+/// device row for `platform`.
+///
+/// One function because both GPU surfaces resolve it: WebGL serves it (and
+/// picks its capability tier from it), and WebGPU derives its adapter
+/// vendor/architecture from it. Resolving it twice is how the two drift onto
+/// different GPUs — `gpu::devices` exists precisely so one renderer drives
+/// both.
+///
+/// `platform` only selects the default. A renderer string is read beside
+/// `navigator.platform`, so the fallback has to be one Chrome could report on
+/// the OS the page claims — see
+/// [`default_device`](crate::gpu::devices::default_device).
+fn resolved_renderer<'a>(
+    spec: Option<&'a WebglSpec>,
+    gpu: Option<&'a GpuProfile>,
+    platform: Platform,
+) -> &'a str {
+    spec.and_then(|s| s.unmasked_renderer.as_deref())
+        .or_else(|| {
+            gpu.map(|g| g.unmasked_renderer.as_str())
+                .filter(|r| !r.is_empty())
+        })
+        .unwrap_or_else(|| crate::gpu::devices::default_renderer(platform))
+}
+
+/// The device row whose tier supplies a renderer's capability values.
+///
+/// Shared by both GPU surfaces so they cannot land on different tiers: WebGL
+/// serves the tier's `getParameter` values and WebGPU the same tier's measured
+/// adapter limits and features, and a page reads the two against each other.
+///
+/// [`device_for_renderer`](crate::gpu::devices::device_for_renderer) answers
+/// `None` for a backend no shipped tier covers, and falling back then serves
+/// that renderer's *name* above another backend's *numbers*. [`push_webgl`]
+/// warns about it; this does not warn again, because the WebGPU value path only
+/// runs when the WebGL patch ran, so warning in both would log one fact twice
+/// per launch.
+fn tier_device(renderer: &str, platform: Platform) -> crate::gpu::devices::DeviceRow {
+    crate::gpu::devices::device_for_renderer(renderer)
+        .unwrap_or_else(|| crate::gpu::devices::default_device(platform))
+}
+
+/// Append the WebGL surface patch, substituting one resolved profile.
+///
+/// Three layers, coarsest first, each overlaying the last — the precedence
+/// [`Persona::gpu`] documents:
+///
+/// 1. the capability tier the renderer string selects, which supplies every
+///    static device capability the page can read (per-context mutable state is
+///    deliberately left to the real backend — see `gpu-tier-gen`'s
+///    `SERVED_CAPS`);
+/// 2. `gpu`, a caller-pinned whole device, merged key-wise so a partial
+///    profile overrides only what it set;
+/// 3. `spec`, the finest-grained layer, pinning the two masked identity
+///    strings without restating a device.
+///
+/// `platform` is the OS the page will claim, and is only used to report a
+/// tier that could not run on it (a Win32 persona served Apple Metal values).
+///
+/// Under [`Strategy::Native`] nothing is emitted at all: the caller asked for
+/// the real backend, and a partial patch is what produces incoherent pairs
+/// like a spoofed viewport beside a real texture limit.
+fn push_webgl(
+    out: &mut String,
+    spec: Option<&WebglSpec>,
+    gpu: Option<&GpuProfile>,
+    platform: Platform,
+) {
     let strat = Surface::Webgl.resolve_strategy(spec.and_then(|s| s.strategy));
-    let (vendor, renderer) = match strat {
-        // Under Native the persona contributes nothing — pass null so the new
-        // IIFE delegates entirely to the hardcoded block (which still runs).
-        Strategy::Native => ("null".to_string(), "null".to_string()),
-        _ => (
-            json_or_null(spec.and_then(|s| s.unmasked_vendor.as_ref())),
-            json_or_null(spec.and_then(|s| s.unmasked_renderer.as_ref())),
-        ),
-    };
+    if strat == Strategy::Native {
+        return;
+    }
+    let renderer = resolved_renderer(spec, gpu, platform);
+    // `device_for_renderer` returns None when no shipped tier matches. Four
+    // tiers exist today (SwiftShader, Apple Metal, D3D11 FL11+, and one Intel
+    // Iris Pro 580 under Mesa/Vulkan), so what lands here is a caller-pinned
+    // renderer from a backend or device none of them covers — a desktop-GL
+    // string, or any Vulkan device but that one, whose limits ANGLE reads off
+    // the physical device. Falling back means serving that
+    // renderer's name above another backend's numbers, so it is warned about
+    // rather than done silently — the real fix is capturing that tier.
+    // The default renderer never reaches this path: it is drawn from a shipped
+    // row by construction.
+    if crate::gpu::devices::device_for_renderer(renderer).is_none() {
+        tracing::warn!(
+            renderer,
+            "no captured GPU tier matches this renderer; using the platform's \
+             default device, whose capability values come from a different backend"
+        );
+    }
+    let device = tier_device(renderer, platform);
+    let mut profile = crate::gpu::profile_for_tier(device.tier);
+    if let Some(pinned) = gpu {
+        profile = profile.overlay(pinned.clone());
+    }
+    // The vendor falls back to the device row only when neither the spec nor
+    // the pinned profile named one; overwriting unconditionally would undo the
+    // overlay a caller just asked for.
+    if let Some(vendor) = spec.and_then(|s| s.unmasked_vendor.clone()) {
+        profile.unmasked_vendor = vendor;
+    } else if profile.unmasked_vendor.is_empty() {
+        // Derived from the renderer actually being served, not from the row
+        // that matched it. One row now covers many cards — the D3D11 row's
+        // token matches Intel and AMD renderers because the *capability values*
+        // are shared — so taking the vendor from the row would answer
+        // `Google Inc. (NVIDIA)` beside an Intel renderer. The row is still the
+        // fallback for a renderer ANGLE did not format, and for the default
+        // renderers it derives exactly what the row itself declares.
+        profile.unmasked_vendor = crate::gpu::devices::vendor_for_renderer(renderer)
+            .unwrap_or_else(|| device.unmasked_vendor.to_string());
+    }
+    profile.unmasked_renderer = renderer.to_string();
+
+    if let Err(why) = crate::gpu::invariants::check_coherence(&profile) {
+        // Warn rather than fail: the caller may have pinned an odd value
+        // deliberately, and refusing to launch over a fingerprint detail is a
+        // worse failure than reporting one. Matches the header-coherence
+        // warn-on-skew precedent.
+        tracing::warn!(reason = %why, "GPU profile is internally incoherent");
+    }
+    // Same stance across surfaces: a tier that cannot exist on the OS the page
+    // claims (an Apple Metal renderer pinned under a Win32 persona, or a D3D11
+    // one under a Mac persona) is reported, not corrected — only capturing that
+    // platform's tier fixes it, and guessing one would pair a real name with
+    // another backend's numbers.
+    if let Some(why) = crate::gpu::invariants::platform_skew(platform, device.tier) {
+        tracing::warn!(reason = %why, "GPU profile disagrees with the persona's platform");
+    }
+
     out.push('\n');
-    out.push_str(
-        &WEBGL
-            .replace("WEBGL_VENDOR", &vendor)
-            .replace("WEBGL_RENDERER", &renderer),
-    );
+    out.push_str(&WEBGL.replace("WEBGL_PROFILE", &crate::gpu::profile_to_js(&profile)));
 }
 
 /// Append the WebGPU coherence patch. Adapter info defaults to values derived
-/// from the persona's WebGL renderer (or the hardcoded Intel default the
-/// webgl block falls back to), so navigator.gpu agrees with WebGL — unless
-/// the caller's [`WebgpuSpec`] explicitly overrides `vendor`/`architecture`.
-/// Omitted under `Native`.
+/// from [`resolved_renderer`] — the same string the WebGL patch serves, so
+/// `navigator.gpu` agrees with WebGL — unless the caller's [`WebgpuSpec`]
+/// explicitly overrides `vendor`/`architecture`. Omitted under `Native`.
 ///
-/// `spoof_webgl` reflects whether the WebGL value patch ran. When it is
-/// `false` (the native-WebGL opt-in — [`bootstrap_script_native_webgl`]) the
-/// real WebGL renderer passes through unpatched, so a spoofed WebGPU *value*
-/// adapter — derived from the WebGL renderer we did NOT apply, or the
-/// hardcoded default below — would disagree with the real GPU. That cross-API
-/// mismatch is the exact coherence tell the opt-in exists to avoid, so the
-/// value spoof (and any fabrication) is skipped too and the real
-/// `navigator.gpu` adapter passes through. An explicit `Block` (hide
-/// `navigator.gpu`) is renderer-neutral and stays honored regardless.
+/// `.limits` and `.features` default to the **measured** values of the same
+/// tier [`push_webgl`] draws its parameters from, resolved through
+/// [`webgpu_for_tier`](crate::gpu::webgpu_for_tier). Before that they came from
+/// the host: the adapter named the claimed GPU while its capabilities described
+/// the real one, the same shape of gap the tier tables closed for WebGL. A
+/// [`WebgpuSpec`] still overlays on top — limits key-wise, features wholesale —
+/// exactly as [`WebglSpec`] overlays the WebGL tier's values.
+///
+/// A tier with **no adapter** serves neither, leaving the host adapter's own
+/// untouched. Two ship: SwiftShader, whose Chrome resolves `requestAdapter()`
+/// to null, and the Mesa/Vulkan tier, probed on a Linux Chrome that does not
+/// enable WebGPU by default. Substituting another tier's numbers there would
+/// claim a GPU the persona just told WebGL it does not have.
+///
+/// `webgl_spoofed` reflects whether the WebGL value patch ran. When it is
+/// `false` — either the native-WebGL opt-in
+/// ([`bootstrap_script_native_webgl`]) or a `Strategy::Native` WebGL surface —
+/// the real WebGL renderer passes through unpatched, so a spoofed WebGPU
+/// *value* adapter — derived from the renderer we did NOT apply — would
+/// disagree with the real GPU. That cross-API mismatch is the exact coherence
+/// tell the opt-in exists to avoid, so the value spoof (and any fabrication)
+/// is skipped too and the real `navigator.gpu` adapter passes through. An
+/// explicit `Block` (hide `navigator.gpu`) is renderer-neutral and stays
+/// honored regardless.
 fn push_webgpu(
     out: &mut String,
     spec: Option<&WebgpuSpec>,
     webgl: Option<&WebglSpec>,
-    spoof_webgl: bool,
+    gpu: Option<&GpuProfile>,
+    webgl_spoofed: bool,
+    platform: Platform,
 ) {
-    use crate::persona::webgpu_adapter::adapter_for_renderer;
+    use crate::gpu::devices::adapter_for_renderer;
     let strat = Surface::Webgpu.resolve_strategy(spec.and_then(|s| s.strategy));
     if strat == Strategy::Native {
         return;
@@ -280,7 +436,7 @@ fn push_webgpu(
     // fabrication) when the real WebGL renderer is left unpatched (see the
     // doc comment above). A `Block` is renderer-neutral, so it is still
     // emitted.
-    if !spoof_webgl && strat != Strategy::Block {
+    if !webgl_spoofed && strat != Strategy::Block {
         return;
     }
 
@@ -300,12 +456,15 @@ fn push_webgpu(
         return;
     }
 
-    const DEFAULT_RENDERER: &str =
-        "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)";
-    let renderer = webgl
-        .and_then(|w| w.unmasked_renderer.as_deref())
-        .unwrap_or(DEFAULT_RENDERER);
+    // The same renderer the WebGL patch serves, resolved the same way. This
+    // used to fall back to a local Intel string while the WebGL side fell back
+    // to the Apple device row, so a persona that pinned no renderer reported
+    // an Apple GPU to WebGL and an Intel one to WebGPU.
+    let renderer = resolved_renderer(webgl, gpu, platform);
     let derived = adapter_for_renderer(renderer);
+    // ...and the same tier, so the adapter's capabilities describe the device
+    // its info names. `None` is the no-adapter tier — see this function's doc.
+    let measured = crate::gpu::webgpu_for_tier(tier_device(renderer, platform).tier);
 
     let vendor = spec
         .and_then(|s| s.vendor.clone())
@@ -315,13 +474,29 @@ fn push_webgpu(
         .unwrap_or(derived.architecture);
     let device = spec.and_then(|s| s.device.clone()).unwrap_or_default();
     let description = spec.and_then(|s| s.description.clone()).unwrap_or_default();
-    let limits = spec.and_then(|s| s.limits.as_ref());
-    let features = spec.and_then(|s| s.features.as_ref());
-    // Fabrication is only wired up when the caller opted in AND supplied
-    // enough to fabricate coherently (vendor + limits) — a bare
-    // `fabricate_when_absent: true` with nothing else is refused (no-op):
-    // this project never auto-invents fingerprint values (see `WebgpuSpec`
-    // rustdoc).
+    // Limits merge key-wise, the same shape `GpuProfile::overlay` gives the
+    // WebGL parameter maps: a caller pinning one limit overrides that one and
+    // keeps the tier's other thirty-five, rather than silently dropping them
+    // back to the host's. Features replace wholesale — a feature list is a set
+    // the caller either states in full or leaves alone, and the same wholesale
+    // rule already governs the WebGL extension lists.
+    let limits = match (&measured, spec.and_then(|s| s.limits.as_ref())) {
+        (None, None) => None,
+        (tier, pinned) => {
+            let mut merged = tier.as_ref().map(|m| m.limits.clone()).unwrap_or_default();
+            merged.extend(pinned.into_iter().flatten().map(|(k, v)| (k.clone(), *v)));
+            Some(merged)
+        }
+    };
+    let features = spec
+        .and_then(|s| s.features.clone())
+        .or_else(|| measured.map(|m| m.features));
+    // Fabrication stays gated on the caller's OWN vendor + limits. The tier's
+    // measured limits deliberately do not satisfy that half: fabrication
+    // invents an adapter on a host that has none, which is an explicit opt-in
+    // per surface, and letting table data unlock it would turn a bare
+    // `fabricate_when_absent: true` into exactly the auto behavior this project
+    // refuses (see the `WebgpuSpec` rustdoc).
     let fabricate = spec.is_some_and(|s| {
         s.fabricate_when_absent == Some(true) && s.vendor.is_some() && s.limits.is_some()
     });
@@ -349,14 +524,14 @@ fn push_webgpu(
                 "WEBGPU_LIMITS",
                 &limits.map_or_else(
                     || "null".to_string(),
-                    |l| serde_json::to_string(l).unwrap_or_else(|_| "null".into()),
+                    |l| serde_json::to_string(&l).unwrap_or_else(|_| "null".into()),
                 ),
             )
             .replace(
                 "WEBGPU_FEATURES",
                 &features.map_or_else(
                     || "null".to_string(),
-                    |f| serde_json::to_string(f).unwrap_or_else(|_| "null".into()),
+                    |f| serde_json::to_string(&f).unwrap_or_else(|_| "null".into()),
                 ),
             )
             .replace("WEBGPU_MODE", "\"value\"")
@@ -660,24 +835,372 @@ mod tests {
         );
     }
 
+    /// The JSON profile `push_webgl` substitutes, parsed back out of the
+    /// emitted JS. The patch ends with `})(<profile>);`, so the last `})(`
+    /// bounds it — no `})(` can appear inside JSON.
+    fn emitted_profile(js: &str) -> serde_json::Value {
+        let arg = js
+            .rsplit_once("})(")
+            .expect("the patch is an IIFE applied to the profile")
+            .1;
+        // Drop the `);` that closes the call; the profile itself ends in `}`.
+        let json = arg.trim().trim_end_matches([';', ')']);
+        serde_json::from_str(json).expect("the substituted argument is JSON")
+    }
+
+    /// Run `f` with a tracing subscriber capturing WARN and above, and return
+    /// what it logged. A coherence warning nobody can observe is
+    /// indistinguishable from no warning at all.
+    fn captured_warnings(f: impl FnOnce()) -> String {
+        use std::io::Write;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Default)]
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl Write for Sink {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Sink {
+            type Writer = Self;
+            fn make_writer(&'a self) -> Self {
+                self.clone()
+            }
+        }
+
+        let sink = Sink::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(sink.clone())
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+        tracing::subscriber::with_default(subscriber, f);
+        let bytes = sink.0.lock().unwrap().clone();
+        String::from_utf8(bytes).expect("log output is utf-8")
+    }
+
     #[test]
-    fn webgl_native_passes_null_and_keeps_hardcoded_block() {
-        // No webgl spec → Native resolution → IIFE args null, but the
-        // hardcoded fallback block (37445/37446) still present.
-        let script = bootstrap_script(&Persona::default(), &mock_identity());
+    fn webgl_patch_substitutes_a_complete_profile() {
+        let mut out = String::new();
+        push_webgl(&mut out, None, None, Platform::MacIntel);
+        // The profile arrives as one JSON object, not a ladder of literals.
+        assert!(out.contains("\"params2\""), "got: {out}");
+        assert!(out.contains("\"precision\""), "got: {out}");
+        assert!(out.contains("\"extensions1\""), "got: {out}");
+        assert!(out.contains("\"extensions2\""), "got: {out}");
         assert!(
-            s_has_webgl_iife_null(&script),
-            "webgl IIFE args should be null"
-        );
-        assert!(
-            script.contains("37445"),
-            "hardcoded webgl fallback block must remain"
+            !out.contains("WEBGL_PROFILE"),
+            "placeholder was not replaced"
         );
     }
 
-    fn s_has_webgl_iife_null(s: &str) -> bool {
-        // The appended webgl IIFE ends with its args; null both => `})(null, null);`
-        s.contains("})(null, null);")
+    #[test]
+    fn webgl_patch_no_longer_hardcodes_the_impossible_viewport() {
+        // The shipped bug: a 32767 viewport beside an unpatched 8192 texture
+        // max. The value may legitimately appear if a tier measures it, but
+        // never as a bare literal in the JS source.
+        assert!(
+            !WEBGL.contains("32767"),
+            "webgl.js must not hardcode viewport dimensions"
+        );
+    }
+
+    #[test]
+    fn webgl_patch_fills_the_draw_buffer_gap_from_the_served_cap() {
+        // Presence of a DRAW_BUFFERn enum comes from the real backend, so a
+        // served MAX_DRAW_BUFFERS of 8 over a 6-buffer backend leaves
+        // DRAW_BUFFER6/7 answering null — the default pairing, since
+        // `StealthProfile::spoofed()` launches on SwiftShader. The patch fills
+        // that gap; the behavior is proven in a real browser by
+        // `zendriver/tests/gpu_profile.rs`, and this guards the JS that does
+        // it against being deleted as dead weight.
+        assert!(
+            WEBGL.contains("drawBufferGap"),
+            "webgl.js no longer fills the DRAW_BUFFERn gap"
+        );
+        assert!(
+            WEBGL.contains("MAX_DRAW_BUFFERS"),
+            "the gap must be driven off the SERVED cap, not a hardcoded count"
+        );
+        assert!(
+            !WEBGL.contains("34853"),
+            "DRAW_BUFFERn enum numbers come from the profile's enum table, not \
+             from literals in the JS"
+        );
+    }
+
+    #[test]
+    fn webgl_patch_serves_different_extension_lists_per_context_version() {
+        let mut out = String::new();
+        push_webgl(&mut out, None, None, Platform::MacIntel);
+        let profile = emitted_profile(&out);
+        let list = |k: &str| -> Vec<String> {
+            profile[k]
+                .as_array()
+                .unwrap_or_else(|| panic!("{k} must be a list"))
+                .iter()
+                .map(|v| v.as_str().expect("extension names are strings").to_string())
+                .collect()
+        };
+        let (e1, e2) = (list("extensions1"), list("extensions2"));
+        assert_ne!(
+            e1, e2,
+            "one list served to both prototypes claims extensions a real \
+             WebGL2 context cannot have"
+        );
+        assert!(
+            e1.iter().any(|e| e == "OES_texture_float"),
+            "the WebGL1 list must carry the core-promoted entries, got: {e1:?}"
+        );
+        assert!(
+            !e2.iter().any(|e| e == "OES_texture_float"),
+            "OES_texture_float is core in WebGL2; claiming it is a tell"
+        );
+    }
+
+    #[test]
+    fn webgl_patch_under_native_strategy_emits_nothing() {
+        let mut out = String::new();
+        push_webgl(
+            &mut out,
+            Some(&WebglSpec {
+                strategy: Some(Strategy::Native),
+                ..Default::default()
+            }),
+            None,
+            Platform::MacIntel,
+        );
+        assert!(
+            out.is_empty(),
+            "Native must leave the real backend alone, got: {out}"
+        );
+    }
+
+    // --- persona.gpu wiring + platform skew ---------------------------------
+
+    #[test]
+    fn a_caller_pinned_gpu_profile_reaches_the_emitted_js() {
+        // `Persona::gpu` used to be inert: a caller pinning a whole device was
+        // silently ignored and got the tier's values verbatim.
+        let mut pinned = GpuProfile::empty();
+        pinned
+            .params_webgl2
+            .insert("MAX_TEXTURE_SIZE".into(), crate::GlParam::Int(4096));
+        pinned.unmasked_vendor = "Google Inc. (NVIDIA)".into();
+        pinned.unmasked_renderer = "ANGLE (NVIDIA GeForce RTX 4090)".into();
+
+        let mut out = String::new();
+        push_webgl(&mut out, None, Some(&pinned), Platform::Win32);
+        let profile = emitted_profile(&out);
+
+        assert_eq!(profile["params2"]["MAX_TEXTURE_SIZE"]["v"], 4096);
+        assert_eq!(
+            profile["params2"]["UNMASKED_RENDERER_WEBGL"]["v"],
+            "ANGLE (NVIDIA GeForce RTX 4090)"
+        );
+        assert_eq!(
+            profile["params2"]["UNMASKED_VENDOR_WEBGL"]["v"],
+            "Google Inc. (NVIDIA)"
+        );
+        // Everything it did not pin still comes from the tier, so one pinned
+        // value cannot hollow out the rest of the device.
+        assert!(
+            profile["params2"]["MAX_VIEWPORT_DIMS"]["v"].is_array(),
+            "unpinned params must survive the overlay"
+        );
+    }
+
+    #[test]
+    fn the_webgl_spec_strings_overlay_a_pinned_gpu_profile() {
+        // Documented precedence: tier, then `Persona::gpu`, then the
+        // finer-grained `WebglSpec` on top.
+        let mut pinned = GpuProfile::empty();
+        pinned.unmasked_vendor = "Google Inc. (NVIDIA)".into();
+        pinned.unmasked_renderer = "ANGLE (NVIDIA GeForce RTX 4090)".into();
+        let spec = WebglSpec {
+            strategy: Some(Strategy::Value),
+            unmasked_vendor: Some("Google Inc. (Apple)".into()),
+            unmasked_renderer: Some("ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro)".into()),
+        };
+
+        let mut out = String::new();
+        push_webgl(&mut out, Some(&spec), Some(&pinned), Platform::MacIntel);
+        let profile = emitted_profile(&out);
+
+        assert_eq!(
+            profile["params2"]["UNMASKED_RENDERER_WEBGL"]["v"],
+            "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro)"
+        );
+        assert_eq!(
+            profile["params2"]["UNMASKED_VENDOR_WEBGL"]["v"],
+            "Google Inc. (Apple)"
+        );
+    }
+
+    #[test]
+    fn a_non_mac_persona_that_pins_nothing_gets_a_coherent_default() {
+        // The default used to be the Apple Metal row unconditionally, so every
+        // non-Mac persona reported an Apple renderer beside a Win32 or Linux
+        // navigator.platform — a pair Chrome cannot produce, which the skew
+        // check flagged on every launch. The default is now drawn from the
+        // platform, so the common case is coherent and silent.
+        //
+        // The expected backend differs per platform because the captured tiers
+        // do: Windows has a D3D11 tier and Linux a Mesa/Vulkan one. Linux used
+        // to keep the platform-neutral software rasterizer here, which was the
+        // last default that was merely *possible* rather than ordinary.
+        for (platform, backend) in [
+            (Platform::Win32, "D3D11"),
+            (Platform::LinuxX86_64, "Vulkan"),
+        ] {
+            let mut out = String::new();
+            let logs = captured_warnings(|| push_webgl(&mut out, None, None, platform));
+            assert!(
+                logs.is_empty(),
+                "the default profile must not warn on {platform:?}, got: {logs:?}"
+            );
+            let renderer = emitted_profile(&out)["params2"]["UNMASKED_RENDERER_WEBGL"]["v"]
+                .as_str()
+                .expect("renderer string")
+                .to_string();
+            assert!(
+                renderer.contains(backend),
+                "{platform:?} must default to a renderer Chrome can report on it, got {renderer}"
+            );
+            assert!(
+                !renderer.contains("Apple"),
+                "{platform:?} must not default to an Apple renderer, got {renderer}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_mac_persona_that_pins_nothing_still_gets_the_apple_row() {
+        // Choosing the renderer string is platform-derived, not a retreat to
+        // software everywhere: macOS keeps the real hardware row.
+        let mut out = String::new();
+        push_webgl(&mut out, None, None, Platform::MacIntel);
+        let renderer = emitted_profile(&out)["params2"]["UNMASKED_RENDERER_WEBGL"]["v"]
+            .as_str()
+            .expect("renderer string")
+            .to_string();
+        assert!(
+            renderer.contains("Apple") && renderer.contains("Metal"),
+            "macOS must keep the Apple Metal row, got {renderer}"
+        );
+    }
+
+    #[test]
+    fn a_pinned_d3d11_renderer_is_served_with_its_own_vendor() {
+        // End of the chain the unit test in `gpu::devices` covers: what the
+        // page actually reads. The D3D11 row supplies the numbers for every
+        // FL11+ card, so pinning an Intel renderer must yield Intel's *name*
+        // above D3D11's *values* — not the row's NVIDIA name, which is what
+        // was served (silently, since a matched row raises no warning) before
+        // the vendor was derived from the renderer.
+        let spec = WebglSpec {
+            strategy: None,
+            unmasked_vendor: None,
+            unmasked_renderer: Some(
+                "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)".into(),
+            ),
+        };
+        let mut out = String::new();
+        let logs = captured_warnings(|| push_webgl(&mut out, Some(&spec), None, Platform::Win32));
+        let p = emitted_profile(&out);
+        assert_eq!(
+            p["params2"]["UNMASKED_VENDOR_WEBGL"]["v"], "Google Inc. (Intel)",
+            "an Intel renderer must not be served the D3D11 row's NVIDIA vendor"
+        );
+        assert_eq!(
+            p["params2"]["MAX_TEXTURE_SIZE"]["v"], 16384,
+            "it must still get the shared D3D11 tier's measured values"
+        );
+        assert!(
+            logs.is_empty(),
+            "an Intel D3D11 renderer under Win32 is coherent and must not warn, got: {logs:?}"
+        );
+    }
+
+    #[test]
+    fn a_windows_persona_pinned_to_the_metal_tier_still_warns_about_the_skew() {
+        // A caller can still pair them deliberately, and that stays a warning
+        // rather than an error — the skew check must keep reaching push_webgl
+        // now that the default no longer trips it.
+        let spec = WebglSpec {
+            strategy: None,
+            unmasked_vendor: None,
+            unmasked_renderer: Some(
+                "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)".into(),
+            ),
+        };
+        let logs = captured_warnings(|| {
+            let mut out = String::new();
+            push_webgl(&mut out, Some(&spec), None, Platform::Win32);
+        });
+        assert!(
+            logs.contains("Win32") && logs.contains("MetalMacos"),
+            "the platform/tier skew must be reported, got: {logs:?}"
+        );
+    }
+
+    #[test]
+    fn a_mac_persona_on_the_metal_tier_is_quiet() {
+        let logs = captured_warnings(|| {
+            let mut out = String::new();
+            push_webgl(&mut out, None, None, Platform::MacIntel);
+        });
+        assert!(
+            logs.is_empty(),
+            "a coherent platform/tier pair must not warn, got: {logs:?}"
+        );
+    }
+
+    #[test]
+    fn the_bootstrap_passes_the_personas_claimed_platform_to_the_webgl_profile() {
+        // The default device is chosen against the OS the *page* claims, not
+        // the host's: the mock identity is MacIntel, so only the persona's own
+        // Win32 can move the default off the Apple Metal row. Observed through
+        // the emitted renderer rather than a warning, because the coherent
+        // default no longer warns at all.
+        let renderer_for = |platform: Option<Platform>| {
+            let persona = Persona {
+                platform,
+                ..Persona::default()
+            };
+            let script = bootstrap_script(&persona, &mock_identity());
+            let line = script
+                .lines()
+                .find(|l| l.starts_with("})({") && l.contains("\"params1\":"))
+                .expect("substituted WebGL profile");
+            let profile: serde_json::Value = serde_json::from_str(
+                line.trim_start_matches("})(")
+                    .trim_end_matches(';')
+                    .trim_end_matches(')'),
+            )
+            .expect("profile json");
+            profile["params2"]["UNMASKED_RENDERER_WEBGL"]["v"]
+                .as_str()
+                .expect("renderer string")
+                .to_string()
+        };
+
+        let win = renderer_for(Some(Platform::Win32));
+        assert!(
+            win.contains("D3D11"),
+            "the persona's Win32 must reach the WebGL profile, got {win}"
+        );
+        // Unset falls through to the identity's MacIntel, which keeps Apple.
+        let host = renderer_for(None);
+        assert!(
+            host.contains("Apple"),
+            "an unset persona platform must fall through to the host's, got {host}"
+        );
+        assert_ne!(win, host, "the platform must actually change the default");
     }
 
     // --- opt-in native-WebGL bootstrap (Task 10) ----------------------------
@@ -773,6 +1296,56 @@ mod tests {
         assert!(
             s.contains("navigator, 'gpu'"),
             "explicit webgpu Block should still shadow navigator.gpu under native-webgl"
+        );
+    }
+
+    #[test]
+    fn a_native_webgl_surface_also_omits_the_webgpu_value_spoof() {
+        // Same reasoning as the profile-level opt-in above, reached the other
+        // way: `Strategy::Native` on the WebGL surface leaves the host's real
+        // renderer in place, so a default (`Value`) WebGPU adapter would report
+        // an Apple GPU beside whatever the host really has — a Linux/Intel box
+        // would answer `getParameter(UNMASKED_RENDERER_WEBGL)` honestly while
+        // `navigator.gpu` claimed `apple`/`metal-3`.
+        let p = Persona {
+            webgl: Some(WebglSpec {
+                strategy: Some(Strategy::Native),
+                ..Default::default()
+            }),
+            ..Persona::default()
+        };
+        let s = bootstrap_script(&p, &mock_identity());
+        assert!(
+            !s.contains("getSupportedExtensions"),
+            "a Native WebGL surface must emit no WebGL patch"
+        );
+        assert!(
+            !s.contains("GPUAdapter.prototype"),
+            "a Native WebGL surface must also omit the WebGPU value spoof, else \
+             navigator.gpu names a GPU WebGL never claimed"
+        );
+    }
+
+    #[test]
+    fn a_native_webgl_surface_still_honors_an_explicit_webgpu_block() {
+        // Blocking `navigator.gpu` names no GPU at all, so it cannot contradict
+        // the real WebGL renderer and stays honored.
+        let p = Persona {
+            webgl: Some(WebglSpec {
+                strategy: Some(Strategy::Native),
+                ..Default::default()
+            }),
+            webgpu: Some(WebgpuSpec {
+                strategy: Some(Strategy::Block),
+                ..Default::default()
+            }),
+            ..Persona::default()
+        };
+        let s = bootstrap_script(&p, &mock_identity());
+        assert!(
+            s.contains("navigator, 'gpu'"),
+            "an explicit webgpu Block is renderer-neutral and must survive a \
+             Native WebGL surface"
         );
     }
 
@@ -926,6 +1499,94 @@ mod tests {
     }
 
     #[test]
+    fn webgl_and_webgpu_report_the_same_gpu_with_no_persona_spec() {
+        // The two surfaces used to fall back to different renderers: the WebGL
+        // block to the Apple device row, the WebGPU block to a local Intel
+        // string. A page reading both saw an Apple GPU and an Intel adapter in
+        // the same document — a cross-API tell in the *default* configuration.
+        //
+        // Every platform, not just the mock identity's: the default renderer is
+        // platform-derived, so pinning only the mock's `MacIntel` exercised the
+        // Apple branch alone. The second split this caught: `LinuxX86_64` used
+        // to default to the SwiftShader row (as `Win32` did before the D3D11
+        // tier was captured), whose renderer matched none of
+        // `adapter_for_renderer`'s branches and fell through to the Intel
+        // catch-all — an Intel WebGPU adapter beside a SwiftShader WebGL
+        // renderer, which is the same cross-API contradiction one layer down.
+        // Linux now defaults to the captured Mesa/Vulkan row, where Intel is
+        // the honest answer rather than a fall-through.
+        const VENDOR_TOKENS: [&str; 4] = ["intel", "nvidia", "amd", "apple"];
+        for platform in [Platform::MacIntel, Platform::Win32, Platform::LinuxX86_64] {
+            let persona = Persona {
+                platform: Some(platform),
+                ..Persona::default()
+            };
+            let s = bootstrap_script(&persona, &mock_identity());
+            let row = crate::gpu::devices::default_device(platform);
+            assert!(
+                s.contains(row.unmasked_renderer),
+                "{platform:?} must serve its default row's renderer to WebGL"
+            );
+            assert!(
+                s.contains("GPUAdapter.prototype"),
+                "{platform:?} must still emit the WebGPU adapter patch"
+            );
+            // The adapter derived from that renderer has to be the one the row
+            // itself declares: the row is the single ground truth both surfaces
+            // answer from, so a derivation that disagrees with it is by
+            // definition a second GPU.
+            let derived = crate::gpu::devices::adapter_for_renderer(row.unmasked_renderer);
+            assert_eq!(
+                derived.vendor, row.webgpu_vendor,
+                "{platform:?}: WebGPU vendor derived from {} disagrees with its own device row",
+                row.unmasked_renderer
+            );
+            assert_eq!(
+                derived.architecture, row.webgpu_architecture,
+                "{platform:?}: WebGPU architecture derived from {} disagrees with its own device \
+                 row",
+                row.unmasked_renderer
+            );
+            if !row.webgpu_vendor.is_empty() {
+                assert!(
+                    s.contains(&format!("\"{}\"", row.webgpu_vendor)),
+                    "{platform:?} must emit its row's WebGPU vendor"
+                );
+            }
+            // And nothing in the emitted script may name a *different* GPU
+            // vendor than the one that row declares.
+            for token in VENDOR_TOKENS {
+                if token == row.webgpu_vendor {
+                    continue;
+                }
+                assert!(
+                    !s.contains(&format!("\"{token}\"")),
+                    "{platform:?} serves {} to WebGL but names {token:?} to WebGPU",
+                    row.unmasked_renderer
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_pinned_gpu_profile_drives_the_webgpu_adapter_too() {
+        // `Persona::gpu` is documented as one coherent GPU identity covering
+        // both surfaces, so its renderer has to reach the WebGPU adapter as
+        // well — not just the WebGL values.
+        let mut pinned = GpuProfile::empty();
+        pinned.unmasked_renderer = "ANGLE (NVIDIA, NVIDIA GeForce RTX 4090, D3D11)".into();
+        let p = Persona {
+            gpu: Some(pinned),
+            ..Persona::default()
+        };
+        let s = bootstrap_script(&p, &mock_identity());
+        assert!(
+            s.contains("\"nvidia\"") && s.contains("\"lovelace\""),
+            "the WebGPU adapter must derive from the pinned renderer"
+        );
+    }
+
+    #[test]
     fn webgpu_objects_built_via_prototype_helper_for_instanceof() {
         // GPU objects must be built through the __zdGpuProto prototype helper so
         // `instanceof` holds — not the old bare `var info = { vendor: ... }`
@@ -1015,7 +1676,9 @@ mod tests {
     #[test]
     fn webgpu_limits_and_features_decorate_when_supplied() {
         let mut limits = std::collections::BTreeMap::new();
-        limits.insert("maxTextureDimension2D".to_string(), 16384u64);
+        // Deliberately not the Metal tier's own 16384, so the assertion below
+        // distinguishes "the caller won" from "the tier happened to agree".
+        limits.insert("maxTextureDimension2D".to_string(), 999u64);
         let p = Persona {
             webgpu: Some(WebgpuSpec {
                 limits: Some(limits),
@@ -1033,19 +1696,72 @@ mod tests {
         // "absent". What Rust actually varies is the substituted argument
         // values passed into the IIFE; assert those instead.
         assert!(
-            s.contains(
-                r#"{"maxTextureDimension2D":16384}, ["texture-compression-bc"], "value", false);"#
-            ),
-            "limits + features substituted into the invocation args: {s}"
+            s.contains(r#""maxTextureDimension2D":999"#),
+            "a caller-pinned limit must beat the tier's measured one: {s}"
+        );
+        // ...and pinning one limit must not drop the other thirty-five back to
+        // the host's. `maxBufferSize` is the Metal tier's, which this persona
+        // (a MacIntel identity, no renderer pinned) resolves.
+        assert!(
+            s.contains(r#""maxBufferSize":4294967292"#),
+            "limits merge key-wise, so an unpinned limit keeps the tier's value: {s}"
+        );
+        // Features replace wholesale — a feature list is a set the caller
+        // either states in full or leaves alone.
+        assert!(
+            s.contains(r#"["texture-compression-bc"], "value", false);"#),
+            "caller-supplied features replace the tier's list entirely: {s}"
+        );
+        assert!(
+            !s.contains("texture-compression-astc"),
+            "the tier's own features must not survive beside a caller's list: {s}"
         );
     }
 
     #[test]
-    fn webgpu_limits_and_features_absent_pass_null() {
+    fn webgpu_limits_and_features_default_to_the_tiers_measured_values() {
+        // The gap this closes: with nothing supplied these were `null`, so the
+        // adapter named the claimed GPU (vendor/architecture derived from the
+        // spoofed renderer) while `.limits` and `.features` still described the
+        // host's real one.
         let s = bootstrap_script(&Persona::default(), &mock_identity());
         assert!(
+            s.contains(r#""maxBufferSize":4294967292"#),
+            "a MacIntel persona must serve the Metal tier's measured limits: {s}"
+        );
+        assert!(
+            s.contains("\"texture-compression-astc\""),
+            "...and its measured features: {s}"
+        );
+        assert!(
+            !s.contains(", null, null, \"value\""),
+            "neither argument may still be null on a tier that has an adapter: {s}"
+        );
+    }
+
+    #[test]
+    fn a_tier_with_no_webgpu_adapter_serves_neither_limits_nor_features() {
+        // A `LinuxX86_64` persona resolves the Mesa/Vulkan row, probed on a
+        // Chrome that does not enable WebGPU by default — so there is nothing
+        // measured to serve, and `webgpu.js` leaves the host adapter's own
+        // values alone, exactly as it does for SwiftShader.
+        // Substituting another tier's numbers would claim a GPU the persona
+        // just told WebGL it does not have.
+        let p = Persona {
+            platform: Some(Platform::LinuxX86_64),
+            ..Persona::default()
+        };
+        let s = bootstrap_script(&p, &mock_identity());
+        assert!(
             s.contains(r#", null, null, "value", false);"#),
-            "limits/features args are JS null when unset: {s}"
+            "a tier with no adapter must pass JS null for both: {s}"
+        );
+        // Matched with the quote and colon so this reads only SERIALIZED limits
+        // — `webgpu.js` names limits in its own comments, and a substring match
+        // on the bare key would be tripped by prose rather than by data.
+        assert!(
+            !s.contains("\"maxBufferSize\":"),
+            "no other tier's limits may leak in where the tier measured none: {s}"
         );
     }
 
@@ -1103,8 +1819,9 @@ mod tests {
         };
         let s = bootstrap_script(&p, &mock_identity());
         assert!(
-            s.contains(r#"{"maxBufferSize":1073741824}, null, "value", true);"#),
-            "fabricate arg substituted true when vendor+limits both set: {s}"
+            s.contains(r#""maxBufferSize":1073741824"#) && s.contains(r#""value", true);"#),
+            "fabricate arg substituted true when vendor+limits both set, with the caller's \
+             limit beating the tier's: {s}"
         );
         assert!(
             s.contains("NotSupportedError"),
@@ -1238,7 +1955,7 @@ mod tests {
         );
         // tokens still substituted, not left raw:
         assert!(
-            !s.contains("SEED") && !s.contains("WEBGL_VENDOR"),
+            !s.contains("SEED") && !s.contains("WEBGL_PROFILE"),
             "tokens substituted"
         );
     }
@@ -1294,8 +2011,7 @@ mod tests {
         let script = bootstrap_script(&p, &mock_identity());
         for tok in [
             "SEED",
-            "WEBGL_VENDOR",
-            "WEBGL_RENDERER",
+            "WEBGL_PROFILE",
             "FONT_ALLOW",
             "WEBRTC_POLICY",
             "WEBRTC_FAKE_IP",
@@ -1316,5 +2032,43 @@ mod tests {
                 "unsubstituted token `{tok}` left in bootstrap"
             );
         }
+    }
+
+    #[test]
+    fn webgpu_serves_its_values_through_the_real_classes_not_substitutes() {
+        // Measured on Chrome 150: a real `adapter.limits` is a
+        // GPUSupportedLimits instance with zero own properties, and
+        // `adapter.features` a GPUSupportedFeatures whose members live on its
+        // prototype. Handing back a plain object and a `Set` answers every
+        // value correctly and is still caught by `constructor.name` alone — so
+        // serving the tier's measured values that way would trade a subtle
+        // mismatch for four blatant ones. The patch overrides those two
+        // prototypes in place instead; this pins that it still does.
+        let s = bootstrap_script(&Persona::default(), &mock_identity());
+        assert!(
+            s.contains("GPUSupportedLimits.prototype")
+                && s.contains("GPUSupportedFeatures.prototype"),
+            "the values must be served by overriding the real classes' prototypes: {s}"
+        );
+        for setlike in [
+            "'has'",
+            "'keys'",
+            "'values'",
+            "'entries'",
+            "'forEach'",
+            "'size'",
+        ] {
+            assert!(
+                s.contains(setlike),
+                "every setlike member has to be overridden, or `features.{setlike}` contradicts \
+                 the ones that were: {s}"
+            );
+        }
+        // The substitutes survive only as the fallback for a page with no
+        // WebGPU IDL at all, which is where there is no real class to imitate.
+        assert!(
+            s.contains("featuresServed") && s.contains("limitsServed"),
+            "the plain-object/Set path must stay gated on the real classes being absent: {s}"
+        );
     }
 }

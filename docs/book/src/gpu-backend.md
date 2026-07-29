@@ -57,17 +57,37 @@ identities across a fleet, `Native` is not that tool; look at
 for caller-supplied adapter values instead. `Native` makes the GPU surface
 *coherent*; it does not give you *control* over what it says.
 
-## No automatic fallback
+## The launch is validated, and there is no automatic fallback
 
-If `Native` is selected and Chrome's GPU process cannot start — no GPU
-present, a crashed GPU process, a missing sandbox — the launch fails with
-[`BrowserError::GpuBackendUnavailable`] rather than silently retrying with a
-software rasterizer. That's deliberate: falling back automatically would
-restore the same incoherent, mixed software/hardware fingerprint that
-choosing a backend explicitly exists to avoid. If a launch might land on a
-GPU-less host, catch `GpuBackendUnavailable` (along with `DevtoolsParse` and
-`EarlyExit`, the other failure shapes a missing GPU process produces) and
-retry with `GpuBackend::SwiftShader` or `GpuBackend::Disabled` yourself.
+Chrome *starting* is not evidence that it got a GPU. On a GPU-less Ubuntu 24
+VM, Chrome 150 launched successfully under `Native` and then returned `null`
+from both `canvas.getContext('webgl')` and `getContext('webgl2')`. That is a
+browser strictly **more** detectable than the default — a missing WebGL
+context is one of the oldest and cheapest headless tells, and the stealth
+WebGL patch cannot repair it, because it patches prototypes and there is no
+context to patch.
+
+So `Native` verifies the launch. After the CDP handshake, zendriver asks
+Chrome what it actually initialized (`SystemInfo.getInfo`, a browser-level
+domain — no page, no navigation, one round-trip) and reads
+`gpu.featureStatus.webgl`. Measured on Chrome 150.0.7871.186 on the darwin
+dev host: `Native` reports `enabled`, `SwiftShader` reports
+`enabled_readback`, `Disabled` reports `disabled_off`. Anything but a
+hardware status terminates the Chrome that was just spawned and fails the
+launch with [`BrowserError::GpuBackendUnavailable`].
+
+If the GPU cannot be *verified* — `SystemInfo.getInfo` unavailable, or
+answering with a status string zendriver does not recognize — the launch logs
+a warning and proceeds. A missing diagnostic API is not evidence of a missing
+GPU, and refusing to launch over one would be worse than the problem the
+check addresses.
+
+There is no fallback. Failing rather than retrying on SwiftShader is
+deliberate: falling back automatically would serve a software rasterizer's
+values under a "native" label — the same incoherent, mixed software/hardware
+fingerprint that choosing a backend explicitly exists to avoid. If a launch
+might land on a GPU-less host, catch `GpuBackendUnavailable` and retry with
+`GpuBackend::SwiftShader` or `GpuBackend::Disabled` yourself.
 
 [`BrowserError::GpuBackendUnavailable`]: https://docs.rs/zendriver/latest/zendriver/enum.BrowserError.html
 
@@ -93,11 +113,36 @@ context exist at all" question applies to it.
 | WebGL `MAX_TEXTURE_SIZE` | 8192 | 16384 |
 | WebGL extension count | 30 | 36 |
 
-`MAX_TEXTURE_SIZE` and the other numeric WebGL caps are not read from the
-GPU — ANGLE computes them from constants branched on backend and feature
-tier, not from device queries. That's why the SwiftShader row above is
-identical regardless of what real GPU sits underneath: it's a software
-rasterizer, so there's no real device to query.
+Whether `MAX_TEXTURE_SIZE` and the other numeric WebGL caps are read from the
+GPU **depends on the backend**, and that is what decides how far one probe
+generalizes:
+
+- **D3D11 and Metal-on-macOS: not read from the device.** ANGLE computes them
+  from constants branched on the feature level (`renderer11_utils.cpp`) or
+  from plain compile-time constants (`DisplayMtl.mm`'s `TARGET_OS_OSX` arm), so
+  one probe covers every card on that backend.
+- **SwiftShader: no device to read.** It is a software rasterizer, which is why
+  the row above is identical regardless of what real GPU sits underneath.
+- **Vulkan: read straight off the device.** `vk_caps_utils.cpp` fills its caps
+  from `VkPhysicalDeviceLimits`, so a Linux probe describes that GPU under that
+  Mesa build and nothing else. zendriver's Vulkan tier is named for its device
+  for exactly this reason (Intel Iris Pro Graphics 580, Mesa 25.2.8), and
+  covering another Linux GPU means capturing it.
+
+The one part of the SwiftShader row that *is* host-specific is the renderer
+string. Re-probing the same flags on Ubuntu 24 (Chrome 150.0.7871.114)
+reproduced every capability value above, but reported `SwiftShader Device
+(Subzero)` rather than `(LLVM 10.0.0)` — SwiftShader picks its JIT backend at
+build time and Chrome prints the choice. Windows reports Subzero too (measured
+on Windows 10.0.21996, Chrome 150.0.7871.186).
+
+The spoofed profile now serves neither string by default on any platform: a
+`Win32` persona resolves the captured D3D11 tier and a `LinuxX86_64` persona
+the captured Mesa/Vulkan one, both real hardware rather than a software
+rasterizer. A SwiftShader row is reached only by pinning such a renderer
+yourself, and which of the two builds you land on then follows the persona's
+platform. See
+[the WebGL section of the fingerprint chapter](./fingerprint.md#webgl-full-surface-value-spoof-resolved-from-measured-tiers).
 
 ## `navigator.gpu` visibility is governed by the page, not by this option
 

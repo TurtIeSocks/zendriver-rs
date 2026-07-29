@@ -41,4 +41,7 @@ fastrand                      = "2"
 [dev-dependencies]
 tokio-test.workspace          = true
 insta.workspace               = true
+# Capture `tracing::warn!` output so the coherence warnings can be asserted on
+# (a warning nobody can observe is indistinguishable from no warning).
+tracing-subscriber.workspace  = true
 zendriver-transport           = { workspace = true, features = ["testing"] }

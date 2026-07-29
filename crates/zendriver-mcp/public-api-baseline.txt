@@ -22,7 +22,9 @@ pub use zendriver::FetcherChannel
 pub use zendriver::FetcherError
 pub use zendriver::FetcherPhase
 pub use zendriver::FetcherProgress
+pub use zendriver::GlParam
 pub use zendriver::GpuBackend
+pub use zendriver::GpuProfile
 pub use zendriver::HostMatcher
 pub use zendriver::ImpervaBypass
 pub use zendriver::ImpervaClearanceOutcome
@@ -38,6 +40,7 @@ pub use zendriver::PausedSession
 pub use zendriver::Persona
 pub use zendriver::PersonaBuilder
 pub use zendriver::Platform
+pub use zendriver::Provenance
 pub use zendriver::RequestInfo
 pub use zendriver::RequestOverrides
 pub use zendriver::RequestStage
@@ -46,6 +49,7 @@ pub use zendriver::ResponseInfo
 pub use zendriver::ResponseOverrides
 pub use zendriver::Seed
 pub use zendriver::SessionHandle
+pub use zendriver::ShaderPrecision
 pub use zendriver::Strategy
 pub use zendriver::Surface
 pub use zendriver::TargetInfo
@@ -4064,16 +4068,21 @@ impl<V, T> ppv_lite86::types::VZip<V> for zendriver::screenshot::ScreenshotBuild
 pub fn zendriver::screenshot::ScreenshotBuilder<'tab>::vzip(self) -> V
 pub mod zendriver::stealth
 pub use zendriver::stealth::Fingerprint
+pub use zendriver::stealth::GlParam
 pub use zendriver::stealth::GpuBackend
+pub use zendriver::stealth::GpuProfile
 pub use zendriver::stealth::InputProfile
 pub use zendriver::stealth::Persona
 pub use zendriver::stealth::PersonaBuilder
 pub use zendriver::stealth::Platform
+pub use zendriver::stealth::Provenance
 pub use zendriver::stealth::Seed
+pub use zendriver::stealth::ShaderPrecision
 pub use zendriver::stealth::StealthProfile
 pub use zendriver::stealth::Strategy
 pub use zendriver::stealth::Surface
 pub use zendriver::stealth::UserAgentMetadata
+pub use zendriver::stealth::WebglSpec
 pub use zendriver::stealth::WebgpuSpec
 pub mod zendriver::storage
 pub struct zendriver::storage::Storage
