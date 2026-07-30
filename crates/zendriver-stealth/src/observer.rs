@@ -134,7 +134,20 @@ impl TargetObserver for StealthObserver {
                 json!({
                     "userAgent": &self.fingerprint.ua_string,
                     "acceptLanguage": accept_language,
-                    "platform": self.fingerprint.platform.ch_platform(),
+                    // `js_string()`, NOT `ch_platform()`. This CDP parameter is defined as "the
+                    // platform navigator.platform should return", so it takes the legacy JS value
+                    // (`Win32` / `MacIntel` / `Linux x86_64`). The Client-Hints spelling
+                    // (`Windows` / `macOS` / `Linux`) belongs to `userAgentMetadata.platform`,
+                    // which is sent separately just below and derives it in `Fingerprint::new`.
+                    //
+                    // Sending the CH spelling here made every session report a
+                    // `navigator.platform` no real browser emits. It was invisible under
+                    // `spoofed`, whose bootstrap re-patches `navigator.platform` from
+                    // `platformJs` and so happened to paper over it — but the bootstrap is
+                    // deliberately EMPTY for `Off`/`Native` (see `bootstrap` above), leaving
+                    // `native` profiles presenting `"macOS"` where Chrome reports `"MacIntel"`.
+                    // Measured against a real Chrome build, not inferred.
+                    "platform": self.fingerprint.platform.js_string(),
                     "userAgentMetadata": &user_agent_metadata,
                 }),
             )
@@ -271,6 +284,49 @@ mod tests {
     use serde_json::json;
     use zendriver_transport::testing::MockConnection;
 
+    /// `Emulation.setUserAgentOverride` carries the platform on TWO distinct axes, and they
+    /// must not be swapped:
+    ///
+    /// * top-level `platform` — CDP defines this as "the platform navigator.platform should
+    ///   return", so it takes the legacy JS spelling `Win32` / `MacIntel` / `Linux x86_64`
+    ///   ([`Platform::js_string`]).
+    /// * `userAgentMetadata.platform` — the Client-Hints spelling `Windows` / `macOS` /
+    ///   `Linux` ([`Platform::ch_platform`]).
+    ///
+    /// The two sets are disjoint, so this asserts membership rather than a fixture literal and
+    /// therefore catches the swap on whatever platform the test host happens to be.
+    ///
+    /// Regression guarded: the top-level param was sent as `ch_platform()`, so every session
+    /// reported a `navigator.platform` no real browser emits. It was invisible under `spoofed`,
+    /// whose bootstrap re-patches the property from `platformJs`, but that bootstrap is empty
+    /// for `Off`/`Native` — so `native` profiles shipped the bad value straight through.
+    fn assert_platform_axes_not_swapped(sent: &serde_json::Value) {
+        const JS_SPELLINGS: [&str; 3] = ["Win32", "MacIntel", "Linux x86_64"];
+        const CH_SPELLINGS: [&str; 3] = ["Windows", "macOS", "Linux"];
+
+        let top = sent["params"]["platform"]
+            .as_str()
+            .expect("setUserAgentOverride.platform must be sent");
+        assert!(
+            JS_SPELLINGS.contains(&top),
+            "setUserAgentOverride.platform sets navigator.platform, so it must be one of \
+             {JS_SPELLINGS:?} (Platform::js_string). Got {top:?} — if that is one of \
+             {CH_SPELLINGS:?} then the two platform axes are swapped, and no real browser \
+             reports those for navigator.platform."
+        );
+
+        // The CH axis must still carry the CH spelling: a fix that swapped both would just
+        // trade one impossible value for another.
+        let ch = sent["params"]["userAgentMetadata"]["platform"]
+            .as_str()
+            .expect("userAgentMetadata.platform must be sent");
+        assert!(
+            CH_SPELLINGS.contains(&ch),
+            "userAgentMetadata.platform is the Client-Hints axis and must be one of \
+             {CH_SPELLINGS:?} (Platform::ch_platform). Got {ch:?}."
+        );
+    }
+
     #[tokio::test]
     async fn spoofed_observer_sends_expected_sequence_for_page_target() {
         let fp = Fingerprint {
@@ -340,6 +396,7 @@ mod tests {
                     !al.contains(";q="),
                     "acceptLanguage must be a bare locale list (no q-weights); got: {al}"
                 );
+                assert_platform_axes_not_swapped(mock.last_sent());
             }
             mock.reply(id, json!({})).await;
         }
@@ -410,6 +467,7 @@ mod tests {
                 accept_language = mock.last_sent()["params"]["acceptLanguage"]
                     .as_str()
                     .map(String::from);
+                assert_platform_axes_not_swapped(mock.last_sent());
             }
             if expected == "Emulation.setLocaleOverride" {
                 locale_override = mock.last_sent()["params"]["locale"]
