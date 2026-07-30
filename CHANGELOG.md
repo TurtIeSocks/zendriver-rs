@@ -171,6 +171,14 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SEMVER.md].
 
 ### Fixed
 
+- `UserAgentMetadata::realistic` hardcoded the GREASE brand as `Not_A Brand;v=8` in a
+  fixed GREASE-first order. That pair and that order are exactly what Chrome **120** sends,
+  so every other major presented a `sec-ch-ua` (and `navigator.userAgentData.brands`) that no
+  Chrome has ever sent — checkable against a static table with no device knowledge. The
+  brand, its version and the list order are now all derived from `chrome_major` the way
+  Chromium's `GenerateBrandVersionList` does. Verified byte-exact against real captures at
+  majors 142 and 146; 149 now yields `Not)A;Brand`, matching a separately-recorded real
+  Chrome 149 value.
 - `Emulation.setUserAgentOverride` sent the **Client-Hints** platform spelling
   (`Windows` / `macOS` / `Linux`) to the CDP parameter that sets `navigator.platform`,
   which takes the legacy JS spelling (`Win32` / `MacIntel` / `Linux x86_64`). Every

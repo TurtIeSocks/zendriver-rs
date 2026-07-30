@@ -27,39 +27,102 @@ pub struct UserAgentMetadata {
     pub model: String,
 }
 
+/// Chromium's GREASE brand, derived from the major version.
+///
+/// Chromium builds the "fake" brand from a fixed 11-character alphabet indexed by the major
+/// version, and picks the version from a 3-element table the same way — see
+/// `GenerateBrandVersionList` in `components/embedder_support/user_agent_utils.cc`. It is
+/// deterministic per major, NOT random per boot, so a client that hardcodes one pair is
+/// identifiable the moment its major moves on.
+///
+/// Anchored on real captures: 142 -> `Not_A Brand`/`99`, 146 -> `Not-A.Brand`/`24`.
+fn grease_brand(chrome_major: u32) -> (String, &'static str) {
+    const CHARS: [&str; 11] = [" ", "(", ":", "-", ".", "/", ")", ";", "=", "?", "_"];
+    const VERSIONS: [&str; 3] = ["8", "99", "24"];
+    let c1 = CHARS[(chrome_major % 11) as usize];
+    let c2 = CHARS[((chrome_major + 1) % 11) as usize];
+    (
+        format!("Not{c1}A{c2}Brand"),
+        VERSIONS[(chrome_major % 3) as usize],
+    )
+}
+
+/// Chromium's brand-list permutation, also derived from the major version.
+///
+/// `GenerateBrandVersionList` shuffles the three brands through a fixed table of the six
+/// permutations of three elements, selected by `major % 6`, and it SCATTERS: the i-th input
+/// brand is written to slot `order[i]`. That direction matters — for the two 3-cycles
+/// (`major % 6` of 3 or 4) scattering and gathering give different results, and a real
+/// major-142 capture (`major % 6 == 4`) matches the scatter.
+///
+/// Returns the three brands in wire order given `[grease, chromium, branded]`.
+fn permute_brands<T>(chrome_major: u32, brands: [T; 3]) -> Vec<T> {
+    const ORDERS: [[usize; 3]; 6] = [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ];
+    let order = ORDERS[(chrome_major % 6) as usize];
+    let mut out: Vec<Option<T>> = vec![None, None, None];
+    for (brand, slot) in brands.into_iter().zip(order) {
+        out[slot] = Some(brand);
+    }
+    // Every slot is written exactly once: `order` is a permutation of 0..3.
+    out.into_iter()
+        .map(|b| b.expect("permutation covers every slot"))
+        .collect()
+}
+
 impl UserAgentMetadata {
     /// Build a realistic UAM for the given platform + Chrome major version.
-    /// Uses the Chrome convention of three brands: "Not_A Brand;v=8",
-    /// "Chromium;v=N", "Google Chrome;v=N".
+    ///
+    /// Three brands, as Chrome sends them: a GREASE brand, `Chromium;v=N` and
+    /// `Google Chrome;v=N`. Both the GREASE pair and the list ORDER are derived from
+    /// `chrome_major` — see [`grease_brand`] and [`permute_brands`].
+    ///
+    /// This used to hardcode `Not_A Brand;v=8` in a fixed GREASE-first order. That pair and
+    /// that order are what Chrome **120** sends (120 % 11 == 10, 120 % 3 == 0, 120 % 6 == 0),
+    /// so every other major presented a `sec-ch-ua` no Chrome has ever sent — checkable
+    /// against a static table with no device knowledge at all.
     pub fn realistic(platform: Platform, chrome_major: u32, chrome_full: &str) -> Self {
-        let brands = vec![
-            Brand {
-                brand: "Not_A Brand".into(),
-                version: "8".into(),
-            },
-            Brand {
-                brand: "Chromium".into(),
-                version: chrome_major.to_string(),
-            },
-            Brand {
-                brand: "Google Chrome".into(),
-                version: chrome_major.to_string(),
-            },
-        ];
-        let full_version_list = vec![
-            Brand {
-                brand: "Not_A Brand".into(),
-                version: "8.0.0.0".into(),
-            },
-            Brand {
-                brand: "Chromium".into(),
-                version: chrome_full.to_string(),
-            },
-            Brand {
-                brand: "Google Chrome".into(),
-                version: chrome_full.to_string(),
-            },
-        ];
+        let (grease, grease_version) = grease_brand(chrome_major);
+        let brands = permute_brands(
+            chrome_major,
+            [
+                Brand {
+                    brand: grease.clone(),
+                    version: grease_version.into(),
+                },
+                Brand {
+                    brand: "Chromium".into(),
+                    version: chrome_major.to_string(),
+                },
+                Brand {
+                    brand: "Google Chrome".into(),
+                    version: chrome_major.to_string(),
+                },
+            ],
+        );
+        let full_version_list = permute_brands(
+            chrome_major,
+            [
+                Brand {
+                    brand: grease,
+                    version: format!("{grease_version}.0.0.0"),
+                },
+                Brand {
+                    brand: "Chromium".into(),
+                    version: chrome_full.to_string(),
+                },
+                Brand {
+                    brand: "Google Chrome".into(),
+                    version: chrome_full.to_string(),
+                },
+            ],
+        );
         let (platform_version, architecture, bitness) = match platform {
             Platform::Win32 => ("15.0.0", "x86", "64"),
             Platform::MacIntel => ("10.15.7", "x86", "64"),
@@ -401,6 +464,83 @@ fn round_to_navigator_memory(gb: u32) -> u32 {
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
+
+    /// Real captures, not derivations: both pairs come from device fingerprints recorded off
+    /// genuine Chrome installs. 146 is the anchor that proves the alphabet indexing, since its
+    /// two characters differ (`-` and `.`).
+    #[test]
+    fn grease_brand_matches_real_captures() {
+        assert_eq!(grease_brand(146), ("Not-A.Brand".to_string(), "24"));
+        assert_eq!(grease_brand(142), ("Not_A Brand".to_string(), "99"));
+    }
+
+    /// The value that was hardcoded before this was derived. `Not_A Brand;v=8` is precisely
+    /// Chrome 120's GREASE pair, which is why the constant looked plausible for years: it was
+    /// correct for exactly one major and wrong for every other.
+    #[test]
+    fn the_old_hardcoded_pair_was_chrome_120s() {
+        assert_eq!(grease_brand(120), ("Not_A Brand".to_string(), "8"));
+        // ...and 120 also takes the identity permutation, which is why GREASE-first looked
+        // right too.
+        assert_eq!(
+            permute_brands(120, ["grease", "chromium", "branded"]),
+            vec!["grease", "chromium", "branded"]
+        );
+    }
+
+    /// A real major-146 capture puts Chromium first, GREASE second, the branded entry last.
+    #[test]
+    fn brand_order_matches_a_real_146_capture() {
+        assert_eq!(
+            permute_brands(146, ["grease", "chromium", "branded"]),
+            vec!["chromium", "grease", "branded"]
+        );
+    }
+
+    /// 142 is the discriminating case. `142 % 6 == 4` selects `[2, 0, 1]`, one of the two
+    /// 3-cycles, so scatter and gather disagree: scatter yields
+    /// `[chromium, branded, grease]`, gather would yield `[branded, grease, chromium]`.
+    /// The real capture is the former, which is what fixes the direction.
+    #[test]
+    fn brand_order_scatters_rather_than_gathers() {
+        assert_eq!(
+            permute_brands(142, ["grease", "chromium", "branded"]),
+            vec!["chromium", "branded", "grease"]
+        );
+    }
+
+    /// Whatever the major, all three brands must survive exactly once — a permutation bug that
+    /// dropped or duplicated one would otherwise only show up as a weird header in the wild.
+    #[test]
+    fn every_major_permutes_without_loss() {
+        for major in 100u32..200 {
+            let out = permute_brands(major, ["grease", "chromium", "branded"]);
+            assert_eq!(out.len(), 3, "major {major}");
+            for want in ["grease", "chromium", "branded"] {
+                assert_eq!(
+                    out.iter().filter(|b| **b == want).count(),
+                    1,
+                    "major {major} lost or duplicated {want}: {out:?}"
+                );
+            }
+        }
+    }
+
+    /// `brands` and `full_version_list` are the same three brands at two precisions, so they
+    /// must agree on order — a client whose two lists disagreed would contradict itself.
+    #[test]
+    fn brands_and_full_version_list_agree_on_order() {
+        for major in [120u32, 142, 146, 149, 150] {
+            let uam = UserAgentMetadata::realistic(Platform::Win32, major, "146.0.7680.165");
+            let a: Vec<&str> = uam.brands.iter().map(|b| b.brand.as_str()).collect();
+            let b: Vec<&str> = uam
+                .full_version_list
+                .iter()
+                .map(|b| b.brand.as_str())
+                .collect();
+            assert_eq!(a, b, "major {major}");
+        }
+    }
     use super::*;
 
     /// The version probe must never *execute* Chrome on Windows: with no
