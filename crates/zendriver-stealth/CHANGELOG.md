@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.11.4] - 2026-07-30
+
+### Fixed
+
+- Derive the GREASE brand, version and list order from chrome_major ([#137](https://github.com/TurtIeSocks/zendriver-rs/pull/137))
+
+
 ## [0.11.3] - 2026-07-30
 
 ### Fixed
