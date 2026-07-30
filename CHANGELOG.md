@@ -171,6 +171,15 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SEMVER.md].
 
 ### Fixed
 
+- `launch()` could fail with `no initial target found` against a perfectly healthy
+  browser. Chrome prints `DevTools listening on ws://...` when its DevTools server comes up,
+  which is BEFORE it creates the initial page target, and `finish_connect` called
+  `Target.getTargets` exactly once — roughly 15 ms later — then hard-errored on an empty
+  list. `guard_handshake` did not cover it: that bounds a handshake which HANGS, and this
+  one succeeded and returned nothing. Measured banner-to-target on a Windows 11 host:
+  Chrome for Testing 146 took 62-68 ms and stock Chrome 151 took 28-31 ms, so the slower
+  browser failed 3 launches in 4. `getTargets` is now polled against a 5s deadline. A
+  browser that already has its target returns on the first call and pays nothing.
 - `UserAgentMetadata::realistic` hardcoded the GREASE brand as `Not_A Brand;v=8` in a
   fixed GREASE-first order. That pair and that order are exactly what Chrome **120** sends,
   so every other major presented a `sec-ch-ua` (and `navigator.userAgentData.brands`) that no
