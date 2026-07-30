@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.4.10] - 2026-07-30
+
+### Fixed
+
+- Poll Target.getTargets instead of calling it once at launch
+
+
 ## [0.4.9] - 2026-07-30
 
 
