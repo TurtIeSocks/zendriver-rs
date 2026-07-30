@@ -2627,6 +2627,46 @@ pub(crate) struct FinishConnect {
 /// The only spawn-vs-attach differences are carried in [`FinishConnect`]: the
 /// owned `Child` / `TempDir` (present only for `launch`) and the
 /// `owns_process` flag.
+/// How long [`poll_initial_targets`] waits for Chrome to create its first target.
+///
+/// Sized from measurement, not taste: the worst observed banner-to-target gap was ~70 ms on a
+/// slow Windows host. Five seconds is ~70x that, which costs nothing on a healthy launch (the
+/// first poll returns immediately) and only matters on one that would otherwise have failed.
+const INITIAL_TARGET_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Poll interval while waiting for the first target. Short enough that a fast browser is
+/// delayed by at most one tick, long enough not to spin on the CDP connection.
+const INITIAL_TARGET_POLL: Duration = Duration::from_millis(10);
+
+/// `Target.getTargets`, retried until it reports at least one target or the deadline expires.
+///
+/// Returns the last response either way, so the caller's own "no initial target found" error
+/// still fires for a browser that genuinely never creates one — the timeout changes when we
+/// give up, not what we conclude.
+async fn poll_initial_targets(
+    conn: &zendriver_transport::Connection,
+) -> Result<serde_json::Value, ZendriverError> {
+    let deadline = tokio::time::Instant::now() + INITIAL_TARGET_TIMEOUT;
+    let mut last = conn.call_raw("Target.getTargets", json!({}), None).await?;
+    loop {
+        let empty = last["targetInfos"]
+            .as_array()
+            .is_none_or(|t: &Vec<serde_json::Value>| t.is_empty());
+        if !empty || tokio::time::Instant::now() >= deadline {
+            if empty {
+                warn!(
+                    waited = ?INITIAL_TARGET_TIMEOUT,
+                    "chrome reported no targets before the deadline; the browser is up but \
+                     never created one",
+                );
+            }
+            return Ok(last);
+        }
+        tokio::time::sleep(INITIAL_TARGET_POLL).await;
+        last = conn.call_raw("Target.getTargets", json!({}), None).await?;
+    }
+}
+
 pub(crate) async fn finish_connect(
     args: FinishConnect,
 ) -> Result<Arc<BrowserInner>, ZendriverError> {
@@ -2660,7 +2700,26 @@ pub(crate) async fn finish_connect(
     .await?;
 
     // Discover the initial target via Target.getTargets (prefer a page).
-    let list = conn.call_raw("Target.getTargets", json!({}), None).await?;
+    //
+    // POLLED, not a single call. Chrome prints `DevTools listening on ws://...` as soon as its
+    // DevTools server is up, which happens BEFORE it has created the initial page target. A
+    // driver that connects on the banner and immediately asks for targets can therefore get an
+    // empty list from a perfectly healthy browser, and this used to be a hard error:
+    //
+    //     browser launch: navigation failed: no initial target found
+    //
+    // `guard_handshake` does not cover it — that bounds a handshake which HANGS, and this one
+    // succeeds and returns nothing.
+    //
+    // Measured on a Windows 11 box, from the banner to the first page target: Chrome for
+    // Testing 146 needed 62-68 ms and stock Chrome 151 needed 28-31 ms, while the single call
+    // landed around 15 ms. The slower browser failed 3 launches out of 4; the faster one
+    // usually won. Nothing about either browser was unhealthy — the check was simply early.
+    //
+    // The deadline is generous because the cost of waiting is paid only on a launch that would
+    // otherwise have failed outright: a browser that already has its target returns on the
+    // first iteration, before any sleep.
+    let list = poll_initial_targets(&conn).await?;
     let no_targets = Vec::new();
     let targets = list["targetInfos"].as_array().unwrap_or(&no_targets);
     // Preference rule (unchanged): the first page target, else the first
@@ -7324,6 +7383,103 @@ mod tests {
     /// T1: the guard is transparent on the happy path — a handshake that
     /// completes inside the budget returns its `BrowserInner` untouched, and
     /// `finish_connect` (not the guard) owns the child by then.
+    /// A browser that already has its target must not be delayed at all: the first poll
+    /// returns and no sleep is paid. This is the healthy path and it is the one that must stay
+    /// fast, since it is every launch on every fast host.
+    #[tokio::test]
+    async fn poll_initial_targets_returns_on_the_first_response() {
+        use zendriver_transport::testing::MockConnection;
+        let (mut mock, conn) = MockConnection::pair();
+        let fut = tokio::spawn(async move { poll_initial_targets(&conn).await });
+
+        let id = mock.expect_cmd("Target.getTargets").await;
+        mock.reply(
+            id,
+            json!({ "targetInfos": [{ "targetId": "T1", "type": "page", "url": "about:blank" }] }),
+        )
+        .await;
+
+        let out = fut.await.expect("join").expect("poll");
+        assert_eq!(out["targetInfos"].as_array().map(Vec::len), Some(1));
+        // Exactly one call: a healthy browser must not be polled twice.
+        assert!(
+            mock.try_recv_cmd().is_none(),
+            "expected no second getTargets"
+        );
+    }
+
+    /// The regression this exists for. Chrome prints its DevTools banner before creating the
+    /// initial target, so an early `getTargets` sees an empty list from a healthy browser.
+    /// Measured worst case was ~70 ms on a slow Windows host against a ~15 ms check, which
+    /// failed 3 launches in 4 with `no initial target found`.
+    #[tokio::test]
+    async fn poll_initial_targets_retries_an_empty_list() {
+        use zendriver_transport::testing::MockConnection;
+        let (mut mock, conn) = MockConnection::pair();
+        let fut = tokio::spawn(async move { poll_initial_targets(&conn).await });
+
+        // Two empty responses, as a browser still starting up would give.
+        for _ in 0..2 {
+            let id = mock.expect_cmd("Target.getTargets").await;
+            mock.reply(id, json!({ "targetInfos": [] })).await;
+        }
+        // Then the target appears.
+        let id = mock.expect_cmd("Target.getTargets").await;
+        mock.reply(
+            id,
+            json!({ "targetInfos": [{ "targetId": "T9", "type": "page", "url": "about:blank" }] }),
+        )
+        .await;
+
+        let out = fut.await.expect("join").expect("poll");
+        assert_eq!(
+            out["targetInfos"][0]["targetId"], "T9",
+            "the target that appeared after the empty responses must be returned"
+        );
+    }
+
+    /// The timeout changes WHEN we give up, not WHAT we conclude. A browser that never creates
+    /// a target must still surface the caller's "no initial target found" rather than hanging
+    /// or inventing one.
+    #[tokio::test(start_paused = true)]
+    async fn poll_initial_targets_gives_up_and_returns_the_empty_list() {
+        use zendriver_transport::testing::MockConnection;
+        let (mut mock, conn) = MockConnection::pair();
+        let fut = tokio::spawn(async move { poll_initial_targets(&conn).await });
+
+        // Answer every poll with nothing until the driver gives up. `start_paused` lets tokio
+        // auto-advance the clock whenever every task is idle, so the 5s deadline costs no wall
+        // time, though the clock has to be advanced by hand (see below). `try_recv_cmd` is
+        // used rather than `expect_cmd` because the latter PANICS once
+        // the driver stops sending, which is exactly the state this test drives it into.
+        let mut answered = 0;
+        for _ in 0..10_000 {
+            if let Some((method, id)) = mock.try_recv_cmd() {
+                assert_eq!(method, "Target.getTargets");
+                mock.reply(id, json!({ "targetInfos": [] })).await;
+                answered += 1;
+            } else if fut.is_finished() {
+                break;
+            } else {
+                // `start_paused` auto-advances only when the runtime is IDLE, and a loop that
+                // yields is never idle — so drive the clock explicitly instead.
+                tokio::time::advance(Duration::from_millis(50)).await;
+            }
+        }
+        assert!(fut.is_finished(), "poll_initial_targets never gave up");
+
+        let out = fut.await.expect("join").expect("poll");
+        assert_eq!(
+            out["targetInfos"].as_array().map(Vec::len),
+            Some(0),
+            "the last (empty) response must be returned so the caller's error still fires"
+        );
+        assert!(
+            answered > 1,
+            "expected repeated polling, saw {answered} call(s)"
+        );
+    }
+
     #[tokio::test]
     async fn guard_handshake_passes_through_a_successful_handshake() {
         let slot: ChildSlot = ChildSlot::default();
@@ -7787,7 +7943,12 @@ mod tests {
 
     /// T3: no targets at all still fails cleanly — the sweep rework must not
     /// turn "nothing to attach to" into a panic or a hang.
-    #[tokio::test]
+    ///
+    /// `getTargets` is now POLLED rather than called once, so the mock has to keep answering
+    /// until the driver gives up; a single reply would leave the second call unanswered and
+    /// the failure would arrive as a 180s `CdpTimeout` instead of the clean `Navigation` this
+    /// asserts. The conclusion is unchanged — that is the point of the polling change.
+    #[tokio::test(start_paused = true)]
     async fn finish_connect_errors_cleanly_on_empty_get_targets() {
         use zendriver_transport::testing::MockConnection;
 
@@ -7812,8 +7973,20 @@ mod tests {
 
         let id = mock.expect_cmd("Target.setAutoAttach").await;
         mock.reply(id, json!({})).await;
-        let id = mock.expect_cmd("Target.getTargets").await;
-        mock.reply(id, json!({ "targetInfos": [] })).await;
+
+        // Answer every poll with nothing until the driver stops asking. The clock is advanced
+        // by hand because `start_paused` only auto-advances while the runtime is idle, and this
+        // loop never is.
+        for _ in 0..10_000 {
+            if let Some((method, id)) = mock.try_recv_cmd() {
+                assert_eq!(method, "Target.getTargets");
+                mock.reply(id, json!({ "targetInfos": [] })).await;
+            } else if fut.is_finished() {
+                break;
+            } else {
+                tokio::time::advance(Duration::from_millis(50)).await;
+            }
+        }
 
         let err = fut.await.unwrap().unwrap_err();
         assert!(
