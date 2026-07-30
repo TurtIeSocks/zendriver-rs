@@ -169,6 +169,17 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SEMVER.md].
   `browser_close` tear them down at session end (which DOES drain
   both registries as of this release). Fix tracked for a follow-up.
 
+### Fixed
+
+- `Emulation.setUserAgentOverride` sent the **Client-Hints** platform spelling
+  (`Windows` / `macOS` / `Linux`) to the CDP parameter that sets `navigator.platform`,
+  which takes the legacy JS spelling (`Win32` / `MacIntel` / `Linux x86_64`). Every
+  session therefore reported a `navigator.platform` no real browser emits. `spoofed`
+  masked it — its bootstrap re-patches the property from `platformJs` — but that
+  bootstrap is empty for `Off`/`Native`, so **`native` profiles shipped the bad value
+  straight through**. `userAgentMetadata.platform` keeps the CH spelling, as it should.
+  A regression test asserts the two axes hold disjoint value sets.
+
 ## [0.1.0] - 2026-05-23
 
 First public release. Built across 6 phases of internal development.
