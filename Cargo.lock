@@ -3419,7 +3419,7 @@ dependencies = [
 
 [[package]]
 name = "zendriver"
-version = "0.4.7"
+version = "0.4.8"
 dependencies = [
  "async-trait",
  "base64",
@@ -3511,7 +3511,7 @@ dependencies = [
 
 [[package]]
 name = "zendriver-fingerprints"
-version = "0.3.10"
+version = "0.3.11"
 dependencies = [
  "dirs",
  "fastrand",
@@ -3567,7 +3567,7 @@ dependencies = [
 
 [[package]]
 name = "zendriver-mcp"
-version = "0.16.3"
+version = "0.16.4"
 dependencies = [
  "async-trait",
  "axum",
@@ -3601,7 +3601,7 @@ dependencies = [
 
 [[package]]
 name = "zendriver-stealth"
-version = "0.11.2"
+version = "0.11.3"
 dependencies = [
  "async-trait",
  "chromiumoxide_cdp",
