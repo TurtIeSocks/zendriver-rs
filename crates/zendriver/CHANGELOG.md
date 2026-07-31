@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.4.12] - 2026-07-31
+
+### Fixed
+
+- Derive screen geometry from the caller's metrics, not constants
+
+
 ## [0.4.11] - 2026-07-31
 
 
