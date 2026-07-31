@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["bootstrap_script","bootstrap_script_native_webgl"]};
+window.SIDEBAR_ITEMS = {"fn":["bootstrap_script","bootstrap_script_native_webgl","geometry_bootstrap"]};
