@@ -11,7 +11,7 @@
 use serde_json::json;
 use zendriver_transport::{CallError, ObserverError, PausedSession, TargetObserver};
 
-use crate::patches::{bootstrap_script, bootstrap_script_native_webgl};
+use crate::patches::{bootstrap_script, bootstrap_script_native_webgl, geometry_bootstrap};
 use crate::persona::GeoPos;
 use crate::persona::specs::{ScreenSpec, UaMetadata};
 use crate::{Fingerprint, Persona, ProfileKind, StealthProfile};
@@ -66,14 +66,23 @@ impl StealthObserver {
         fingerprint: Fingerprint,
         persona: Persona,
     ) -> Self {
-        let bootstrap = if profile.kind() == ProfileKind::Spoofed {
-            if profile.native_webgl_enabled() {
-                bootstrap_script_native_webgl(&persona, &fingerprint)
-            } else {
-                bootstrap_script(&persona, &fingerprint)
+        let bootstrap = match profile.kind() {
+            ProfileKind::Spoofed => {
+                if profile.native_webgl_enabled() {
+                    bootstrap_script_native_webgl(&persona, &fingerprint)
+                } else {
+                    bootstrap_script(&persona, &fingerprint)
+                }
             }
-        } else {
-            String::new()
+            // `Native` gets the geometry repair and nothing else. It still receives
+            // `Emulation.setDeviceMetricsOverride` below, which sets `inner*` and
+            // `screen.width`/`height` but cannot reach `outer*`/`avail*` — leaving
+            // `outerWidth` at the OS default under a 1920 `innerWidth` (content wider than
+            // its own window) and `availHeight === height` (no taskbar inset). Those are
+            // artifacts this library introduces, not properties of the host, so repairing
+            // them keeps `Native` native rather than spoofing anything.
+            ProfileKind::Native => geometry_bootstrap(),
+            ProfileKind::Off => String::new(),
         };
         let geolocation = persona.geolocation;
         let ua_metadata = persona.ua.as_ref().and_then(|u| u.ua_metadata.clone());
@@ -245,12 +254,19 @@ impl TargetObserver for StealthObserver {
                 .await?;
         }
 
-        if self.profile.kind() == ProfileKind::Spoofed {
-            if self.profile.bypass_csp_enabled() {
-                session
-                    .call("Page.setBypassCSP", json!({ "enabled": true }))
-                    .await?;
-            }
+        // CSP bypass stays SPOOFED-only: it weakens the page's own security policy, which is
+        // only justified by the full identity bootstrap needing to run.
+        if self.profile.kind() == ProfileKind::Spoofed && self.profile.bypass_csp_enabled() {
+            session
+                .call("Page.setBypassCSP", json!({ "enabled": true }))
+                .await?;
+        }
+
+        // Injection is driven by whether there IS a bootstrap, not by the profile kind.
+        // `Native` now carries the geometry repair (and nothing else), and gating the send on
+        // `Spoofed` was a second, independent gate that would have left that repair assembled
+        // but never sent. `Off` still produces an empty bootstrap and so still sends nothing.
+        if !self.bootstrap.is_empty() {
             // Inject into the MAIN world (no `worldName`). The bootstrap's
             // patches mutate `Navigator.prototype`, `window.chrome`,
             // `WebGLRenderingContext.prototype`, etc. — every isolated
@@ -999,6 +1015,10 @@ mod tests {
             "Emulation.setDeviceMetricsOverride",
             "Emulation.setFocusEmulationEnabled",
             "Emulation.setGeolocationOverride",
+            // `Native` now also receives the geometry-coherence bootstrap. It repairs the
+            // `outer*`/`avail*` props that `setDeviceMetricsOverride` above cannot reach, and
+            // carries no identity spoofing — see `patches::geometry_bootstrap`.
+            "Page.addScriptToEvaluateOnNewDocument",
             "Runtime.runIfWaitingForDebugger",
         ] {
             let id =

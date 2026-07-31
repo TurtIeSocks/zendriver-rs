@@ -88,6 +88,38 @@ pub fn bootstrap_script_native_webgl(persona: &Persona, identity: &Fingerprint) 
     bootstrap_script_impl(persona, identity, false)
 }
 
+/// Geometry-coherence bootstrap for profiles that apply NO identity spoofing.
+///
+/// `Native` still receives `Emulation.setDeviceMetricsOverride` (see
+/// [`StealthObserver`](crate::StealthObserver)), and that command sets
+/// `window.inner*` and `screen.width`/`height` while being unable to touch
+/// `window.outer*` or `screen.avail*`. The result is a window a real browser cannot
+/// produce: `outerWidth` stays at the OS default (~756 headless) under an `innerWidth`
+/// of 1920, i.e. content wider than the window containing it, and
+/// `availHeight === height`, the kiosk signature. Both are cheap, deterministic,
+/// high-weight bot tells, and both are introduced BY THIS LIBRARY rather than by the
+/// host.
+///
+/// `patches/screen.js` exists to repair exactly that, but it only ever shipped inside
+/// the full identity bootstrap, which `Native` does not receive — so the mode that
+/// spoofs nothing was the one left visibly incoherent.
+///
+/// This emits the `__zdGetter` prelude plus the geometry patch and nothing else. It is
+/// identity-neutral by construction: it reads no persona and no fingerprint, and
+/// repairs an artifact rather than spoofing a device characteristic, so it does not
+/// make `Native` any less native.
+#[must_use]
+pub fn geometry_bootstrap() -> String {
+    let mut body = String::from(NATIVE);
+    body.push('\n');
+    body.push_str(SCREEN);
+    // Same single outer IIFE `bootstrap_script_impl` uses, and for the same two reasons:
+    // `_native.js` is written as a fragment that runs inside it, and `screen.js` reaches
+    // `__zdGetter` as a closure-local of that scope. Emitting the fragments bare leaves the
+    // helper out of scope and keeps nothing off `globalThis`.
+    format!("(function(){{\n{body}\n}})();")
+}
+
 /// Shared implementation for [`bootstrap_script`] /
 /// [`bootstrap_script_native_webgl`]. `spoof_webgl` gates the `push_webgl`
 /// call and, together with the persona's own WebGL strategy, the WebGPU
@@ -2092,5 +2124,38 @@ mod tests {
             s.contains("featuresServed") && s.contains("limitsServed"),
             "the plain-object/Set path must stay gated on the real classes being absent: {s}"
         );
+    }
+}
+
+#[cfg(test)]
+mod geometry_bootstrap_tests {
+    use super::*;
+
+    /// `Native` must ship the geometry repair. It receives
+    /// `Emulation.setDeviceMetricsOverride`, which cannot reach `outer*`/`avail*`, so without
+    /// this patch it reports `outerWidth` at the OS default under a 1920 `innerWidth` --
+    /// content wider than its own window, which no real browser can produce.
+    #[test]
+    fn geometry_bootstrap_carries_the_screen_patch_and_its_prelude() {
+        let js = geometry_bootstrap();
+        assert!(
+            js.contains("__zdGetter"),
+            "screen.js's only dependency must be present"
+        );
+        assert!(js.contains("outerWidth"), "must repair outerWidth");
+        assert!(js.contains("outerHeight"), "must repair outerHeight");
+        assert!(js.contains("availHeight"), "must repair the taskbar inset");
+    }
+
+    /// Identity-neutral by construction: pulling in an identity patch here would stop
+    /// `Native` being native, which is the whole reason callers choose it.
+    #[test]
+    fn geometry_bootstrap_carries_no_identity_patches() {
+        let js = geometry_bootstrap();
+        assert!(
+            !js.contains("navigator.webdriver"),
+            "must not spoof webdriver"
+        );
+        assert!(!js.contains("WEBGL_PROFILE"), "must not spoof WebGL");
     }
 }
