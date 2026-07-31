@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.11.5] - 2026-07-31
+
+### Fixed
+
+- Repair window geometry on the native profile
+
+
 ## [0.11.4] - 2026-07-30
 
 ### Fixed
