@@ -10,38 +10,52 @@
 // screen geometry in one pass; both are cheap, deterministic, high-weight bot
 // tells.
 //
-// Force one coherent desktop profile across EVERY geometry property (mirrors the
-// known-good xilriws-targetfp screen.js): outer >= inner, availHeight < height.
+// This patch REPAIRS those two gaps. It does not choose a resolution: the size
+// comes from whatever `setDeviceMetricsOverride` already established, so a caller
+// that configures 1366x768 gets a coherent 1366x768 and not a silent 1920x1080.
+// Earlier versions hardcoded 1920x1080 here, which overrode the caller's own
+// metrics — invisible while every caller happened to use 1920x1080, and wrong the
+// moment one did not.
 (function () {
-  const W = 1920;
-  const H = 1080;
+  // Read the size CDP already applied rather than asserting one. Falls back to the
+  // window's own inner size, then to a desktop default, so the patch still produces
+  // a coherent set if it somehow runs before the metrics override lands.
+  const W = window.screen.width || window.innerWidth || 1920;
+  const H = window.screen.height || window.innerHeight || 1080;
+
+  // Chrome inset (title + tabs + bookmarks + omnibox) and the OS taskbar/menu-bar
+  // inset. Both are shape constants, not resolution: they keep `inner < outer` and
+  // `availHeight < height` true at any size. They stay approximate on purpose —
+  // the tells are the RELATIONSHIPS, not the exact pixel counts.
+  const CHROME_H = 86;
+  const TASKBAR_H = 48;
+
   const set = (obj, prop, val) =>
     __zdGetter(obj, prop, () => val, { enumerable: true });
 
-  // screen.* — real monitor with a taskbar inset.
-  set(window.screen, 'width', W);
-  set(window.screen, 'height', H);
+  // screen.* — a real monitor has a work area smaller than the panel. width/height
+  // are deliberately NOT re-set: CDP owns them, and rewriting them here is what
+  // overrode the caller.
   set(window.screen, 'availWidth', W);
-  set(window.screen, 'availHeight', H - 48); // Windows taskbar
+  set(window.screen, 'availHeight', Math.max(1, H - TASKBAR_H));
   set(window.screen, 'availLeft', 0);
   set(window.screen, 'availTop', 0);
-  set(window.screen, 'colorDepth', 24);
-  set(window.screen, 'pixelDepth', 24);
 
-  // window.* — outer is the whole window; inner is smaller by the browser chrome
-  // (title + tabs + bookmarks + omnibox), so inner < outer always holds.
+  // window.* — outer is the whole window; inner is smaller by the browser chrome,
+  // so inner < outer always holds. outer is bounded by the screen so a window can
+  // never be reported larger than the display containing it.
   set(window, 'outerWidth', W);
   set(window, 'outerHeight', H);
   set(window, 'innerWidth', W);
-  set(window, 'innerHeight', H - 86);
+  set(window, 'innerHeight', Math.max(1, H - CHROME_H));
   set(window, 'screenX', 0);
   set(window, 'screenY', 0);
   set(window, 'screenLeft', 0);
   set(window, 'screenTop', 0);
-  set(window, 'devicePixelRatio', 1);
 
   if (window.screen.orientation) {
-    set(window.screen.orientation, 'type', 'landscape-primary');
+    const landscape = W >= H;
+    set(window.screen.orientation, 'type', landscape ? 'landscape-primary' : 'portrait-primary');
     set(window.screen.orientation, 'angle', 0);
   }
 })();
