@@ -193,59 +193,86 @@ pub(crate) async fn click_at(
         move_raw(input, tab, target_x, target_y, extra_modifiers).await?;
     }
     let bit = button_bit(button);
-    for n in 1..=click_count.max(1) {
-        // `buttons` must reflect the set held *after* the press and *after* the
-        // release, so take it from the same locked section that mutates it.
-        let (modifier_bits, buttons) = {
-            let mut s = input.state.lock().await;
-            s.buttons_held.insert(bit);
-            (
-                (s.modifiers_held | extra_modifiers).cdp_bits(),
-                s.buttons_held.bits(),
-            )
-        };
-        tab.session()
-            .call(
-                "Input.dispatchMouseEvent",
-                json!({
-                    "type": "mousePressed",
-                    "x": target_x, "y": target_y,
-                    "button": button.cdp_str(),
-                    "clickCount": n,
-                    "modifiers": modifier_bits,
-                    "buttons": buttons,
-                }),
-            )
-            .await?;
-        let (modifier_bits, buttons) = {
-            let mut s = input.state.lock().await;
-            s.buttons_held.remove(bit);
-            (
-                (s.modifiers_held | extra_modifiers).cdp_bits(),
-                s.buttons_held.bits(),
-            )
-        };
-        tab.session()
-            .call(
-                "Input.dispatchMouseEvent",
-                json!({
-                    "type": "mouseReleased",
-                    "x": target_x, "y": target_y,
-                    "button": button.cdp_str(),
-                    "clickCount": n,
-                    "modifiers": modifier_bits,
-                    "buttons": buttons,
-                }),
-            )
-            .await?;
+    // `buttons_held` lives on the per-Tab InputController, which outlives this
+    // call, so a `?` between the press and its matching release would strand
+    // `bit` set for the rest of the tab's life: every later `mouseMoved` would
+    // then report a button held with no preceding mousedown. That impossible
+    // state is worse than the missing-`buttons` bug this replaced — behavioral
+    // anti-bot scoring reads exactly this stream.
+    //
+    // The fix is a single fallible section plus one cleanup below, rather than
+    // a `Drop` guard: clearing the bit needs the async `Mutex`, `Drop` cannot
+    // await, and a `try_lock` inside `Drop` would silently fail under
+    // contention — precisely when another task is mid-dispatch and would go on
+    // to read the stale bit. A guard here would be more machinery and a weaker
+    // guarantee.
+    //
+    // Residual case it does not cover: if the caller drops this future
+    // mid-gesture (cancellation, an outer `tokio::time::timeout`), the cleanup
+    // never runs and the bit stays set. A `Drop` guard would not reliably close
+    // that either, for the `try_lock` reason above.
+    let sequence: Result<()> = async {
+        for n in 1..=click_count.max(1) {
+            // `buttons` must reflect the set held *after* the press and *after*
+            // the release, so take it from the same locked section that mutates
+            // it.
+            let (modifier_bits, buttons) = {
+                let mut s = input.state.lock().await;
+                s.buttons_held.insert(bit);
+                (
+                    (s.modifiers_held | extra_modifiers).cdp_bits(),
+                    s.buttons_held.bits(),
+                )
+            };
+            tab.session()
+                .call(
+                    "Input.dispatchMouseEvent",
+                    json!({
+                        "type": "mousePressed",
+                        "x": target_x, "y": target_y,
+                        "button": button.cdp_str(),
+                        "clickCount": n,
+                        "modifiers": modifier_bits,
+                        "buttons": buttons,
+                    }),
+                )
+                .await?;
+            let (modifier_bits, buttons) = {
+                let mut s = input.state.lock().await;
+                s.buttons_held.remove(bit);
+                (
+                    (s.modifiers_held | extra_modifiers).cdp_bits(),
+                    s.buttons_held.bits(),
+                )
+            };
+            tab.session()
+                .call(
+                    "Input.dispatchMouseEvent",
+                    json!({
+                        "type": "mouseReleased",
+                        "x": target_x, "y": target_y,
+                        "button": button.cdp_str(),
+                        "clickCount": n,
+                        "modifiers": modifier_bits,
+                        "buttons": buttons,
+                    }),
+                )
+                .await?;
+        }
+        Ok(())
     }
-    Ok(())
+    .await;
+    // Single exit for the latched bit. A no-op on the happy path (the last
+    // release already cleared it) and on any failure before the first press.
+    input.state.lock().await.buttons_held.remove(bit);
+    sequence
 }
 
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use zendriver_transport::{SessionHandle, testing::MockConnection};
 
     #[test]
     fn mouse_button_cdp_strings_match_chrome() {
@@ -256,4 +283,92 @@ mod tests {
         assert_eq!(MouseButton::Forward.cdp_str(), "forward");
     }
     // Note: dispatch fns are async + need a Tab + MockConnection — exercised in T20 click tests.
+
+    /// Drive one `Input.dispatchMouseEvent` off the mock: assert the frame is
+    /// the expected `type`, then hand it to `respond`. `expect_cmd` has no
+    /// built-in timeout, so every wait is bounded here.
+    async fn next_dispatch(mock: &mut MockConnection, expected_type: &str) -> u64 {
+        let id = tokio::time::timeout(
+            Duration::from_secs(5),
+            mock.expect_cmd("Input.dispatchMouseEvent"),
+        )
+        .await
+        .expect("no Input.dispatchMouseEvent arrived");
+        assert_eq!(
+            mock.last_sent()["params"]["type"],
+            expected_type,
+            "unexpected dispatch order: {}",
+            mock.last_sent()
+        );
+        id
+    }
+
+    /// A failed `mousePressed` must not strand the held-button bit. The
+    /// InputController is per-Tab and long-lived, so a latched bit makes every
+    /// subsequent `mouseMoved` on this tab report a button held with no
+    /// preceding mousedown — incoherent pointer telemetry, and strictly worse
+    /// than omitting the field.
+    #[tokio::test]
+    async fn click_at_clears_the_held_bit_when_the_press_fails() {
+        let (mut mock, conn) = MockConnection::pair();
+        let tab = Tab::new_for_test(SessionHandle::new(conn.clone(), "S1"));
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                // `realistic: false` keeps the approach to a single teleport
+                // `mouseMoved` — no Bezier path, no per-segment sleeps.
+                let opts = crate::element::actions::ClickOptions {
+                    realistic: false,
+                    ..Default::default()
+                };
+                click_at(t.input(), &t, 10.0, 20.0, &opts).await
+            }
+        });
+
+        let mv = next_dispatch(&mut mock, "mouseMoved").await;
+        mock.reply(mv, serde_json::json!({})).await;
+        let press = next_dispatch(&mut mock, "mousePressed").await;
+        mock.reply_err(press, -32000, "dispatch rejected").await;
+
+        assert!(
+            fut.await.unwrap().is_err(),
+            "a failed mousePressed must propagate"
+        );
+        assert!(
+            tab.input().state.lock().await.buttons_held.is_empty(),
+            "click_at leaked a latched button bit after a failed mousePressed"
+        );
+        conn.shutdown();
+    }
+
+    /// `mouse_drag` latches the bit *after* the press lands, so the failure
+    /// that leaks it is a dispatch between the press and the release — an
+    /// interpolated `mouseMoved` is the realistic one.
+    #[tokio::test]
+    async fn mouse_drag_clears_the_held_bit_when_a_move_fails() {
+        let (mut mock, conn) = MockConnection::pair();
+        let tab = Tab::new_for_test(SessionHandle::new(conn.clone(), "S1"));
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move { t.mouse_drag((10.0, 10.0), (200.0, 10.0), 5).await }
+        });
+
+        let press = next_dispatch(&mut mock, "mousePressed").await;
+        mock.reply(press, serde_json::json!({})).await;
+        // The bit is held from here until the release; fail inside that window.
+        let mv = next_dispatch(&mut mock, "mouseMoved").await;
+        mock.reply_err(mv, -32000, "dispatch rejected").await;
+
+        assert!(
+            fut.await.unwrap().is_err(),
+            "a failed mouseMoved must propagate"
+        );
+        assert!(
+            tab.input().state.lock().await.buttons_held.is_empty(),
+            "mouse_drag leaked a latched button bit after a failed mouseMoved"
+        );
+        conn.shutdown();
+    }
 }

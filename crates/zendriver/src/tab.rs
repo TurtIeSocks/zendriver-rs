@@ -2215,75 +2215,106 @@ pointer-events:none;opacity:0.85;'; \
         // every CDP call still succeeds.
         const LEFT_HELD: u8 = crate::input::pointer_state::MouseButtonSet::LEFT.bits();
 
-        // Press the left button at the source point.
-        self.call(
-            "Input.dispatchMouseEvent",
-            json!({
-                "type": "mousePressed",
-                "x": from.0, "y": from.1,
-                "button": "left",
-                "clickCount": 1,
-                "buttons": LEFT_HELD,
-            }),
-        )
-        .await?;
-        {
-            let input = self.input().clone();
-            let mut s = input.state.lock().await;
-            s.buttons_held
-                .insert(crate::input::pointer_state::MouseButtonSet::LEFT);
-        }
-
-        // Interpolate the move. nodriver walks i in 0..=steps (steps+1 points,
-        // the first coinciding with `from`); steps <= 1 collapses to a single
-        // hop straight to `to`.
-        let steps = steps.max(1);
-        if steps == 1 {
+        // `buttons_held` lives on the per-Tab InputController, which outlives
+        // this call, so a `?` between the press and the release — an
+        // interpolated `mouseMoved` failing partway is the realistic one —
+        // would strand the LEFT bit set for the rest of the tab's life. Every
+        // later `mouseMoved` would then report a button held with no preceding
+        // mousedown, which is a worse signal to leak to behavioral anti-bot
+        // scoring than omitting `buttons` altogether.
+        //
+        // So the whole gesture runs as one fallible section and the state fixup
+        // happens at the single exit below, rather than via a `Drop` guard:
+        // clearing the bit needs the async `Mutex`, `Drop` cannot await, and a
+        // `try_lock` inside `Drop` would silently fail under contention —
+        // exactly when another task is mid-dispatch and about to read the stale
+        // bit. More machinery, weaker guarantee.
+        //
+        // Residual case it does not cover: if the caller drops this future
+        // mid-gesture (cancellation, an outer `tokio::time::timeout`), the
+        // fixup never runs and the bit stays set. A `Drop` guard would not
+        // reliably close that either, for the `try_lock` reason above.
+        let gesture: Result<()> = async {
+            // Press the left button at the source point.
             self.call(
                 "Input.dispatchMouseEvent",
-                json!({ "type": "mouseMoved", "x": to.0, "y": to.1, "buttons": LEFT_HELD }),
+                json!({
+                    "type": "mousePressed",
+                    "x": from.0, "y": from.1,
+                    "button": "left",
+                    "clickCount": 1,
+                    "buttons": LEFT_HELD,
+                }),
             )
             .await?;
-        } else {
-            let step_x = (to.0 - from.0) / steps as f64;
-            let step_y = (to.1 - from.1) / steps as f64;
-            for i in 0..=steps {
-                let x = from.0 + step_x * i as f64;
-                let y = from.1 + step_y * i as f64;
+            {
+                let input = self.input().clone();
+                let mut s = input.state.lock().await;
+                s.buttons_held
+                    .insert(crate::input::pointer_state::MouseButtonSet::LEFT);
+            }
+
+            // Interpolate the move. nodriver walks i in 0..=steps (steps+1
+            // points, the first coinciding with `from`); steps <= 1 collapses
+            // to a single hop straight to `to`.
+            let steps = steps.max(1);
+            if steps == 1 {
                 self.call(
                     "Input.dispatchMouseEvent",
-                    json!({ "type": "mouseMoved", "x": x, "y": y, "buttons": LEFT_HELD }),
+                    json!({ "type": "mouseMoved", "x": to.0, "y": to.1, "buttons": LEFT_HELD }),
                 )
                 .await?;
+            } else {
+                let step_x = (to.0 - from.0) / steps as f64;
+                let step_y = (to.1 - from.1) / steps as f64;
+                for i in 0..=steps {
+                    let x = from.0 + step_x * i as f64;
+                    let y = from.1 + step_y * i as f64;
+                    self.call(
+                        "Input.dispatchMouseEvent",
+                        json!({ "type": "mouseMoved", "x": x, "y": y, "buttons": LEFT_HELD }),
+                    )
+                    .await?;
+                }
             }
-        }
 
-        // Release at the destination. `buttons` is now empty — the button is
-        // no longer held once the release is dispatched.
-        self.call(
-            "Input.dispatchMouseEvent",
-            json!({
-                "type": "mouseReleased",
-                "x": to.0, "y": to.1,
-                "button": "left",
-                "clickCount": 1,
-                "buttons": 0,
-            }),
-        )
-        .await?;
-        // Leave the controller's cached cursor where the drag actually ended.
-        // Skipping this made the next `move_realistic` build its Bezier from a
-        // stale origin, so the path started by teleporting back to wherever the
-        // last click landed.
+            // Release at the destination. `buttons` is now empty — the button
+            // is no longer held once the release is dispatched.
+            self.call(
+                "Input.dispatchMouseEvent",
+                json!({
+                    "type": "mouseReleased",
+                    "x": to.0, "y": to.1,
+                    "button": "left",
+                    "clickCount": 1,
+                    "buttons": 0,
+                }),
+            )
+            .await?;
+            Ok(())
+        }
+        .await;
+
         {
             let input = self.input().clone();
             let mut s = input.state.lock().await;
+            // Whether the gesture finished or a dispatch failed partway, this
+            // tab is no longer holding the button as far as our state goes.
             s.buttons_held
                 .remove(crate::input::pointer_state::MouseButtonSet::LEFT);
-            s.pointer_x = to.0;
-            s.pointer_y = to.1;
+            if gesture.is_ok() {
+                // Leave the controller's cached cursor where the drag actually
+                // ended. Skipping this made the next `move_realistic` build its
+                // Bezier from a stale origin, so the path started by teleporting
+                // back to wherever the last click landed. On failure the real
+                // cursor is at some indeterminate intermediate point, so leave
+                // the cache alone rather than assert a position we never
+                // reached.
+                s.pointer_x = to.0;
+                s.pointer_y = to.1;
+            }
         }
-        Ok(())
+        gesture
     }
 
     /// Search the text content of every loaded frame resource for `query`,
