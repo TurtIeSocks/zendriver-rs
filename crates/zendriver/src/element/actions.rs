@@ -554,9 +554,13 @@ impl Element {
         self.with_refresh(|| {
             let value = value.clone();
             async move {
+                // Leading `el` absorbs the element handle `call_on_main`
+                // prepends, so `v` binds to the caller's text (same shape as
+                // `NATIVE_VALUE_SETTER_JS`); the body reads the element off
+                // `this`, which `Runtime.callFunctionOn` binds to it.
                 let _ = self
                     .call_on_main(
-                        "function(v){ this.textContent = v; }",
+                        "function(el, v){ this.textContent = v; }",
                         json!([{ "value": value }]),
                     )
                     .await?;
@@ -744,9 +748,11 @@ impl Element {
             let cy = bbox.y + bbox.height / 2.0;
             // Inject the dot in the main world with the element bound (house
             // pattern); the args carry the viewport-center coords + lifetime.
+            // Leading `el` absorbs the element handle `call_on_main` prepends,
+            // so `cx`/`cy`/`ms` line up with the args passed below.
             // The dot is `position:fixed` so the coords are viewport-relative,
             // matching `bounding_box`'s frame and `Tab::flash_point`.
-            let js = "function(cx, cy, ms){ \
+            let js = "function(el, cx, cy, ms){ \
                     const d = document.createElement('div'); \
                     d.style.cssText = 'position:fixed;left:'+cx+'px;top:'+cy+'px;\
 width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:50%;background:red;\
@@ -877,6 +883,27 @@ mod tests {
     use crate::test_support::{expect, serve_gate_probes, serve_isolated_world};
     use zendriver_transport::SessionHandle;
     use zendriver_transport::testing::MockConnection;
+
+    /// Parameter names of a `function(a, b, ...){ ... }` declaration, in order.
+    ///
+    /// `call_on_main` prepends the element handle to the argument list, so the
+    /// parameter at index `i` binds to `arguments[i]`. Asserting the parameter
+    /// list against the emitted arguments is what catches an off-by-one — a
+    /// body declared `function(v)` reads the *element* out of `arguments[0]`
+    /// while the caller's value sits unread at `arguments[1]`, and every
+    /// assertion about the arguments array alone still passes.
+    ///
+    /// The first `(`/`)` pair is the parameter list: parameter names can't
+    /// contain parentheses, so a body that does (`setTimeout(...)`) is safe.
+    fn js_params(decl: &str) -> Vec<&str> {
+        let open = decl.find('(').expect("declaration opens a param list");
+        let close = decl.find(')').expect("declaration closes its param list");
+        decl[open + 1..close]
+            .split(',')
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .collect()
+    }
 
     #[tokio::test]
     async fn hover_dispatches_input_dispatchmouseevent_with_type_mousemoved() {
@@ -1156,6 +1183,14 @@ mod tests {
         assert_eq!(args.len(), 2);
         assert_eq!(args[0]["objectId"], "R1");
         assert_eq!(args[1]["value"], "hello world");
+        // ...and the JS reads it there: the leading parameter absorbs the
+        // prepended element handle so `v` binds to arguments[1]. `clear`
+        // shares this declaration, so this pins the shape for both.
+        assert_eq!(
+            js_params(decl),
+            vec!["el", "v"],
+            "value must land on the parameter the body assigns"
+        );
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
 
@@ -1186,11 +1221,14 @@ mod tests {
         assert!(decl.contains("HTMLInputElement"));
         assert!(decl.contains("'input'"));
         assert!(decl.contains("'change'"));
-        // The cleared value is the empty string, passed at arguments[1].
+        // The cleared value is the empty string, passed at arguments[1] — and
+        // read there, since the leading parameter absorbs the prepended
+        // element handle.
         let args = sent["params"]["arguments"].as_array().unwrap();
         assert_eq!(args.len(), 2);
         assert_eq!(args[0]["objectId"], "R1");
         assert_eq!(args[1]["value"], "");
+        assert_eq!(js_params(decl), vec!["el", "v"]);
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
 
@@ -1222,6 +1260,14 @@ mod tests {
         assert_eq!(args.len(), 2);
         assert_eq!(args[0]["objectId"], "R1");
         assert_eq!(args[1]["value"], "New title");
+        // The body must READ it at arguments[1] too. Without the leading `el`
+        // the assigned parameter binds to the element handle and the element's
+        // text becomes "[object HTMLDivElement]" instead of the caller's text.
+        assert_eq!(
+            js_params(decl),
+            vec!["el", "v"],
+            "assigned parameter must bind to the caller's text, not the element"
+        );
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
 
@@ -1433,10 +1479,19 @@ mod tests {
         );
         let args = sent["params"]["arguments"].as_array().unwrap();
         // call_on_main prepends the element {objectId}; then cx, cy, ms.
+        assert_eq!(args.len(), 4);
         assert_eq!(args[0]["objectId"], "R1");
         assert_eq!(args[1]["value"], 60.0); // center x
         assert_eq!(args[2]["value"], 45.0); // center y
         assert_eq!(args[3]["value"], 500); // duration ms
+        // Each coordinate must be read at the index it was sent. Without the
+        // leading `el` every parameter shifts by one: the dot is positioned
+        // at the stringified element, and `ms` reads undefined.
+        assert_eq!(
+            js_params(decl),
+            vec!["el", "cx", "cy", "ms"],
+            "coords/duration must bind to the parameters the body reads"
+        );
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
 
