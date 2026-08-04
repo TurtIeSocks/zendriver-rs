@@ -32,14 +32,18 @@
     var hasLegacyCookies = false;
     for (var j = 0; j < cookieNames.length; j++) {
         var n2 = cookieNames[j];
-        // Imperva emits the load-balancer cookie as `nlbi_<siteid>` (and
-        // sometimes `nlbi_<siteid>_<suffix>`), so match it by prefix — an
-        // exact "nlbi" never occurs in the wild.
+        // `nlbi_*` is deliberately NOT a surface signal. It is Imperva's
+        // load-balancer cookie: pure routing state that is set on ordinary
+        // traffic and outlives clearance, unlike `incap_ses_*` / `___utmvc`,
+        // which track the challenge itself. Counting it here pinned the
+        // surface at `Legacy` on pages that had already cleared, which
+        // structurally blocks `ChallengeGone` and burns the whole budget down
+        // to `TimedOut`. It is still collected into `sessions` below, which is
+        // what the caller actually needs it for.
         if (
             n2 === "___utmvc" ||
             n2.indexOf("incap_ses_") === 0 ||
-            n2.indexOf("visid_incap_") === 0 ||
-            n2.indexOf("nlbi") === 0
+            n2.indexOf("visid_incap_") === 0
         ) {
             hasLegacyCookies = true;
             break;

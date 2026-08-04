@@ -308,6 +308,9 @@ impl<'tab> ImpervaBypass<'tab> {
         let mut prev_surface: Option<crate::detection::ImpervaSurface> = None;
         let mut stall_ticks: u32 = 0;
         let mut warned_stall = false;
+        // One solve attempt per clearance. See the escalation branch below for
+        // why the surface cannot clear itself afterwards.
+        let mut captcha_attempted = false;
 
         loop {
             let snap = match next_snapshot.take() {
@@ -320,32 +323,51 @@ impl<'tab> ImpervaBypass<'tab> {
                 },
             };
 
-            // CAPTCHA escalation is polled, not assumed to arrive on the
-            // first probe: Imperva routinely upgrades a reese84 device check
-            // to a CAPTCHA seconds in, and that arrival must reach the
-            // registered solver too.
-            if let crate::detection::ImpervaSurface::Captcha(kind) = snap.surface {
-                self.solve_captcha(kind).await?;
-                // Page mutated by the injection — next iteration re-probes.
-                last_surface = Some(snap.surface);
-            } else {
-                let token = snap.reese84.as_ref().filter(|v| !v.is_empty());
-                let surface_clear = matches!(snap.surface, crate::detection::ImpervaSurface::None);
-                match (token, snap.body_clean, surface_clear) {
-                    (Some(token), true, _) => {
-                        return Ok(ClearanceOutcome::TokenAcquired {
-                            reese84: token.clone(),
-                            sessions: snap.sessions,
-                        });
+            // Clearance is decided BEFORE any CAPTCHA escalation. A snapshot
+            // carrying a usable reese84 token over a clean body *is* a cleared
+            // challenge, and stays one even if the page happens to be showing
+            // a CAPTCHA iframe — the site's own post-clearance form routinely
+            // mounts one (a plain Google reCAPTCHA on the page it just let you
+            // reach). Escalating first discarded the very token this call
+            // exists to return, and turned a better clearance into a more
+            // reliable failure.
+            let token = snap.reese84.as_ref().filter(|v| !v.is_empty());
+            let surface_clear = matches!(snap.surface, crate::detection::ImpervaSurface::None);
+            match (token, snap.body_clean, surface_clear) {
+                (Some(token), true, _) => {
+                    return Ok(ClearanceOutcome::TokenAcquired {
+                        reese84: token.clone(),
+                        sessions: snap.sessions,
+                    });
+                }
+                // ChallengeGone requires `surface_clear` in addition to
+                // the body+no-token spec criteria: lingering Legacy
+                // cookies (`incap_ses_*`, `___utmvc`) indicate the page is
+                // still tracking the challenge even after body markers
+                // drop, and returning ChallengeGone there would race the
+                // page's own post-clearance navigation.
+                (None, true, true) => return Ok(ClearanceOutcome::ChallengeGone),
+                _ => {
+                    // Not cleared. CAPTCHA escalation is polled rather than
+                    // assumed to arrive on the first probe, because Imperva
+                    // routinely upgrades a reese84 device check to a CAPTCHA
+                    // seconds in, and that arrival must reach the registered
+                    // solver too.
+                    //
+                    // Latched: `inject_captcha_solution` writes a hidden
+                    // response field and never removes the widget, so the
+                    // surface stays `Captcha` afterwards. Without the latch a
+                    // 250ms poll over a 30s budget would re-enter the solver
+                    // on every tick — up to ~120 paid solves and twice that in
+                    // main-world evaluates, on exactly the pages that are
+                    // watching for them.
+                    if let crate::detection::ImpervaSurface::Captcha(kind) = snap.surface {
+                        if !captcha_attempted {
+                            captcha_attempted = true;
+                            self.solve_captcha(kind).await?;
+                        }
                     }
-                    // ChallengeGone requires `surface_clear` in addition to
-                    // the body+no-token spec criteria: lingering Legacy
-                    // cookies (`incap_ses_*`, `___utmvc`) indicate the page is
-                    // still tracking the challenge even after body markers
-                    // drop, and returning ChallengeGone there would race the
-                    // page's own post-clearance navigation.
-                    (None, true, true) => return Ok(ClearanceOutcome::ChallengeGone),
-                    _ => last_surface = Some(snap.surface),
+                    last_surface = Some(snap.surface);
                 }
             }
 
@@ -889,6 +911,137 @@ mod tests {
             outcome,
             ClearanceOutcome::TokenAcquired { reese84, .. } if reese84 == "TOK_FINAL"
         ));
+        conn.shutdown();
+    }
+
+    /// A usable token over a clean body IS a cleared challenge, and stays one
+    /// even when the page is showing a CAPTCHA iframe — the site's own
+    /// post-clearance form routinely mounts a plain Google reCAPTCHA on the
+    /// page it just let you reach, and `detect.js` ranks any captcha above
+    /// `Reese84`. Escalating before checking the token threw away the token
+    /// this call exists to return, so the better the clearance worked, the
+    /// more reliably it failed. No solver is registered here, which is what
+    /// turned that into a hard error rather than a wasted tick.
+    #[tokio::test]
+    async fn a_token_over_a_clean_body_wins_over_a_captcha_surface() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move {
+                ImpervaBypass::new(&s)
+                    .poll_interval(Duration::from_millis(1))
+                    .wait_for_clearance()
+                    .await
+            }
+        });
+
+        let id = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id,
+            snapshot_reply(json!({
+                "surface": { "kind": "Captcha", "captcha": "Recaptcha" },
+                "reese84": "TOK_CLEARED",
+                "body_clean": true,
+                "sessions": [],
+                "has_imperva_signal": true,
+            })),
+        )
+        .await;
+
+        let outcome = fut.await.unwrap().expect("a carried token must not error");
+        match outcome {
+            ClearanceOutcome::TokenAcquired { reese84, .. } => {
+                assert_eq!(reese84, "TOK_CLEARED");
+            }
+            other => panic!("expected TokenAcquired, got {other:?}"),
+        }
+        conn.shutdown();
+    }
+
+    /// `inject_captcha_solution` writes a hidden response field and never
+    /// removes the widget, so the surface stays `Captcha` afterwards. Without
+    /// a latch the poll loop re-enters the solver on every tick — real money
+    /// per solve, and a burst of main-world evaluates on a page that is
+    /// watching for exactly that.
+    #[tokio::test]
+    async fn captcha_solver_is_invoked_at_most_once_per_clearance() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            let c = Arc::clone(&calls);
+            async move {
+                ImpervaBypass::new(&s)
+                    .poll_interval(Duration::from_millis(1))
+                    .timeout(Duration::from_millis(600))
+                    .on_captcha(move |_| {
+                        let c = Arc::clone(&c);
+                        async move {
+                            c.fetch_add(1, Ordering::SeqCst);
+                            Ok(CaptchaSolution {
+                                token: "SOLVED".into(),
+                                form_field: "g-recaptcha-response".into(),
+                            })
+                        }
+                    })
+                    .wait_for_clearance()
+                    .await
+            }
+        });
+
+        // Serve a stuck CAPTCHA surface for as long as the loop asks. Each
+        // Runtime.evaluate is answered by shape: the detect probe gets the
+        // snapshot, the site-key probe gets a key, the injection gets `true`.
+        // Nothing here ever clears the surface, so only the latch can stop a
+        // second solve.
+        let stuck = snapshot_reply(json!({
+            "surface": { "kind": "Captcha", "captcha": "Recaptcha" },
+            "reese84": null,
+            "body_clean": false,
+            "sessions": [],
+            "has_imperva_signal": true,
+        }));
+        loop {
+            let Ok(id) = tokio::time::timeout(
+                Duration::from_millis(300),
+                mock.expect_cmd("Runtime.evaluate"),
+            )
+            .await
+            else {
+                break;
+            };
+            let expr = mock.last_sent()["params"]["expression"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            let reply = if expr.contains("has_imperva_signal") {
+                stuck.clone()
+            } else if expr.contains("SOLVED") {
+                json!({ "result": { "type": "boolean", "value": true } })
+            } else {
+                json!({
+                    "result": {
+                        "type": "object",
+                        "value": { "hcap": null, "rcap": "KEY_ABC", "url": "https://x.test/p" }
+                    }
+                })
+            };
+            mock.reply(id, reply).await;
+        }
+
+        let _ = fut.await.unwrap();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "solver must be latched to one attempt per clearance"
+        );
         conn.shutdown();
     }
 
