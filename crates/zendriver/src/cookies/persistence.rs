@@ -21,20 +21,77 @@
 //! `url` re-inference. If you hand-author a JSON file with a non-null
 //! `url`, it round-trips faithfully too (serde preserves `Some` values).
 
-use std::path::Path;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::fs;
 
 use crate::cookies::CookieJar;
 use crate::error::Result;
 
+/// Write `bytes` to `path` atomically: fill a uniquely-named sibling temp
+/// file, then `rename` it over the destination.
+///
+/// A same-directory `rename` is atomic on every platform zendriver targets, so
+/// a process killed mid-write leaves either the previous file or the complete
+/// new one — never a truncated prefix. That matters most for the cookie jar: a
+/// half-written `cookies.json` fails to parse on the next `load_from_file`,
+/// losing exactly the authenticated session the file existed to preserve.
+///
+/// The temp name carries the process id plus a per-process counter, so two
+/// writers targeting the same destination cannot fill each other's temp file.
+/// A failure at either step removes the temp file rather than leaving litter
+/// next to the destination.
+///
+/// Scope: this buys atomicity against a killed process, not fsync-level
+/// durability against a power loss (neither the temp file nor the containing
+/// directory is synced). Losing an unsynced write leaves the previous file,
+/// which is the same outcome as never having called `save_to_file`.
+///
+/// Shared with the `tracker-blocking` blocklist cache
+/// (`crate::tracker::load_or_download_blocklist`), which wants the same
+/// guarantee; it lives here because this module is compiled unconditionally
+/// while that one is feature-gated.
+pub(crate) async fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = temp_path(path);
+    if let Err(e) = fs::write(&tmp, bytes).await {
+        let _ = fs::remove_file(&tmp).await;
+        return Err(e);
+    }
+    if let Err(e) = fs::rename(&tmp, path).await {
+        let _ = fs::remove_file(&tmp).await;
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// Sibling temp path for [`write_atomic`] — same directory, so the `rename`
+/// stays on one filesystem (and is therefore atomic), and unique per process
+/// and per call.
+fn temp_path(path: &Path) -> PathBuf {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let mut name = path
+        .file_name()
+        .unwrap_or_else(|| OsStr::new("zendriver"))
+        .to_os_string();
+    name.push(format!(
+        ".{}.{}.tmp",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    path.with_file_name(name)
+}
+
 impl CookieJar {
     /// Snapshot the cookie store to a JSON file at `path`.
     ///
     /// Issues a single `Storage.getCookies` round-trip, then writes the
-    /// pretty-printed array via [`tokio::fs::write`]. The file is
-    /// overwritten if it already exists. Parent directories must already
-    /// exist — `save_to_file` does not create them.
+    /// pretty-printed array. The write is atomic — a sibling temp file is
+    /// filled and renamed over the destination — so an interrupted save
+    /// leaves the previous file intact instead of a truncated one that no
+    /// longer parses. The file is overwritten if it already exists. Parent
+    /// directories must already exist — `save_to_file` does not create them.
     ///
     /// # Errors
     ///
@@ -52,7 +109,7 @@ impl CookieJar {
     pub async fn save_to_file(&self, path: impl AsRef<Path>) -> Result<()> {
         let cookies = self.all().await?;
         let bytes = serde_json::to_vec_pretty(&cookies)?;
-        fs::write(path, bytes).await?;
+        write_atomic(path.as_ref(), &bytes).await?;
         Ok(())
     }
 
@@ -84,11 +141,11 @@ impl CookieJar {
 
     /// Snapshot only the cookies matching `filter` to a JSON file at `path`.
     ///
-    /// Like [`Self::save_to_file`], but applies the `filter` predicate to
-    /// the result of [`CookieJar::all`] before writing — handy for
-    /// persisting just one site's cookies out of a shared store. The
-    /// predicate receives each [`crate::cookies::Cookie`] by reference and
-    /// returns `true` to keep it.
+    /// Like [`Self::save_to_file`] — including the atomic temp-file-then-
+    /// rename write — but applies the `filter` predicate to the result of
+    /// [`CookieJar::all`] before writing, handy for persisting just one
+    /// site's cookies out of a shared store. The predicate receives each
+    /// [`crate::cookies::Cookie`] by reference and returns `true` to keep it.
     ///
     /// # Errors
     ///
@@ -118,7 +175,7 @@ impl CookieJar {
             .filter(|c| filter(c))
             .collect();
         let bytes = serde_json::to_vec_pretty(&cookies)?;
-        fs::write(path, bytes).await?;
+        write_atomic(path.as_ref(), &bytes).await?;
         Ok(())
     }
 
@@ -165,8 +222,53 @@ mod tests {
     use serde_json::json;
     use zendriver_transport::testing::MockConnection;
 
+    use super::write_atomic;
     use crate::cookies::{CookieJar, SameSite};
     use crate::error::ZendriverError;
+
+    /// Count the entries in a directory — the cheap proxy for "the temp file
+    /// was renamed, not left behind".
+    fn dir_entry_count(dir: &std::path::Path) -> usize {
+        std::fs::read_dir(dir).unwrap().count()
+    }
+
+    /// The atomic write replaces existing content in place and leaves no
+    /// `.tmp` sibling behind: after the call the directory holds exactly the
+    /// destination file, carrying the new bytes.
+    #[tokio::test]
+    async fn write_atomic_replaces_existing_and_leaves_no_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("cookies.json");
+        std::fs::write(&dest, b"stale").unwrap();
+
+        write_atomic(&dest, b"fresh").await.unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), b"fresh");
+        assert_eq!(
+            dir_entry_count(dir.path()),
+            1,
+            "temp file must be renamed away, not left next to the destination"
+        );
+    }
+
+    /// When the `rename` step fails, the error surfaces AND the temp file is
+    /// cleaned up. A destination that is an existing directory is the
+    /// simplest way to make `rename` fail after a successful temp write.
+    #[tokio::test]
+    async fn write_atomic_cleans_up_temp_file_when_rename_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("occupied");
+        std::fs::create_dir(&dest).unwrap();
+
+        let err = write_atomic(&dest, b"fresh").await.unwrap_err();
+        let _ = err;
+
+        assert_eq!(
+            dir_entry_count(dir.path()),
+            1,
+            "only the pre-existing directory should remain; the temp file must be removed"
+        );
+    }
 
     /// End-to-end round-trip: dump the cookie store to disk, then load it back
     /// into a fresh jar. The mock receives `Storage.getCookies` on save,
@@ -373,5 +475,57 @@ mod tests {
         load.await.unwrap().unwrap();
 
         conn.shutdown();
+    }
+
+    /// Both save paths must go through the atomic helper: the destination
+    /// ends up holding the full pretty-printed JSON, and no `.tmp` sibling is
+    /// left in the directory. Writing over an existing file also proves the
+    /// rename replaces stale content rather than appending to it.
+    #[tokio::test]
+    async fn both_save_paths_write_atomically() {
+        for matching in [false, true] {
+            let (mut mock, conn) = MockConnection::pair();
+            let jar = CookieJar::new(conn.clone());
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("cookies.json");
+            std::fs::write(&path, b"stale-and-longer-than-the-new-content").unwrap();
+
+            let save = tokio::spawn({
+                let j = jar.clone();
+                let p = path.clone();
+                async move {
+                    if matching {
+                        j.save_to_file_matching(p, |_| true).await
+                    } else {
+                        j.save_to_file(p).await
+                    }
+                }
+            });
+
+            let id = mock.expect_cmd("Storage.getCookies").await;
+            mock.reply(
+                id,
+                json!({
+                    "cookies": [
+                        { "name": "a", "value": "1", "domain": ".x.test", "path": "/",
+                          "httpOnly": false, "secure": false },
+                    ]
+                }),
+            )
+            .await;
+            save.await.unwrap().unwrap();
+
+            let parsed: Vec<crate::cookies::Cookie> =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(parsed.len(), 1, "matching={matching}");
+            assert_eq!(parsed[0].name, "a");
+            assert_eq!(
+                dir_entry_count(dir.path()),
+                1,
+                "matching={matching}: save must leave no temp file behind"
+            );
+
+            conn.shutdown();
+        }
     }
 }
