@@ -632,11 +632,7 @@ mod persona_tests {
                 }),
                 ..Default::default()
             }),
-            screen: Some(ScreenSpec {
-                width: 1536,
-                height: 864,
-                device_pixel_ratio: 1.25,
-            }),
+            screen: Some(ScreenSpec::new(1536, 864, 1.25)),
             ..Persona::default()
         };
         let s = serde_json::to_string(&p).unwrap();
@@ -649,52 +645,23 @@ mod persona_tests {
                 .as_deref(),
             Some("arm")
         );
-        assert_eq!(
-            back.screen,
-            Some(ScreenSpec {
-                width: 1536,
-                height: 864,
-                device_pixel_ratio: 1.25
-            })
-        );
+        assert_eq!(back.screen, Some(ScreenSpec::new(1536, 864, 1.25)));
     }
 
     #[test]
     fn overlay_screen_some_wins_none_inherits() {
         let base = Persona {
-            screen: Some(ScreenSpec {
-                width: 1920,
-                height: 1080,
-                device_pixel_ratio: 1.0,
-            }),
+            screen: Some(ScreenSpec::new(1920, 1080, 1.0)),
             ..Persona::default()
         };
         let over = Persona {
-            screen: Some(ScreenSpec {
-                width: 1536,
-                height: 864,
-                device_pixel_ratio: 1.25,
-            }),
+            screen: Some(ScreenSpec::new(1536, 864, 1.25)),
             ..Persona::default()
         };
         let merged = base.clone().overlay(over);
-        assert_eq!(
-            merged.screen,
-            Some(ScreenSpec {
-                width: 1536,
-                height: 864,
-                device_pixel_ratio: 1.25
-            })
-        ); // some wins
+        assert_eq!(merged.screen, Some(ScreenSpec::new(1536, 864, 1.25))); // some wins
         let merged2 = base.overlay(Persona::default());
-        assert_eq!(
-            merged2.screen,
-            Some(ScreenSpec {
-                width: 1920,
-                height: 1080,
-                device_pixel_ratio: 1.0
-            })
-        ); // none inherits
+        assert_eq!(merged2.screen, Some(ScreenSpec::new(1920, 1080, 1.0))); // none inherits
     }
 
     #[test]

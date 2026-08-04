@@ -14,11 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .headless(true)
         .stealth(StealthProfile::native())
         .persona_overlay(Persona {
-            screen: Some(ScreenSpec {
-                width: w,
-                height: h,
-                device_pixel_ratio: 1.0,
-            }),
+            screen: Some(ScreenSpec::new(w, h, 1.0)),
             ..Persona::default()
         })
         .launch()

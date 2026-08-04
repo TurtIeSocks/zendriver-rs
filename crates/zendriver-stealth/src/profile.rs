@@ -865,11 +865,7 @@ mod profile_tests {
 
     #[test]
     fn custom_screen_resolves_onto_fingerprint_when_supplied() {
-        let screen = ScreenSpec {
-            width: 1536,
-            height: 864,
-            device_pixel_ratio: 1.25,
-        };
+        let screen = ScreenSpec::new(1536, 864, 1.25);
         let profile = StealthProfile::native()
             .fingerprint(bare_fp())
             .screen(screen);
