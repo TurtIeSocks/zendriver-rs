@@ -2,11 +2,17 @@
 //!
 //! Resolves a `(version, platform)` pair against the Chrome for Testing
 //! manifest, downloads the zip into a per-version atomic cache layout,
-//! extracts it, and hands back a path to the executable. If the binary is
-//! already cached and runnable, returns the path immediately.
+//! extracts it, and hands back a path to the executable.
+//!
+//! Resolution runs on every call, before the cache is consulted: the cache
+//! is keyed by the resolved version, so the manifest has to be fetched to
+//! know which key to look for. A cached, runnable binary therefore skips the
+//! download and the extraction, but not the manifest request.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime};
 
 use crate::cache::{binary_path, default_cache_dir};
 use crate::download::download;
@@ -27,6 +33,23 @@ pub(crate) const DEFAULT_CFT_URL: &str =
 /// [`VersionSpec::Channel`] for the `Beta`/`Dev`/`Canary` channels (`Stable`
 /// resolves through [`DEFAULT_CFT_URL`] like [`VersionSpec::Latest`]).
 pub(crate) const DEFAULT_CFT_CHANNELS_URL: &str = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json";
+
+/// Marker separating a version from its per-attempt staging suffix.
+///
+/// Staging entries are named `<version>.tmp-<pid>-<attempt>-<nanos>`, with
+/// the archive adding a `.zip` extension on top. The marker is what makes
+/// the stale sweep scopeable: `121.0.0.1.tmp-…` never matches the
+/// `121.0.0.tmp-` prefix of a different version, and the promoted
+/// `<version>/` directory never carries the marker at all.
+const STAGING_MARKER: &str = ".tmp-";
+
+/// How long a staging entry must sit untouched before [`sweep_stale_staging`]
+/// treats it as abandoned by a crashed run.
+///
+/// A CfT archive is ~150 MB, so this has to be far longer than any plausible
+/// download — an in-flight staging directory belonging to another process on
+/// a shared cache volume must never be mistaken for garbage.
+const STAGING_STALE_AFTER: Duration = Duration::from_secs(6 * 60 * 60);
 
 /// Chrome for Testing binary downloader.
 ///
@@ -165,7 +188,10 @@ impl Fetcher {
     /// Resolve, download, extract (on cache miss), and return the path
     /// to the cached Chrome binary.
     ///
-    /// On a cache hit, returns immediately without touching the network.
+    /// The manifest is resolved *before* the cache is probed, so every call
+    /// reaches the Chrome for Testing manifest host. A cache hit skips the
+    /// ~150 MB archive download and the extraction, not the manifest
+    /// request — a fully populated cache still fails without egress.
     ///
     /// # Errors
     ///
@@ -211,7 +237,9 @@ impl Fetcher {
             }
         };
 
-        // Compute final layout + cache hit check.
+        // Compute final layout + cache probe. Note this runs *after* the
+        // resolve above, so it saves the download, not the network round
+        // trip — see the `ensure_chrome` rustdoc.
         tokio::fs::create_dir_all(&cache_dir).await?;
         let final_dir = cache_dir.join(&version);
         let target_bin = binary_path(&cache_dir, &version, platform);
@@ -220,74 +248,162 @@ impl Fetcher {
             return Ok(target_bin);
         }
 
-        // Phase 2: download to <version>.tmp.zip.
-        let tmp_zip = cache_dir.join(format!("{version}.tmp.zip"));
-        let tmp_dir = cache_dir.join(format!("{version}.tmp"));
+        // Drop staging abandoned by a crashed run of this same version.
+        // Scoped by name and by age so a *concurrent* fetcher's in-flight
+        // staging survives — one cache volume may be shared by many
+        // processes.
+        sweep_stale_staging(&cache_dir, &version, STAGING_STALE_AFTER).await;
 
-        // Clean up any stale tmp from a prior crashed run.
-        let _ = tokio::fs::remove_file(&tmp_zip).await;
-        let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
+        // Phase 2: download into staging paths private to this attempt.
+        let (tmp_dir, tmp_zip) = staging_paths(&cache_dir, &version);
 
         emit(&progress_cb, FetcherPhase::Downloading, 0, None);
-        download(&url, &tmp_zip, progress_cb.as_deref().map(|a| a as _)).await?;
+        if let Err(e) = download(&url, &tmp_zip, progress_cb.as_deref().map(|a| a as _)).await {
+            // A download that dies mid-body leaves a partial archive behind;
+            // drop it now rather than waiting for a later run to age it out.
+            let _ = tokio::fs::remove_file(&tmp_zip).await;
+            return Err(e);
+        }
 
         // Phase 2b: optional SHA256 integrity check before we trust the
         // archive enough to extract it.
         if let Some(expected) = self.expected_sha256.as_deref() {
             emit(&progress_cb, FetcherPhase::Verifying, 0, None);
-            let actual = sha256_file(&tmp_zip).await?;
-            if !sha256_eq(expected, &actual) {
-                let _ = tokio::fs::remove_file(&tmp_zip).await;
-                return Err(FetcherError::IntegrityFailed {
+            let verdict = match sha256_file(&tmp_zip).await {
+                Ok(actual) if sha256_eq(expected, &actual) => Ok(()),
+                Ok(actual) => Err(FetcherError::IntegrityFailed {
                     expected: expected.to_string(),
                     actual,
-                });
+                }),
+                Err(e) => Err(e),
+            };
+            if let Err(e) = verdict {
+                let _ = tokio::fs::remove_file(&tmp_zip).await;
+                return Err(e);
             }
         }
 
-        // Phase 3: extract to <version>.tmp/.
+        // Phase 3: extract into the staging dir.
         emit(&progress_cb, FetcherPhase::Extracting, 0, None);
         tokio::fs::create_dir_all(&tmp_dir).await?;
-        // CfT archives place everything under a single `chrome-<platform>/`
-        // directory; pinning the expected prefix locks the extraction to
-        // that layout and rejects mislabeled / tampered archives.
-        let expected_top = platform.cft_top_dir();
-        let extract_result = extract(&tmp_zip, &tmp_dir, Some(expected_top)).await;
 
-        // Always clean the zip, even if extract failed.
-        let _ = tokio::fs::remove_file(&tmp_zip).await;
-        extract_result?;
+        // Phases 3-5 all write into the staging dir, so wrap them: any
+        // failure removes it immediately instead of leaving an abandoned
+        // tree for a later run's sweep to age out.
+        let staged: Result<(), FetcherError> = async {
+            // CfT archives place everything under a single `chrome-<platform>/`
+            // directory; pinning the expected prefix locks the extraction to
+            // that layout and rejects mislabeled / tampered archives.
+            let expected_top = platform.cft_top_dir();
+            let extract_result = extract(&tmp_zip, &tmp_dir, Some(expected_top)).await;
 
-        // Phase 4: ensure executable bit (Unix) BEFORE the atomic rename.
-        // Setting perms after the rename would leave a window where a
-        // concurrent `Fetcher::ensure(...)` on the same cache_dir observes
-        // `final_dir` (cache-hit check at L159) but the binary inside is
-        // still non-executable, forcing a wasteful re-download.
-        emit(&progress_cb, FetcherPhase::Verifying, 0, None);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let tmp_bin = tmp_dir.join(crate::cache::binary_subpath(platform));
-            if tmp_bin.exists() {
-                let mut perms = tokio::fs::metadata(&tmp_bin).await?.permissions();
-                perms.set_mode(perms.mode() | 0o111);
-                tokio::fs::set_permissions(&tmp_bin, perms).await?;
+            // Always clean the zip, even if extract failed.
+            let _ = tokio::fs::remove_file(&tmp_zip).await;
+            extract_result?;
+
+            // Phase 4: ensure executable bit (Unix) BEFORE the atomic rename.
+            // Setting perms after the rename would leave a window where a
+            // concurrent `Fetcher::ensure_chrome` on the same cache_dir sees
+            // `final_dir` from its cache probe but the binary inside is still
+            // non-executable, forcing a wasteful re-download.
+            emit(&progress_cb, FetcherPhase::Verifying, 0, None);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                let tmp_bin = tmp_dir.join(crate::cache::binary_subpath(platform));
+                if tmp_bin.exists() {
+                    let mut perms = tokio::fs::metadata(&tmp_bin).await?.permissions();
+                    perms.set_mode(perms.mode() | 0o111);
+                    tokio::fs::set_permissions(&tmp_bin, perms).await?;
+                }
+            }
+
+            // Phase 5: atomic promote <staging> -> <version>. Staging lives
+            // inside `cache_dir`, so this is a same-filesystem rename.
+            // If `final_dir` already exists (race: someone else just
+            // finished), drop our work and use theirs.
+            match tokio::fs::rename(&tmp_dir, &final_dir).await {
+                Ok(()) => Ok(()),
+                Err(_) if final_dir.exists() => {
+                    let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
+                    Ok(())
+                }
+                Err(e) => Err(FetcherError::Io(e)),
             }
         }
+        .await;
 
-        // Phase 5: atomic promote <version>.tmp -> <version>.
-        // If `final_dir` already exists (race: someone else just finished),
-        // drop our work and use theirs.
-        match tokio::fs::rename(&tmp_dir, &final_dir).await {
-            Ok(()) => {}
-            Err(_) if final_dir.exists() => {
-                let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
-            }
-            Err(e) => return Err(FetcherError::Io(e)),
+        if staged.is_err() {
+            let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
         }
+        staged?;
 
         emit(&progress_cb, FetcherPhase::Done, 0, None);
         Ok(target_bin)
+    }
+}
+
+/// Staging paths for one download attempt, as `(staging_dir, staging_zip)`.
+///
+/// Both sit directly inside `cache_dir` so promoting the finished tree is a
+/// same-filesystem `rename` (moving staging elsewhere would fail with
+/// `EXDEV`). The suffix mixes the OS process id, a process-local attempt
+/// counter, and the wall-clock nanos, so two processes sharing one cache
+/// volume — the CI layout [`Fetcher::cache_dir`] recommends — never stage
+/// into the same directory and cannot corrupt each other's download.
+fn staging_paths(cache_dir: &Path, version: &str) -> (PathBuf, PathBuf) {
+    static ATTEMPT: AtomicU64 = AtomicU64::new(0);
+
+    let attempt = ATTEMPT.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let stem = format!(
+        "{version}{STAGING_MARKER}{pid}-{attempt}-{nanos:x}",
+        pid = std::process::id()
+    );
+
+    let dir = cache_dir.join(&stem);
+    let zip = cache_dir.join(format!("{stem}.zip"));
+    (dir, zip)
+}
+
+/// Remove staging entries for `version` that a crashed run abandoned.
+///
+/// Scoped two ways, because siblings in `cache_dir` may belong to other
+/// live processes: only entries named `<version>.tmp-*` are candidates (a
+/// concurrent fetch of a *different* version is never touched), and only
+/// those untouched for `stale_after` are removed (a concurrent fetch of the
+/// *same* version is left to finish). Errors are swallowed — sweeping is
+/// best-effort housekeeping, not part of the fetch contract.
+async fn sweep_stale_staging(cache_dir: &Path, version: &str, stale_after: Duration) {
+    let prefix = format!("{version}{STAGING_MARKER}");
+    let Ok(mut entries) = tokio::fs::read_dir(cache_dir).await else {
+        return;
+    };
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        if !entry.file_name().to_string_lossy().starts_with(&prefix) {
+            continue;
+        }
+        let Ok(meta) = entry.metadata().await else {
+            continue;
+        };
+        // A clock that jumped backwards yields `Err` from `elapsed()`; treat
+        // that as "not stale" so we never delete a live attempt.
+        let stale = meta
+            .modified()
+            .ok()
+            .and_then(|m| m.elapsed().ok())
+            .is_some_and(|age| age >= stale_after);
+        if !stale {
+            continue;
+        }
+        if meta.is_dir() {
+            let _ = tokio::fs::remove_dir_all(entry.path()).await;
+        } else {
+            let _ = tokio::fs::remove_file(entry.path()).await;
+        }
     }
 }
 
@@ -309,7 +425,7 @@ fn emit(
 /// Compute the lowercase-hex SHA256 of `path`'s contents. The hash is
 /// computed on a `spawn_blocking` thread so a multi-hundred-MB Chrome zip
 /// doesn't block the runtime.
-async fn sha256_file(path: &std::path::Path) -> Result<String, FetcherError> {
+async fn sha256_file(path: &Path) -> Result<String, FetcherError> {
     let path = path.to_path_buf();
     tokio::task::spawn_blocking(move || -> std::io::Result<String> {
         use sha2::Digest as _;
@@ -342,7 +458,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 /// True iff `path` exists and (on Unix) has any executable bit set.
-async fn is_runnable(path: &std::path::Path) -> bool {
+async fn is_runnable(path: &Path) -> bool {
     let Ok(meta) = tokio::fs::metadata(path).await else {
         return false;
     };
@@ -382,6 +498,21 @@ mod tests {
             writer.finish().unwrap();
         }
         buf.into_inner()
+    }
+
+    /// Names of every staging entry still sitting in `cache_root`. Staging
+    /// paths are unique per attempt now, so tests assert on the marker
+    /// rather than on one hard-coded `<version>.tmp` name.
+    async fn staging_leftovers(cache_root: &Path) -> Vec<String> {
+        let mut found = Vec::new();
+        let mut entries = tokio::fs::read_dir(cache_root).await.unwrap();
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.contains(STAGING_MARKER) {
+                found.push(name);
+            }
+        }
+        found
     }
 
     #[tokio::test]
@@ -435,9 +566,9 @@ mod tests {
         let extracted = tokio::fs::read(&bin_path).await.unwrap();
         assert_eq!(extracted, sentinel);
 
-        // No leftover tmp artifacts.
-        assert!(!cache_root.path().join("120.0.6099.234.tmp.zip").exists());
-        assert!(!cache_root.path().join("120.0.6099.234.tmp").exists());
+        // No leftover staging artifacts.
+        let leftovers = staging_leftovers(cache_root.path()).await;
+        assert!(leftovers.is_empty(), "staging left behind: {leftovers:?}");
 
         // Executable bit set on Unix.
         #[cfg(unix)]
@@ -527,8 +658,9 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(err, FetcherError::IntegrityFailed { .. }));
-        // Tmp zip cleaned up; extraction never ran so no version dir.
-        assert!(!cache_root.path().join("120.0.6099.234.tmp.zip").exists());
+        // Staging zip cleaned up; extraction never ran so no version dir.
+        let leftovers = staging_leftovers(cache_root.path()).await;
+        assert!(leftovers.is_empty(), "staging left behind: {leftovers:?}");
         assert!(!cache_root.path().join("120.0.6099.234").exists());
     }
 
@@ -597,5 +729,125 @@ mod tests {
         );
         let extracted = tokio::fs::read(&bin_path).await.unwrap();
         assert_eq!(extracted, sentinel);
+    }
+
+    /// Two attempts for the same version must get different staging paths —
+    /// this is what stops two processes on a shared cache volume from
+    /// downloading into the same file. Staging also has to stay inside
+    /// `cache_dir` so the promote is a same-filesystem rename.
+    #[test]
+    fn staging_paths_are_unique_per_attempt() {
+        let root = Path::new("/tmp/cache");
+        let (dir_a, zip_a) = staging_paths(root, "120.0.6099.234");
+        let (dir_b, zip_b) = staging_paths(root, "120.0.6099.234");
+
+        assert_ne!(dir_a, dir_b, "staging dirs collided: {dir_a:?}");
+        assert_ne!(zip_a, zip_b, "staging zips collided: {zip_a:?}");
+
+        assert_eq!(dir_a.parent(), Some(root));
+        assert_eq!(zip_a.parent(), Some(root));
+
+        // Never collides with the promoted version dir.
+        assert_ne!(dir_a, root.join("120.0.6099.234"));
+
+        let name = dir_a.file_name().unwrap().to_str().unwrap();
+        assert!(
+            name.starts_with(&format!("120.0.6099.234{STAGING_MARKER}")),
+            "unexpected staging name: {name}"
+        );
+        assert_eq!(zip_a, root.join(format!("{name}.zip")));
+    }
+
+    /// The sweep only touches staging belonging to the version being
+    /// fetched. `Duration::ZERO` makes every entry count as stale, which
+    /// isolates the name scoping from the age threshold.
+    #[tokio::test]
+    async fn sweep_removes_only_this_versions_stale_staging() {
+        let root = tempfile::tempdir().unwrap();
+        let mine = root.path().join("120.0.6099.234.tmp-1-0-abc");
+        let mine_zip = root.path().join("120.0.6099.234.tmp-1-0-abc.zip");
+        let other_version = root.path().join("121.0.6100.10.tmp-1-0-abc");
+        let promoted = root.path().join("120.0.6099.234");
+
+        tokio::fs::create_dir_all(mine.join("chrome-linux64"))
+            .await
+            .unwrap();
+        tokio::fs::write(&mine_zip, b"partial").await.unwrap();
+        tokio::fs::create_dir_all(&other_version).await.unwrap();
+        tokio::fs::create_dir_all(&promoted).await.unwrap();
+
+        sweep_stale_staging(root.path(), "120.0.6099.234", Duration::ZERO).await;
+
+        assert!(!mine.exists(), "stale staging dir should be swept");
+        assert!(!mine_zip.exists(), "stale staging zip should be swept");
+        assert!(
+            other_version.exists(),
+            "another version's staging must survive"
+        );
+        assert!(promoted.exists(), "promoted version dir must survive");
+    }
+
+    /// Staging younger than the threshold belongs to a fetcher that is
+    /// still running, possibly in another process. It must survive.
+    #[tokio::test]
+    async fn sweep_leaves_fresh_staging_alone() {
+        let root = tempfile::tempdir().unwrap();
+        let (dir, zip) = staging_paths(root.path(), "120.0.6099.234");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        tokio::fs::write(&zip, b"in flight").await.unwrap();
+
+        sweep_stale_staging(root.path(), "120.0.6099.234", Duration::from_secs(3600)).await;
+
+        assert!(dir.exists(), "a concurrent fetcher's staging dir was swept");
+        assert!(zip.exists(), "a concurrent fetcher's staging zip was swept");
+    }
+
+    /// A download that fails must not leave its partial archive in the
+    /// cache dir.
+    #[tokio::test]
+    async fn failed_download_leaves_no_staging_behind() {
+        let server = MockServer::start().await;
+        let manifest_json = format!(
+            r#"{{"versions":[{{"version":"120.0.6099.234","revision":"1234","downloads":{{"chrome":[{{"platform":"linux64","url":"{server}/chrome.zip"}}]}}}}]}}"#,
+            server = server.uri()
+        );
+
+        Mock::given(method("GET"))
+            .and(path("/manifest.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(manifest_json))
+            .mount(&server)
+            .await;
+        // Claim more bytes than we send, so the body stream errors after the
+        // partial archive has already been written to disk.
+        Mock::given(method("GET"))
+            .and(path("/chrome.zip"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Content-Length", "99999")
+                    .set_body_bytes(b"truncated".to_vec()),
+            )
+            .mount(&server)
+            .await;
+
+        let cache_root = tempfile::tempdir().unwrap();
+        let err = Fetcher::new()
+            .cache_dir(cache_root.path())
+            .platform(Platform::LinuxX64)
+            .version(VersionSpec::Latest)
+            .manifest_url(format!("{}/manifest.json", server.uri()))
+            .ensure_chrome()
+            .await
+            .unwrap_err();
+
+        assert!(
+            !matches!(err, FetcherError::IntegrityFailed { .. }),
+            "expected a download failure, got {err}"
+        );
+        let leftovers = staging_leftovers(cache_root.path()).await;
+        assert!(
+            leftovers.is_empty(),
+            "partial download left behind: {leftovers:?}"
+        );
+        assert!(!cache_root.path().join("120.0.6099.234").exists());
     }
 }

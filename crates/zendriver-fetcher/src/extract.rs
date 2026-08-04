@@ -6,7 +6,8 @@
 //! [`tokio::task::spawn_blocking`] handles all three.
 //!
 //! On Unix, executable bits from the archive's `unix_mode()` are preserved
-//! so the extracted Chrome binary stays runnable without a chmod pass.
+//! (masked to the standard rwx triplet) so the extracted Chrome binary stays
+//! runnable without a chmod pass.
 //!
 //! # Trust boundary
 //!
@@ -31,11 +32,23 @@
 //!    entry to live under a single named top-level directory (e.g.
 //!    `chrome-linux64/`); enforced from the fetcher to lock the archive
 //!    to the CfT layout we expect.
+//! 5. Mode bits are masked with [`ARCHIVE_MODE_MASK`] before they reach
+//!    `set_permissions`, so a setuid / setgid / sticky bit in the archive
+//!    can never land on an extracted file.
 
 use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::error::FetcherError;
+
+/// Permission bits kept from an archive entry's `unix_mode()`.
+///
+/// Chrome for Testing only needs the standard rwx triplet, so the mask drops
+/// the file-type bits *and* setuid / setgid / sticky (`0o7000`). Without it a
+/// hostile or malformed archive could get a setuid-root or setgid binary
+/// written into the cache directory.
+#[cfg(unix)]
+pub(crate) const ARCHIVE_MODE_MASK: u32 = 0o0777;
 
 /// Unzips `archive_path` into `dest_dir`, preserving directory layout and
 /// (on Unix) executable bits from the archive.
@@ -150,7 +163,8 @@ fn extract_blocking(
         #[cfg(unix)]
         if let Some(mode) = entry.unix_mode() {
             use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(mode))?;
+            let safe_mode = mode & ARCHIVE_MODE_MASK;
+            std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(safe_mode))?;
         }
     }
 
@@ -266,5 +280,111 @@ mod tests {
             err.to_string().contains("symlink"),
             "unexpected error: {err}"
         );
+    }
+
+    /// Overwrite the external-attributes field of every central-directory
+    /// header in `zip_bytes` with `mode`, shifted into the high half where
+    /// `ZipFile::unix_mode` reads it.
+    ///
+    /// The `zip` writer masks `unix_permissions` down to `0o777`, so a
+    /// setuid archive cannot be produced through its API — patching the
+    /// bytes is the only way to model a hostile or malformed archive.
+    /// Layout per APPNOTE 4.3.12: the header starts with `PK\x01\x02` and
+    /// carries its 4-byte external attributes at offset 38.
+    #[cfg(unix)]
+    fn patch_central_dir_mode(zip_bytes: &mut [u8], mode: u32) {
+        const CENTRAL_DIR_SIG: [u8; 4] = [b'P', b'K', 1, 2];
+        const EXTERNAL_ATTRS_OFFSET: usize = 38;
+
+        let attrs = (mode << 16).to_le_bytes();
+        let mut patched = 0usize;
+        for i in 0..zip_bytes.len().saturating_sub(EXTERNAL_ATTRS_OFFSET + 4) {
+            if zip_bytes[i..i + 4] == CENTRAL_DIR_SIG {
+                let at = i + EXTERNAL_ATTRS_OFFSET;
+                zip_bytes[at..at + 4].copy_from_slice(&attrs);
+                patched += 1;
+            }
+        }
+        assert!(patched > 0, "no central directory header found in zip");
+    }
+
+    /// A hostile archive that asks for setuid + setgid + sticky gets only
+    /// the rwx triplet applied: the extracted file must not be setuid.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn extract_masks_setuid_setgid_and_sticky_bits() {
+        use std::os::unix::fs::PermissionsExt as _;
+        use zip::write::SimpleFileOptions;
+
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = dir.path().join("setuid.zip");
+        let dest_dir = dir.path().join("out");
+        std::fs::create_dir_all(&dest_dir).unwrap();
+
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut buf);
+            writer
+                .start_file(
+                    "chrome-linux64/chrome",
+                    SimpleFileOptions::default().unix_permissions(0o755),
+                )
+                .unwrap();
+            writer.write_all(b"payload").unwrap();
+            writer.finish().unwrap();
+        }
+        let mut zip_bytes = buf.into_inner();
+        // S_IFREG | setuid | setgid | sticky | rwxr-xr-x
+        patch_central_dir_mode(&mut zip_bytes, 0o100_000 | 0o7755);
+        std::fs::write(&zip_path, zip_bytes).unwrap();
+
+        extract(&zip_path, &dest_dir, Some("chrome-linux64"))
+            .await
+            .unwrap();
+
+        let out = dest_dir.join("chrome-linux64/chrome");
+        let mode = std::fs::metadata(&out).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o7777,
+            0o755,
+            "archive mode bits must be masked to {ARCHIVE_MODE_MASK:o}, got {:o}",
+            mode & 0o7777
+        );
+    }
+
+    /// The mask must not cost us the executable bit on a well-formed CfT
+    /// archive — a plain `0o755` entry still extracts as `0o755`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn extract_preserves_ordinary_executable_bits() {
+        use std::os::unix::fs::PermissionsExt as _;
+        use zip::write::SimpleFileOptions;
+
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = dir.path().join("exec.zip");
+        let dest_dir = dir.path().join("out");
+        std::fs::create_dir_all(&dest_dir).unwrap();
+
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut buf);
+            writer
+                .start_file(
+                    "chrome-linux64/chrome",
+                    SimpleFileOptions::default().unix_permissions(0o755),
+                )
+                .unwrap();
+            writer.write_all(b"payload").unwrap();
+            writer.finish().unwrap();
+        }
+        std::fs::write(&zip_path, buf.into_inner()).unwrap();
+
+        extract(&zip_path, &dest_dir, Some("chrome-linux64"))
+            .await
+            .unwrap();
+
+        let out = dest_dir.join("chrome-linux64/chrome");
+        let mode = std::fs::metadata(&out).unwrap().permissions().mode();
+        assert_eq!(mode & 0o7777, 0o755, "got {:o}", mode & 0o7777);
     }
 }

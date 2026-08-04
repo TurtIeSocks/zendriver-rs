@@ -11,8 +11,10 @@
 //!       Google Chrome for Testing.app/Contents/MacOS/...  (macOS)
 //! ```
 //!
-//! Per-version dirs are written atomically: download + extract land under
-//! a `<version>.tmp/` sibling, then a single rename promotes it.
+//! Per-version dirs are written atomically: download + extract land under a
+//! `<version>.tmp-<pid>-<attempt>-<nanos>/` sibling — unique per attempt, so
+//! processes sharing one cache volume never stage into the same place —
+//! then a single rename promotes it.
 
 use std::env;
 use std::path::{Path, PathBuf};

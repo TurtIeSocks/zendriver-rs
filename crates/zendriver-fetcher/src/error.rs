@@ -30,7 +30,10 @@ pub enum FetcherError {
     /// SHA256 checksum mismatch on the downloaded archive.
     #[error("integrity check failed: expected {expected}, got {actual}")]
     IntegrityFailed {
-        /// SHA256 from the manifest.
+        /// The SHA256 the caller pinned via
+        /// [`crate::Fetcher::expected_sha256`]. The CfT manifest does not
+        /// publish per-download hashes, so this never comes from the
+        /// manifest.
         expected: String,
         /// SHA256 computed from the downloaded bytes.
         actual: String,

@@ -39,8 +39,14 @@ let browser = zendriver::Browser::builder()
 
 `ensure_chrome` resolves the latest stable CFT version for the host
 platform, downloads + extracts it on cache miss, and points the
-[`BrowserBuilder`] at the resulting binary. On a cache hit the call
-returns in milliseconds and skips the network.
+[`BrowserBuilder`] at the resulting binary.
+
+The cache is keyed by the resolved version, so the manifest has to be
+fetched before the cache can be probed. A cache hit therefore skips the
+~150 MB download and the extraction — one manifest request instead of
+tens of seconds of transfer — but it is not an offline path. Every call
+needs to reach `https://googlechromelabs.github.io`, and a fully
+populated cache still errors without egress.
 
 ## The full builder
 
@@ -98,11 +104,18 @@ layout verbatim:
       Google Chrome for Testing.app/Contents/MacOS/...  (macOS Apple Silicon)
 ```
 
-Writes are atomic. The fetcher downloads + extracts into a
-`<version>.tmp/` sibling, then a single `rename` promotes it to
-`<version>/`. Crashing mid-download leaves a `.tmp/` that the next run
-detects, deletes, and retries — no half-extracted binaries ever appear
-under the canonical name.
+Writes are atomic. The fetcher downloads + extracts into a staging
+sibling named `<version>.tmp-<pid>-<attempt>-<nanos>/`, then a single
+`rename` promotes it to `<version>/`. No half-extracted binary ever
+appears under the canonical name.
+
+The staging name is unique per attempt, which is what makes a shared
+cache volume safe: two jobs fetching the same version at the same time
+stage into separate directories and race only on the final `rename`,
+where the loser discards its own tree and uses the winner's. Staging
+left behind by a crash is swept on a later run of the *same* version,
+and only once it has sat untouched for six hours — long enough that an
+in-flight download in another process is never mistaken for garbage.
 
 ## Progress callbacks
 
@@ -164,17 +177,22 @@ A minimal `.github/workflows/test.yml` snippet:
 - run: cargo test --features fetcher
 ```
 
-`actions/cache` rehydrates the cache dir; the fetcher detects the cache
-hit and skips the download. First run takes ~30 s on GitHub's free
-runners; cached runs take &lt;1 s in `ensure_chrome`.
+`actions/cache` rehydrates the cache dir; the fetcher resolves the
+manifest, detects the cache hit, and skips the download. First run takes
+~30 s on GitHub's free runners; cached runs take &lt;1 s in
+`ensure_chrome` — the manifest request, not the archive. The runner
+still needs egress to `googlechromelabs.github.io` either way.
 
 ## When NOT to use it
 
 - **You already have Chrome on the host** and don't care about
   version-pinning — the built-in PATH discovery is faster.
 - **Network-restricted environments** that can't reach
-  `https://googlechromelabs.github.io` or the CFT CDN — pre-populate
-  the cache out-of-band or ship a Docker image with Chrome baked in.
+  `https://googlechromelabs.github.io` or the CFT CDN. Pre-populating
+  the cache dir is not enough — the manifest is resolved before the
+  cache is probed, so `ensure_chrome` still errors. Point
+  `BrowserBuilder::executable` at the binary directly, or ship a Docker
+  image with Chrome baked in.
 - **You need Chrome stable on Linux ARM64** — CFT doesn't ship a
   `linux-arm64` build today;
   [`Platform::auto_detect`] returns `None` on that host and
