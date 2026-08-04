@@ -31,6 +31,35 @@ pub(crate) struct OutboundCmd {
 /// Default broadcast bus capacity. Lagged subscribers drop frames.
 pub(crate) const EVENT_BUS_CAPACITY: usize = 1024;
 
+/// How many dispatched commands may pass between sweeps of the pending-reply
+/// map.
+///
+/// A `call_raw` that hits its budget drops its reply receiver and walks away,
+/// but the matching `oneshot::Sender` stays keyed in `pending` until Chrome
+/// answers that id — which, for the wedged browser the budget exists to
+/// escape, never happens. Left alone the map grows for the life of the
+/// connection.
+///
+/// Sweeping every 256 dispatches bounds the debris at a few hundred
+/// pointer-sized entries for one `HashMap::retain` per 256 commands.
+/// Deliberately **not** a capacity cap on `pending`: refusing to enqueue
+/// commands would shed real work on a busy connection, which is worse than a
+/// slow leak.
+const PENDING_SWEEP_INTERVAL: u64 = 256;
+
+/// Drop every pending entry whose caller has gone away — its reply receiver
+/// dropped, i.e. a `call_raw` that timed out or was cancelled. Returns how
+/// many entries were removed.
+///
+/// Dropping the sender early is invisible to the caller (it is already gone);
+/// a late reply for a swept id lands on the existing "response for unknown id"
+/// branch, exactly as it already does when a caller drops mid-flight.
+fn sweep_pending(pending: &mut HashMap<u64, oneshot::Sender<Result<Value, CdpRpcError>>>) -> usize {
+    let before = pending.len();
+    pending.retain(|_id, reply| !reply.is_closed());
+    before - pending.len()
+}
+
 /// Accounted-bus plumbing for one actor run: the second, opt-in broadcast
 /// sender plus this run's generation number. Bundled into a struct (rather
 /// than two more [`run_actor`] parameters) to keep the function signature
@@ -101,6 +130,9 @@ pub(crate) async fn run_actor<S>(
     // reconnect); only advances when `accounted_tx` actually has a
     // subscriber, since it counts positions *on the accounted bus*.
     let mut next_accounted_sequence: u64 = 1;
+    // Commands dispatched since the last `sweep_pending`. See
+    // [`PENDING_SWEEP_INTERVAL`].
+    let mut dispatched_since_sweep: u64 = 0;
 
     // Sentinel stamped onto drained pendings when the loop exits. Defaults to
     // the clean-shutdown code; the unexpected-ws-death branches below flip it
@@ -134,8 +166,16 @@ pub(crate) async fn run_actor<S>(
                         trace!(id, method = %cmd.method, "send");
                         if let Err(e) = ws.send(Message::text(s)).await {
                             error!("ws send failed: {e}");
+                            // Same sentinel the remaining pendings get below:
+                            // a failed write means the socket died, and this
+                            // command is the one that hit the death first. A
+                            // generic `-32000` here would surface as an
+                            // ordinary `CallError::Rpc` — a code Chrome itself
+                            // emits constantly — so the caller's
+                            // `Disconnected` recovery would never fire for the
+                            // very call that discovered the disconnect.
                             let _ = cmd.reply.send(Err(CdpRpcError {
-                                code: -32000,
+                                code: crate::connection::DISCONNECTED_CODE,
                                 message: format!("ws send failed: {e}"),
                                 data: None,
                             }));
@@ -146,6 +186,18 @@ pub(crate) async fn run_actor<S>(
                             break;
                         }
                         pending.insert(id, cmd.reply);
+                        dispatched_since_sweep += 1;
+                        if dispatched_since_sweep >= PENDING_SWEEP_INTERVAL {
+                            dispatched_since_sweep = 0;
+                            let swept = sweep_pending(&mut pending);
+                            if swept > 0 {
+                                debug!(
+                                    swept,
+                                    remaining = pending.len(),
+                                    "swept pendings whose caller had gone away"
+                                );
+                            }
+                        }
                     }
                     Err(e) => {
                         let _ = cmd.reply.send(Err(CdpRpcError {
@@ -304,6 +356,26 @@ pub(crate) async fn run_actor<S>(
                 }
             }
         }
+    }
+
+    // Latch *why* this actor stopped, so calls that arrive after it is gone
+    // can still tell "Chrome died" from "I closed it". Without this, only
+    // in-flight calls (drained just below with `drain_code`) ever see
+    // `Disconnected`: every later call finds a closed command channel, whose
+    // `SendError` carries no reason, and reports `Shutdown`.
+    //
+    // Ordering is what makes the flag trustworthy. `cmd_rx` is dropped when
+    // this function returns, which is strictly after this store, so any sender
+    // that observes the channel closed necessarily observes the flag too —
+    // there is no window where a caller sees the death but not its cause.
+    // `Release`/`Acquire` (rather than the `Relaxed` used for the advisory
+    // counters on `ConnectionInner`) is the point: this store must be visible
+    // to the thread that later learns of the channel close.
+    if let Some(inner) = weak_inner.upgrade() {
+        inner.socket_died.store(
+            drain_code == crate::connection::DISCONNECTED_CODE,
+            std::sync::atomic::Ordering::Release,
+        );
     }
 
     // Drain pending into transport errors so callers don't hang. `drain_code`
@@ -474,7 +546,21 @@ mod tests {
         mpsc::Sender<Result<Message, tokio_tungstenite::tungstenite::Error>>,
         mpsc::Receiver<Message>,
     ) {
-        let (driver_tx_out, test_rx) = mpsc::channel::<Message>(32);
+        duplex_pair_with_capacity(32)
+    }
+
+    /// [`duplex_pair`] with a caller-chosen outbound capacity. The driver's
+    /// sink is `try_send`-based, so a test that dispatches a large burst
+    /// without draining needs room for all of it — otherwise the write fails
+    /// and kills the actor, which is a different test than the one intended.
+    fn duplex_pair_with_capacity(
+        outbound_capacity: usize,
+    ) -> (
+        DriverStream,
+        mpsc::Sender<Result<Message, tokio_tungstenite::tungstenite::Error>>,
+        mpsc::Receiver<Message>,
+    ) {
+        let (driver_tx_out, test_rx) = mpsc::channel::<Message>(outbound_capacity);
         let (test_tx_in, driver_rx_in) =
             mpsc::channel::<Result<Message, tokio_tungstenite::tungstenite::Error>>(32);
 
@@ -851,6 +937,103 @@ mod tests {
         let res = reply_rx.await.unwrap();
         let err = res.unwrap_err();
         assert_eq!(err.code, crate::connection::DISCONNECTED_CODE);
+
+        shutdown.cancel();
+        actor_handle.await.unwrap();
+    }
+
+    // ---------- Pending-map sweep ----------
+
+    #[test]
+    fn sweep_pending_drops_abandoned_callers_and_keeps_live_ones() {
+        let mut pending: HashMap<u64, oneshot::Sender<Result<Value, CdpRpcError>>> = HashMap::new();
+
+        // A caller still waiting on its reply.
+        let (live_tx, _live_rx) = oneshot::channel();
+        pending.insert(1, live_tx);
+        // Two callers that hit their budget and walked away — their reply
+        // receivers are gone, but the senders would otherwise sit here until
+        // Chrome answered ids it may never answer.
+        for id in [2u64, 3] {
+            let (abandoned_tx, abandoned_rx) = oneshot::channel();
+            drop(abandoned_rx);
+            pending.insert(id, abandoned_tx);
+        }
+
+        assert_eq!(sweep_pending(&mut pending), 2);
+        assert_eq!(pending.len(), 1);
+        assert!(
+            pending.contains_key(&1),
+            "a caller still waiting must never be swept"
+        );
+    }
+
+    /// The sweep must reap only callers that are gone: a call still waiting
+    /// has to survive crossing the sweep boundary and still get routed when
+    /// Chrome finally answers.
+    #[tokio::test]
+    async fn live_pending_survives_the_sweep_boundary() {
+        let outbound_capacity = PENDING_SWEEP_INTERVAL as usize * 2 + 8;
+        let (ws, test_tx, _test_rx) = duplex_pair_with_capacity(outbound_capacity);
+        let (cmd_tx, cmd_rx) = mpsc::channel::<OutboundCmd>(8);
+        let (event_tx, _event_rx) = broadcast::channel::<RawEvent>(EVENT_BUS_CAPACITY);
+        let shutdown = CancellationToken::new();
+        let actor_handle = tokio::spawn(run_actor(
+            ws,
+            cmd_rx,
+            event_tx,
+            AccountedBus {
+                tx: broadcast::channel::<AccountedRawEvent>(EVENT_BUS_CAPACITY).0,
+                generation: 1,
+            },
+            shutdown.clone(),
+            Vec::new(),
+            Weak::new(),
+        ));
+
+        // The one caller that stays alive. First command dispatched, so id 1.
+        let (live_reply_tx, live_reply_rx) = oneshot::channel();
+        cmd_tx
+            .send(OutboundCmd {
+                method: "Page.navigate".into(),
+                params: json!({ "url": "https://x.test" }),
+                session_id: None,
+                reply: live_reply_tx,
+            })
+            .await
+            .unwrap();
+
+        // Enough abandoned callers to cross the sweep interval twice over.
+        for _ in 0..PENDING_SWEEP_INTERVAL * 2 {
+            let (abandoned_tx, abandoned_rx) = oneshot::channel();
+            drop(abandoned_rx);
+            cmd_tx
+                .send(OutboundCmd {
+                    method: "Abandoned.call".into(),
+                    params: json!({}),
+                    session_id: None,
+                    reply: abandoned_tx,
+                })
+                .await
+                .unwrap();
+        }
+
+        // The actor's select is `biased` with `cmd_rx` ahead of the socket
+        // read, so every one of those commands (and therefore both sweeps) is
+        // processed before this reply is routed.
+        test_tx
+            .send(Ok(Message::text(
+                json!({ "id": 1, "result": { "frameId": "F1" } }).to_string(),
+            )))
+            .await
+            .unwrap();
+
+        let res = tokio::time::timeout(Duration::from_secs(5), live_reply_rx)
+            .await
+            .expect("a live pending must still be routable after a sweep")
+            .unwrap()
+            .unwrap();
+        assert_eq!(res["frameId"], "F1");
 
         shutdown.cancel();
         actor_handle.await.unwrap();
