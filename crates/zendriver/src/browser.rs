@@ -1462,28 +1462,38 @@ impl BrowserBuilder {
         if explicit_locale {
             return;
         }
-        if let Some(geo) = resolver.resolve().await {
-            let mut derived = zendriver_stealth::geo::persona(geo.country);
-            // The exact probe timezone (when the source knows it) beats
-            // `persona`'s country-representative zone — precise beats
-            // approximate for the SAME field, still below anything the
-            // caller pinned explicitly (handled by the overlay direction
-            // just below).
-            if let Some(tz) = geo.timezone {
-                derived.timezone = Some(tz);
-            }
-            self.persona_overlay = Some(match self.persona_overlay.take() {
-                // Same direction as `geo_locale` above: `derived.overlay(existing)`
-                // — `existing` is the ARG so its explicit fields (e.g. a
-                // pinned `.timezone` with no locale) win; `derived` only
-                // fills gaps. The early return above guarantees
-                // `existing.locale` is `None` here, so the derived locale
-                // always comes through — this only changes precedence for
-                // OTHER fields (e.g. `timezone`) that `existing` may have set.
-                Some(existing) => derived.overlay(existing),
-                None => derived,
-            });
+        // A failed probe is NOT "no geo data" — it silently launches the
+        // default (US-English) persona behind whatever exit IP the proxy
+        // actually has, which is exactly the incoherence `geo_auto` exists
+        // to prevent. The resolver has already logged *why* it gave up;
+        // this records the consequence, since nothing downstream can.
+        let Some(geo) = resolver.resolve().await else {
+            tracing::warn!(
+                "geo_auto: resolver returned no geo; persona keeps its default locale/timezone, \
+                 which may not match the exit IP"
+            );
+            return;
+        };
+        let mut derived = zendriver_stealth::geo::persona(geo.country);
+        // The exact probe timezone (when the source knows it) beats
+        // `persona`'s country-representative zone — precise beats
+        // approximate for the SAME field, still below anything the
+        // caller pinned explicitly (handled by the overlay direction
+        // just below).
+        if let Some(tz) = geo.timezone {
+            derived.timezone = Some(tz);
         }
+        self.persona_overlay = Some(match self.persona_overlay.take() {
+            // Same direction as `geo_locale` above: `derived.overlay(existing)`
+            // — `existing` is the ARG so its explicit fields (e.g. a
+            // pinned `.timezone` with no locale) win; `derived` only
+            // fills gaps. The early return above guarantees
+            // `existing.locale` is `None` here, so the derived locale
+            // always comes through — this only changes precedence for
+            // OTHER fields (e.g. `timezone`) that `existing` may have set.
+            Some(existing) => derived.overlay(existing),
+            None => derived,
+        });
     }
 
     /// Override a single fingerprint [`Surface`]'s render [`Strategy`].

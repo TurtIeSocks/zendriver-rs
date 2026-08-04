@@ -585,7 +585,50 @@ impl Frame {
         })
     }
 
+    /// Re-bind a rejected `frame_id` by finding this frame's current id in
+    /// the live `Page.getFrameTree`.
+    ///
+    /// A single child under the recorded parent is unambiguous. With
+    /// several, the recorded `name` and `url` are the only things that tell
+    /// them apart — and when neither singles one out, this returns
+    /// [`ZendriverError::FrameNotFound`] instead of binding the first
+    /// depth-first hit. A wrong bind is worse than an error: it reports
+    /// `Ok` and then runs every later `evaluate` / query against a
+    /// different iframe's document.
     async fn discover_current_frame_id(&self) -> Result<String> {
+        /// One candidate child frame, as reported by `Page.getFrameTree`.
+        struct Child {
+            id: String,
+            name: Option<String>,
+            url: Option<String>,
+        }
+        /// Depth-first collect of EVERY child of `parent` — all of them,
+        /// not just the first, since the count is what reveals ambiguity.
+        fn collect_children(node: &Value, parent: &str, out: &mut Vec<Child>) {
+            if let Some(children) = node["childFrames"].as_array() {
+                for c in children {
+                    let f = &c["frame"];
+                    if f["parentId"].as_str() == Some(parent) {
+                        if let Some(id) = f["id"].as_str() {
+                            out.push(Child {
+                                id: id.to_string(),
+                                name: f["name"].as_str().map(str::to_string),
+                                url: f["url"].as_str().map(str::to_string),
+                            });
+                        }
+                    }
+                    collect_children(c, parent, out);
+                }
+            }
+        }
+        /// The one candidate satisfying `pred`, or `None` when zero or
+        /// several do — "several" must not resolve to "the first".
+        fn sole_match(candidates: &[Child], pred: impl Fn(&Child) -> bool) -> Option<&Child> {
+            let mut hits = candidates.iter().filter(|c| pred(c));
+            let first = hits.next()?;
+            hits.next().is_none().then_some(first)
+        }
+
         let parent = self.inner.parent_frame_id.as_deref().ok_or_else(|| {
             ZendriverError::Navigation(
                 "frame_id rejected and no parent_frame_id recorded to recover from".into(),
@@ -596,31 +639,37 @@ impl Frame {
             .session
             .call("Page.getFrameTree", json!({}))
             .await?;
-        let main = tree["frameTree"].clone();
-        // Walk: depth-first. Find a child whose parentId matches `parent`
-        // and which is not the main frame. Single-iframe pages always
-        // win; multi-iframe pages get the first matching child, which
-        // is the best we can do without a name/url to disambiguate.
-        fn walk_for_child(node: &serde_json::Value, parent: &str) -> Option<String> {
-            if let Some(children) = node["childFrames"].as_array() {
-                for c in children {
-                    if c["frame"]["parentId"].as_str() == Some(parent) {
-                        if let Some(id) = c["frame"]["id"].as_str() {
-                            return Some(id.to_string());
-                        }
-                    }
-                    if let Some(found) = walk_for_child(c, parent) {
-                        return Some(found);
-                    }
-                }
-            }
-            None
-        }
-        walk_for_child(&main, parent).ok_or_else(|| {
-            ZendriverError::FrameNotFound(format!(
+        let mut candidates = Vec::new();
+        collect_children(&tree["frameTree"], parent, &mut candidates);
+
+        if candidates.is_empty() {
+            return Err(ZendriverError::FrameNotFound(format!(
                 "no child frame found under parent {parent} during recovery"
-            ))
-        })
+            )));
+        }
+        if candidates.len() == 1 {
+            return Ok(candidates.swap_remove(0).id);
+        }
+        // Several siblings: only a unique name or url match may bind.
+        let name = self.inner.name.as_deref().filter(|n| !n.is_empty());
+        if let Some(name) = name {
+            if let Some(hit) = sole_match(&candidates, |c| c.name.as_deref() == Some(name)) {
+                return Ok(hit.id.clone());
+            }
+        }
+        let url = self.inner.url.read().await.clone();
+        if !url.is_empty() {
+            if let Some(hit) = sole_match(&candidates, |c| c.url.as_deref() == Some(url.as_str())) {
+                return Ok(hit.id.clone());
+            }
+        }
+        Err(ZendriverError::FrameNotFound(format!(
+            "frame id recovery under parent {parent} is ambiguous: {} sibling frames, and neither \
+             the recorded name ({}) nor url ({}) matches exactly one",
+            candidates.len(),
+            name.unwrap_or("<none>"),
+            if url.is_empty() { "<none>" } else { &url },
+        )))
     }
 
     /// Shared post-processing for `Runtime.evaluate` responses — checks
@@ -926,6 +975,165 @@ mod tests {
             }
             other => panic!("expected Navigation error, got: {other:?}"),
         }
+        conn.shutdown();
+    }
+
+    // --- stale frame-id recovery (`discover_current_frame_id`) ----------
+
+    /// A `Frame` whose recorded id Chrome will reject, forcing
+    /// `ensure_isolated_world` down the recovery path.
+    fn stale_frame(session: SessionHandle, name: Option<&str>, url: &str) -> Frame {
+        Frame::new(
+            "STALE".to_string(),
+            Some("PARENT".to_string()),
+            url.to_string(),
+            name.map(str::to_string),
+            session,
+            Weak::new(),
+        )
+    }
+
+    /// Drain the rejected first `Page.createIsolatedWorld` and answer the
+    /// recovery `Page.getFrameTree` with `children` under `PARENT`.
+    async fn reject_then_serve_tree(mock: &mut MockConnection, children: Value) {
+        let id_world = mock.expect_cmd("Page.createIsolatedWorld").await;
+        assert_eq!(mock.last_sent()["params"]["frameId"], "STALE");
+        mock.reply_err(id_world, -32602, "No frame for given id found")
+            .await;
+        let id_tree = mock.expect_cmd("Page.getFrameTree").await;
+        mock.reply(
+            id_tree,
+            json!({
+                "frameTree": {
+                    "frame": { "id": "PARENT", "url": "https://host.test/" },
+                    "childFrames": children,
+                }
+            }),
+        )
+        .await;
+    }
+
+    fn tree_frame(id: &str, name: &str, url: &str) -> Value {
+        json!({ "frame": { "id": id, "parentId": "PARENT", "name": name, "url": url } })
+    }
+
+    /// Two sibling iframes and nothing to tell them apart: recovery must
+    /// FAIL. Binding the first depth-first hit would return `Ok` and then
+    /// run every later `evaluate` against the wrong document.
+    #[tokio::test]
+    async fn ambiguous_recovery_errors_instead_of_binding_a_sibling() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let frame = stale_frame(sess, None, "");
+
+        let fut = tokio::spawn({
+            let f = frame.clone();
+            async move { f.ensure_isolated_world().await }
+        });
+        reject_then_serve_tree(
+            &mut mock,
+            json!([
+                tree_frame("F1", "", "https://host.test/a"),
+                tree_frame("F2", "", "https://host.test/b"),
+            ]),
+        )
+        .await;
+
+        match fut.await.unwrap() {
+            Err(ZendriverError::FrameNotFound(m)) => {
+                assert!(m.contains("ambiguous"), "unexpected message: {m}");
+            }
+            other => panic!("expected FrameNotFound on an ambiguous tree, got: {other:?}"),
+        }
+        assert_eq!(
+            mock.try_recv_cmd(),
+            None,
+            "a failed recovery must not retry Page.createIsolatedWorld against a guess",
+        );
+        conn.shutdown();
+    }
+
+    /// The recorded frame `name` singles one sibling out — that is a bind
+    /// we can justify, so recovery proceeds with the live id.
+    #[tokio::test]
+    async fn recovery_uses_the_recorded_name_to_pick_among_siblings() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let frame = stale_frame(sess, Some("sidebar"), "");
+
+        let fut = tokio::spawn({
+            let f = frame.clone();
+            async move { f.ensure_isolated_world().await }
+        });
+        reject_then_serve_tree(
+            &mut mock,
+            json!([
+                tree_frame("F1", "banner", "https://host.test/a"),
+                tree_frame("F2", "sidebar", "https://host.test/b"),
+            ]),
+        )
+        .await;
+
+        let id_retry = mock.expect_cmd("Page.createIsolatedWorld").await;
+        assert_eq!(
+            mock.last_sent()["params"]["frameId"],
+            "F2",
+            "recovery must bind the name-matched sibling",
+        );
+        mock.reply(id_retry, json!({ "executionContextId": 99 }))
+            .await;
+        assert_eq!(fut.await.unwrap().unwrap(), 99);
+        conn.shutdown();
+    }
+
+    /// No name, but the recorded url matches exactly one sibling.
+    #[tokio::test]
+    async fn recovery_falls_back_to_the_recorded_url() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let frame = stale_frame(sess, None, "https://host.test/b");
+
+        let fut = tokio::spawn({
+            let f = frame.clone();
+            async move { f.ensure_isolated_world().await }
+        });
+        reject_then_serve_tree(
+            &mut mock,
+            json!([
+                tree_frame("F1", "", "https://host.test/a"),
+                tree_frame("F2", "", "https://host.test/b"),
+            ]),
+        )
+        .await;
+
+        let id_retry = mock.expect_cmd("Page.createIsolatedWorld").await;
+        assert_eq!(mock.last_sent()["params"]["frameId"], "F2");
+        mock.reply(id_retry, json!({ "executionContextId": 5 }))
+            .await;
+        assert_eq!(fut.await.unwrap().unwrap(), 5);
+        conn.shutdown();
+    }
+
+    /// The unambiguous single-iframe page keeps recovering with no name or
+    /// url to go on — the disambiguation must not make the common case
+    /// stricter.
+    #[tokio::test]
+    async fn lone_child_still_recovers_without_name_or_url() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let frame = stale_frame(sess, None, "");
+
+        let fut = tokio::spawn({
+            let f = frame.clone();
+            async move { f.ensure_isolated_world().await }
+        });
+        reject_then_serve_tree(&mut mock, json!([tree_frame("LIVE", "", "")])).await;
+
+        let id_retry = mock.expect_cmd("Page.createIsolatedWorld").await;
+        assert_eq!(mock.last_sent()["params"]["frameId"], "LIVE");
+        mock.reply(id_retry, json!({ "executionContextId": 3 }))
+            .await;
+        assert_eq!(fut.await.unwrap().unwrap(), 3);
         conn.shutdown();
     }
 }

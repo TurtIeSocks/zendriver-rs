@@ -109,7 +109,16 @@ impl GeoResolver for IpApiResolver {
                 }
             }
         }
-        let client = builder.build().ok()?;
+        // Every `None` below is a *failure*, not "this IP has no country" —
+        // the caller downgrades the persona either way, so each exit says
+        // which one it was.
+        let client = match builder.build() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "geo probe: HTTP client build failed; skipping");
+                return None;
+            }
+        };
         let resp = match client.get(&self.endpoint).send().await {
             Ok(r) => r,
             Err(e) => {
@@ -117,8 +126,27 @@ impl GeoResolver for IpApiResolver {
                 return None;
             }
         };
-        let body: serde_json::Value = resp.json().await.ok()?;
-        let cc = body.get("countryCode").and_then(|v| v.as_str())?;
+        let status = resp.status();
+        let body: serde_json::Value = match resp.json().await {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    status = %status,
+                    endpoint = %self.endpoint,
+                    "geo probe: response body was not JSON"
+                );
+                return None;
+            }
+        };
+        let Some(cc) = body.get("countryCode").and_then(|v| v.as_str()) else {
+            tracing::warn!(
+                status = %status,
+                endpoint = %self.endpoint,
+                "geo probe: response has no string `countryCode` field"
+            );
+            return None;
+        };
         let country = match Country::try_from(cc) {
             Ok(c) => c,
             Err(_) => {
@@ -196,6 +224,44 @@ mod tests {
         let resolved = r.resolve().await.unwrap();
         assert_eq!(resolved.country, Country::try_from("US").unwrap());
         assert_eq!(resolved.timezone, None);
+    }
+
+    /// Well-formed JSON that simply has no `countryCode` (ip-api answers
+    /// `{"status":"fail",...}` for a reserved-range IP) is a probe FAILURE,
+    /// not geo data. It yields `None` — and, unlike before, says so in the
+    /// log rather than downgrading the persona in silence.
+    #[tokio::test]
+    async fn missing_country_code_yields_none() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_string(r#"{"status":"fail","message":"reserved range"}"#),
+            )
+            .mount(&server)
+            .await;
+        assert_eq!(
+            IpApiResolver::new().endpoint(server.uri()).resolve().await,
+            None
+        );
+    }
+
+    /// A non-2xx answer whose body is not JSON at all (a proxy's HTML error
+    /// page is the realistic case) is likewise a logged failure, not data.
+    #[tokio::test]
+    async fn non_json_error_page_yields_none() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(502)
+                    .set_body_string("<html><body>Bad Gateway</body></html>"),
+            )
+            .mount(&server)
+            .await;
+        assert_eq!(
+            IpApiResolver::new().endpoint(server.uri()).resolve().await,
+            None
+        );
     }
 
     #[tokio::test]
