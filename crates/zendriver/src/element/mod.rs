@@ -433,30 +433,10 @@ impl crate::traits::Queryable for Element {
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
-    use std::time::Duration;
-
     use super::*;
+    use crate::test_support::{ISOLATED_CONTEXT_ID, expect, serve_isolated_world};
     use zendriver_transport::SessionHandle;
     use zendriver_transport::testing::MockConnection;
-
-    /// `expect_cmd` silently discards non-matching frames and has no built-in
-    /// timeout, so a dispatch that vanished or moved would hang the suite
-    /// instead of failing it. Bound every wait.
-    async fn expect(mock: &mut MockConnection, method: &str) -> u64 {
-        match tokio::time::timeout(Duration::from_secs(5), mock.expect_cmd(method)).await {
-            Ok(id) => id,
-            Err(_) => panic!("timed out waiting for {method}"),
-        }
-    }
-
-    /// Serve the two-frame isolated-world handshake, yielding context 42.
-    async fn serve_isolated_world(mock: &mut MockConnection) {
-        let id = expect(mock, "Page.getFrameTree").await;
-        mock.reply(id, json!({ "frameTree": { "frame": { "id": "F1" } } }))
-            .await;
-        let id = expect(mock, "Page.createIsolatedWorld").await;
-        mock.reply(id, json!({ "executionContextId": 42 })).await;
-    }
 
     /// The read/probe funnel must re-resolve the node into the isolated world
     /// and invoke the *isolated* handle — a page that shadowed `innerText` or
@@ -482,7 +462,7 @@ mod tests {
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["backendNodeId"], 314);
         assert_eq!(
-            sent["params"]["executionContextId"], 42,
+            sent["params"]["executionContextId"], ISOLATED_CONTEXT_ID,
             "element reads must be re-resolved into the isolated world",
         );
         mock.reply(id, json!({ "object": { "objectId": "R_ISO" } }))

@@ -142,18 +142,9 @@ impl Element {
 mod tests {
     use super::*;
     use crate::tab::Tab;
+    use crate::test_support::{expect, serve_isolated_call, serve_isolated_world};
     use zendriver_transport::SessionHandle;
     use zendriver_transport::testing::MockConnection;
-
-    /// `expect_cmd` drops non-matching frames silently and never times out,
-    /// so a dispatch that moved or vanished would hang the suite instead of
-    /// failing it. Bound every wait.
-    async fn expect(mock: &mut MockConnection, method: &str) -> u64 {
-        match tokio::time::timeout(Duration::from_secs(5), mock.expect_cmd(method)).await {
-            Ok(id) => id,
-            Err(_) => panic!("timed out waiting for {method}"),
-        }
-    }
 
     #[tokio::test]
     async fn screenshot_sends_page_capturescreenshot_with_clip_matching_bbox() {
@@ -181,24 +172,20 @@ mod tests {
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
 
-        // Step 2: actionability gate (VISIBLE_ONLY = only check_visible).
-        // Asserted by what it is NOT: the predicate's JS is owned by
+        // Step 2: actionability gate (VISIBLE_ONLY = only check_visible),
+        // which runs in the isolated world — hence the world handshake and
+        // the resolve/release around the predicate call.
+        //
+        // The predicate is asserted by what it is NOT: its JS is owned by
         // `query::actionability` and gets rewritten there, but "the gate is
         // not the scroll" is the property this test needs.
-        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
-        let gate_js = mock.last_sent()["params"]["functionDeclaration"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        serve_isolated_world(&mut mock).await;
+        let gate_js =
+            serve_isolated_call(&mut mock, json!({ "value": true, "type": "boolean" })).await;
         assert!(
             gate_js.contains("getBoundingClientRect") && !gate_js.contains("scrollIntoView"),
             "expected the visibility predicate after the scroll, got: {gate_js}",
         );
-        mock.reply(
-            id,
-            json!({ "result": { "value": true, "type": "boolean" } }),
-        )
-        .await;
 
         // Step 3: bounding_box → DOM.getBoxModel.
         let id = expect(&mut mock, "DOM.getBoxModel").await;

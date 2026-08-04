@@ -194,6 +194,7 @@ mod tests {
     use super::*;
     use crate::input::keyboard::SpecialKey;
     use crate::tab::Tab;
+    use crate::test_support::{expect, serve_gate_probes, serve_isolated_world};
     use serde_json::{Value, json};
     use zendriver_transport::SessionHandle;
     use zendriver_transport::testing::MockConnection;
@@ -215,16 +216,14 @@ mod tests {
 
         // focus() runs the actionability gate first: visible → enabled.
         // ActionabilityCheck::TEXT_INPUT skips stable + receives_pointer.
-        for _ in 0..2 {
-            let id = mock.expect_cmd("Runtime.callFunctionOn").await;
-            mock.reply(
-                id,
-                json!({ "result": { "value": true, "type": "boolean" } }),
-            )
-            .await;
-        }
-        // focus() then calls el.focus() — one more Runtime.callFunctionOn.
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        // Both predicates run in the isolated world, which the first one
+        // builds.
+        serve_isolated_world(&mut mock).await;
+        serve_gate_probes(&mut mock, 2).await;
+        // focus() then calls el.focus() — one more Runtime.callFunctionOn,
+        // this one in the main world (it acts on the page rather than reading
+        // it).
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
         assert!(
             sent["params"]["functionDeclaration"]
@@ -244,7 +243,7 @@ mod tests {
             ("i", "keyUp"),
         ];
         for (ch, kind) in expected {
-            let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+            let id = expect(&mut mock, "Input.dispatchKeyEvent").await;
             let last = mock.last_sent();
             assert_eq!(last["params"]["text"].as_str().unwrap(), ch);
             assert_eq!(last["params"]["type"].as_str().unwrap(), kind);
@@ -257,16 +256,15 @@ mod tests {
 
     /// Drain the focus() actionability gate (visible → enabled) plus the
     /// final `this.focus()` call, replying to each.
+    ///
+    /// Serves the isolated-world handshake up front, so this is the *first*
+    /// focus on a fresh tab — which is how every caller here uses it. A
+    /// second call on the same tab would hang waiting for a handshake the
+    /// cached context makes unnecessary.
     async fn drain_focus(mock: &mut MockConnection) {
-        for _ in 0..2 {
-            let id = mock.expect_cmd("Runtime.callFunctionOn").await;
-            mock.reply(
-                id,
-                json!({ "result": { "value": true, "type": "boolean" } }),
-            )
-            .await;
-        }
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        serve_isolated_world(mock).await;
+        serve_gate_probes(mock, 2).await;
+        let id = expect(mock, "Runtime.callFunctionOn").await;
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
     }
@@ -295,7 +293,7 @@ mod tests {
             ("ControlLeft", "keyUp", 0),
         ];
         for (code, kind, mods) in expected {
-            let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+            let id = expect(&mut mock, "Input.dispatchKeyEvent").await;
             let last = mock.last_sent();
             assert_eq!(last["params"]["code"].as_str().unwrap(), code);
             assert_eq!(last["params"]["type"].as_str().unwrap(), kind);
@@ -344,7 +342,7 @@ mod tests {
             ("Control", "keyUp"),
         ];
         for (key, kind) in expected {
-            let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+            let id = expect(&mut mock, "Input.dispatchKeyEvent").await;
             let last = mock.last_sent();
             assert_eq!(last["params"]["key"].as_str().unwrap(), key);
             assert_eq!(last["params"]["type"].as_str().unwrap(), kind);
@@ -370,7 +368,7 @@ mod tests {
         drain_focus(&mut mock).await;
 
         // Emoji has no physical-key descriptor → one `char`-type event.
-        let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+        let id = expect(&mut mock, "Input.dispatchKeyEvent").await;
         let last = mock.last_sent();
         assert_eq!(last["params"]["type"].as_str().unwrap(), "char");
         assert_eq!(last["params"]["text"].as_str().unwrap(), "🚀");

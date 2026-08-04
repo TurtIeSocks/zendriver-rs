@@ -874,6 +874,7 @@ z-index:2147483647;pointer-events:none;opacity:0.85;'; \
 mod tests {
     use super::*;
     use crate::tab::Tab;
+    use crate::test_support::{expect, serve_gate_probes, serve_isolated_world};
     use zendriver_transport::SessionHandle;
     use zendriver_transport::testing::MockConnection;
 
@@ -894,7 +895,7 @@ mod tests {
         });
 
         // Step 1: scroll_into_view → Runtime.callFunctionOn.
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
         assert!(
             sent["params"]["functionDeclaration"]
@@ -905,31 +906,15 @@ mod tests {
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
 
-        // Step 2: actionability gate runs check_visible first.
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
-        mock.reply(
-            id,
-            json!({ "result": { "value": true, "type": "boolean" } }),
-        )
-        .await;
-        // check_stable (gate order: visible → enabled → stable → receives_pointer;
-        // enabled is disabled for hover, so stable is next).
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
-        mock.reply(
-            id,
-            json!({ "result": { "value": true, "type": "boolean" } }),
-        )
-        .await;
-        // check_receives_pointer.
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
-        mock.reply(
-            id,
-            json!({ "result": { "value": true, "type": "boolean" } }),
-        )
-        .await;
+        // Step 2: actionability gate — visible → stable → receives_pointer
+        // (gate order is visible → enabled → stable → receives_pointer, and
+        // hover doesn't require enabled). The predicates run in the isolated
+        // world, so the first one also builds it.
+        serve_isolated_world(&mut mock).await;
+        serve_gate_probes(&mut mock, 3).await;
 
         // Step 3: bounding_box → DOM.getBoxModel.
-        let id = mock.expect_cmd("DOM.getBoxModel").await;
+        let id = expect(&mut mock, "DOM.getBoxModel").await;
         mock.reply(
             id,
             json!({
@@ -999,23 +984,17 @@ mod tests {
         });
 
         // Step 1: scroll_into_view → Runtime.callFunctionOn.
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
 
         // Step 2: actionability gate (FULL = visible → enabled → stable →
-        // receives_pointer); reply true to each.
-        for _ in 0..4 {
-            let id = mock.expect_cmd("Runtime.callFunctionOn").await;
-            mock.reply(
-                id,
-                json!({ "result": { "value": true, "type": "boolean" } }),
-            )
-            .await;
-        }
+        // receives_pointer), each predicate running in the isolated world.
+        serve_isolated_world(&mut mock).await;
+        serve_gate_probes(&mut mock, 4).await;
 
         // Step 3: bounding_box → DOM.getBoxModel.
-        let id = mock.expect_cmd("DOM.getBoxModel").await;
+        let id = expect(&mut mock, "DOM.getBoxModel").await;
         mock.reply(
             id,
             json!({
@@ -1098,24 +1077,18 @@ mod tests {
         });
 
         // Step 1: scroll_into_view → Runtime.callFunctionOn.
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
 
         // Step 2: actionability gate (FULL = visible → enabled → stable →
-        // receives_pointer); reply true to each, matching `click`'s gate.
-        for _ in 0..4 {
-            let id = mock.expect_cmd("Runtime.callFunctionOn").await;
-            mock.reply(
-                id,
-                json!({ "result": { "value": true, "type": "boolean" } }),
-            )
-            .await;
-        }
+        // receives_pointer), matching `click`'s gate.
+        serve_isolated_world(&mut mock).await;
+        serve_gate_probes(&mut mock, 4).await;
 
         // Step 3: bounding_box → DOM.getBoxModel. Box top-left (10,20),
         // 100x50 ⇒ center (60, 45).
-        let id = mock.expect_cmd("DOM.getBoxModel").await;
+        let id = expect(&mut mock, "DOM.getBoxModel").await;
         mock.reply(
             id,
             json!({
@@ -1132,7 +1105,7 @@ mod tests {
         .await;
 
         // Step 4: touchStart at the bbox center, then touchEnd empty.
-        let id = mock.expect_cmd("Input.dispatchTouchEvent").await;
+        let id = expect(&mut mock, "Input.dispatchTouchEvent").await;
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["type"], "touchStart");
         let points = sent["params"]["touchPoints"].as_array().unwrap();
@@ -1141,7 +1114,7 @@ mod tests {
         assert_eq!(points[0]["y"], 45.0);
         mock.reply(id, json!({})).await;
 
-        let id = mock.expect_cmd("Input.dispatchTouchEvent").await;
+        let id = expect(&mut mock, "Input.dispatchTouchEvent").await;
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["type"], "touchEnd");
         assert_eq!(sent["params"]["touchPoints"].as_array().unwrap().len(), 0);
@@ -1163,7 +1136,7 @@ mod tests {
             async move { e.set_value("hello world").await }
         });
 
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
         let decl = sent["params"]["functionDeclaration"].as_str().unwrap();
         // Assign through the native prototype value-setter so React's
@@ -1202,7 +1175,7 @@ mod tests {
             async move { e.clear().await }
         });
 
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
         let decl = sent["params"]["functionDeclaration"].as_str().unwrap();
         // `clear` routes through the same native-setter JS as `set_value`,
@@ -1237,7 +1210,7 @@ mod tests {
             async move { e.set_text("New title").await }
         });
 
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
         let decl = sent["params"]["functionDeclaration"].as_str().unwrap();
         // Faithful-simpler port of nodriver's DOM.setNodeValue: assign
@@ -1269,16 +1242,12 @@ mod tests {
         });
 
         // Step 1: explicit focus() — actionability gate (visible → enabled)
-        // then this.focus().
-        for _ in 0..2 {
-            let id = mock.expect_cmd("Runtime.callFunctionOn").await;
-            mock.reply(
-                id,
-                json!({ "result": { "value": true, "type": "boolean" } }),
-            )
-            .await;
-        }
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        // then this.focus(). The gate is isolated-world (built once here and
+        // reused by every later focus in this test); `this.focus()` is not,
+        // since focusing is an effect on the page, not a read of it.
+        serve_isolated_world(&mut mock).await;
+        serve_gate_probes(&mut mock, 2).await;
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
         assert!(
             sent["params"]["functionDeclaration"]
@@ -1295,21 +1264,14 @@ mod tests {
         // dispatches the modifier as REAL wrapper key events, so the chord is
         // four dispatches: modifier keyDown → 'a' keyDown → 'a' keyUp →
         // modifier keyUp. Ctrl on Windows/Linux, Meta on macOS.
-        for _ in 0..2 {
-            let id = mock.expect_cmd("Runtime.callFunctionOn").await;
-            mock.reply(
-                id,
-                json!({ "result": { "value": true, "type": "boolean" } }),
-            )
-            .await;
-        }
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        serve_gate_probes(&mut mock, 2).await;
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
         let ctrl = i64::from(KeyModifiers::CTRL.cdp_bits());
         let meta = i64::from(KeyModifiers::META.cdp_bits());
         // 1: modifier keyDown (Meta or Control).
-        let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+        let id = expect(&mut mock, "Input.dispatchKeyEvent").await;
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["type"], "keyDown");
         let mod_key = sent["params"]["key"].as_str().unwrap();
@@ -1319,7 +1281,7 @@ mod tests {
         );
         mock.reply(id, json!({})).await;
         // 2: 'a' keyDown with the modifier bit set.
-        let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+        let id = expect(&mut mock, "Input.dispatchKeyEvent").await;
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["type"], "keyDown");
         assert_eq!(sent["params"]["key"], "a");
@@ -1330,11 +1292,11 @@ mod tests {
         );
         mock.reply(id, json!({})).await;
         // 3: 'a' keyUp.
-        let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+        let id = expect(&mut mock, "Input.dispatchKeyEvent").await;
         assert_eq!(mock.last_sent()["params"]["type"], "keyUp");
         mock.reply(id, json!({})).await;
         // 4: modifier keyUp.
-        let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+        let id = expect(&mut mock, "Input.dispatchKeyEvent").await;
         assert_eq!(mock.last_sent()["params"]["type"], "keyUp");
         mock.reply(id, json!({})).await;
 
@@ -1342,7 +1304,7 @@ mod tests {
         // so only the fixed slack-count of Backspaces follows — keeps the
         // remaining frame sequence deterministic regardless of the value the
         // page reports.
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
         assert!(
             sent["params"]["functionDeclaration"]
@@ -1361,20 +1323,13 @@ mod tests {
         // sequence is deterministic; drive every frame explicitly.
         let mut saw_backspace = false;
         for _ in 0..CLEAR_BY_DELETING_SLACK {
-            // press(Backspace) focus: 2 gate calls + this.focus().
-            for _ in 0..2 {
-                let id = mock.expect_cmd("Runtime.callFunctionOn").await;
-                mock.reply(
-                    id,
-                    json!({ "result": { "value": true, "type": "boolean" } }),
-                )
-                .await;
-            }
-            let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+            // press(Backspace) focus: 2 gate probes + this.focus().
+            serve_gate_probes(&mut mock, 2).await;
+            let id = expect(&mut mock, "Runtime.callFunctionOn").await;
             mock.reply(id, json!({ "result": { "type": "undefined" } }))
                 .await;
             // rawKeyDown for Backspace (never forward Delete).
-            let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+            let id = expect(&mut mock, "Input.dispatchKeyEvent").await;
             let sent = mock.last_sent();
             assert_eq!(sent["params"]["type"], "rawKeyDown");
             assert_eq!(sent["params"]["key"], "Backspace");
@@ -1382,7 +1337,7 @@ mod tests {
             saw_backspace = true;
             mock.reply(id, json!({})).await;
             // keyUp.
-            let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+            let id = expect(&mut mock, "Input.dispatchKeyEvent").await;
             assert_eq!(mock.last_sent()["params"]["type"], "keyUp");
             mock.reply(id, json!({})).await;
         }
@@ -1411,7 +1366,7 @@ mod tests {
             async move { e.upload_files(&paths).await }
         });
 
-        let id = mock.expect_cmd("DOM.setFileInputFiles").await;
+        let id = expect(&mut mock, "DOM.setFileInputFiles").await;
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["backendNodeId"], 42);
         let files = sent["params"]["files"].as_array().unwrap();
@@ -1437,7 +1392,7 @@ mod tests {
         });
 
         // Step 1: scroll_into_view → Runtime.callFunctionOn.
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         assert!(
             mock.last_sent()["params"]["functionDeclaration"]
                 .as_str()
@@ -1449,7 +1404,7 @@ mod tests {
 
         // Step 2: bounding_box → DOM.getBoxModel. Box top-left (10,20), 100x50
         // ⇒ center (60, 45).
-        let id = mock.expect_cmd("DOM.getBoxModel").await;
+        let id = expect(&mut mock, "DOM.getBoxModel").await;
         mock.reply(
             id,
             json!({
@@ -1468,7 +1423,7 @@ mod tests {
         // Step 3: overlay injected via Runtime.callFunctionOn carrying the
         // dot-building JS (createElement + setTimeout/remove), with the
         // viewport-center coords + duration passed as arguments.
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
         let decl = sent["params"]["functionDeclaration"].as_str().unwrap();
         assert!(decl.contains("createElement"), "should build a dot element");
@@ -1502,11 +1457,11 @@ mod tests {
         });
 
         // Step 1: Overlay.enable (highlightNode is a no-op without it).
-        let id = mock.expect_cmd("Overlay.enable").await;
+        let id = expect(&mut mock, "Overlay.enable").await;
         mock.reply(id, json!({})).await;
 
         // Step 2: Overlay.highlightNode { backendNodeId, highlightConfig }.
-        let id = mock.expect_cmd("Overlay.highlightNode").await;
+        let id = expect(&mut mock, "Overlay.highlightNode").await;
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["backendNodeId"], 42);
         assert!(
@@ -1532,7 +1487,7 @@ mod tests {
         });
 
         // Step 1: scroll_into_view → Runtime.callFunctionOn.
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         assert!(
             mock.last_sent()["params"]["functionDeclaration"]
                 .as_str()
@@ -1544,7 +1499,7 @@ mod tests {
 
         // Step 2: bounding_box → DOM.getBoxModel. Box top-left (10,20), 100x50
         // ⇒ center (60, 45) = the drag source.
-        let id = mock.expect_cmd("DOM.getBoxModel").await;
+        let id = expect(&mut mock, "DOM.getBoxModel").await;
         mock.reply(
             id,
             json!({

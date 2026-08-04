@@ -101,6 +101,8 @@ pub mod response_body;
 pub mod screenshot;
 pub mod storage;
 pub mod tab;
+#[cfg(test)]
+pub(crate) mod test_support;
 #[cfg(any(feature = "geo", feature = "tracker-blocking"))]
 pub mod tls;
 #[cfg(feature = "tracker-blocking")]
