@@ -1,15 +1,17 @@
 //! [`Element::evaluate`] — true isolated-world evaluation.
 //!
-//! Flow:
+//! The dispatch itself lives in [`Element::call_on`] (`element/mod.rs`),
+//! which every isolated-world element call shares:
 //!
 //! 1. Resolve the tab's isolated `executionContextId` (creating it on the
 //!    first call).
 //! 2. `DOM.resolveNode { backendNodeId, executionContextId }` returns a
 //!    fresh `RemoteObject` whose `objectId` is bound to that isolated world.
 //! 3. `Runtime.callFunctionOn { objectId, functionDeclaration, arguments,
-//!    returnByValue, awaitPromise }` invokes the user's JS with `el` bound
-//!    to the isolated-world handle. Page globals (`window.foo`, monkeypatches
-//!    on `HTMLElement.prototype`, etc.) are NOT visible from inside.
+//!    returnByValue, awaitPromise }` invokes the user's JS against the
+//!    isolated-world handle, which this module aliases to `el`. Page globals
+//!    (`window.foo`, monkeypatches on `HTMLElement.prototype`, etc.) are NOT
+//!    visible from inside.
 //! 4. Best-effort `Runtime.releaseObject { objectId }` frees the handle so
 //!    long-running scrapers don't leak isolated-world `RemoteObject`s.
 //!
@@ -54,86 +56,11 @@ impl Element {
     pub async fn evaluate<T: DeserializeOwned>(&self, js: impl AsRef<str>) -> Result<T> {
         let js = js.as_ref();
         self.with_refresh(|| async move {
-            let ctx_id = self.inner.tab.ensure_isolated_world().await?;
-            let backend_node_id = self.backend_node_id_cloned().await?;
-
-            // Re-resolve our node in the isolated world. The returned
-            // RemoteObject lives in `ctx_id`, not the main world.
-            let resolved = self
-                .inner
-                .tab
-                .call(
-                    "DOM.resolveNode",
-                    json!({
-                        "backendNodeId": backend_node_id,
-                        "executionContextId": ctx_id,
-                    }),
-                )
-                .await?;
-            let isolated_object_id = resolved["object"]["objectId"]
-                .as_str()
-                .ok_or_else(|| {
-                    ZendriverError::Navigation(
-                        "DOM.resolveNode returned no objectId for isolated world".into(),
-                    )
-                })?
-                .to_string();
-
-            let function = format!("function(el){{ return ({js}) }}");
-            let result = self
-                .inner
-                .tab
-                .call(
-                    "Runtime.callFunctionOn",
-                    json!({
-                        "objectId": isolated_object_id,
-                        "functionDeclaration": function,
-                        "arguments": [{ "objectId": isolated_object_id }],
-                        "returnByValue": true,
-                        "awaitPromise": true,
-                    }),
-                )
-                .await?;
-
-            // Surface page-script exceptions before we deserialize.
-            if let Some(details) = result.get("exceptionDetails") {
-                let msg = details
-                    .get("exception")
-                    .and_then(|e| e.get("description"))
-                    .and_then(|d| d.as_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-                // Release the handle even on JS exception — best effort.
-                let _ = self
-                    .inner
-                    .tab
-                    .call(
-                        "Runtime.releaseObject",
-                        json!({ "objectId": isolated_object_id }),
-                    )
-                    .await;
-                return Err(ZendriverError::JsException(msg));
-            }
-
-            let value = result
-                .get("result")
-                .and_then(|r| r.get("value"))
-                .cloned()
-                .unwrap_or(Value::Null);
-
-            // Best-effort cleanup so isolated-world handles don't pile up
-            // across many evaluate() calls. Failures are non-fatal — the
-            // worst case is a short-lived leak until the isolated world
-            // itself is replaced.
-            let _ = self
-                .inner
-                .tab
-                .call(
-                    "Runtime.releaseObject",
-                    json!({ "objectId": isolated_object_id }),
-                )
-                .await;
-
+            // `call_on` binds the isolated-world handle as `this`; alias it to
+            // `el` so the user's expression reads the documented way.
+            let function = format!("function(){{ const el = this; return ({js}) }}");
+            let result = self.call_on(&function, json!([])).await?;
+            let value = result.get("value").cloned().unwrap_or(Value::Null);
             serde_json::from_value(value).map_err(ZendriverError::Serde)
         })
         .await
@@ -193,23 +120,18 @@ mod tests {
         )
         .await;
 
-        // 4. Runtime.callFunctionOn — uses isolated objectId for BOTH the
-        //    target object AND the el argument; wraps user js in
-        //    `function(el){ return (...) }`.
+        // 4. Runtime.callFunctionOn — targets the isolated objectId, which
+        //    the wrapper aliases to `el` via `this`.
         let id_call = mock.expect_cmd("Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
         assert_eq!(
             sent["params"]["objectId"], "R_ISO",
             "callFunctionOn must target the isolated-world handle, not the main-world one",
         );
-        assert_eq!(
-            sent["params"]["arguments"][0]["objectId"], "R_ISO",
-            "the bound `el` argument must be the isolated handle",
-        );
         let decl = sent["params"]["functionDeclaration"].as_str().unwrap();
         assert!(
-            decl.contains("function(el)") && decl.contains("el.tagName"),
-            "function declaration must wrap user JS; got: {decl}",
+            decl.contains("const el = this") && decl.contains("el.tagName"),
+            "function declaration must bind `el` to the isolated handle and wrap user JS; got: {decl}",
         );
         assert_eq!(sent["params"]["returnByValue"], true);
         assert_eq!(sent["params"]["awaitPromise"], true);

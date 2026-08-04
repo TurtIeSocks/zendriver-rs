@@ -229,11 +229,19 @@ impl Element {
             .ok_or(ZendriverError::ElementStale)
     }
 
-    /// Call a JS function on this element's remote object. The function
-    /// signature MUST take exactly one parameter (the element); use
-    /// `function(el){ ... }`.
-    pub(crate) async fn call_on(&self, function: &str, args: Value) -> Result<Value> {
-        let object_id = self.remote_object_id_cloned().await?;
+    /// Dispatch `Runtime.callFunctionOn` against `object_id` and unwrap the
+    /// response into its `result` RemoteObject.
+    ///
+    /// World-agnostic: the JS runs in whatever world `object_id` belongs to.
+    /// Picking that world is the caller's job — [`Element::call_on`] resolves
+    /// a fresh isolated-world handle first, [`Element::call_on_main`] passes
+    /// the element's own page-world handle.
+    async fn call_function_on(
+        &self,
+        object_id: &str,
+        function: &str,
+        args: Value,
+    ) -> Result<Value> {
         let res = self
             .inner
             .tab
@@ -260,6 +268,88 @@ impl Element {
         Ok(res["result"].clone())
     }
 
+    /// Call a JS function on this element **in the tab's isolated world**.
+    ///
+    /// The function receives the element as `this`, so its signature takes
+    /// only the extra arguments: `function(a, b){ ... this ... }`. `args` is
+    /// forwarded verbatim and must hold plain values — a page-world
+    /// `objectId` means nothing inside the isolated world.
+    ///
+    /// Each call re-resolves the node through `DOM.resolveNode
+    /// { backendNodeId, executionContextId }` so the handle we invoke on
+    /// belongs to the isolated world, then releases it (best effort, so a
+    /// long scrape doesn't accumulate handles). That costs two extra
+    /// round-trips over reusing the page-world handle, which is the price of
+    /// the guarantee: a page that has monkeypatched `getAttribute`,
+    /// `innerText`, `getBoundingClientRect` or `getComputedStyle` can
+    /// neither feed the automation false values nor observe it reading.
+    /// Isolated worlds share the DOM, so the values are the same ones the
+    /// page actually renders.
+    ///
+    /// Use [`Element::call_on_main`] instead when the JS has to see
+    /// page-defined state (page globals, framework expandos on the node)
+    /// rather than DOM state.
+    pub(crate) async fn call_on(&self, function: &str, args: Value) -> Result<Value> {
+        // A navigation destroys the isolated world while the tab still holds
+        // its cached context id, so a read that straddles one resolves
+        // against a dead context. Drop the cache and rebuild it once — the
+        // same recovery `Tab::evaluate` performs, without which the very
+        // common goto → read → goto → read flow would fail from the second
+        // page onwards.
+        match self.call_in_isolated_world(function, args.clone()).await {
+            Err(ref e) if is_dead_context_error(e) => {
+                self.inner.tab.inner.isolated_world.lock().await.context_id = None;
+                self.call_in_isolated_world(function, args).await
+            }
+            other => other,
+        }
+    }
+
+    /// One isolated-world attempt: resolve the node into the world, invoke,
+    /// release. Split out so [`Element::call_on`] can retry it after
+    /// invalidating a destroyed context.
+    async fn call_in_isolated_world(&self, function: &str, args: Value) -> Result<Value> {
+        let ctx_id = self.inner.tab.ensure_isolated_world().await?;
+        let backend_node_id = self.backend_node_id_cloned().await?;
+        let resolved = self
+            .inner
+            .tab
+            .call(
+                "DOM.resolveNode",
+                json!({
+                    "backendNodeId": backend_node_id,
+                    "executionContextId": ctx_id,
+                }),
+            )
+            .await?;
+        let isolated_object_id = resolved["object"]["objectId"]
+            .as_str()
+            .ok_or_else(|| {
+                ZendriverError::Navigation(
+                    "DOM.resolveNode returned no objectId for isolated world".into(),
+                )
+            })?
+            .to_string();
+
+        let result = self
+            .call_function_on(&isolated_object_id, function, args)
+            .await;
+
+        // Release on both the success and the JS-exception path — a leaked
+        // handle would otherwise outlive the call until the isolated world
+        // itself is replaced. Failures here are non-fatal.
+        let _ = self
+            .inner
+            .tab
+            .call(
+                "Runtime.releaseObject",
+                json!({ "objectId": isolated_object_id }),
+            )
+            .await;
+
+        result
+    }
+
     /// Invoke a JS function in the main world with this element bound as
     /// the first positional argument. Accepts a function declaration whose
     /// first parameter is the element handle (`function(el, ...rest){...}`)
@@ -267,17 +357,19 @@ impl Element {
     /// argument descriptors that follow the element. Returns the raw
     /// `result` RemoteObject (caller picks `value` if `returnByValue`).
     ///
-    /// Locks the remote-object Mutex once at the top, then routes
-    /// through `call_on` (which re-locks once more). The double-lock is
-    /// cheap — `tokio::sync::Mutex` is uncontended in the common case
-    /// and the guard is dropped before any `.await`.
+    /// Reserved for JS that must observe page-defined state — page globals,
+    /// or framework expandos living on the node's page-world wrapper (e.g.
+    /// React's per-instance `_valueTracker`). Anything reading plain DOM
+    /// state belongs on [`Element::call_on`], where the page can neither
+    /// see the read nor forge its answer.
     pub(crate) async fn call_on_main(&self, function: &str, args: Value) -> Result<Value> {
         let object_id = self.remote_object_id_cloned().await?;
         let mut full_args = vec![json!({ "objectId": object_id })];
         if let Some(extra) = args.as_array() {
             full_args.extend(extra.iter().cloned());
         }
-        self.call_on(function, Value::Array(full_args)).await
+        self.call_function_on(&object_id, function, Value::Array(full_args))
+            .await
     }
 
     /// Evaluate a JS expression in the main world with `el` bound to this
@@ -313,6 +405,22 @@ impl Element {
     }
 }
 
+/// `true` for Chrome's "the execution context you named is gone" error,
+/// which is what a destroyed isolated world looks like from the outside.
+///
+/// Chrome reports it as -32000 "Cannot find context with specified id";
+/// `From<CallError>` maps that to [`ZendriverError::Navigation`] (see
+/// `error.rs`), but the raw [`ZendriverError::Cdp`] shape reaches us too, so
+/// both are matched.
+fn is_dead_context_error(e: &ZendriverError) -> bool {
+    let message = match e {
+        ZendriverError::Navigation(m) => m.as_str(),
+        ZendriverError::Cdp { message, .. } => message.as_str(),
+        _ => return false,
+    };
+    message.contains("Cannot find context")
+}
+
 impl crate::traits::Queryable for Element {
     fn find(&self) -> crate::query::FindBuilder<'_> {
         Element::find(self)
@@ -325,9 +433,218 @@ impl crate::traits::Queryable for Element {
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     use zendriver_transport::SessionHandle;
     use zendriver_transport::testing::MockConnection;
+
+    /// `expect_cmd` silently discards non-matching frames and has no built-in
+    /// timeout, so a dispatch that vanished or moved would hang the suite
+    /// instead of failing it. Bound every wait.
+    async fn expect(mock: &mut MockConnection, method: &str) -> u64 {
+        match tokio::time::timeout(Duration::from_secs(5), mock.expect_cmd(method)).await {
+            Ok(id) => id,
+            Err(_) => panic!("timed out waiting for {method}"),
+        }
+    }
+
+    /// Serve the two-frame isolated-world handshake, yielding context 42.
+    async fn serve_isolated_world(mock: &mut MockConnection) {
+        let id = expect(mock, "Page.getFrameTree").await;
+        mock.reply(id, json!({ "frameTree": { "frame": { "id": "F1" } } }))
+            .await;
+        let id = expect(mock, "Page.createIsolatedWorld").await;
+        mock.reply(id, json!({ "executionContextId": 42 })).await;
+    }
+
+    /// The read/probe funnel must re-resolve the node into the isolated world
+    /// and invoke the *isolated* handle — a page that shadowed `innerText` or
+    /// `getBoundingClientRect` can then neither lie to the read nor see it.
+    #[tokio::test]
+    async fn call_on_resolves_into_the_isolated_world() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+        let el = Element::from_jsret(tab, 314, "R_MAIN".to_string());
+
+        let fut = tokio::spawn({
+            let e = el.clone();
+            async move {
+                e.call_on("function(){ return this.innerText; }", json!([]))
+                    .await
+            }
+        });
+
+        serve_isolated_world(&mut mock).await;
+
+        let id = expect(&mut mock, "DOM.resolveNode").await;
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["backendNodeId"], 314);
+        assert_eq!(
+            sent["params"]["executionContextId"], 42,
+            "element reads must be re-resolved into the isolated world",
+        );
+        mock.reply(id, json!({ "object": { "objectId": "R_ISO" } }))
+            .await;
+
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
+        assert_eq!(
+            mock.last_sent()["params"]["objectId"],
+            "R_ISO",
+            "the call must target the isolated handle, not the page-world one",
+        );
+        mock.reply(
+            id,
+            json!({ "result": { "value": "hello", "type": "string" } }),
+        )
+        .await;
+
+        let id = expect(&mut mock, "Runtime.releaseObject").await;
+        assert_eq!(mock.last_sent()["params"]["objectId"], "R_ISO");
+        mock.reply(id, json!({})).await;
+
+        let res = fut.await.unwrap().unwrap();
+        assert_eq!(res["value"], "hello");
+        conn.shutdown();
+    }
+
+    /// A JS exception still frees the isolated handle — otherwise a scraper
+    /// hitting throwing pages leaks one `RemoteObject` per failed read.
+    #[tokio::test]
+    async fn call_on_releases_the_isolated_handle_after_a_js_exception() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+        let el = Element::from_jsret(tab, 1, "R_MAIN".to_string());
+
+        let fut = tokio::spawn({
+            let e = el.clone();
+            async move {
+                e.call_on("function(){ throw new Error('boom'); }", json!([]))
+                    .await
+            }
+        });
+
+        serve_isolated_world(&mut mock).await;
+        let id = expect(&mut mock, "DOM.resolveNode").await;
+        mock.reply(id, json!({ "object": { "objectId": "R_ISO" } }))
+            .await;
+
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
+        mock.reply(
+            id,
+            json!({
+                "result": { "type": "object", "subtype": "error" },
+                "exceptionDetails": { "exception": { "description": "Error: boom" } },
+            }),
+        )
+        .await;
+
+        let id = expect(&mut mock, "Runtime.releaseObject").await;
+        assert_eq!(mock.last_sent()["params"]["objectId"], "R_ISO");
+        mock.reply(id, json!({})).await;
+
+        match fut.await.unwrap() {
+            Err(ZendriverError::JsException(m)) => assert!(m.contains("boom")),
+            other => panic!("unexpected: {other:?}"),
+        }
+        conn.shutdown();
+    }
+
+    /// A navigation destroys the isolated world but leaves its id cached, so
+    /// the next read resolves against a dead context. It must rebuild the
+    /// world and carry on — otherwise the first navigation would poison
+    /// every subsequent read on the tab.
+    #[tokio::test]
+    async fn call_on_rebuilds_the_isolated_world_after_a_navigation_destroyed_it() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+        let el = Element::from_jsret(tab, 5, "R_MAIN".to_string());
+
+        let fut = tokio::spawn({
+            let e = el.clone();
+            async move {
+                e.call_on("function(){ return this.innerText; }", json!([]))
+                    .await
+            }
+        });
+
+        serve_isolated_world(&mut mock).await;
+
+        // First resolve lands on the context the navigation just destroyed.
+        let id = expect(&mut mock, "DOM.resolveNode").await;
+        mock.reply_err(id, -32000, "Cannot find context with specified id")
+            .await;
+
+        // Recovery: the cache is dropped, so the whole discovery handshake
+        // runs again and yields a live context.
+        let id = expect(&mut mock, "Page.getFrameTree").await;
+        mock.reply(id, json!({ "frameTree": { "frame": { "id": "F1" } } }))
+            .await;
+        let id = expect(&mut mock, "Page.createIsolatedWorld").await;
+        mock.reply(id, json!({ "executionContextId": 99 })).await;
+
+        let id = expect(&mut mock, "DOM.resolveNode").await;
+        assert_eq!(
+            mock.last_sent()["params"]["executionContextId"],
+            99,
+            "the retry must use the rebuilt context, not the dead one",
+        );
+        mock.reply(id, json!({ "object": { "objectId": "R_ISO2" } }))
+            .await;
+
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
+        assert_eq!(mock.last_sent()["params"]["objectId"], "R_ISO2");
+        mock.reply(
+            id,
+            json!({ "result": { "value": "recovered", "type": "string" } }),
+        )
+        .await;
+
+        let id = expect(&mut mock, "Runtime.releaseObject").await;
+        mock.reply(id, json!({})).await;
+
+        let res = fut.await.unwrap().unwrap();
+        assert_eq!(res["value"], "recovered");
+        conn.shutdown();
+    }
+
+    /// The escape hatch stays an escape hatch: JS that needs page-defined
+    /// state runs against the element's own page-world handle, with no
+    /// isolated-world handshake in front of it.
+    #[tokio::test]
+    async fn call_on_main_stays_in_the_page_world() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+        let el = Element::from_jsret(tab, 1, "R_MAIN".to_string());
+
+        let fut = tokio::spawn({
+            let e = el.clone();
+            async move {
+                e.call_on_main("function(el){ return el.value; }", json!([]))
+                    .await
+            }
+        });
+
+        // No Page.getFrameTree / DOM.resolveNode is served here: if the main-
+        // world path ever grew one, this wait would trip the timeout.
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["objectId"], "R_MAIN");
+        assert_eq!(
+            sent["params"]["arguments"][0]["objectId"], "R_MAIN",
+            "the element is bound as the first positional argument",
+        );
+        mock.reply(id, json!({ "result": { "value": "v", "type": "string" } }))
+            .await;
+
+        let res = fut.await.unwrap().unwrap();
+        assert_eq!(res["value"], "v");
+        conn.shutdown();
+    }
 
     #[tokio::test]
     async fn from_jsret_yields_evaluation_origin() {
