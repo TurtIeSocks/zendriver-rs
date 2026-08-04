@@ -141,32 +141,20 @@ impl<'tab> DataDomeBypass<'tab> {
             Err(_) => return Ok(ClearanceOutcome::TimedOut { last_surface: None }),
         };
 
-        match snapshot.surface {
-            DataDomeSurface::None if snapshot.body_clean => {
-                return Ok(ClearanceOutcome::AlreadyClear);
-            }
-            DataDomeSurface::Block => return Ok(ClearanceOutcome::Blocked),
-            _ => {}
+        // Only the "nothing to clear" fast path is decided out here — it is
+        // the one terminal the loop cannot express (inside the loop, a clean
+        // page means the challenge *resolved*). Block and CAPTCHA escalation
+        // live in the loop so they also fire when the surface changes
+        // mid-flight, which is the normal shape: a device check hands off to
+        // a CAPTCHA, or to a ban, seconds in.
+        if snapshot.surface == DataDomeSurface::None && snapshot.body_clean {
+            return Ok(ClearanceOutcome::AlreadyClear);
         }
 
-        // Pre-loop captcha escalation.
-        if snapshot.surface == DataDomeSurface::Captcha {
-            let Some(solver) = self.on_captcha.clone() else {
-                return Err(DataDomeError::CaptchaRequired);
-            };
-            let challenge = crate::captcha::build_challenge(self.session, &snapshot).await?;
-            let site_url = challenge.site_url.clone();
-            let solution = solver(challenge)
-                .await
-                .map_err(DataDomeError::CaptchaSolver)?;
-            crate::captcha::apply_solution(self.session, &solution, &site_url).await?;
-            // Page reloaded — discard the stale snapshot, force a re-probe.
-            return self.poll_loop(deadline, None, None, None).await;
-        }
-
-        // Optional Fetch-domain fast-path. The guard's `Drop` cooperatively
-        // cancels the spawned task (token check at every loop boundary)
-        // with `abort()` as a backstop.
+        // Optional Fetch-domain fast-path. Spawned before any escalation so
+        // the CAPTCHA route gets the same fast wake-up as the device-check
+        // route. The guard's `Drop` cooperatively cancels the spawned task
+        // (token check at every loop boundary) with `abort()` as a backstop.
         let (interception_rx, interception_guard) = if self.interception_enabled {
             let (rx, guard) = crate::interception::spawn_signal(self.session);
             (Some(rx), Some(guard))
@@ -182,6 +170,28 @@ impl<'tab> DataDomeBypass<'tab> {
         .await
     }
 
+    /// Escalate a CAPTCHA surface to the registered solver and apply the
+    /// solved cookie. Errors with [`DataDomeError::CaptchaRequired`] when no
+    /// solver is registered. On success the page has been reloaded, so the
+    /// caller must re-probe rather than reuse `snap`.
+    async fn solve_captcha(&self, snap: &DetectionSnapshot) -> Result<(), DataDomeError> {
+        let Some(solver) = self.on_captcha.clone() else {
+            return Err(DataDomeError::CaptchaRequired);
+        };
+        let challenge = crate::captcha::build_challenge(self.session, snap).await?;
+        let site_url = challenge.site_url.clone();
+        let solution = solver(challenge)
+            .await
+            .map_err(DataDomeError::CaptchaSolver)?;
+        crate::captcha::apply_solution(self.session, &solution, &site_url).await
+    }
+
+    /// Core poll loop. Owns every mid-flight terminal — clearance, ban, and
+    /// CAPTCHA escalation — so a surface that changes after the pre-loop
+    /// probe is handled exactly like one present from the start.
+    ///
+    /// Factored out so unit tests can drive it with a controlled interception
+    /// receiver without standing up the real `Fetch.enable` plumbing.
     pub(crate) async fn poll_loop(
         self,
         deadline: Instant,
@@ -213,17 +223,30 @@ impl<'tab> DataDomeBypass<'tab> {
                 },
             };
 
-            let cookie = snap.datadome.as_ref().filter(|v| !v.is_empty());
-            match (cookie, snap.body_clean) {
-                (Some(c), true) => {
-                    return Ok(ClearanceOutcome::Cleared {
-                        datadome: c.clone(),
-                    });
+            // Escalations are polled, not assumed to arrive on the first
+            // probe: DataDome routinely upgrades a device check to a CAPTCHA
+            // (or drops it to a ban) a few seconds into the interstitial.
+            match snap.surface {
+                DataDomeSurface::Block => return Ok(ClearanceOutcome::Blocked),
+                DataDomeSurface::Captcha => {
+                    self.solve_captcha(&snap).await?;
+                    // Page reloaded — next iteration re-probes from scratch.
+                    last_surface = Some(snap.surface);
                 }
-                (None, true) if snap.surface == DataDomeSurface::None => {
-                    return Ok(ClearanceOutcome::ChallengeGone);
+                _ => {
+                    let cookie = snap.datadome.as_ref().filter(|v| !v.is_empty());
+                    match (cookie, snap.body_clean) {
+                        (Some(c), true) => {
+                            return Ok(ClearanceOutcome::Cleared {
+                                datadome: c.clone(),
+                            });
+                        }
+                        (None, true) if snap.surface == DataDomeSurface::None => {
+                            return Ok(ClearanceOutcome::ChallengeGone);
+                        }
+                        _ => last_surface = Some(snap.surface),
+                    }
                 }
-                _ => last_surface = Some(snap.surface),
             }
 
             if Instant::now() >= deadline {
@@ -532,6 +555,226 @@ mod tests {
             ClearanceOutcome::TimedOut { .. } => {}
             other => panic!("expected TimedOut, got {other:?}"),
         }
+        conn.shutdown();
+    }
+
+    /// Generic bounded read of the next outbound command, for flows whose
+    /// command order is not fully deterministic (the interception task emits
+    /// `Fetch.enable` from its own spawn).
+    async fn next_cmd(mock: &mut MockConnection) -> Option<(String, u64)> {
+        for _ in 0..300 {
+            if let Some(cmd) = mock.try_recv_cmd() {
+                return Some(cmd);
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        None
+    }
+
+    fn device_check_snap() -> serde_json::Value {
+        json!({"surface":"device_check","datadome":null,"dd":{"cid":"C","hsh":"H","t":"fe","host":"h"},"captcha_url":null,"body_clean":false})
+    }
+
+    fn captcha_snap() -> serde_json::Value {
+        json!({"surface":"captcha","datadome":"OLD","dd":{"cid":"C","hsh":"H","t":"fe","host":"h"},"captcha_url":"https://geo.captcha-delivery.com/captcha/?cid=C","body_clean":false})
+    }
+
+    /// The normal DataDome escalation shape: the interstitial starts as a
+    /// device check and only *then* hands off to a CAPTCHA. Escalation used
+    /// to be checked on the pre-loop probe only, so this arrival never
+    /// reached the registered solver.
+    #[tokio::test]
+    async fn device_check_escalating_to_captcha_invokes_solver() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move {
+                DataDomeBypass::new(&s)
+                    .poll_interval(Duration::from_millis(1))
+                    .on_captcha(|ch| async move {
+                        assert!(ch.captcha_url.contains("captcha-delivery.com"));
+                        Ok(crate::captcha::DataDomeSolution {
+                            datadome_cookie: "FROM_SOLVER".into(),
+                        })
+                    })
+                    .wait_for_clearance()
+                    .await
+            }
+        });
+
+        // Probe 1 (pre-loop): device check — no escalation yet.
+        let id1 = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(id1, snap_reply(device_check_snap())).await;
+
+        // Probe 2 (in-loop): the device check escalated to a CAPTCHA.
+        let id2 = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(id2, snap_reply(captcha_snap())).await;
+
+        // Solver path: build_challenge eval → setCookie → reload.
+        let id_ctx = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id_ctx,
+            json!({"result":{"type":"object","value":{"url":"https://shop.example.com/p","ua":"Mozilla/5.0"}}}),
+        )
+        .await;
+        let id_cookie = mock.expect_cmd("Network.setCookie").await;
+        assert_eq!(mock.last_sent()["params"]["value"], "FROM_SOLVER");
+        mock.reply(id_cookie, json!({"success":true})).await;
+        let id_reload = mock.expect_cmd("Page.reload").await;
+        mock.reply(id_reload, json!({})).await;
+
+        // Probe 3: cleared.
+        let id3 = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id3,
+            snap_reply(
+                json!({"surface":"none","datadome":"FROM_SOLVER","dd":null,"captcha_url":null,"body_clean":true}),
+            ),
+        )
+        .await;
+
+        match fut.await.unwrap().unwrap() {
+            ClearanceOutcome::Cleared { datadome } => assert_eq!(datadome, "FROM_SOLVER"),
+            other => panic!("expected Cleared, got {other:?}"),
+        }
+        conn.shutdown();
+    }
+
+    /// A CAPTCHA that arrives mid-flight with no solver registered must still
+    /// produce the actionable `CaptchaRequired` error, not a silent timeout.
+    #[tokio::test]
+    async fn mid_flight_captcha_without_solver_errors() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move {
+                DataDomeBypass::new(&s)
+                    .poll_interval(Duration::from_millis(1))
+                    .wait_for_clearance()
+                    .await
+            }
+        });
+
+        let id1 = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(id1, snap_reply(device_check_snap())).await;
+        let id2 = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(id2, snap_reply(captcha_snap())).await;
+
+        assert!(matches!(
+            fut.await.unwrap().unwrap_err(),
+            DataDomeError::CaptchaRequired
+        ));
+        conn.shutdown();
+    }
+
+    /// A ban that lands after the pre-loop probe must terminate as `Blocked`
+    /// — the caller needs "change your IP", not "timed out".
+    #[tokio::test]
+    async fn device_check_escalating_to_block_returns_blocked() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move {
+                DataDomeBypass::new(&s)
+                    .poll_interval(Duration::from_millis(1))
+                    .wait_for_clearance()
+                    .await
+            }
+        });
+
+        let id1 = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(id1, snap_reply(device_check_snap())).await;
+        let id2 = mock.expect_cmd("Runtime.evaluate").await;
+        mock.reply(
+            id2,
+            snap_reply(
+                json!({"surface":"block","datadome":null,"dd":{"cid":"C","hsh":"H","t":"bv","host":"h"},"captcha_url":null,"body_clean":false}),
+            ),
+        )
+        .await;
+
+        assert!(matches!(
+            fut.await.unwrap().unwrap(),
+            ClearanceOutcome::Blocked
+        ));
+        conn.shutdown();
+    }
+
+    /// `with_interception()` used to be dropped on the CAPTCHA route: that
+    /// branch returned into the poll loop with no receiver and no guard, so
+    /// the fast path was silently off exactly where it matters most. A
+    /// `Fetch.enable` on the wire proves the subscription is armed.
+    #[tokio::test]
+    async fn captcha_route_arms_the_interception_fast_path() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move {
+                DataDomeBypass::new(&s)
+                    .poll_interval(Duration::from_millis(1))
+                    .with_interception()
+                    .on_captcha(|_ch| async move {
+                        Ok(crate::captcha::DataDomeSolution {
+                            datadome_cookie: "FROM_SOLVER".into(),
+                        })
+                    })
+                    .wait_for_clearance()
+                    .await
+            }
+        });
+
+        let mut saw_fetch_enable = false;
+        let mut reloaded = false;
+        while let Some((method, id)) = next_cmd(&mut mock).await {
+            match method.as_str() {
+                "Fetch.enable" => {
+                    saw_fetch_enable = true;
+                    mock.reply(id, json!({})).await;
+                }
+                "Runtime.evaluate" => {
+                    let expr = mock.last_sent()["params"]["expression"]
+                        .as_str()
+                        .unwrap()
+                        .to_string();
+                    if expr.contains("location.href") {
+                        mock.reply(
+                            id,
+                            json!({"result":{"type":"object","value":{"url":"https://shop.example.com/p","ua":"UA"}}}),
+                        )
+                        .await;
+                    } else if reloaded {
+                        mock.reply(
+                            id,
+                            snap_reply(
+                                json!({"surface":"none","datadome":"FROM_SOLVER","dd":null,"captcha_url":null,"body_clean":true}),
+                            ),
+                        )
+                        .await;
+                    } else {
+                        mock.reply(id, snap_reply(captcha_snap())).await;
+                    }
+                }
+                "Network.setCookie" => mock.reply(id, json!({"success":true})).await,
+                "Page.reload" => {
+                    reloaded = true;
+                    mock.reply(id, json!({})).await;
+                }
+                _ => mock.reply(id, json!({})).await,
+            }
+        }
+
+        match fut.await.unwrap().unwrap() {
+            ClearanceOutcome::Cleared { datadome } => assert_eq!(datadome, "FROM_SOLVER"),
+            other => panic!("expected Cleared, got {other:?}"),
+        }
+        assert!(
+            saw_fetch_enable,
+            "with_interception() must arm the Fetch fast path on the captcha route too"
+        );
         conn.shutdown();
     }
 

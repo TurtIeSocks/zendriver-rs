@@ -296,6 +296,28 @@ mod tests {
         conn.shutdown();
     }
 
+    /// Imperva names the load-balancer cookie `nlbi_<siteid>`, never a bare
+    /// `nlbi`, so both cookie scans in `detect.js` (the legacy-surface check
+    /// and the `sessions` collector the caller replays) must match it by
+    /// prefix. An equality match silently dropped it from every snapshot.
+    ///
+    /// Source-level guard: `detect.js` only ever runs inside a real page, so
+    /// its behavior cannot be exercised from a mocked CDP transport.
+    #[test]
+    fn detect_js_matches_the_nlbi_cookie_by_prefix_at_both_sites() {
+        let js = include_str!("detect.js");
+        assert_eq!(
+            js.matches(r#"indexOf("nlbi") === 0"#).count(),
+            2,
+            "both the legacy-cookie scan and the sessions collector must \
+             prefix-match nlbi_<siteid>"
+        );
+        assert!(
+            !js.contains(r#"=== "nlbi""#),
+            "an exact nlbi match never fires against a real Imperva cookie"
+        );
+    }
+
     #[tokio::test]
     async fn detect_snapshot_propagates_js_exception_as_jserror() {
         let (mut mock, conn) = MockConnection::pair();

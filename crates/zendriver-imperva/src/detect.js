@@ -32,11 +32,14 @@
     var hasLegacyCookies = false;
     for (var j = 0; j < cookieNames.length; j++) {
         var n2 = cookieNames[j];
+        // Imperva emits the load-balancer cookie as `nlbi_<siteid>` (and
+        // sometimes `nlbi_<siteid>_<suffix>`), so match it by prefix — an
+        // exact "nlbi" never occurs in the wild.
         if (
             n2 === "___utmvc" ||
             n2.indexOf("incap_ses_") === 0 ||
             n2.indexOf("visid_incap_") === 0 ||
-            n2 === "nlbi"
+            n2.indexOf("nlbi") === 0
         ) {
             hasLegacyCookies = true;
             break;
@@ -109,12 +112,14 @@
     var sessionCookies = [];
     for (var m = 0; m < cookieNames.length; m++) {
         var name = cookieNames[m];
+        // Same prefix match as the legacy-cookie scan above: `nlbi_<siteid>`
+        // has to reach the caller's `sessions` snapshot for replay.
         if (
             name === reese84Key ||
             name === "___utmvc" ||
             name.indexOf("incap_ses_") === 0 ||
             name.indexOf("visid_incap_") === 0 ||
-            name === "nlbi"
+            name.indexOf("nlbi") === 0
         ) {
             sessionCookies.push({ name: name, value: cookies[name] });
         }
