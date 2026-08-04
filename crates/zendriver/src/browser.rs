@@ -2295,6 +2295,43 @@ const BROWSER_CLOSE_TIMEOUT: Duration = Duration::from_secs(3);
 /// intended per-phase waits, so it only bites on a genuine wedge, never on a
 /// close that is merely slow but still making progress.
 const BROWSER_CLOSE_DEADLINE: Duration = Duration::from_secs(15);
+
+/// What the `Browser.close` round-trip actually established about the quit.
+///
+/// Drives two decisions in [`Browser::close_owning`]: whether Chrome has earned
+/// the [`SHUTDOWN_GRACE`] to exit on its own before signals, and what to say if
+/// it does not. Both used to hang off one `acked: bool` that recorded *every*
+/// [`zendriver_transport::CallError::Transport`] as an acknowledgement — which
+/// silently folded "the frame never reached the socket" in with "Chrome took
+/// the quit and dropped the socket", and then reported the pair as a fact
+/// Chrome had told us.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum QuitOutcome {
+    /// Chrome answered the command. The only outcome that is a real ack.
+    Accepted,
+    /// The transport died on this call, so we will never learn whether Chrome
+    /// saw the quit. Chrome commonly drops the socket on quit instead of
+    /// replying, so the quit most likely landed — but a write that failed
+    /// before the frame left this process reports identically
+    /// ([`zendriver_transport::TransportError::Disconnected`] covers both), so
+    /// this earns the grace without ever claiming an acknowledgement.
+    TransportDied,
+    /// No quit can be in flight: Chrome refused it, never answered it, or the
+    /// transport was already shut down so it was never sent at all.
+    NotPending,
+}
+
+impl QuitOutcome {
+    /// Whether a quit might still be in flight, earning Chrome the
+    /// [`SHUTDOWN_GRACE`] to act on it before the signal path takes over.
+    ///
+    /// Waiting out the grace when nothing was ever sent buys nothing: there is
+    /// no message for Chrome to act on, so the wait can only expire.
+    fn may_be_in_flight(self) -> bool {
+        matches!(self, Self::Accepted | Self::TransportDied)
+    }
+}
+
 /// How long [`resolve_ws_from_http`] waits for the `/json/version` round-trip.
 const JSON_VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -4375,12 +4412,31 @@ impl Browser {
             self.inner.conn.call_raw("Browser.close", json!({}), None),
         )
         .await;
-        let acked = match quit {
+        let outcome = match quit {
             // Chrome acknowledged the quit.
-            Ok(Ok(_)) => true,
-            // Chrome commonly drops the socket on quit instead of replying;
-            // the transport dying here means the quit landed.
-            Ok(Err(zendriver_transport::CallError::Transport(_))) => true,
+            Ok(Ok(_)) => QuitOutcome::Accepted,
+            // The transport was already stopped by a caller-requested
+            // `shutdown()` / `reconnect()` — reachable from outside via the
+            // public `Browser::cdp` — so the enqueue failed cleanly and the
+            // frame never reached the socket. Nothing is in flight for the
+            // grace wait to wait on, so go straight to signals.
+            Ok(Err(zendriver_transport::CallError::Transport(
+                zendriver_transport::TransportError::Shutdown,
+            ))) => {
+                warn!(
+                    "Browser.close was never sent (the transport was already shut down); \
+                     falling back to signal shutdown",
+                );
+                QuitOutcome::NotPending
+            }
+            // Chrome commonly drops the socket on quit instead of replying, so
+            // a transport that dies here usually means the quit landed. Usually
+            // is not certainly: a local write that failed before the frame left
+            // this process surfaces as the same `Disconnected`, and the
+            // transport deliberately gives both the same variant so a caller's
+            // reconnect-on-`Disconnected` recovery fires either way. Grace it,
+            // but never report it as an acknowledgement.
+            Ok(Err(zendriver_transport::CallError::Transport(_))) => QuitOutcome::TransportDied,
             // Chrome never answered. Unreachable while `browser_close_budget`
             // (3s) stays far tighter than the transport's per-call default
             // (180s) — the outer timeout below wins — but matched explicitly
@@ -4388,20 +4444,20 @@ impl Browser {
             // it categorically is not: nothing was heard, let alone declined.
             Ok(Err(e @ zendriver_transport::CallError::Timeout { .. })) => {
                 warn!(error = %e, "Browser.close went unanswered; falling back to signal shutdown");
-                false
+                QuitOutcome::NotPending
             }
             // An RPC refusal means Chrome heard us and declined — nothing to
             // wait for, go straight to signals.
             Ok(Err(e)) => {
                 warn!(error = %e, "Browser.close was refused; falling back to signal shutdown");
-                false
+                QuitOutcome::NotPending
             }
             Err(_elapsed) => {
                 warn!(
                     budget = ?browser_close_budget,
                     "Browser.close went unanswered; falling back to signal shutdown",
                 );
-                false
+                QuitOutcome::NotPending
             }
         };
 
@@ -4409,14 +4465,25 @@ impl Browser {
 
         let mut child_guard = self.inner.child.lock().await;
         if let Some(mut child) = child_guard.take() {
-            if acked {
-                // Chrome took the quit — give it the same grace to actually
-                // exit. If it does, no signal is ever sent and the whole
-                // process tree went down with it.
+            if outcome.may_be_in_flight() {
+                // A quit may still be working — give Chrome the grace to
+                // actually exit. If it does, no signal is ever sent and the
+                // whole process tree went down with it.
                 if let Ok(Ok(_status)) = timeout(SHUTDOWN_GRACE, child.wait()).await {
                     return Ok(());
                 }
-                warn!("chrome accepted Browser.close but did not exit; hard-killing");
+                // Report what was observed, not what was assumed. Only
+                // `Accepted` is Chrome telling us it took the quit; on
+                // `TransportDied` the command may never have reached Chrome at
+                // all, so claiming it "accepted" states a fact we do not have.
+                if outcome == QuitOutcome::Accepted {
+                    warn!("chrome accepted Browser.close but did not exit; hard-killing");
+                } else {
+                    warn!(
+                        "the transport died during Browser.close and chrome did not exit; \
+                         the quit may never have reached it — hard-killing",
+                    );
+                }
             }
             // Try graceful exit first. On Unix, tokio's `start_kill` is
             // `kill(pid, SIGKILL)` — too aggressive for graceful shutdown.
@@ -7645,6 +7712,51 @@ mod tests {
             "a Browser.close timeout must still hard-kill the process (pid {pid} alive)",
         );
         drop(mock);
+    }
+
+    /// A quit that never reached the socket must not be recorded as one Chrome
+    /// accepted. `close()` classified *every* `CallError::Transport` as an
+    /// acknowledgement, so a `Browser.close` that failed to be sent at all
+    /// bought Chrome the full `SHUTDOWN_GRACE` to act on a message it had
+    /// never received — stalling teardown, then logging that "chrome accepted
+    /// Browser.close", which is a statement about bytes that never left this
+    /// process.
+    ///
+    /// `TransportError::Shutdown` is the unambiguous half of that: the actor
+    /// was stopped by a caller-requested `shutdown()`, so the enqueue failed
+    /// cleanly and nothing is in flight. Reachable from outside through the
+    /// public `Browser::cdp`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn close_skips_the_grace_when_the_quit_was_never_sent() {
+        let (child, pid) = spawn_stand_in_chrome();
+        // `_mock` is held (named, not bare `_`) for the whole test so the
+        // actor's only route out is the cancellation below. Dropping it would
+        // end the inbound stream instead, which the actor latches as an
+        // unexpected disconnect — a different classification than the one
+        // under test.
+        let (_mock, browser) = owning_browser_with_child(Some(child)).await;
+
+        // Tear the transport down before close() can send its quit.
+        browser.cdp().shutdown();
+
+        let start = tokio::time::Instant::now();
+        let closed = tokio::time::timeout(Duration::from_secs(20), browser.close()).await;
+        let elapsed = start.elapsed();
+
+        closed
+            .expect("close() must not hang")
+            .expect("close() returns Ok via the signal fallback");
+
+        // The stand-in never exits on its own, so an unsent quit misread as an
+        // ack burns the whole 5s `SHUTDOWN_GRACE` waiting for it to. The
+        // signal path is the only thing that can end this process, and there
+        // was never a reason to delay reaching for it.
+        assert!(
+            elapsed < SHUTDOWN_GRACE,
+            "an unsent Browser.close must not wait out the {SHUTDOWN_GRACE:?} grace; took {elapsed:?}",
+        );
+        assert!(!pid_alive(pid), "close() must leave no surviving process");
     }
 
     /// The whole close must stay bounded even when a phase that is otherwise
