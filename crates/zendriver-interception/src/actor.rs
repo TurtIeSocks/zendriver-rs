@@ -36,8 +36,8 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use futures::StreamExt;
 use serde::Deserialize;
+use serde::de::{Deserializer, MapAccess, Visitor};
 use serde_json::{Map, Value, json};
-use std::collections::HashMap;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::{trace, warn};
@@ -148,8 +148,12 @@ pub(crate) struct RequestPausedEvent {
 pub(crate) struct RequestPayload {
     pub(crate) url: String,
     pub(crate) method: String,
-    #[serde(default)]
-    pub(crate) headers: HashMap<String, String>,
+    /// Request headers in the order the decoder yields them, kept as pairs
+    /// rather than a map so nothing is reordered or merged on our side of the
+    /// boundary. See [`deserialize_headers`] for what CDP can and cannot tell
+    /// us about the original wire order.
+    #[serde(default, deserialize_with = "deserialize_headers")]
+    pub(crate) headers: Vec<(String, String)>,
     /// Chrome's text representation of the request body. For multipart /
     /// binary uploads this can be lossy — Chrome rebuilds via UTF-8 best
     /// effort. Prefer [`Self::post_data_entries`] when present.
@@ -162,6 +166,48 @@ pub(crate) struct RequestPayload {
     /// When present, it is the canonical source of truth for the body.
     #[serde(rename = "postDataEntries", default)]
     pub(crate) post_data_entries: Option<Vec<PostDataEntry>>,
+}
+
+/// Decode CDP's `Network.Headers` (a JSON *object*) into ordered pairs,
+/// preserving whatever order the deserializer hands us.
+///
+/// Why this is not the browser's true header order: CDP models request
+/// headers as an object keyed by name, so duplicate-named headers are already
+/// merged by Chrome before the event is serialized, and JSON object order is
+/// only as faithful as the parser that read it. Our transport hands events to
+/// this crate as an already-parsed [`serde_json::Value`], whose object map is
+/// a `BTreeMap` unless `serde_json/preserve_order` is enabled workspace-wide —
+/// so the names arrive sorted, and the wire order is gone before we see it.
+///
+/// Collecting into a `Vec` here is still worth doing: it is deterministic
+/// (a `HashMap` would re-randomize the order on every request, which is a
+/// worse fingerprint for a caller who round-trips `RequestInfo::headers` back
+/// through `RequestOverrides`), and it is the piece that would automatically
+/// become order-faithful if the parse ever starts preserving order. Restoring
+/// the real order needs a raw-bytes event path in `zendriver-transport`.
+fn deserialize_headers<'de, D>(deserializer: D) -> Result<Vec<(String, String)>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct HeadersVisitor;
+
+    impl<'de> Visitor<'de> for HeadersVisitor {
+        type Value = Vec<(String, String)>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a map of header name to header value")
+        }
+
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+            let mut headers = Vec::with_capacity(map.size_hint().unwrap_or(0));
+            while let Some(pair) = map.next_entry::<String, String>()? {
+                headers.push(pair);
+            }
+            Ok(headers)
+        }
+    }
+
+    deserializer.deserialize_map(HeadersVisitor)
 }
 
 #[derive(Debug, Deserialize)]
@@ -379,30 +425,40 @@ pub(crate) fn serialize_pattern(p: &RequestPattern) -> Value {
 
 /// Build a [`RequestInfo`] from the decoded event for `Modify` closures.
 ///
-/// Body precedence: `postDataEntries` (canonical, base64-decoded + concatenated)
-/// when present, else `postData` interpreted as UTF-8 bytes. The string
-/// fallback is necessarily lossy for binary bodies — Chrome only emits
-/// `postDataEntries` when it knows the text form would mangle the bytes.
+/// Body precedence: `postDataEntries` (canonical, base64-decoded +
+/// concatenated) when present, else `postData` interpreted as UTF-8 bytes. The
+/// string fallback is necessarily lossy for binary bodies — Chrome only emits
+/// `postDataEntries` when it knows the text form would mangle the bytes. The
+/// entries path is all-or-nothing: see [`decode_post_data`].
 ///
-/// Headers come from `Network.Request.headers` (CDP object) so we materialize
-/// them as a `Vec<(name, value)>` on the boundary; the upstream HashMap may
-/// have collapsed duplicates already, but for the request side CDP also
-/// pre-merges so this is faithful.
+/// Headers come from `Network.Request.headers`, which CDP models as an object
+/// keyed by header name — so duplicates are pre-merged by Chrome and the
+/// browser's on-the-wire header *order* does not survive to this point. See
+/// [`deserialize_headers`] for the full explanation; the pairs are passed
+/// through unchanged here.
 pub(crate) fn build_request_info(ev: &RequestPausedEvent) -> RequestInfo {
     RequestInfo {
         url: ev.request.url.clone(),
         method: ev.request.method.clone(),
-        headers: ev
-            .request
-            .headers
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect(),
+        headers: ev.request.headers.clone(),
         post_data: decode_post_data(&ev.request),
         resource_type: parse_resource_type(ev.resource_type.as_deref()),
     }
 }
 
+/// Decode the request body, all-or-nothing.
+///
+/// `postDataEntries` is a chunked body: the caller only has the real payload
+/// if *every* chunk decodes. If any entry is unusable (absent `bytes`, or
+/// invalid base64) we return `None` rather than the successfully-decoded
+/// prefix — a partial body is indistinguishable from a complete one, so a
+/// `Modify` closure that signs or hashes it would produce a valid signature
+/// over the wrong bytes. We also don't fall back to `postData` in that case:
+/// its lossy UTF-8 rebuild would be a different set of plausible-but-wrong
+/// bytes. `None` is the only honest answer the [`RequestInfo::post_data`]
+/// shape can give.
+///
+/// [`RequestInfo::post_data`]: crate::types::RequestInfo::post_data
 fn decode_post_data(req: &RequestPayload) -> Option<Vec<u8>> {
     use base64::Engine as _;
     use base64::engine::general_purpose::STANDARD as BASE64;
@@ -411,12 +467,19 @@ fn decode_post_data(req: &RequestPayload) -> Option<Vec<u8>> {
         let mut buf = Vec::new();
         for entry in entries {
             let Some(b64) = entry.bytes.as_deref() else {
-                continue;
+                tracing::warn!(
+                    "interception: postDataEntries entry without bytes; reporting no body rather than a truncated one"
+                );
+                return None;
             };
             match BASE64.decode(b64) {
                 Ok(bytes) => buf.extend_from_slice(&bytes),
                 Err(e) => {
-                    tracing::warn!(error = %e, "interception: bad base64 in postDataEntries; skipping entry");
+                    tracing::warn!(
+                        error = %e,
+                        "interception: bad base64 in postDataEntries; reporting no body rather than a truncated one"
+                    );
+                    return None;
                 }
             }
         }
@@ -926,5 +989,116 @@ mod tests {
             .expect("oneshot dropped");
         actor.await.unwrap();
         conn.shutdown();
+    }
+
+    /// Decode a `Fetch.requestPaused` payload the way the actor does.
+    fn request_info_from(request: Value) -> RequestInfo {
+        let ev: RequestPausedEvent = serde_json::from_value(json!({
+            "requestId": "REQ-1",
+            "request": request,
+            "resourceType": "XHR",
+        }))
+        .expect("event fixture must decode");
+        build_request_info(&ev)
+    }
+
+    /// Happy path: every `postDataEntries` chunk decodes, so the body is the
+    /// concatenation. Guards the all-or-nothing fix below from over-correcting.
+    #[test]
+    fn post_data_entries_concatenate_when_every_chunk_decodes() {
+        let info = request_info_from(json!({
+            "url": "https://example.test/upload",
+            "method": "POST",
+            "headers": {},
+            "postDataEntries": [
+                { "bytes": BASE64.encode("hello ") },
+                { "bytes": BASE64.encode("world") },
+            ],
+        }));
+        assert_eq!(info.post_data.as_deref(), Some(&b"hello world"[..]));
+    }
+
+    /// A corrupt chunk must yield `None`, never the decoded prefix: a partial
+    /// body is indistinguishable from a complete one, so a `Modify` closure
+    /// that signs it would emit a valid signature over the wrong bytes.
+    #[test]
+    fn post_data_entries_with_corrupt_chunk_yield_none_not_a_partial_body() {
+        let info = request_info_from(json!({
+            "url": "https://example.test/upload",
+            "method": "POST",
+            "headers": {},
+            "postDataEntries": [
+                { "bytes": BASE64.encode("hello ") },
+                { "bytes": "!!!not base64!!!" },
+                { "bytes": BASE64.encode("world") },
+            ],
+        }));
+        assert_eq!(
+            info.post_data, None,
+            "a truncated body must not surface as Some(prefix)"
+        );
+    }
+
+    /// Same contract for a chunk Chrome sent without `bytes` — the body is
+    /// incomplete, so we report no body rather than the surrounding chunks.
+    #[test]
+    fn post_data_entry_without_bytes_yields_none() {
+        let info = request_info_from(json!({
+            "url": "https://example.test/upload",
+            "method": "POST",
+            "headers": {},
+            "postDataEntries": [
+                { "bytes": BASE64.encode("hello ") },
+                {},
+            ],
+        }));
+        assert_eq!(info.post_data, None);
+    }
+
+    /// The `postData` fallback is untouched by the all-or-nothing rule — it
+    /// only applies to the chunked `postDataEntries` path.
+    #[test]
+    fn post_data_string_fallback_still_decodes() {
+        let info = request_info_from(json!({
+            "url": "https://example.test/form",
+            "method": "POST",
+            "headers": {},
+            "postData": "a=1&b=2",
+        }));
+        assert_eq!(info.post_data.as_deref(), Some(&b"a=1&b=2"[..]));
+    }
+
+    /// Request headers decode into a deterministic pair list. CDP's name-keyed
+    /// object means we can't recover Chrome's wire order (see
+    /// `deserialize_headers`), but two decodes of the same event must agree —
+    /// a `HashMap` re-randomized the order per request, which a caller
+    /// round-tripping `RequestInfo::headers` back through `RequestOverrides`
+    /// turns into a randomized header order on the wire.
+    #[test]
+    fn request_headers_decode_in_a_deterministic_order() {
+        let headers = json!({
+            "host": "example.test",
+            "user-agent": "zd/1",
+            "accept": "*/*",
+            "accept-language": "en-US",
+            "accept-encoding": "gzip",
+            "cookie": "a=1",
+            "referer": "https://example.test/",
+            "sec-fetch-mode": "cors",
+        });
+        let request = json!({
+            "url": "https://example.test/x",
+            "method": "GET",
+            "headers": headers,
+        });
+
+        let first = request_info_from(request.clone()).headers;
+        let second = request_info_from(request).headers;
+        assert_eq!(
+            first, second,
+            "header order must not change between decodes of the same event"
+        );
+        assert_eq!(first.len(), 8, "every header must survive the decode");
+        assert!(first.contains(&("cookie".to_string(), "a=1".to_string())));
     }
 }

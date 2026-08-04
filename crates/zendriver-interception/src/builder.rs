@@ -140,6 +140,12 @@ impl<'tab> InterceptBuilder<'tab> {
     /// `zendriver` crate if you want the wiring installed automatically on
     /// every tab.
     ///
+    /// **Only [`start`](Self::start) honors this.** The
+    /// [`subscribe`](Self::subscribe) escape hatch has no auth path — it never
+    /// subscribes to `Fetch.authRequired`, so it leaves
+    /// `handleAuthRequests: false` and logs an error rather than pausing auth
+    /// challenges nothing would answer. Use `start()` when you need auth.
+    ///
     /// See cdpdriver/zendriver#208.
     #[must_use]
     pub fn handle_auth(mut self, user: impl Into<String>, pass: impl Into<String>) -> Self {
@@ -392,12 +398,31 @@ impl<'tab> InterceptBuilder<'tab> {
     /// themselves. Use [`start`](Self::start) when you want the actor to
     /// apply rules automatically.
     ///
+    /// [`handle_auth`](Self::handle_auth) credentials are **also ignored**
+    /// here, and calling both logs an error. This path never subscribes to
+    /// `Fetch.authRequired`, so `Fetch.enable` is deliberately sent with
+    /// `handleAuthRequests: false`: flipping it on would make Chrome pause
+    /// every auth challenge with nobody to answer it, turning a visible 407
+    /// into a hang. Behind a proxy that requires credentials, use
+    /// [`start`](Self::start) instead.
+    ///
     /// The returned stream owns the underlying CDP subscription. Dropping
     /// the stream tears the subscription down — Chrome's interception stays
     /// active until the session is closed, but no further pauses surface to
     /// the caller.
     #[must_use = "the returned stream is the only handle on the subscription"]
     pub fn subscribe(mut self) -> impl Stream<Item = PausedRequest> + Send + use<> {
+        if self.auth.is_some() {
+            // Loud, because the alternative failure is invisible: behind a
+            // proxy every navigation 407s and the caller sees only empty
+            // pages. We cannot honor the credentials here — this path has no
+            // `Fetch.authRequired` subscription, and enabling
+            // `handleAuthRequests` without one converts the 407 into a hang.
+            tracing::error!(
+                "interception: handle_auth() credentials are ignored by subscribe(); \
+                 auth challenges will NOT be answered — use start() for proxy / HTTP auth"
+            );
+        }
         if self.patterns.is_empty() {
             self.patterns.push(RequestPattern {
                 url_pattern: Some("*".into()),
@@ -417,6 +442,9 @@ impl<'tab> InterceptBuilder<'tab> {
                     "Fetch.enable",
                     json!({
                         "patterns": enable_patterns,
+                        // Always false on this path — see the doc comment: no
+                        // `Fetch.authRequired` subscription exists here, so
+                        // `true` would pause challenges forever.
                         "handleAuthRequests": false,
                     }),
                 )
@@ -753,6 +781,37 @@ mod tests {
             paused.response.is_none(),
             "request-stage event has no response"
         );
+
+        drop(stream);
+        conn.shutdown();
+    }
+
+    /// `subscribe()` cannot honor `handle_auth`: it never subscribes to
+    /// `Fetch.authRequired`, so `handleAuthRequests: true` would leave Chrome
+    /// pausing auth challenges nobody answers — a hang instead of a 407.
+    /// Pin the flag to `false` (the caller is warned via `tracing::error!`)
+    /// so a future "fix" can't half-enable the auth path here.
+    #[tokio::test]
+    async fn subscribe_pins_handle_auth_requests_false_even_with_credentials() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+
+        let stream = Box::pin(
+            InterceptBuilder::new(&sess)
+                .handle_auth("puser", "ppass")
+                .subscribe(),
+        );
+
+        let enable_id =
+            tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Fetch.enable"))
+                .await
+                .expect("subscribe() did not send Fetch.enable within 2s");
+        let params = mock.last_sent()["params"].clone();
+        assert_eq!(
+            params["handleAuthRequests"], false,
+            "subscribe() has no Fetch.authRequired subscription — enabling auth handling here hangs every challenge"
+        );
+        mock.reply(enable_id, json!({})).await;
 
         drop(stream);
         conn.shutdown();
