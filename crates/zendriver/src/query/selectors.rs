@@ -571,6 +571,18 @@ async fn resolve_text_one(
     exact: bool,
     best_match: bool,
 ) -> Result<Option<RemoteRef>> {
+    // XPath compares `normalize-space(.)` against the needle, so the page side
+    // was folded but the needle was not: `text_exact("Hello   world")` could
+    // never match anything. Fold it the same way, using the one rule
+    // `TextPred::Equals` uses so the two stay in agreement. Substring and regex
+    // needles keep their raw text — interior whitespace can be meaningful there.
+    let normalized;
+    let needle = if exact {
+        normalized = crate::query::predicate::normalize_space(needle);
+        normalized.as_str()
+    } else {
+        needle
+    };
     let session = scope.session();
     if exact {
         // XPath path. For best_match we need the full snapshot array
@@ -674,6 +686,18 @@ async fn resolve_text_many(
     exact: bool,
     best_match: bool,
 ) -> Result<Vec<RemoteRef>> {
+    // XPath compares `normalize-space(.)` against the needle, so the page side
+    // was folded but the needle was not: `text_exact("Hello   world")` could
+    // never match anything. Fold it the same way, using the one rule
+    // `TextPred::Equals` uses so the two stay in agreement. Substring and regex
+    // needles keep their raw text — interior whitespace can be meaningful there.
+    let normalized;
+    let needle = if exact {
+        normalized = crate::query::predicate::normalize_space(needle);
+        normalized.as_str()
+    } else {
+        needle
+    };
     let session = scope.session();
     let result = if exact {
         match scope {
@@ -1111,6 +1135,55 @@ mod tests {
     use super::*;
     use zendriver_transport::SessionHandle;
     use zendriver_transport::testing::MockConnection;
+
+    /// The XPath folds the page side with `normalize-space(.)`, so an
+    /// author-written run of spaces in the needle could never match. Both
+    /// sides must be folded by the same rule `TextPred::Equals` uses.
+    #[tokio::test]
+    async fn text_exact_folds_whitespace_in_the_needle_before_building_the_xpath() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                let scope = QueryScope::Tab(&t);
+                SelectorKind::Text {
+                    needle: "  Hello \t\n  world  ".into(),
+                    exact: true,
+                }
+                .resolve_one(&scope)
+                .await
+            }
+        });
+
+        let id = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            mock.expect_cmd("Runtime.evaluate"),
+        )
+        .await
+        .expect("expected a Runtime.evaluate dispatch");
+        let expr = mock.last_sent()["params"]["expression"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            expr.contains("Hello world"),
+            "needle should be normalize-space folded before embedding, got: {expr}"
+        );
+        assert!(
+            !expr.contains("Hello \\t"),
+            "raw tabs/runs must not survive into the XPath, got: {expr}"
+        );
+        mock.reply(
+            id,
+            json!({ "result": { "type": "object", "subtype": "null" } }),
+        )
+        .await;
+        let _ = fut.await.unwrap();
+        conn.shutdown();
+    }
 
     #[tokio::test]
     async fn css_one_sends_query_selector_with_selector() {
