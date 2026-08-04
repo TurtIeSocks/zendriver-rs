@@ -79,6 +79,13 @@ const CLEAR_BY_DELETING_SLACK: usize = 2;
 /// spin it unboundedly.
 const CLEAR_BY_DELETING_MAX: usize = 4096;
 
+/// How often [`Element::clear_by_deleting`] re-reads the field to see whether
+/// it is already empty. Each Backspace is a CDP round-trip, so probing lets the
+/// common case (the select-all chord cleared the whole value in one stroke)
+/// exit after a single extra read instead of spending the full budget; probing
+/// every stroke would double the round-trips on fields that do need them.
+const PROBE_EVERY_N_BACKSPACES: usize = 16;
+
 /// Per-call knobs for [`Element::click_with`].
 ///
 /// `Default` matches the behavior of [`Element::click`]: a left, single,
@@ -221,6 +228,7 @@ impl Element {
                     self,
                     ActionabilityCheck::FULL,
                     DEFAULT_ACTIONABILITY_TIMEOUT,
+                    opts.position,
                 )
                 .await?;
             }
@@ -233,16 +241,7 @@ impl Element {
                 None => (bbox.x + bbox.width / 2.0, bbox.y + bbox.height / 2.0),
             };
             let input = self.inner.tab.input().clone();
-            mouse::click_at(
-                &input,
-                &self.inner.tab,
-                tx,
-                ty,
-                opts.button,
-                opts.click_count,
-                opts.realistic,
-            )
-            .await
+            mouse::click_at(&input, &self.inner.tab, tx, ty, &opts).await
         })
         .await
     }
@@ -283,6 +282,7 @@ impl Element {
                 self,
                 ActionabilityCheck::FULL,
                 DEFAULT_ACTIONABILITY_TIMEOUT,
+                None,
             )
             .await?;
             let bbox = self
@@ -325,6 +325,7 @@ impl Element {
                     receives_pointer: true,
                 },
                 DEFAULT_ACTIONABILITY_TIMEOUT,
+                None,
             )
             .await?;
             let bbox = self
@@ -334,7 +335,7 @@ impl Element {
             let cx = bbox.x + bbox.width / 2.0;
             let cy = bbox.y + bbox.height / 2.0;
             let input = self.inner.tab.input().clone();
-            mouse::move_realistic(&input, &self.inner.tab, cx, cy).await
+            mouse::move_realistic(&input, &self.inner.tab, cx, cy, KeyModifiers::empty()).await
         })
         .await
     }
@@ -369,6 +370,7 @@ impl Element {
                     receives_pointer: true,
                 },
                 DEFAULT_ACTIONABILITY_TIMEOUT,
+                None,
             )
             .await?;
             let bbox = self
@@ -378,7 +380,7 @@ impl Element {
             let cx = bbox.x + bbox.width / 2.0;
             let cy = bbox.y + bbox.height / 2.0;
             let input = self.inner.tab.input().clone();
-            mouse::move_raw(&input, &self.inner.tab, cx, cy).await
+            mouse::move_raw(&input, &self.inner.tab, cx, cy, KeyModifiers::empty()).await
         })
         .await
     }
@@ -407,6 +409,7 @@ impl Element {
                 self,
                 ActionabilityCheck::TEXT_INPUT,
                 DEFAULT_ACTIONABILITY_TIMEOUT,
+                None,
             )
             .await?;
             let _ = self
@@ -604,24 +607,47 @@ impl Element {
             };
             self.press_with(Key::Char('a'), select_all).await?;
 
-            let len: usize = {
-                let res = self
-                    .call_on_main("function(){ return (this.value || '').length; }", json!([]))
-                    .await?;
-                res.get("value")
-                    .and_then(serde_json::Value::as_u64)
-                    .and_then(|n| usize::try_from(n).ok())
-                    .unwrap_or(0)
-            };
+            let len = self.value_len().await?;
             let presses = len
                 .saturating_add(CLEAR_BY_DELETING_SLACK)
                 .min(CLEAR_BY_DELETING_MAX);
-            for _ in 0..presses {
+            // Re-probe the value periodically and stop as soon as it is empty
+            // instead of always spending the full `len + slack` budget. Every
+            // `press` is a CDP round-trip (and re-runs the focus gate), so on a
+            // field the select-all chord already cleared this turns thousands of
+            // round-trips into one probe. The cadence keeps the probe overhead
+            // proportional rather than doubling the round-trips on short fields.
+            for i in 0..presses {
+                // Deliberately never probes within the first
+                // `PROBE_EVERY_N_BACKSPACES` strokes: `CLEAR_BY_DELETING_SLACK`
+                // exists precisely because `value.length` under-reports on
+                // off-by-one and IME-composition tails, so exiting early on a
+                // near-empty field would trust the number the slack is there to
+                // distrust. Long fields are where the budget actually hurts, and
+                // by stroke 16 a reported-empty field really is empty.
+                if i > 0 && i % PROBE_EVERY_N_BACKSPACES == 0 && self.value_len().await? == 0 {
+                    return Ok(());
+                }
                 self.press(Key::Special(SpecialKey::Backspace)).await?;
             }
             Ok(())
         })
         .await
+    }
+
+    /// Length of this element's `value`, or 0 if it has none.
+    ///
+    /// Used by [`Element::clear_by_deleting`] to size its Backspace budget and
+    /// then to detect early that the field is already empty.
+    async fn value_len(&self) -> Result<usize> {
+        let res = self
+            .call_on_main("function(){ return (this.value || '').length; }", json!([]))
+            .await?;
+        Ok(res
+            .get("value")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|n| usize::try_from(n).ok())
+            .unwrap_or(0))
     }
 
     /// Attach files to this `<input type="file">` element via

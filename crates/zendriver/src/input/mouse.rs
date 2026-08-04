@@ -7,6 +7,8 @@ use serde_json::json;
 use crate::error::Result;
 use crate::input::InputController;
 use crate::input::bezier::BezierPath;
+use crate::input::keyboard::KeyModifiers;
+use crate::input::pointer_state::MouseButtonSet;
 use crate::tab::Tab;
 
 /// Mouse buttons for click dispatch.
@@ -54,14 +56,34 @@ impl MouseButton {
     }
 }
 
+/// The [`MouseButtonSet`] bit for a single button.
+///
+/// `MouseButtonSet`'s bit values are chosen to match CDP's `buttons` bitmask
+/// (1 left, 2 right, 4 middle, 8 back, 16 forward), so `MouseButtonSet::bits`
+/// is the wire value directly.
+const fn button_bit(button: MouseButton) -> MouseButtonSet {
+    match button {
+        MouseButton::Left => MouseButtonSet::LEFT,
+        MouseButton::Middle => MouseButtonSet::MIDDLE,
+        MouseButton::Right => MouseButtonSet::RIGHT,
+        MouseButton::Back => MouseButtonSet::BACK,
+        MouseButton::Forward => MouseButtonSet::FORWARD,
+    }
+}
+
 /// Move the cursor from its current position to `(target_x, target_y)` along
 /// a Bezier path with realistic per-segment delay. Updates InputController
 /// state to the target position on success.
+///
+/// Carries `buttons` so a move dispatched between a press and a release reads
+/// as a drag. A page implementing drag with `mousemove` + `e.buttons` — the
+/// standard modern check — sees nothing at all without it.
 pub(crate) async fn move_realistic(
     input: &InputController,
     tab: &Tab,
     target_x: f64,
     target_y: f64,
+    extra_modifiers: KeyModifiers,
 ) -> Result<()> {
     // Hold the lock across the full dispatch + state-update sequence so a
     // concurrent `move_*` from another task can't slip in between our last
@@ -71,31 +93,44 @@ pub(crate) async fn move_realistic(
     // which matches Chrome's per-page input model.
     let mut state = input.state.lock().await;
     let start = (state.pointer_x, state.pointer_y);
-    let modifier_bits = state.modifiers_held.cdp_bits();
+    let modifier_bits = (state.modifiers_held | extra_modifiers).cdp_bits();
+    let buttons = state.buttons_held.bits();
     let path = BezierPath::build(
         start,
         (target_x, target_y),
         input.profile.jitter_amplitude_px,
         &mut state.rng,
     );
-    let segment_delay = if input.profile.mouse_speed_px_per_ms > 0.0 {
-        Duration::from_micros(((5.0 / input.profile.mouse_speed_px_per_ms) * 1000.0) as u64)
-    } else {
-        Duration::ZERO
-    };
-    for &(x, y) in &path.points {
+    let speed = input.profile.mouse_speed_px_per_ms;
+    // `points[0]` is the start position, so dispatching it emits a `mouseMoved`
+    // to where the cursor already is. Skip it, and sleep *before* each step so
+    // the delay pays for the movement that follows rather than trailing the
+    // last one.
+    let mut prev = path.points.first().copied().unwrap_or(start);
+    for &(x, y) in path.points.iter().skip(1) {
+        if speed > 0.0 {
+            // Derive the delay from the segment actually emitted. `BezierPath`
+            // clamps its sample count to [8, 60], so segment length scales with
+            // distance; assuming a fixed 5px step ran long moves ~3x too fast
+            // and short ones ~4x too slow, which made `mouse_speed_px_per_ms`
+            // honest only for 40-300px journeys.
+            let seg = (x - prev.0).hypot(y - prev.1);
+            let delay = Duration::from_micros(((seg / speed) * 1000.0) as u64);
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+        }
         tab.session()
             .call(
                 "Input.dispatchMouseEvent",
                 json!({
                     "type": "mouseMoved", "x": x, "y": y,
                     "modifiers": modifier_bits,
+                    "buttons": buttons,
                 }),
             )
             .await?;
-        if !segment_delay.is_zero() {
-            tokio::time::sleep(segment_delay).await;
-        }
+        prev = (x, y);
     }
     state.pointer_x = target_x;
     state.pointer_y = target_y;
@@ -108,16 +143,19 @@ pub(crate) async fn move_raw(
     tab: &Tab,
     target_x: f64,
     target_y: f64,
+    extra_modifiers: KeyModifiers,
 ) -> Result<()> {
     // Same per-Tab serialization rationale as `move_realistic`.
     let mut state = input.state.lock().await;
-    let modifier_bits = state.modifiers_held.cdp_bits();
+    let modifier_bits = (state.modifiers_held | extra_modifiers).cdp_bits();
+    let buttons = state.buttons_held.bits();
     tab.session()
         .call(
             "Input.dispatchMouseEvent",
             json!({
                 "type": "mouseMoved", "x": target_x, "y": target_y,
                 "modifiers": modifier_bits,
+                "buttons": buttons,
             }),
         )
         .await?;
@@ -126,50 +164,81 @@ pub(crate) async fn move_raw(
     Ok(())
 }
 
-/// Dispatch a click at `(target_x, target_y)` with `button` and `click_count`.
-/// If `realistic`, prefixes with Bezier move; otherwise direct teleport.
+/// Dispatch a click at `(target_x, target_y)`.
+///
+/// Reads `button` / `click_count` / `realistic` / `modifiers` from `opts`;
+/// `force` and `position` belong to the element-gating layer and are resolved
+/// by the caller before it picks a target coordinate.
+///
+/// `opts.modifiers` are OR'd with whatever the keyboard currently holds, so a
+/// caller-requested Ctrl/Cmd/Shift-click works without the caller having to
+/// drive a real key-down first. They ride the approach `mouseMoved` frames too,
+/// the way a real browser reports `ctrlKey` on mousemove.
+///
+/// A `click_count` above 1 emits that many press/release pairs with an
+/// increasing `clickCount`, which is what Chrome produces for a real
+/// double-click. Collapsing it into one pair carrying `clickCount: 2` is
+/// invisible to any page counting `mousedown` events.
 pub(crate) async fn click_at(
     input: &InputController,
     tab: &Tab,
     target_x: f64,
     target_y: f64,
-    button: MouseButton,
-    click_count: u32,
-    realistic: bool,
+    opts: &crate::element::actions::ClickOptions,
 ) -> Result<()> {
-    if realistic {
-        move_realistic(input, tab, target_x, target_y).await?;
+    let (button, click_count, extra_modifiers) = (opts.button, opts.click_count, opts.modifiers);
+    if opts.realistic {
+        move_realistic(input, tab, target_x, target_y, extra_modifiers).await?;
     } else {
-        move_raw(input, tab, target_x, target_y).await?;
+        move_raw(input, tab, target_x, target_y, extra_modifiers).await?;
     }
-    let modifier_bits = {
-        let s = input.state.lock().await;
-        s.modifiers_held.cdp_bits()
-    };
-    tab.session()
-        .call(
-            "Input.dispatchMouseEvent",
-            json!({
-                "type": "mousePressed",
-                "x": target_x, "y": target_y,
-                "button": button.cdp_str(),
-                "clickCount": click_count,
-                "modifiers": modifier_bits,
-            }),
-        )
-        .await?;
-    tab.session()
-        .call(
-            "Input.dispatchMouseEvent",
-            json!({
-                "type": "mouseReleased",
-                "x": target_x, "y": target_y,
-                "button": button.cdp_str(),
-                "clickCount": click_count,
-                "modifiers": modifier_bits,
-            }),
-        )
-        .await?;
+    let bit = button_bit(button);
+    for n in 1..=click_count.max(1) {
+        // `buttons` must reflect the set held *after* the press and *after* the
+        // release, so take it from the same locked section that mutates it.
+        let (modifier_bits, buttons) = {
+            let mut s = input.state.lock().await;
+            s.buttons_held.insert(bit);
+            (
+                (s.modifiers_held | extra_modifiers).cdp_bits(),
+                s.buttons_held.bits(),
+            )
+        };
+        tab.session()
+            .call(
+                "Input.dispatchMouseEvent",
+                json!({
+                    "type": "mousePressed",
+                    "x": target_x, "y": target_y,
+                    "button": button.cdp_str(),
+                    "clickCount": n,
+                    "modifiers": modifier_bits,
+                    "buttons": buttons,
+                }),
+            )
+            .await?;
+        let (modifier_bits, buttons) = {
+            let mut s = input.state.lock().await;
+            s.buttons_held.remove(bit);
+            (
+                (s.modifiers_held | extra_modifiers).cdp_bits(),
+                s.buttons_held.bits(),
+            )
+        };
+        tab.session()
+            .call(
+                "Input.dispatchMouseEvent",
+                json!({
+                    "type": "mouseReleased",
+                    "x": target_x, "y": target_y,
+                    "button": button.cdp_str(),
+                    "clickCount": n,
+                    "modifiers": modifier_bits,
+                    "buttons": buttons,
+                }),
+            )
+            .await?;
+    }
     Ok(())
 }
 
