@@ -354,6 +354,19 @@ impl<'tab> ImpervaBypass<'tab> {
                     // seconds in, and that arrival must reach the registered
                     // solver too.
                     //
+                    // Never escalate while a usable token is in hand. A
+                    // snapshot carrying a reese84 is not a page that needs a
+                    // CAPTCHA solved — clean body or not. `detect.js` ranks any
+                    // captcha above `Reese84`, and nothing gates that
+                    // classification on a genuine Imperva signal, so a plain
+                    // Google reCAPTCHA belonging to the site's own form flips
+                    // the surface even while the challenge is still settling.
+                    // Escalating there turns a run that would have kept polling
+                    // (and could still clear) into a hard `CaptchaRequired` on
+                    // the very first tick. Same reasoning as the token-first
+                    // ordering above, one arm over: a token in hand outranks a
+                    // captcha on the page.
+                    //
                     // Latched: `inject_captcha_solution` writes a hidden
                     // response field and never removes the widget, so the
                     // surface stays `Captcha` afterwards. Without the latch a
@@ -362,7 +375,7 @@ impl<'tab> ImpervaBypass<'tab> {
                     // main-world evaluates, on exactly the pages that are
                     // watching for them.
                     if let crate::detection::ImpervaSurface::Captcha(kind) = snap.surface {
-                        if !captcha_attempted {
+                        if token.is_none() && !captcha_attempted {
                             captcha_attempted = true;
                             self.solve_captcha(kind).await?;
                         }
@@ -957,6 +970,59 @@ mod tests {
             }
             other => panic!("expected TokenAcquired, got {other:?}"),
         }
+        conn.shutdown();
+    }
+
+    /// The token-first rule holds on the *not-yet-cleared* path too, which is
+    /// the majority regime in practice: most runs never reach a clean body
+    /// inside the budget. A token in hand plus a still-dirty body plus a
+    /// captcha iframe used to escalate and hard-fail on the first tick, so a
+    /// run that would have kept polling — and could still have cleared — was
+    /// converted into `CaptchaRequired` immediately. It must keep polling
+    /// instead, exactly as it does when no captcha is present.
+    #[tokio::test]
+    async fn a_token_suppresses_escalation_even_while_the_body_is_still_dirty() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move {
+                ImpervaBypass::new(&s)
+                    .poll_interval(Duration::from_millis(1))
+                    .timeout(Duration::from_millis(150))
+                    .wait_for_clearance()
+                    .await
+            }
+        });
+
+        // Token present, body still dirty, captcha surface up — no solver
+        // registered, so any escalation is an immediate hard error.
+        let dirty = snapshot_reply(json!({
+            "surface": { "kind": "Captcha", "captcha": "Recaptcha" },
+            "reese84": "TOK_IN_HAND",
+            "body_clean": false,
+            "sessions": [],
+            "has_imperva_signal": true,
+        }));
+        while let Ok(Ok(id)) = tokio::time::timeout(
+            Duration::from_millis(120),
+            mock.expect_cmd("Runtime.evaluate"),
+        )
+        .await
+        .map(Ok::<u64, ()>)
+        {
+            mock.reply(id, dirty.clone()).await;
+        }
+
+        let outcome = fut
+            .await
+            .unwrap()
+            .expect("a token in hand must not escalate to a hard CaptchaRequired");
+        assert!(
+            matches!(outcome, ClearanceOutcome::TimedOut { .. }),
+            "expected the run to keep polling to its deadline, got {outcome:?}"
+        );
         conn.shutdown();
     }
 
