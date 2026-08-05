@@ -865,28 +865,24 @@
 <a href=#865 id=865 data-nosnippet>865</a>
 <a href=#866 id=866 data-nosnippet>866</a>    <span class="attr">#[test]
 <a href=#867 id=867 data-nosnippet>867</a>    </span><span class="kw">fn </span>custom_screen_resolves_onto_fingerprint_when_supplied() {
-<a href=#868 id=868 data-nosnippet>868</a>        <span class="kw">let </span>screen = ScreenSpec {
-<a href=#869 id=869 data-nosnippet>869</a>            width: <span class="number">1536</span>,
-<a href=#870 id=870 data-nosnippet>870</a>            height: <span class="number">864</span>,
-<a href=#871 id=871 data-nosnippet>871</a>            device_pixel_ratio: <span class="number">1.25</span>,
-<a href=#872 id=872 data-nosnippet>872</a>        };
-<a href=#873 id=873 data-nosnippet>873</a>        <span class="kw">let </span>profile = StealthProfile::native()
-<a href=#874 id=874 data-nosnippet>874</a>            .fingerprint(bare_fp())
-<a href=#875 id=875 data-nosnippet>875</a>            .screen(screen);
-<a href=#876 id=876 data-nosnippet>876</a>        <span class="kw">let </span>resolved = profile
-<a href=#877 id=877 data-nosnippet>877</a>            .resolve_fingerprint(std::path::Path::new(<span class="string">"/nonexistent"</span>))
-<a href=#878 id=878 data-nosnippet>878</a>            .unwrap();
-<a href=#879 id=879 data-nosnippet>879</a>        <span class="macro">assert_eq!</span>(resolved.screen, <span class="prelude-val">Some</span>(screen));
-<a href=#880 id=880 data-nosnippet>880</a>    }
-<a href=#881 id=881 data-nosnippet>881</a>
-<a href=#882 id=882 data-nosnippet>882</a>    <span class="attr">#[test]
-<a href=#883 id=883 data-nosnippet>883</a>    </span><span class="kw">fn </span>absent_screen_override_leaves_fingerprint_screen_none() {
-<a href=#884 id=884 data-nosnippet>884</a>        <span class="kw">let </span>profile = StealthProfile::native().fingerprint(bare_fp());
-<a href=#885 id=885 data-nosnippet>885</a>        <span class="kw">let </span>resolved = profile
-<a href=#886 id=886 data-nosnippet>886</a>            .resolve_fingerprint(std::path::Path::new(<span class="string">"/nonexistent"</span>))
-<a href=#887 id=887 data-nosnippet>887</a>            .unwrap();
-<a href=#888 id=888 data-nosnippet>888</a>        <span class="comment">// No override → today's behavior: no screen field influence at all.
-<a href=#889 id=889 data-nosnippet>889</a>        </span><span class="macro">assert_eq!</span>(resolved.screen, <span class="prelude-val">None</span>);
-<a href=#890 id=890 data-nosnippet>890</a>    }
-<a href=#891 id=891 data-nosnippet>891</a>}
+<a href=#868 id=868 data-nosnippet>868</a>        <span class="kw">let </span>screen = ScreenSpec::new(<span class="number">1536</span>, <span class="number">864</span>, <span class="number">1.25</span>);
+<a href=#869 id=869 data-nosnippet>869</a>        <span class="kw">let </span>profile = StealthProfile::native()
+<a href=#870 id=870 data-nosnippet>870</a>            .fingerprint(bare_fp())
+<a href=#871 id=871 data-nosnippet>871</a>            .screen(screen);
+<a href=#872 id=872 data-nosnippet>872</a>        <span class="kw">let </span>resolved = profile
+<a href=#873 id=873 data-nosnippet>873</a>            .resolve_fingerprint(std::path::Path::new(<span class="string">"/nonexistent"</span>))
+<a href=#874 id=874 data-nosnippet>874</a>            .unwrap();
+<a href=#875 id=875 data-nosnippet>875</a>        <span class="macro">assert_eq!</span>(resolved.screen, <span class="prelude-val">Some</span>(screen));
+<a href=#876 id=876 data-nosnippet>876</a>    }
+<a href=#877 id=877 data-nosnippet>877</a>
+<a href=#878 id=878 data-nosnippet>878</a>    <span class="attr">#[test]
+<a href=#879 id=879 data-nosnippet>879</a>    </span><span class="kw">fn </span>absent_screen_override_leaves_fingerprint_screen_none() {
+<a href=#880 id=880 data-nosnippet>880</a>        <span class="kw">let </span>profile = StealthProfile::native().fingerprint(bare_fp());
+<a href=#881 id=881 data-nosnippet>881</a>        <span class="kw">let </span>resolved = profile
+<a href=#882 id=882 data-nosnippet>882</a>            .resolve_fingerprint(std::path::Path::new(<span class="string">"/nonexistent"</span>))
+<a href=#883 id=883 data-nosnippet>883</a>            .unwrap();
+<a href=#884 id=884 data-nosnippet>884</a>        <span class="comment">// No override → today's behavior: no screen field influence at all.
+<a href=#885 id=885 data-nosnippet>885</a>        </span><span class="macro">assert_eq!</span>(resolved.screen, <span class="prelude-val">None</span>);
+<a href=#886 id=886 data-nosnippet>886</a>    }
+<a href=#887 id=887 data-nosnippet>887</a>}
 </code></pre></div></section></main></body></html>
