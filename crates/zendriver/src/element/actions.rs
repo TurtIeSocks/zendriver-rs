@@ -19,9 +19,14 @@
 //!      `hover` uses a realistic Bezier path; `hover_fast` uses a single
 //!      teleport dispatch for test/automation paths.
 //!
-//! `focus`: actionability gate (visible + enabled — no pointer or stability
-//! requirement; focus routes through the focused element, not the cursor's
-//! position), then `el.focus()` in the main world.
+//! `focus`: `scroll_into_view`, then the actionability gate (visible +
+//! enabled — no pointer or stability requirement; focus routes through the
+//! focused element, not the cursor's position), then `el.focus()` in the main
+//! world. The scroll leads for the same reason it does under `hover` and
+//! `click`: the visibility check is a viewport intersection, so a field below
+//! the fold — the ordinary case for a sign-up or checkout form, and the whole
+//! typing surface (`type_text`, `press`, `type_keys`) focuses first — would
+//! otherwise fail the gate outright.
 //!
 //! `scroll_into_view`: no actionability gate (this *is* the visibility
 //! prereq other actions wait for). Calls `el.scrollIntoView({ block:
@@ -405,6 +410,7 @@ impl Element {
     /// ```
     pub async fn focus(&self) -> Result<()> {
         self.with_refresh(|| async move {
+            self.scroll_into_view().await?;
             actionability::wait_actionable(
                 self,
                 ActionabilityCheck::TEXT_INPUT,
@@ -880,7 +886,7 @@ z-index:2147483647;pointer-events:none;opacity:0.85;'; \
 mod tests {
     use super::*;
     use crate::tab::Tab;
-    use crate::test_support::{expect, serve_gate_probes, serve_isolated_world};
+    use crate::test_support::{expect, serve_gate_probes, serve_scroll_into_view};
     use zendriver_transport::SessionHandle;
     use zendriver_transport::testing::MockConnection;
 
@@ -935,9 +941,7 @@ mod tests {
 
         // Step 2: actionability gate — visible → stable → receives_pointer
         // (gate order is visible → enabled → stable → receives_pointer, and
-        // hover doesn't require enabled). The predicates run in the isolated
-        // world, so the first one also builds it.
-        serve_isolated_world(&mut mock).await;
+        // hover doesn't require enabled).
         serve_gate_probes(&mut mock, 3).await;
 
         // Step 3: bounding_box → DOM.getBoxModel.
@@ -1016,8 +1020,7 @@ mod tests {
             .await;
 
         // Step 2: actionability gate (FULL = visible → enabled → stable →
-        // receives_pointer), each predicate running in the isolated world.
-        serve_isolated_world(&mut mock).await;
+        // receives_pointer); reply true to each.
         serve_gate_probes(&mut mock, 4).await;
 
         // Step 3: bounding_box → DOM.getBoxModel.
@@ -1110,7 +1113,6 @@ mod tests {
 
         // Step 2: actionability gate (FULL = visible → enabled → stable →
         // receives_pointer), matching `click`'s gate.
-        serve_isolated_world(&mut mock).await;
         serve_gate_probes(&mut mock, 4).await;
 
         // Step 3: bounding_box → DOM.getBoxModel. Box top-left (10,20),
@@ -1287,11 +1289,11 @@ mod tests {
             async move { e.clear_by_deleting().await }
         });
 
-        // Step 1: explicit focus() — actionability gate (visible → enabled)
-        // then this.focus(). The gate is isolated-world (built once here and
-        // reused by every later focus in this test); `this.focus()` is not,
-        // since focusing is an effect on the page, not a read of it.
-        serve_isolated_world(&mut mock).await;
+        // Step 1: explicit focus() — scroll_into_view, actionability gate
+        // (visible → enabled), then this.focus(). The scroll leads because
+        // the visibility gate is a viewport check: a field under the fold
+        // fails it outright without one.
+        serve_scroll_into_view(&mut mock).await;
         serve_gate_probes(&mut mock, 2).await;
         let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
@@ -1305,11 +1307,12 @@ mod tests {
             .await;
 
         // Step 2: select-all chord via press_with(Key::Char('a'), Ctrl|Meta).
-        // press_with focuses first (gate visible → enabled, then this.focus()),
-        // then emits the chord. Since A2 (full keyboard parity) press_with
+        // press_with focuses first (scroll, gate visible → enabled, then
+        // this.focus()), then emits the chord. Since A2 (full keyboard parity) press_with
         // dispatches the modifier as REAL wrapper key events, so the chord is
         // four dispatches: modifier keyDown → 'a' keyDown → 'a' keyUp →
         // modifier keyUp. Ctrl on Windows/Linux, Meta on macOS.
+        serve_scroll_into_view(&mut mock).await;
         serve_gate_probes(&mut mock, 2).await;
         let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
@@ -1363,13 +1366,14 @@ mod tests {
 
         // Step 4: with reported length 0 the impl still presses Backspace a
         // small fixed slack number of times so a near-empty field still gets
-        // a couple of deletes. Each press(Backspace) re-focuses (gate:
-        // visible → enabled, then this.focus()) then dispatches
+        // a couple of deletes. Each press(Backspace) re-focuses (scroll,
+        // gate: visible → enabled, then this.focus()) then dispatches
         // rawKeyDown + keyUp for the Backspace virtual key. The whole
         // sequence is deterministic; drive every frame explicitly.
         let mut saw_backspace = false;
         for _ in 0..CLEAR_BY_DELETING_SLACK {
-            // press(Backspace) focus: 2 gate probes + this.focus().
+            // press(Backspace) focus: scroll + 2 gate probes + this.focus().
+            serve_scroll_into_view(&mut mock).await;
             serve_gate_probes(&mut mock, 2).await;
             let id = expect(&mut mock, "Runtime.callFunctionOn").await;
             mock.reply(id, json!({ "result": { "type": "undefined" } }))

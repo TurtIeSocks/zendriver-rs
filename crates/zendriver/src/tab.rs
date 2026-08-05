@@ -5132,11 +5132,10 @@ mod tests {
         mock.reply(id_d, json!({ "node": { "backendNodeId": 7 } }))
             .await;
 
-        // Step 2: type_text_fast focuses the body first — actionability gate
-        // (TEXT_INPUT = visible → enabled) then this.focus(). The two gate
-        // predicates run in the isolated world, which the first one builds;
-        // this.focus() stays in the main world.
-        crate::test_support::serve_isolated_world(&mut mock).await;
+        // Step 2: type_text_fast focuses the body first — scroll_into_view,
+        // the actionability gate (TEXT_INPUT = visible → enabled), then
+        // this.focus(). Reply truthy/undefined to each.
+        crate::test_support::serve_scroll_into_view(&mut mock).await;
         crate::test_support::serve_gate_probes(&mut mock, 2).await;
         let id_focus = mock.expect_cmd("Runtime.callFunctionOn").await;
         mock.reply(id_focus, json!({ "result": { "type": "undefined" } }))

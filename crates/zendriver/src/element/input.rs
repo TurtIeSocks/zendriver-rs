@@ -194,7 +194,7 @@ mod tests {
     use super::*;
     use crate::input::keyboard::SpecialKey;
     use crate::tab::Tab;
-    use crate::test_support::{expect, serve_gate_probes, serve_isolated_world};
+    use crate::test_support::{expect, serve_gate_probes, serve_scroll_into_view};
     use serde_json::{Value, json};
     use zendriver_transport::SessionHandle;
     use zendriver_transport::testing::MockConnection;
@@ -214,15 +214,13 @@ mod tests {
             async move { e.type_text_fast("hi").await }
         });
 
-        // focus() runs the actionability gate first: visible → enabled.
+        // focus() scrolls the element into view first — the visibility gate
+        // below is a viewport check, so a field under the fold would fail it.
+        serve_scroll_into_view(&mut mock).await;
+        // focus() then runs the actionability gate: visible → enabled.
         // ActionabilityCheck::TEXT_INPUT skips stable + receives_pointer.
-        // Both predicates run in the isolated world, which the first one
-        // builds.
-        serve_isolated_world(&mut mock).await;
         serve_gate_probes(&mut mock, 2).await;
-        // focus() then calls el.focus() — one more Runtime.callFunctionOn,
-        // this one in the main world (it acts on the page rather than reading
-        // it).
+        // focus() then calls el.focus() — one more Runtime.callFunctionOn.
         let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
         assert!(
@@ -254,15 +252,11 @@ mod tests {
         conn.shutdown();
     }
 
-    /// Drain the focus() actionability gate (visible → enabled) plus the
-    /// final `this.focus()` call, replying to each.
-    ///
-    /// Serves the isolated-world handshake up front, so this is the *first*
-    /// focus on a fresh tab — which is how every caller here uses it. A
-    /// second call on the same tab would hang waiting for a handshake the
-    /// cached context makes unnecessary.
+    /// Drain the focus() sequence — `scroll_into_view`, the actionability
+    /// gate (visible → enabled), then the final `this.focus()` call —
+    /// replying to each.
     async fn drain_focus(mock: &mut MockConnection) {
-        serve_isolated_world(mock).await;
+        serve_scroll_into_view(mock).await;
         serve_gate_probes(mock, 2).await;
         let id = expect(mock, "Runtime.callFunctionOn").await;
         mock.reply(id, json!({ "result": { "type": "undefined" } }))

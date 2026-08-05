@@ -142,7 +142,7 @@ impl Element {
 mod tests {
     use super::*;
     use crate::tab::Tab;
-    use crate::test_support::{expect, serve_isolated_call, serve_isolated_world};
+    use crate::test_support::{expect, serve_call_js};
     use zendriver_transport::SessionHandle;
     use zendriver_transport::testing::MockConnection;
 
@@ -172,16 +172,12 @@ mod tests {
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
 
-        // Step 2: actionability gate (VISIBLE_ONLY = only check_visible),
-        // which runs in the isolated world — hence the world handshake and
-        // the resolve/release around the predicate call.
+        // Step 2: actionability gate (VISIBLE_ONLY = only check_visible).
         //
         // The predicate is asserted by what it is NOT: its JS is owned by
         // `query::actionability` and gets rewritten there, but "the gate is
         // not the scroll" is the property this test needs.
-        serve_isolated_world(&mut mock).await;
-        let gate_js =
-            serve_isolated_call(&mut mock, json!({ "value": true, "type": "boolean" })).await;
+        let gate_js = serve_call_js(&mut mock, json!({ "value": true, "type": "boolean" })).await;
         assert!(
             gate_js.contains("getBoundingClientRect") && !gate_js.contains("scrollIntoView"),
             "expected the visibility predicate after the scroll, got: {gate_js}",

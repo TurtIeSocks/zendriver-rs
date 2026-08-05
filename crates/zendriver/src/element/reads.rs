@@ -339,41 +339,11 @@ impl Element {
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
-    use std::time::Duration;
-
     use super::*;
     use crate::tab::Tab;
+    use crate::test_support::expect;
     use zendriver_transport::SessionHandle;
     use zendriver_transport::testing::MockConnection;
-
-    /// `expect_cmd` discards non-matching frames silently and never times
-    /// out, so a dispatch that moved or vanished would hang the suite rather
-    /// than fail it. Bound every wait.
-    async fn expect(mock: &mut MockConnection, method: &str) -> u64 {
-        match tokio::time::timeout(Duration::from_secs(5), mock.expect_cmd(method)).await {
-            Ok(id) => id,
-            Err(_) => panic!("timed out waiting for {method}"),
-        }
-    }
-
-    /// Serve the isolated-world handshake + node re-resolution that every
-    /// read now runs through, asserting the resolve targets that world.
-    /// Returns once the isolated handle `R_ISO` is live.
-    async fn serve_isolated_resolve(mock: &mut MockConnection) {
-        let id = expect(mock, "Page.getFrameTree").await;
-        mock.reply(id, json!({ "frameTree": { "frame": { "id": "F1" } } }))
-            .await;
-        let id = expect(mock, "Page.createIsolatedWorld").await;
-        mock.reply(id, json!({ "executionContextId": 7 })).await;
-        let id = expect(mock, "DOM.resolveNode").await;
-        assert_eq!(
-            mock.last_sent()["params"]["executionContextId"],
-            7,
-            "reads must be re-resolved into the isolated world",
-        );
-        mock.reply(id, json!({ "object": { "objectId": "R_ISO" } }))
-            .await;
-    }
 
     #[tokio::test]
     async fn attr_returns_some_when_attribute_present() {
@@ -387,14 +357,9 @@ mod tests {
             async move { e.attr("href").await }
         });
 
-        serve_isolated_resolve(&mut mock).await;
-
         let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
-        assert_eq!(
-            sent["params"]["objectId"], "R_ISO",
-            "a page that shadowed getAttribute must not get to answer this",
-        );
+        assert_eq!(sent["params"]["objectId"], "R1");
         assert!(
             sent["params"]["functionDeclaration"]
                 .as_str()
@@ -407,9 +372,6 @@ mod tests {
             json!({ "result": { "value": "/login", "type": "string" } }),
         )
         .await;
-
-        let id = expect(&mut mock, "Runtime.releaseObject").await;
-        mock.reply(id, json!({})).await;
 
         let got = fut.await.unwrap().unwrap();
         assert_eq!(got, Some("/login".to_string()));
@@ -428,11 +390,9 @@ mod tests {
             async move { e.attrs().await }
         });
 
-        serve_isolated_resolve(&mut mock).await;
-
         let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
-        assert_eq!(sent["params"]["objectId"], "R_ISO");
+        assert_eq!(sent["params"]["objectId"], "R1");
         assert!(
             sent["params"]["functionDeclaration"]
                 .as_str()
@@ -449,9 +409,6 @@ mod tests {
             }),
         )
         .await;
-
-        let id = expect(&mut mock, "Runtime.releaseObject").await;
-        mock.reply(id, json!({})).await;
 
         let map = fut.await.unwrap().unwrap();
         assert_eq!(map.get("id").map(String::as_str), Some("btn"));

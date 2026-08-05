@@ -1,15 +1,10 @@
 //! Playwright-style actionability predicates: visible / stable / enabled /
-//! receives_pointer. Each runs a small JS function on the element via
-//! `Element::call_on` and returns a `bool`.
+//! receives_pointer. Each runs a small JS function on the element's remote
+//! handle via `Element::call_on_main` and returns a `bool`.
 //!
-//! The probes run in the tab's **isolated world**, so the element is bound
-//! as `this` rather than as a positional argument (each body re-aliases it
-//! to `el` for readability). That placement is load-bearing: every predicate
-//! reads geometry through `getBoundingClientRect`, `getComputedStyle` or
-//! `document.elementFromPoint`, all of which a page can shadow in its own
-//! world. From the isolated world it can neither forge those answers nor
-//! observe the gate probing. Isolated worlds share the DOM, so the values
-//! are the ones the page actually renders.
+//! `call_on_main` binds the element as the first positional argument, so
+//! every body opens `function(el, ...)` and any caller-supplied arguments
+//! follow it.
 //!
 //! The aggregate gate ([`wait_actionable`]) polls the four predicates in
 //! order and raises `NotActionable` on deadline; `Element::click_with`,
@@ -99,8 +94,7 @@ impl ActionabilityCheck {
 /// `FindBuilder`/`FindAllBuilder` (`query::mod`).
 pub(crate) async fn check_visible(el: &Element) -> Result<bool> {
     let js = r#"
-        function() {
-            const el = this;
+        function(el) {
             if (!el || !el.isConnected) return false;
 
             // Platform primitive: handles `display: none`, `content-visibility`,
@@ -142,7 +136,7 @@ pub(crate) async fn check_visible(el: &Element) -> Result<bool> {
             return true;
         }
     "#;
-    let res = el.call_on(js, json!([])).await?;
+    let res = el.call_on_main(js, json!([])).await?;
     Ok(res.get("value").and_then(|v| v.as_bool()).unwrap_or(false))
 }
 
@@ -152,8 +146,7 @@ pub(crate) async fn check_visible(el: &Element) -> Result<bool> {
 /// click.
 pub(crate) async fn check_stable(el: &Element) -> Result<bool> {
     let js = r#"
-        function() {
-            const el = this;
+        function(el) {
             return new Promise(resolve => {
                 if (!el || !el.isConnected) { resolve(false); return; }
                 const first = el.getBoundingClientRect();
@@ -171,7 +164,7 @@ pub(crate) async fn check_stable(el: &Element) -> Result<bool> {
             });
         }
     "#;
-    let res = el.call_on(js, json!([])).await?;
+    let res = el.call_on_main(js, json!([])).await?;
     Ok(res.get("value").and_then(|v| v.as_bool()).unwrap_or(false))
 }
 
@@ -180,8 +173,7 @@ pub(crate) async fn check_stable(el: &Element) -> Result<bool> {
 /// (which have no `disabled` property) are considered enabled.
 pub(crate) async fn check_enabled(el: &Element) -> Result<bool> {
     let js = r#"
-        function() {
-            const el = this;
+        function(el) {
             if (!el) return false;
             // `disabled === false` for form controls; `undefined` for non-form elements
             // (which we treat as enabled).
@@ -191,7 +183,7 @@ pub(crate) async fn check_enabled(el: &Element) -> Result<bool> {
             return true;
         }
     "#;
-    let res = el.call_on(js, json!([])).await?;
+    let res = el.call_on_main(js, json!([])).await?;
     Ok(res.get("value").and_then(|v| v.as_bool()).unwrap_or(false))
 }
 
@@ -210,8 +202,7 @@ pub(crate) async fn check_receives_pointer(
     position: Option<(f64, f64)>,
 ) -> Result<bool> {
     let js = r#"
-        function(dx, dy) {
-            const el = this;
+        function(el, dx, dy) {
             if (!el || !el.isConnected) return false;
             const rect = el.getBoundingClientRect();
             if (rect.width <= 0 || rect.height <= 0) return false;
@@ -234,11 +225,15 @@ pub(crate) async fn check_receives_pointer(
     // ("Failed to deserialize params.arguments"), which failed every gated
     // `click` / `hover` / `tap` against a real browser. The mock tests could
     // not catch it — `MockConnection` doesn't validate CDP parameter shapes.
+    //
+    // `call_on_main` prepends the element handle, so these land at
+    // arguments[1] / arguments[2] — which is where the leading `el`
+    // parameter in the declaration above leaves `dx` / `dy`.
     let args = match position {
         Some((dx, dy)) => json!([{ "value": dx }, { "value": dy }]),
         None => json!([]),
     };
-    let res = el.call_on(js, args).await?;
+    let res = el.call_on_main(js, args).await?;
     Ok(res.get("value").and_then(|v| v.as_bool()).unwrap_or(false))
 }
 
@@ -293,16 +288,14 @@ pub(crate) async fn wait_actionable(
 mod tests {
     use super::*;
     use crate::tab::Tab;
-    use crate::test_support::{
-        ISOLATED_OBJECT_ID, expect, serve_isolated_call, serve_isolated_world,
-    };
+    use crate::test_support::{serve_call, serve_call_js};
     use serde_json::Value;
     use zendriver_transport::SessionHandle;
     use zendriver_transport::testing::MockConnection;
 
-    /// Drive `check_visible` against a mock connection, answer its isolated-
-    /// world probe with `value`, and hand back the JS source the probe
-    /// actually sent plus the resolved verdict.
+    /// Drive `check_visible` against a mock connection, answer its probe with
+    /// `value`, and hand back the JS source the probe actually sent plus the
+    /// resolved verdict.
     async fn probe_check_visible(value: bool) -> (String, bool) {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
@@ -311,8 +304,7 @@ mod tests {
 
         let fut = tokio::spawn(async move { check_visible(&el).await });
 
-        serve_isolated_world(&mut mock).await;
-        let js = serve_isolated_call(&mut mock, json!({ "value": value, "type": "boolean" })).await;
+        let js = serve_call_js(&mut mock, json!({ "value": value, "type": "boolean" })).await;
 
         let verdict = fut.await.unwrap().unwrap();
         conn.shutdown();
@@ -385,18 +377,21 @@ mod tests {
     /// parameter shapes. Hence an explicit assertion on the shape.
     #[tokio::test]
     async fn check_receives_pointer_wraps_its_coordinates_as_call_arguments() {
+        // `call_on_main` prepends the element handle, so the coordinates are
+        // the second and third arguments — each one an object, never a bare
+        // number.
         assert_eq!(
             probe_pointer_args(Some((3.0, 4.0))).await,
-            json!([{ "value": 3.0 }, { "value": 4.0 }]),
+            json!([{ "objectId": "R1" }, { "value": 3.0 }, { "value": 4.0 }]),
             "an explicit click position must travel as two CallArgument objects",
         );
 
-        // No position → no arguments at all, leaving dx/dy `undefined` in the
-        // JS, which is what its `Number.isFinite` centre-fallback reads.
+        // No position → no coordinates at all, leaving dx/dy `undefined` in
+        // the JS, which is what its `Number.isFinite` centre-fallback reads.
         assert_eq!(
             probe_pointer_args(None).await,
-            json!([]),
-            "a centre hit-test must send no arguments rather than bare nulls",
+            json!([{ "objectId": "R1" }]),
+            "a centre hit-test must send no coordinates rather than bare nulls",
         );
     }
 
@@ -408,39 +403,25 @@ mod tests {
         let tab = Tab::new_for_test(sess);
         let el = Element::from_jsret(tab, 99, "R1".to_string());
 
-        // Spawn before serving: the handshake only goes out once the probe is
-        // actually running.
+        // Spawn before serving: nothing goes out until the probe is running.
         let fut = tokio::spawn(async move { check_receives_pointer(&el, at).await });
 
-        serve_isolated_world(&mut mock).await;
-        let id = expect(&mut mock, "DOM.resolveNode").await;
-        mock.reply(id, json!({ "object": { "objectId": ISOLATED_OBJECT_ID } }))
-            .await;
-        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
-        let args = mock.last_sent()["params"]["arguments"].clone();
-        mock.reply(
-            id,
-            json!({ "result": { "value": true, "type": "boolean" } }),
-        )
-        .await;
-        let id = expect(&mut mock, "Runtime.releaseObject").await;
-        mock.reply(id, json!({})).await;
+        let params = serve_call(&mut mock, json!({ "value": true, "type": "boolean" })).await;
 
         assert!(fut.await.unwrap().unwrap());
         conn.shutdown();
-        args
+        params["arguments"].clone()
     }
 
-    /// All four predicates run in the isolated world, not the page's.
+    /// Every predicate binds the element as its first positional argument.
     ///
-    /// This is the property the whole gate rests on: every predicate reads
-    /// geometry through `getBoundingClientRect`, `getComputedStyle` or
-    /// `document.elementFromPoint`, and a page that has shadowed any of them
-    /// in its own world could feed the gate whatever it liked — and see it
-    /// being probed. `serve_isolated_call` fails the test if a probe ever
-    /// targets the page-world handle; this drives all four past it in one go.
+    /// `call_on_main` prepends the element handle to `arguments`, so a body
+    /// that forgot its leading `el` parameter would silently read the handle
+    /// as its first *caller* argument — and, for the three no-argument
+    /// predicates, see `el` as `undefined` and answer `false` for everything.
+    /// This drives all four past that in one go.
     #[tokio::test]
-    async fn every_predicate_runs_in_the_isolated_world() {
+    async fn every_predicate_binds_the_element_as_its_first_argument() {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
         let tab = Tab::new_for_test(sess);
@@ -458,20 +439,20 @@ mod tests {
             }
         });
 
-        // The world is built once and cached; each predicate then pays its
-        // own resolve → call → release.
-        serve_isolated_world(&mut mock).await;
-        let mut sources = Vec::new();
+        let mut calls = Vec::new();
         for _ in 0..4 {
-            sources.push(
-                serve_isolated_call(&mut mock, json!({ "value": true, "type": "boolean" })).await,
-            );
+            calls.push(serve_call(&mut mock, json!({ "value": true, "type": "boolean" })).await);
         }
 
         assert_eq!(fut.await.unwrap(), (true, true, true, true));
 
+        let sources: Vec<&str> = calls
+            .iter()
+            .map(|c| c["functionDeclaration"].as_str().unwrap())
+            .collect();
+
         // Pin which source belongs to which predicate, so a future reorder of
-        // the gate can't quietly leave one of them behind in the main world.
+        // the gate can't quietly re-point one of these assertions.
         assert!(sources[0].contains("checkVisibility"), "{}", sources[0]);
         assert!(sources[1].contains("aria-disabled"), "{}", sources[1]);
         assert!(
@@ -481,11 +462,12 @@ mod tests {
         );
         assert!(sources[3].contains("elementFromPoint"), "{}", sources[3]);
 
-        // Isolated calls bind the element as `this`; a lingering
-        // `function(el, ...)` signature would silently receive `undefined`
-        // and make every predicate answer `false`.
-        for js in &sources {
-            assert!(js.contains("const el = this"), "{js}");
+        for (call, js) in calls.iter().zip(&sources) {
+            assert!(js.trim_start().starts_with("function(el"), "{js}");
+            assert_eq!(
+                call["arguments"][0]["objectId"], "R1",
+                "the element must be the first argument the body reads",
+            );
         }
 
         conn.shutdown();
