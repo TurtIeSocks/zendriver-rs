@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-05
+
+### Added
+
+- Present a capture's MEASURED screen insets, not derived constants **(BREAKING)**
+
+
 ## [0.4.12] - 2026-07-31
 
 ### Fixed
