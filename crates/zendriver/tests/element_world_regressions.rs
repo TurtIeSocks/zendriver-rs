@@ -1,10 +1,11 @@
-//! Real-Chrome guards for the two element flows that a world change breaks.
+//! Real-Chrome guards for the element flows that a world change — or a
+//! spoofed global — breaks.
 //!
-//! Both cases below shipped broken twice, and the mock unit suite was green
-//! through both of them — by construction, not by oversight.
+//! Every case below shipped broken, and the mock unit suite was green through
+//! all of them — by construction, not by oversight.
 //! `MockConnection` replays a scripted frame sequence, so a test written
 //! against the wrong sequence asserts the wrong sequence just as happily as
-//! the right one. Neither defect is visible without a browser:
+//! the right one. None of these defects is visible without a browser:
 //!
 //! 1. **Reads after a cross-document navigation.** Element reads were moved
 //!    into the tab's isolated world, whose `executionContextId` is cached per
@@ -23,7 +24,19 @@
 //!    and the gate reported `NotActionable("occluded by overlay")` for every
 //!    `click` / `hover` / `tap` on any element inside any iframe.
 //!
-//! Neither test asserts *which* world the JS runs in; that is an
+//! 3. **Visibility under a spoofed viewport.** The gate's on-screen clause
+//!    read `window.innerHeight`, which the stealth persona rewrites to its
+//!    claimed screen height minus browser chrome, while `scroll_into_view`
+//!    moves the element with Chrome's *real* viewport. Comparing a
+//!    real-geometry scroll against a fabricated viewport left every element
+//!    parked between the two heights permanently "not visible", so `focus` —
+//!    and with it `type_text` / `press` / `type_keys` — failed on any
+//!    below-the-fold field. Stealth is the shipping default, so that was the
+//!    normal case rather than an edge one, and the existing cases here missed
+//!    it twice over: they launch with no explicit profile and neither uses an
+//!    element below the fold.
+//!
+//! None of these tests asserts *which* world the JS runs in; that is an
 //! implementation choice. They assert the observable behavior any world
 //! choice has to preserve, so they stay meaningful when the isolated-world
 //! move is re-landed with per-frame world resolution.
@@ -33,8 +46,8 @@
 //! `#[ignore]` would route these to `nightly-ignored-tests`, which carries
 //! `continue-on-error: true` on a daily cron. These guard a regression that
 //! already shipped twice, so they have to block a merge rather than yellow-dot
-//! one. Both launch headless Chrome against a loopback fixture and finish in
-//! ~3s combined.
+//! one. Each launches headless Chrome against a loopback fixture and they
+//! finish in a few seconds combined.
 //!
 //! Running these locally: give `cargo` a target directory that no *other*
 //! checkout of this same package shares. Cargo keys an integration-test
@@ -54,6 +67,7 @@ use serial_test::serial;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 use zendriver::Browser;
+use zendriver::stealth::{InputProfile, StealthProfile};
 
 /// Mount `html` at `at` on `mock`. These fixtures need several routes each
 /// (a second page to navigate to, an iframe document to embed), so routes are
@@ -214,6 +228,138 @@ async fn hover_and_click_reach_an_element_inside_an_iframe() {
         button.inner_text().await.unwrap().trim(),
         "clicked",
         "the click must actually land on the button"
+    );
+
+    browser.close().await.unwrap();
+}
+
+/// A below-the-fold field must stay reachable while stealth spoofs the
+/// viewport — the shipping default posture.
+///
+/// `StealthProfile::spoofed` is the profile under test because it is the one
+/// that spoofs: `native` stops at launch flags + Emulation overrides and
+/// installs no JS bootstrap, so the persona's `window.inner*` rewrite — the
+/// whole mechanism here — only exists under `spoofed`. On the stock
+/// 1920x1080 persona it claims `innerHeight` 1080 - 86 (browser chrome) =
+/// 994, while `document.documentElement.clientHeight` stays at Chrome's real
+/// 1080. `scroll_into_view` scrolls with the real number, so anything landing
+/// in that 86px band read as off-screen: `is_visible` answered `false` for a
+/// field plainly on screen, and `focus` — the first step of `type_text`,
+/// `press` and `type_keys` — died with `NotActionable(5s, "not visible")`.
+///
+/// The fixture puts the field LAST in a document taller than any viewport, so
+/// `scrollIntoView({ block: 'center' })` clamps at the document bottom
+/// instead of centring and parks the field against the real viewport's lower
+/// edge — inside the band. A field that *can* be centred lands mid-viewport
+/// and hides the bug entirely, which is why the geometry is measured at
+/// runtime rather than assumed: a fixture that stops landing in the band
+/// fails loudly instead of passing vacuously.
+#[tokio::test]
+#[serial]
+async fn focus_reaches_a_below_the_fold_field_under_a_spoofed_viewport() {
+    let mock = MockServer::start().await;
+    // The spacer is deliberately far taller than any persona's screen rather
+    // than tuned to one: all it has to guarantee is that the page scrolls.
+    // The field's own height is what has to stay under the chrome inset, and
+    // 24px is comfortably under it at any resolution — the inset is a fixed
+    // pixel constant, not a fraction of the screen.
+    mount(
+        &mock,
+        "/deep",
+        r#"<!doctype html><html><body style="margin:0">
+             <div style="height:6000px">a very long page</div>
+             <input id="deep" style="display:block;width:200px;height:24px;
+                    box-sizing:border-box">
+           </body></html>"#,
+    )
+    .await;
+
+    // Stealth spoofed — the viewport spoof under test — but with keystroke
+    // TIMING pinned to `native`, which `input_profile` exists to decouple from
+    // the stealth selection. `spoofed`'s humanized profile carries a 3%
+    // per-character typo simulation that dispatches a wrong key followed by a
+    // Backspace, so a 20-character string fires it about a third of the time.
+    // The typed value still comes out right, but the run is nondeterministic
+    // and it puts an extra special-key dispatch on the wire — see the comment
+    // on the typed string below for why that is worth avoiding here. None of
+    // the persona's surface patches are affected: `screen.js`, and so the
+    // spoofed `window.innerHeight` this test turns on, stay live.
+    let browser = Browser::builder()
+        .stealth(StealthProfile::spoofed())
+        .input_profile(InputProfile::native())
+        .headless(true)
+        .launch()
+        .await
+        .unwrap();
+    let tab = browser.main_tab();
+    tab.goto(&format!("{}/deep", mock.uri())).await.unwrap();
+
+    let field = tab.find().css("#deep").one().await.unwrap();
+
+    // Scroll explicitly first — it carries no actionability gate, so this
+    // reproduces the exact state every gated action reaches its gate in, and
+    // lets the geometry below be checked before anything can fail on it.
+    field.scroll_into_view().await.unwrap();
+
+    // Read the post-scroll geometry in the MAIN world: that is where the
+    // persona's patch lives, and where the actionability probe runs. The
+    // isolated world would report Chrome's real `innerHeight` and quietly
+    // prove nothing.
+    let (top, spoofed_vh, real_vh): (f64, f64, f64) = tab
+        .evaluate_main(
+            "(() => {
+               const r = document.getElementById('deep').getBoundingClientRect();
+               return [r.top, window.innerHeight, document.documentElement.clientHeight];
+             })()",
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        spoofed_vh < real_vh,
+        "the persona must actually be spoofing the viewport, or this test \
+         guards nothing: window.innerHeight {spoofed_vh}, \
+         documentElement.clientHeight {real_vh}"
+    );
+    assert!(
+        top >= spoofed_vh && top < real_vh,
+        "the fixture must park the field inside the spoof band — on screen \
+         for the real viewport, past the bottom of the spoofed one; got \
+         rect.top {top} against innerHeight {spoofed_vh} / clientHeight \
+         {real_vh}"
+    );
+
+    // A public API returning the wrong answer, ahead of any gate: the field
+    // is on screen and `is_visible` used to say otherwise.
+    assert!(
+        field.is_visible().await.unwrap(),
+        "is_visible must answer for the real viewport, not the spoofed one"
+    );
+
+    field
+        .focus()
+        .await
+        .expect("focus must pass the actionability gate for a below-the-fold field under stealth");
+
+    // Assert the DOM side effect, not just the absence of an error: typing
+    // that reports success while the keystrokes go nowhere is still broken.
+    //
+    // Hyphens, not spaces, and that is load-bearing. A space is dispatched as
+    // `SpecialKey::Space` (a `rawKeyDown`/`keyUp` pair rather than a plain
+    // char), and on this fixture that dispatch wedges: the same string with
+    // spaces made `Input.dispatchKeyEvent` hang until zendriver's 180s CDP
+    // budget expired, reproducibly, while the identical string with hyphens
+    // finishes in ~2s. That is an input-layer problem with its own cause, not
+    // the visibility bug this test guards, and it has no business deciding
+    // whether this test passes.
+    field.type_text("typed-below-the-fold").await.unwrap();
+    let value: String = tab
+        .evaluate_main("document.getElementById('deep').value")
+        .await
+        .unwrap();
+    assert_eq!(
+        value, "typed-below-the-fold",
+        "the keystrokes must land in the below-the-fold field"
     );
 
     browser.close().await.unwrap();
