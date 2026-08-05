@@ -321,14 +321,15 @@ mod tests {
 
         drain_focus(&mut mock).await;
 
-        // "hi" → h/i down+up; Enter → rawKeyDown+keyUp; Ctrl+a → Control
-        // wrap around a. 10 dispatch events total.
+        // "hi" → h/i down+up; Enter → keyDown+keyUp (Enter inserts text, so
+        // it carries it like any printable key); Ctrl+a → Control wrap around
+        // a. 10 dispatch events total.
         let expected = [
             ("h", "keyDown"),
             ("h", "keyUp"),
             ("i", "keyDown"),
             ("i", "keyUp"),
-            ("Enter", "rawKeyDown"),
+            ("Enter", "keyDown"),
             ("Enter", "keyUp"),
             ("Control", "keyDown"),
             ("a", "keyDown"),

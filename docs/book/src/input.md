@@ -229,12 +229,14 @@ input.press_with(
 [`Key`] is one of:
 
 - `Key::Char(char)` — any typeable character.
-- `Key::Special(SpecialKey)` — named non-character key.
+- `Key::Special(SpecialKey)` — a key with a name rather than a glyph.
 
 [`SpecialKey`] covers Enter, Tab, Escape, Backspace, Delete, Space, all
 four arrows, Home, End, PageUp, PageDown, F1-F12, Insert, CapsLock,
-NumLock, ScrollLock, PrintScreen, Pause, ContextMenu — the full
-non-character keyboard.
+NumLock, ScrollLock, PrintScreen, Pause, ContextMenu — the whole named
+keyboard. Two of them still type: `Space` inserts a space and `Enter`
+inserts a newline (and submits a form that allows implicit submission),
+exactly as the physical keys do. The rest only run their default action.
 
 [`KeyModifiers`] is a bitflags struct:
 

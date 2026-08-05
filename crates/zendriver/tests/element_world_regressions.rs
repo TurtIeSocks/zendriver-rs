@@ -36,6 +36,18 @@
 //!    it twice over: they launch with no explicit profile and neither uses an
 //!    element below the fold.
 //!
+//! 4. **Whitespace in `type_text`.** Space and Enter went out as
+//!    `rawKeyDown` — the CDP event type that means precisely "a keydown that
+//!    generates no character" — carrying no `text`. So Chrome generated
+//!    none: `type_text("a b")` silently produced `"ab"`, and `press(Enter)`
+//!    never submitted a form. The same dispatch also stalled ~1.1s for the
+//!    first one in a renderer against ~2ms for any ordinary character, and a
+//!    second one in the same string killed the browser process outright,
+//!    which is how it first surfaced — as a CDP timeout on a below-the-fold
+//!    field rather than as wrong text. Nothing about it is page-shaped: the
+//!    stall and the crash reproduce identically on a page with nothing to
+//!    scroll, and `window.scrollY` never moves.
+//!
 //! None of these tests asserts *which* world the JS runs in; that is an
 //! implementation choice. They assert the observable behavior any world
 //! choice has to preserve, so they stay meaningful when the isolated-world
@@ -66,8 +78,8 @@
 use serial_test::serial;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-use zendriver::Browser;
 use zendriver::stealth::{InputProfile, StealthProfile};
+use zendriver::{Browser, Key, SpecialKey};
 
 /// Mount `html` at `at` on `mock`. These fixtures need several routes each
 /// (a second page to navigate to, an iframe document to embed), so routes are
@@ -274,19 +286,15 @@ async fn focus_reaches_a_below_the_fold_field_under_a_spoofed_viewport() {
     )
     .await;
 
-    // Stealth spoofed — the viewport spoof under test — but with keystroke
-    // TIMING pinned to `native`, which `input_profile` exists to decouple from
-    // the stealth selection. `spoofed`'s humanized profile carries a 3%
-    // per-character typo simulation that dispatches a wrong key followed by a
-    // Backspace, so a 20-character string fires it about a third of the time.
-    // The typed value still comes out right, but the run is nondeterministic
-    // and it puts an extra special-key dispatch on the wire — see the comment
-    // on the typed string below for why that is worth avoiding here. None of
-    // the persona's surface patches are affected: `screen.js`, and so the
-    // spoofed `window.innerHeight` this test turns on, stay live.
+    // Stealth spoofed, and nothing else pinned: the whole shipping default,
+    // keystroke timing included. `spoofed`'s humanized profile adds
+    // per-character delays and a 3% typo simulation that types a wrong key
+    // and Backspaces it, which costs this test a couple of seconds and
+    // exercises a path a pinned profile would skip. It used to be pinned to
+    // `InputProfile::native()`, because that extra special-key dispatch was
+    // a hazard back when a special-key dispatch could wedge the browser.
     let browser = Browser::builder()
         .stealth(StealthProfile::spoofed())
-        .input_profile(InputProfile::native())
         .headless(true)
         .launch()
         .await
@@ -344,23 +352,131 @@ async fn focus_reaches_a_below_the_fold_field_under_a_spoofed_viewport() {
     // Assert the DOM side effect, not just the absence of an error: typing
     // that reports success while the keystrokes go nowhere is still broken.
     //
-    // Hyphens, not spaces, and that is load-bearing. A space is dispatched as
-    // `SpecialKey::Space` (a `rawKeyDown`/`keyUp` pair rather than a plain
-    // char), and on this fixture that dispatch wedges: the same string with
-    // spaces made `Input.dispatchKeyEvent` hang until zendriver's 180s CDP
-    // budget expired, reproducibly, while the identical string with hyphens
-    // finishes in ~2s. That is an input-layer problem with its own cause, not
-    // the visibility bug this test guards, and it has no business deciding
-    // whether this test passes.
-    field.type_text("typed-below-the-fold").await.unwrap();
+    // Spaces, deliberately. This string carried hyphens while spaces were
+    // dispatched as a text-less `rawKeyDown`, because that dispatch wedged
+    // the browser and would have decided this test's outcome for a reason
+    // that has nothing to do with visibility. The dispatch is fixed and the
+    // whitespace case below guards it directly, so the ordinary string is
+    // back.
+    field.type_text("typed below the fold").await.unwrap();
     let value: String = tab
         .evaluate_main("document.getElementById('deep').value")
         .await
         .unwrap();
     assert_eq!(
-        value, "typed-below-the-fold",
+        value, "typed below the fold",
         "the keystrokes must land in the below-the-fold field"
     );
+
+    browser.close().await.unwrap();
+}
+
+/// Whitespace has to arrive as text, and quickly.
+///
+/// Space and Enter are printable keys with names, and they were dispatched
+/// as though the name were the whole story: `rawKeyDown` with no `text`,
+/// which asks Chrome for a keydown that generates *no character*. Chrome
+/// obliged. `type_text("a b")` produced `"ab"` — a wrong string returned as
+/// a success, the worst shape a defect can take — and Enter stopped
+/// submitting forms. The timing was the louder half: the first such dispatch
+/// in a renderer took ~1.1s against ~2ms for any ordinary character, and a
+/// second one in the same string killed the browser process, surfacing as a
+/// CDP timeout far from the input layer.
+///
+/// So this asserts both halves, on the shipping stealth default. The typed
+/// string carries four spaces, because the failure escalated with the count:
+/// one stalled, the second killed the browser process. Keystroke timing is
+/// pinned to `native` (no per-character delay, no typo simulation) so the
+/// elapsed bound below measures the dispatch rather than the humanized
+/// profile's deliberate pauses.
+///
+/// Enter and Tab are here because they were the two keys the fix had to tell
+/// apart. Enter inserts text and had to start carrying it; Tab genuinely
+/// inserts nothing, so it stays a text-less `rawKeyDown` — the shape it needs
+/// for focus traversal, and the shape that was never slow. Both default
+/// actions are asserted directly.
+#[tokio::test]
+#[serial]
+async fn type_text_types_whitespace_instead_of_dropping_it() {
+    let mock = MockServer::start().await;
+    // The form holds a single field and no submit button, which is the shape
+    // the HTML spec allows to submit implicitly on Enter. The textarea
+    // follows it in document order, so it is also the Tab target.
+    mount(
+        &mock,
+        "/whitespace",
+        r#"<!doctype html><html><body style="margin:0">
+             <div style="height:6000px">a very long page</div>
+             <form id="f" onsubmit="window.__submitted = 1; return false;">
+               <input id="line" style="display:block;width:200px;height:24px;
+                      box-sizing:border-box">
+             </form>
+             <textarea id="area" rows="3"></textarea>
+           </body></html>"#,
+    )
+    .await;
+
+    let browser = Browser::builder()
+        .stealth(StealthProfile::spoofed())
+        .input_profile(InputProfile::native())
+        .headless(true)
+        .launch()
+        .await
+        .unwrap();
+    let tab = browser.main_tab();
+    tab.goto(&format!("{}/whitespace", mock.uri()))
+        .await
+        .unwrap();
+
+    let line = tab.find().css("#line").one().await.unwrap();
+    let started = std::time::Instant::now();
+    line.type_text("four spaces in this line")
+        .await
+        .expect("typing a string with spaces must not wedge the browser");
+    let elapsed = started.elapsed();
+    let value: String = tab
+        .evaluate_main("document.getElementById('line').value")
+        .await
+        .unwrap();
+    assert_eq!(
+        value, "four spaces in this line",
+        "every space must reach the field as a space"
+    );
+    // Twenty-four characters with no injected delay land in single-digit
+    // milliseconds. The bound is loose on purpose — ten seconds is slack for
+    // a loaded machine — because the sharp assertions are the value above and
+    // the `expect` on the dispatch: pre-fix this string crashed the browser
+    // rather than merely running slowly. The bound catches the variant that
+    // stalls while somehow keeping the text right.
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "typing a 24-character string must not take {elapsed:?}"
+    );
+
+    // Enter carries a carriage return, which Chrome turns into a newline.
+    let area = tab.find().css("#area").one().await.unwrap();
+    area.type_text("two\nlines").await.unwrap();
+    let text: String = tab
+        .evaluate_main("document.getElementById('area').value")
+        .await
+        .unwrap();
+    assert_eq!(
+        text, "two\nlines",
+        "Enter must insert a newline in a textarea"
+    );
+
+    // Tab keeps its default action: it moves focus rather than typing.
+    line.press(Key::Special(SpecialKey::Tab)).await.unwrap();
+    let focused: String = tab
+        .evaluate_main("document.activeElement.id")
+        .await
+        .unwrap();
+    assert_eq!(focused, "area", "Tab must still traverse focus");
+
+    // Enter keeps its default action too — a text-less Enter never submitted.
+    line.press(Key::Special(SpecialKey::Enter)).await.unwrap();
+    let submitted: u32 = tab.evaluate_main("window.__submitted || 0").await.unwrap();
+    assert_eq!(submitted, 1, "Enter must still submit the form");
 
     browser.close().await.unwrap();
 }
