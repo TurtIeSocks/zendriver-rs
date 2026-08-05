@@ -96,6 +96,11 @@ impl<'tab> DataDomeBypass<'tab> {
     /// cid, hash) and returns a [`DataDomeSolution`] carrying the solved
     /// `datadome` cookie — wire it to a service like 2captcha / capsolver.
     ///
+    /// Invoked at most once per [`wait_for_clearance`](Self::wait_for_clearance)
+    /// — solving is billed per call, and the reloaded page needs time to settle
+    /// before the surface can be judged again — and bounded by that call's
+    /// timeout, so a stalled solver cannot overrun the stated budget.
+    ///
     /// [`DataDomeChallenge`]: crate::captcha::DataDomeChallenge
     /// [`DataDomeSolution`]: crate::captcha::DataDomeSolution
     #[must_use]
@@ -209,6 +214,10 @@ impl<'tab> DataDomeBypass<'tab> {
         #[allow(unused_assignments)]
         let mut last_surface: Option<DataDomeSurface> = None;
 
+        // One solve attempt per clearance. See the CAPTCHA arm below for why
+        // the surface cannot be relied on to clear itself once a solve returns.
+        let mut captcha_attempted = false;
+
         loop {
             let snap = match next_snapshot.take() {
                 Some(s) => s,
@@ -226,10 +235,43 @@ impl<'tab> DataDomeBypass<'tab> {
             // Escalations are polled, not assumed to arrive on the first
             // probe: DataDome routinely upgrades a device check to a CAPTCHA
             // (or drops it to a ban) a few seconds into the interstitial.
+            //
+            // Deciding the surface before clearance is safe here, unlike the
+            // Imperva sibling, because `detect.js` derives `body_clean` as
+            // `!dd && !captchaUrl`: a `Captcha` or `Block` surface forces
+            // `body_clean == false`, and both clearance terminals below
+            // require it true. No snapshot can be cleared and escalatable at
+            // once. The DataDome surface is also vendor-specific (a
+            // `captcha-delivery.com` iframe), so the site's own reCAPTCHA —
+            // what made Imperva's ordering wrong — cannot flip it.
             match snap.surface {
                 DataDomeSurface::Block => return Ok(ClearanceOutcome::Blocked),
+                // Latched to a single attempt. `apply_solution` sets the
+                // cookie and fires `Page.reload`, and that command is acked
+                // the moment it lands — not when the replacement document has
+                // loaded. The CAPTCHA document therefore survives at least the
+                // next probe, and forever if the solved cookie was rejected,
+                // so an unlatched loop re-enters the solver on every 250ms
+                // tick: two reproductions counted 29 and 34 invocations inside
+                // one `wait_for_clearance`, each of them a paid solve.
                 DataDomeSurface::Captcha => {
-                    self.solve_captcha(&snap).await?;
+                    if !captcha_attempted {
+                        captcha_attempted = true;
+                        // The solver is caller-supplied and carries no bound of
+                        // its own. Only the loop-top probe was raced against
+                        // the deadline, so a solve entered just under it ran to
+                        // completion and overran the caller's timeout by a full
+                        // solver latency. Losing this race drops the in-flight
+                        // solve: the stated timeout is the contract.
+                        match tokio::time::timeout_at(deadline, self.solve_captcha(&snap)).await {
+                            Ok(res) => res?,
+                            Err(_) => {
+                                return Ok(ClearanceOutcome::TimedOut {
+                                    last_surface: Some(snap.surface),
+                                });
+                            }
+                        }
+                    }
                     // Page reloaded — next iteration re-probes from scratch.
                     last_surface = Some(snap.surface);
                 }
@@ -811,6 +853,165 @@ mod tests {
             ClearanceOutcome::Cleared { datadome } => assert_eq!(datadome, "DD"),
             other => panic!("expected Cleared, got {other:?}"),
         }
+        conn.shutdown();
+    }
+
+    /// `apply_solution` sets the cookie and fires `Page.reload`, which is acked
+    /// long before the replacement document loads — so the next probe still
+    /// sees the CAPTCHA, and a page whose solve was rejected never stops
+    /// showing it. Unlatched, the loop re-entered the solver on every tick
+    /// (29 and 34 invocations in two recorded reproductions), each one a paid
+    /// solve.
+    #[tokio::test]
+    async fn captcha_solver_is_invoked_at_most_once_per_clearance() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            let c = Arc::clone(&calls);
+            async move {
+                DataDomeBypass::new(&s)
+                    .poll_interval(Duration::from_millis(1))
+                    .timeout(Duration::from_millis(400))
+                    .on_captcha(move |_ch| {
+                        let c = Arc::clone(&c);
+                        async move {
+                            c.fetch_add(1, Ordering::SeqCst);
+                            Ok(crate::captcha::DataDomeSolution {
+                                datadome_cookie: "FROM_SOLVER".into(),
+                            })
+                        }
+                    })
+                    .wait_for_clearance()
+                    .await
+            }
+        });
+
+        // Serve a stuck CAPTCHA surface for as long as the loop asks. Replies
+        // are picked by command + expression shape: the detect probe gets the
+        // captcha snapshot, `build_challenge`'s url/ua eval gets a page
+        // context, and `apply_solution`'s setCookie / reload get bare acks.
+        // Nothing here ever clears the surface, so only the latch can stop a
+        // second solve.
+        while let Some((method, id)) = next_cmd(&mut mock).await {
+            match method.as_str() {
+                "Runtime.evaluate" => {
+                    let expr = mock.last_sent()["params"]["expression"]
+                        .as_str()
+                        .unwrap()
+                        .to_string();
+                    if expr.contains("location.href") {
+                        mock.reply(
+                            id,
+                            json!({"result":{"type":"object","value":{"url":"https://shop.example.com/p","ua":"UA"}}}),
+                        )
+                        .await;
+                    } else {
+                        mock.reply(id, snap_reply(captcha_snap())).await;
+                    }
+                }
+                "Network.setCookie" => mock.reply(id, json!({"success":true})).await,
+                _ => mock.reply(id, json!({})).await,
+            }
+        }
+
+        let outcome = fut.await.unwrap().unwrap();
+        assert!(
+            matches!(outcome, ClearanceOutcome::TimedOut { .. }),
+            "a CAPTCHA that never clears must poll to its deadline, got {outcome:?}"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "solver must be latched to one attempt per clearance"
+        );
+        conn.shutdown();
+    }
+
+    /// The solver is a caller-supplied network round-trip with no bound of its
+    /// own. Only the loop-top probe was raced against the deadline, so a solve
+    /// entered just under it ran to completion and overran the caller's stated
+    /// timeout by a full solver latency.
+    #[tokio::test]
+    async fn solver_cannot_overrun_the_configured_timeout() {
+        const SOLVER_LATENCY: Duration = Duration::from_secs(3);
+        const BUDGET: Duration = Duration::from_millis(80);
+
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let started = Instant::now();
+
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move {
+                DataDomeBypass::new(&s)
+                    .poll_interval(Duration::from_millis(1))
+                    .timeout(BUDGET)
+                    .on_captcha(|_ch| async move {
+                        tokio::time::sleep(SOLVER_LATENCY).await;
+                        Ok(crate::captcha::DataDomeSolution {
+                            datadome_cookie: "TOO_LATE".into(),
+                        })
+                    })
+                    .wait_for_clearance()
+                    .await
+            }
+        });
+
+        // Serve the whole flow — detect probe, `build_challenge`'s url/ua eval,
+        // and the setCookie / reload the solve would reach on its way back —
+        // and stay up for as long as the call runs, since a stalled solver
+        // sends nothing for seconds. The unbounded version therefore fails on
+        // the elapsed assertion below rather than on a dropped mock.
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let serving = tokio::spawn({
+            let done = Arc::clone(&done);
+            async move {
+                while !done.load(std::sync::atomic::Ordering::SeqCst) {
+                    let Some((method, id)) = mock.try_recv_cmd() else {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                        continue;
+                    };
+                    match method.as_str() {
+                        "Runtime.evaluate" => {
+                            let expr = mock.last_sent()["params"]["expression"]
+                                .as_str()
+                                .unwrap()
+                                .to_string();
+                            if expr.contains("location.href") {
+                                mock.reply(
+                                id,
+                                json!({"result":{"type":"object","value":{"url":"https://shop.example.com/p","ua":"UA"}}}),
+                            )
+                            .await;
+                            } else {
+                                mock.reply(id, snap_reply(captcha_snap())).await;
+                            }
+                        }
+                        "Network.setCookie" => mock.reply(id, json!({"success":true})).await,
+                        _ => mock.reply(id, json!({})).await,
+                    }
+                }
+            }
+        });
+
+        let outcome = fut.await.unwrap().unwrap();
+        let elapsed = started.elapsed();
+        done.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            matches!(outcome, ClearanceOutcome::TimedOut { .. }),
+            "expected TimedOut, got {outcome:?}"
+        );
+        assert!(
+            elapsed < SOLVER_LATENCY / 2,
+            "solve must be bounded by the caller's deadline; took {elapsed:?} against a {BUDGET:?} budget"
+        );
+        serving.abort();
         conn.shutdown();
     }
 }

@@ -126,6 +126,13 @@ browser by setting this cookie (not a form-field token like hCaptcha/reCAPTCHA).
 The driver applies it via `Network.setCookie` scoped to the registrable domain
 and reloads the page.
 
+The solver runs at most once per `wait_for_clearance`, and within that call's
+timeout. The reload is acked before the new document loads, so the next poll
+still sees the CAPTCHA — an unlatched loop would bill you a solve every 250ms
+until the page settled. After the one attempt the driver goes back to polling
+until the surface clears or the deadline passes; call `wait_for_clearance`
+again if you want a second solve.
+
 `DataDomeChallenge` carries: `captcha_url`, `site_url`, `user_agent`, `cid`
 (DataDome challenge ID), and `hash`. `DataDomeSolution` holds
 `datadome_cookie`.
