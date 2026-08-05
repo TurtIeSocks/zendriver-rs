@@ -25,16 +25,30 @@
 //!    `click` / `hover` / `tap` on any element inside any iframe.
 //!
 //! 3. **Visibility under a spoofed viewport.** The gate's on-screen clause
-//!    read `window.innerHeight`, which the stealth persona rewrites to its
-//!    claimed screen height minus browser chrome, while `scroll_into_view`
-//!    moves the element with Chrome's *real* viewport. Comparing a
-//!    real-geometry scroll against a fabricated viewport left every element
-//!    parked between the two heights permanently "not visible", so `focus` —
-//!    and with it `type_text` / `press` / `type_keys` — failed on any
-//!    below-the-fold field. Stealth is the shipping default, so that was the
-//!    normal case rather than an edge one, and the existing cases here missed
-//!    it twice over: they launch with no explicit profile and neither uses an
-//!    element below the fold.
+//!    read `window.innerHeight`, which `zendriver-stealth`'s `screen.js`
+//!    rewrites to the persona's screen height minus a fixed 86px chrome
+//!    inset, while `scroll_into_view` moves the element with Chrome's *real*
+//!    viewport. Comparing a real-geometry scroll against a fabricated
+//!    viewport left every element parked between the two heights permanently
+//!    "not visible", so `focus` — and with it `type_text` / `press` /
+//!    `type_keys` — failed on any below-the-fold field. That patch ships in
+//!    every profile except `StealthProfile::off()`: `Browser::builder()`
+//!    defaults to `StealthProfile::native()`, which installs the geometry
+//!    bootstrap (`observer.rs` maps `ProfileKind::Native` to
+//!    `geometry_bootstrap()` = `_native.js` + `screen.js`). Measured on a
+//!    default-profile launch: `innerHeight` 994 against a real 1080. So this
+//!    was the default-posture case rather than an edge one, and the existing
+//!    cases here missed it twice over: they launch with no explicit profile
+//!    and neither uses an element below the fold.
+//!
+//! 5. **The on-screen clause in quirks mode.** Its replacement read
+//!    `document.documentElement.clientHeight || window.innerHeight`. In a
+//!    `BackCompat` document `documentElement.clientHeight` reports the
+//!    DOCUMENT's content height (6024 on the fixture below) rather than the
+//!    viewport's, so it is truthy, the fallback never fires, and every bbox
+//!    got compared against the whole document — the viewport test was a
+//!    silent no-op on any page without a doctype. It failed open, on exactly
+//!    the sloppy legacy pages most likely to be carrying a honeypot.
 //!
 //! 4. **Whitespace in `type_text`.** Space and Enter went out as
 //!    `rawKeyDown` — the CDP event type that means precisely "a keydown that
@@ -246,16 +260,22 @@ async fn hover_and_click_reach_an_element_inside_an_iframe() {
 }
 
 /// A below-the-fold field must stay reachable while stealth spoofs the
-/// viewport — the shipping default posture.
+/// viewport.
 ///
-/// `StealthProfile::spoofed` is the profile under test because it is the one
-/// that spoofs: `native` stops at launch flags + Emulation overrides and
-/// installs no JS bootstrap, so the persona's `window.inner*` rewrite — the
-/// whole mechanism here — only exists under `spoofed`. On the stock
-/// 1920x1080 persona it claims `innerHeight` 1080 - 86 (browser chrome) =
-/// 994, while `document.documentElement.clientHeight` stays at Chrome's real
-/// 1080. `scroll_into_view` scrolls with the real number, so anything landing
-/// in that 86px band read as off-screen: `is_visible` answered `false` for a
+/// The `window.inner*` rewrite is NOT exclusive to `spoofed`: it lives in
+/// `screen.js`, which `observer.rs` installs for `ProfileKind::Native` too
+/// (`geometry_bootstrap()` = `_native.js` + `screen.js`), and
+/// `Browser::builder()` defaults to `StealthProfile::native()`. Only
+/// `StealthProfile::off()` leaves `window.inner*` alone — measured on a
+/// default-profile launch, `innerHeight` reads 994 against a real 1080,
+/// identical to `spoofed`. `spoofed` is the profile under test because it is
+/// the full shipping posture, and because its humanized `InputProfile` is
+/// what the typing at the end of this test exercises.
+///
+/// On the stock 1920x1080 persona it claims `innerHeight` 1080 - 86 (browser
+/// chrome) = 994, while the layout viewport stays at Chrome's real 1080.
+/// `scroll_into_view` scrolls with the real number, so anything landing in
+/// that 86px band read as off-screen: `is_visible` answered `false` for a
 /// field plainly on screen, and `focus` — the first step of `type_text`,
 /// `press` and `type_keys` — died with `NotActionable(5s, "not visible")`.
 ///
@@ -366,6 +386,104 @@ async fn focus_reaches_a_below_the_fold_field_under_a_spoofed_viewport() {
     assert_eq!(
         value, "typed below the fold",
         "the keystrokes must land in the below-the-fold field"
+    );
+
+    browser.close().await.unwrap();
+}
+
+/// The on-screen clause must still be a test in quirks mode.
+///
+/// The fixture below carries no doctype, so it renders in `BackCompat`, where
+/// `document.documentElement.clientHeight` reports the DOCUMENT's content
+/// height instead of the viewport's — 6024 here, against a real 1080. The
+/// clause read `documentElement.clientHeight || window.innerHeight`,
+/// justified by a comment claiming `window.inner*` survived "only as a
+/// quirks-mode fallback, where `documentElement` reports 0". It reports 6024,
+/// which is truthy, so the fallback never fired and the bbox got compared
+/// against the whole document: the viewport test was a no-op on every
+/// doctype-less page.
+///
+/// Nothing surfaced, because it failed open — `is_visible` simply answered
+/// `true` for a field 6000px below the fold, and the off-screen and honeypot
+/// filtering `visible_only(true)` promises was silently absent on exactly the
+/// sloppy legacy pages most likely to be carrying a honeypot.
+///
+/// Hence the assertion on the *pre-scroll* `false`. The post-scroll `true`
+/// guards the opposite direction: a clause that rejected everything in quirks
+/// mode would satisfy the first assertion by accident. The geometry between
+/// them is read at runtime so a fixture that stops reproducing the trap fails
+/// loudly instead of passing vacuously.
+///
+/// Launched with no explicit profile: this defect is posture-independent
+/// (quirks mode is the page's doing, not the persona's), and the default is
+/// the configuration a caller gets without asking for anything.
+#[tokio::test]
+#[serial]
+async fn is_visible_rejects_a_below_the_fold_field_on_a_doctype_less_page() {
+    let mock = MockServer::start().await;
+    // No doctype — that is the entire point of the fixture. The spacer is
+    // taller than any viewport so the field starts far below the fold.
+    mount(
+        &mock,
+        "/quirks",
+        r#"<html><body style="margin:0">
+             <div style="height:6000px">a very long page, and no doctype</div>
+             <input id="deep" style="display:block;width:200px;height:24px;
+                    box-sizing:border-box">
+           </body></html>"#,
+    )
+    .await;
+
+    let browser = Browser::builder().headless(true).launch().await.unwrap();
+    let tab = browser.main_tab();
+    tab.goto(&format!("{}/quirks", mock.uri())).await.unwrap();
+
+    let field = tab.find().css("#deep").one().await.unwrap();
+
+    // `body.clientHeight` is the layout viewport in `BackCompat`;
+    // `documentElement.clientHeight` is the content height that made the old
+    // expression's `||` unreachable.
+    let (mode, top, content_h, viewport_h): (String, f64, f64, f64) = tab
+        .evaluate_main(
+            "(() => {
+               const r = document.getElementById('deep').getBoundingClientRect();
+               return [document.compatMode, r.top,
+                       document.documentElement.clientHeight,
+                       document.body.clientHeight];
+             })()",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        mode, "BackCompat",
+        "the fixture must render in quirks mode or this test guards nothing"
+    );
+    assert!(
+        top >= viewport_h,
+        "the field must start below the fold: rect.top {top} against a \
+         {viewport_h}px layout viewport"
+    );
+    assert!(
+        content_h > viewport_h && top < content_h,
+        "the trap must be live: documentElement.clientHeight {content_h} has \
+         to be a truthy content height that still swallows rect.top {top}, or \
+         the old expression would have rejected the field for the right \
+         reason by accident"
+    );
+
+    assert!(
+        !field.is_visible().await.unwrap(),
+        "a field {top}px down a quirks-mode page must not read as visible in \
+         a {viewport_h}px viewport"
+    );
+
+    // The other direction: the clause must still pass what is genuinely on
+    // screen, in the same rendering mode.
+    field.scroll_into_view().await.unwrap();
+    assert!(
+        field.is_visible().await.unwrap(),
+        "the same field must read as visible once scrolled into view"
     );
 
     browser.close().await.unwrap();

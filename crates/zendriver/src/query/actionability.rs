@@ -86,9 +86,17 @@ impl ActionabilityCheck {
 /// human; and `checkVisibility` says nothing about where the element sits
 /// relative to the viewport.
 ///
-/// Requires Chrome 105+ (`Element.checkVisibility`). On an older build the
-/// JS throws, which surfaces as a `JsException` — a loud failure rather
-/// than a silently wrong answer.
+/// Requires Chrome 121+, not 105+. `Element.checkVisibility` itself shipped
+/// in 105, but the three option names passed below (`opacityProperty`,
+/// `visibilityProperty`, `contentVisibilityAuto`) shipped in 121 — the first
+/// two as aliases for 105's `checkOpacity` / `checkVisibilityCSS`, the third
+/// as a new check (crbug feature 5070043440480256). Below 105 the call
+/// throws, surfacing as a `JsException`: a loud failure rather than a
+/// silently wrong answer. On 105–120 it does NOT throw — WebIDL drops
+/// dictionary members it doesn't recognize — so the call silently degrades
+/// to the default `display: none` test and stops covering
+/// `visibility: hidden`/`collapse` and `content-visibility: auto`. The
+/// effective-opacity loop below is independent of that and still holds.
 ///
 /// Live callers: `Element::is_visible` and the `visible_only` filter in
 /// `FindBuilder`/`FindAllBuilder` (`query::mod`).
@@ -112,27 +120,48 @@ pub(crate) async fn check_visible(el: &Element) -> Result<bool> {
             if (rect.width <= 0 || rect.height <= 0) return false;
 
             // On-screen test: the bbox must overlap the viewport by at least a
-            // sliver. `getBoundingClientRect` is already viewport-relative.
+            // sliver. `getBoundingClientRect` is already viewport-relative, so
+            // the box it must be compared against is the LAYOUT viewport. Two
+            // things about reading that box are load-bearing:
             //
-            // `documentElement.clientWidth/Height` FIRST, and never
-            // `window.inner*` first — the order is load-bearing, not style.
-            // A stealth persona rewrites `window.innerWidth/innerHeight` to its
-            // claimed screen size minus browser chrome, while `scroll_into_view`
-            // moves the element using Chrome's real viewport. Reading the
-            // spoofed value here compares a real-geometry scroll against a
-            // fabricated viewport, so every element landing between the two
-            // heights is permanently "not visible" — which made `focus`, and so
-            // `type_text`/`press`/`type_keys`, fail on any below-the-fold field
-            // whenever stealth was on. Stealth is the default posture, so that
-            // was the normal case, not an edge one.
+            // 1. It must never come from `window.inner*`. Every profile except
+            //    `StealthProfile::off()` — including `native()`, which
+            //    `Browser::builder()` installs by default — runs
+            //    `zendriver-stealth`'s `patches/screen.js`, which rewrites
+            //    `window.inner*` to the persona's screen size minus a fixed
+            //    86px chrome inset, while `scroll_into_view` moves the element
+            //    with Chrome's real viewport. Measured under the default
+            //    profile: `innerHeight` 994 against a real 1080. Comparing a
+            //    real-geometry scroll against that fabricated viewport leaves
+            //    every element landing in the 86px band permanently "not
+            //    visible", which broke `focus` — and with it `type_text` /
+            //    `press` / `type_keys` — on any below-the-fold field.
             //
-            // `clientWidth/Height` is unspoofed and is also the more correct
-            // pairing: it reports the layout viewport, which is the box
-            // `getBoundingClientRect` is measured against. `window.inner*`
-            // survives only as a quirks-mode fallback, where `documentElement`
-            // reports 0.
-            const vw = document.documentElement.clientWidth || window.innerWidth;
-            const vh = document.documentElement.clientHeight || window.innerHeight;
+            // 2. WHICH element reports the layout viewport depends on the
+            //    rendering mode, and reading the wrong one fails silently.
+            //    Standards mode: `documentElement`. Quirks (`BackCompat`):
+            //    `documentElement.client*` reports the document's CONTENT box
+            //    and `body.client*` reports the viewport. Measured on a 6000px
+            //    doctype-less page: `documentElement.clientHeight` 6024,
+            //    `body.clientHeight` 1080. Reading `documentElement`
+            //    unconditionally therefore compares the bbox against the whole
+            //    document on any page without a doctype — a no-op that fails
+            //    open, on exactly the sloppy legacy pages most likely to be
+            //    carrying a honeypot.
+            const box = document.compatMode === 'BackCompat'
+                ? document.body
+                : document.documentElement;
+            // The `BackCompat` arm can be null: a document whose `<body>` was
+            // removed still renders elements appended to `documentElement`, and
+            // still answers `isConnected` for them (reproduced against Chrome).
+            // The fallback is `visualViewport` rather than `window.inner*`
+            // because it is the other unspoofed source, and it reads the real
+            // 1080 in both modes. It is the VISUAL viewport, which diverges
+            // from the layout viewport under pinch-zoom or an on-screen
+            // keyboard — neither reachable through this crate's emulation
+            // surface, and neither triggerable by page script.
+            const vw = box ? box.clientWidth : window.visualViewport.width;
+            const vh = box ? box.clientHeight : window.visualViewport.height;
             if (rect.right <= 0 || rect.bottom <= 0 || rect.left >= vw || rect.top >= vh) {
                 return false;
             }
@@ -262,9 +291,11 @@ pub(crate) async fn check_receives_pointer(
 /// animating)", or "occluded by overlay").
 ///
 /// Predicates are evaluated in fixed order: visible → enabled → stable →
-/// receives_pointer. This matches Playwright's gate ordering and avoids
-/// running the more-expensive stability + hit-testing checks while the
-/// element is still hidden or disabled.
+/// receives_pointer — the two cheap reads first, so the expensive
+/// two-frame stability wait and the hit-test never run while the element is
+/// still hidden or disabled. The *set* of checks is Playwright's; this
+/// ordering is not, and does not claim to be — Playwright's actionability
+/// docs list visible → stable → receives events → enabled.
 ///
 /// `position` is the offset the caller will click at, forwarded to the
 /// hit-test so the gate probes the point the dispatch actually uses. `None`
@@ -346,53 +377,41 @@ mod tests {
         let (js, _) = probe_check_visible(true).await;
         // `visible_only(true)` promises offscreen candidates are filtered
         // out; that requires comparing the bbox against the viewport box.
-        //
-        // The viewport must come from `documentElement.client*` BEFORE
-        // `window.inner*`. A stealth persona rewrites `window.inner*` to its
-        // claimed screen size, and comparing a real-geometry scroll against
-        // that fabricated viewport made every below-the-fold element
-        // permanently invisible under the default posture. Asserting the
-        // ordering, not just the presence of a viewport read — the previous
-        // version of this test pinned `window.innerWidth` and so pinned the
-        // bug.
-        // Assert on the assignment lines, not the whole script: the comment
-        // above them names `window.inner*` while explaining why it must not be
-        // read first, so a raw substring search matches the prose.
-        let assignment = |name: &str| -> String {
-            js.lines()
-                .map(str::trim)
-                .find(|l| l.starts_with(&format!("const {name} =")))
-                .unwrap_or_else(|| panic!("no `const {name} =` in probe: {js}"))
-                .to_owned()
-        };
-        for (name, real, spoofable) in [
-            (
-                "vw",
-                "document.documentElement.clientWidth",
-                "window.innerWidth",
-            ),
-            (
-                "vh",
-                "document.documentElement.clientHeight",
-                "window.innerHeight",
-            ),
-        ] {
-            let line = assignment(name);
-            let real_at = line.find(real);
-            let spoofable_at = line.find(spoofable);
-            assert!(
-                real_at.is_some(),
-                "`{name}` must read a real viewport: {line}"
-            );
-            assert!(
-                spoofable_at.is_none_or(|s| real_at.is_some_and(|r| r < s)),
-                "`{name}` must prefer {real} over the spoofable {spoofable}: {line}"
-            );
-        }
         assert!(js.contains("rect.right <= 0"), "{js}");
         assert!(js.contains("rect.bottom <= 0"), "{js}");
         assert!(js.contains("rect.left >= vw"), "{js}");
         assert!(js.contains("rect.top >= vh"), "{js}");
+    }
+
+    /// The viewport box must be read from an unspoofed source, and from the
+    /// element that actually reports the layout viewport in *both* rendering
+    /// modes.
+    ///
+    /// Two separate defects are pinned here, both of which shipped:
+    ///
+    /// - Reading `window.inner*` at all. Every profile except
+    ///   `StealthProfile::off()` rewrites those, so they must not appear —
+    ///   not even as a trailing fallback. The predecessor of this test
+    ///   asserted only that `documentElement` came *first*, which a
+    ///   `documentElement.clientWidth || window.innerWidth` expression
+    ///   satisfies while still reaching the spoofed value.
+    /// - Reading `documentElement` unconditionally. In quirks mode that is
+    ///   the document's content box (6024 on a 6000px page), which is
+    ///   truthy, so the `||` fallback never fired and the whole on-screen
+    ///   clause degraded to a no-op. Asserting merely that *some* viewport
+    ///   is read would pass that.
+    ///
+    /// The whole-source substring search is safe because the probe's own
+    /// comments spell the spoofable pair `window.inner*` rather than naming
+    /// either property.
+    #[tokio::test]
+    async fn check_visible_probe_reads_the_layout_viewport_in_both_rendering_modes() {
+        let (js, _) = probe_check_visible(true).await;
+        assert!(!js.contains("window.innerWidth"), "{js}");
+        assert!(!js.contains("window.innerHeight"), "{js}");
+        assert!(js.contains("document.compatMode === 'BackCompat'"), "{js}");
+        assert!(js.contains("document.body"), "{js}");
+        assert!(js.contains("document.documentElement"), "{js}");
     }
 
     #[tokio::test]
