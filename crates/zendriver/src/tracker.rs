@@ -103,6 +103,14 @@ async fn download_blocklist(
 /// [`DOWNLOAD_TIMEOUT`]; `reqwest`/IO failures are surfaced as
 /// [`std::io::Error`] so the caller folds them into `ZendriverError::Io`
 /// without a new public error variant.
+///
+/// The cache file inherits that helper's owner-only `0600` default. Nothing in
+/// a public blocklist is secret, so the restriction buys no confidentiality
+/// here — but it costs nothing either (the cache root is already per-user, and
+/// a miss just re-downloads), and one rule across both callers beats a second
+/// mode knob threaded through the helper for a file nobody needs to share.
+/// An operator who does want it group-readable can `chmod` once; the helper
+/// preserves an existing destination's mode on every later refresh.
 pub(crate) async fn load_or_download_blocklist(url: &str) -> Result<Vec<String>, std::io::Error> {
     let cache = cache_path(url);
 

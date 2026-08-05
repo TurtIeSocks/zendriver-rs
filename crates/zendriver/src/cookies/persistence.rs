@@ -53,9 +53,34 @@ use crate::error::Result;
 /// (`crate::tracker::load_or_download_blocklist`), which wants the same
 /// guarantee; it lives here because this module is compiled unconditionally
 /// while that one is feature-gated.
+///
+/// # Permissions and symlinks
+///
+/// The rename installs the *temp file's* inode at `path`, so the destination
+/// afterwards is a different file than it was before. Two consequences that a
+/// plain `fs::write` does not have:
+///
+/// - **The mode comes from the temp file.** Left alone that would be the
+///   process umask (commonly `0644`), silently widening a jar the user
+///   deliberately created `chmod 600` into a world-readable file full of live
+///   session cookies. [`apply_destination_mode`] therefore stamps the
+///   destination's current mode onto the temp file before the rename, and
+///   falls back to owner-only `0600` when the destination does not exist yet.
+///   No-op on non-Unix targets, which have no mode to carry over.
+/// - **A symlinked destination is replaced, not followed.** If `path` is a
+///   symlink, the rename unlinks it and leaves a regular file in its place —
+///   the link target keeps its old contents and stops receiving writes.
+///   `fs::write` followed the link and wrote through to the target, so a
+///   caller who symlinked their cookie jar at some canonical store must point
+///   zendriver at the real path instead. (The mode is still read through the
+///   link, so the replacement inherits the target's permissions.)
 pub(crate) async fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let tmp = temp_path(path);
     if let Err(e) = fs::write(&tmp, bytes).await {
+        let _ = fs::remove_file(&tmp).await;
+        return Err(e);
+    }
+    if let Err(e) = apply_destination_mode(&tmp, path).await {
         let _ = fs::remove_file(&tmp).await;
         return Err(e);
     }
@@ -63,6 +88,45 @@ pub(crate) async fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<(
         let _ = fs::remove_file(&tmp).await;
         return Err(e);
     }
+    Ok(())
+}
+
+/// Give `tmp` the permissions `dest` should still have once the rename has
+/// swapped one for the other.
+///
+/// An existing destination's mode wins outright: preserving what the user (or
+/// their prior save) chose is the only behavior that keeps `write_atomic`
+/// indistinguishable from the `fs::write` it replaced.
+#[cfg(unix)]
+async fn apply_destination_mode(tmp: &Path, dest: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    /// Mode for a destination that does not exist yet.
+    ///
+    /// `0600` rather than the process umask because the caller that matters
+    /// here — [`CookieJar::save_to_file`] — writes authentication material:
+    /// session cookies that are equivalent to a password for as long as they
+    /// live. Nothing else on the machine has a reason to read them, so the
+    /// safe default is owner-only and a user who genuinely wants the file
+    /// shared can widen it once — the branch above then preserves that choice
+    /// on every later save.
+    const NEW_FILE_MODE: u32 = 0o600;
+
+    let mode = match fs::metadata(dest).await {
+        // Mask off the file-type bits; keep the full permission set (including
+        // setuid/setgid/sticky) so nothing the user set is quietly dropped.
+        Ok(meta) => meta.permissions().mode() & 0o7777,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => NEW_FILE_MODE,
+        Err(e) => return Err(e),
+    };
+    fs::set_permissions(tmp, std::fs::Permissions::from_mode(mode)).await
+}
+
+/// No-op counterpart for targets without Unix mode bits — Windows carries its
+/// ACLs on the containing directory, so the renamed file picks them up.
+#[cfg(not(unix))]
+#[allow(clippy::unused_async)]
+async fn apply_destination_mode(_tmp: &Path, _dest: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
@@ -92,6 +156,13 @@ impl CookieJar {
     /// leaves the previous file intact instead of a truncated one that no
     /// longer parses. The file is overwritten if it already exists. Parent
     /// directories must already exist — `save_to_file` does not create them.
+    ///
+    /// On Unix an existing file keeps its permissions across saves, and a file
+    /// created by this call is `0600`: it holds live session cookies, so the
+    /// default is owner-only rather than whatever the process umask allows.
+    /// Because the write finishes with a `rename`, a `path` that is a *symlink*
+    /// is replaced by a regular file — the link target stops receiving saves.
+    /// Pass the real path if you were relying on that indirection.
     ///
     /// # Errors
     ///
@@ -142,7 +213,8 @@ impl CookieJar {
     /// Snapshot only the cookies matching `filter` to a JSON file at `path`.
     ///
     /// Like [`Self::save_to_file`] — including the atomic temp-file-then-
-    /// rename write — but applies the `filter` predicate to the result of
+    /// rename write and its permission/symlink behavior — but applies the
+    /// `filter` predicate to the result of
     /// [`CookieJar::all`] before writing, handy for persisting just one
     /// site's cookies out of a shared store. The predicate receives each
     /// [`crate::cookies::Cookie`] by reference and returns `true` to keep it.
@@ -268,6 +340,157 @@ mod tests {
             1,
             "only the pre-existing directory should remain; the temp file must be removed"
         );
+    }
+
+    /// Mode of `path`, permission bits only. Unix-only helper for the
+    /// permission tests below.
+    #[cfg(unix)]
+    fn mode_of(path: &std::path::Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    /// A jar deliberately created `chmod 600` must still be `0600` after a
+    /// save. The rename installs the temp file's inode, so without an explicit
+    /// carry-over the mode collapses to the process umask (0644 on a stock
+    /// box) and a file full of live session cookies goes world-readable.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn write_atomic_preserves_an_existing_restrictive_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("cookies.json");
+        std::fs::write(&dest, b"stale").unwrap();
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        write_atomic(&dest, b"fresh").await.unwrap();
+
+        let mode = mode_of(&dest);
+        assert_eq!(
+            mode, 0o600,
+            "a 0600 cookie jar must not widen across a save, got {mode:o}"
+        );
+        assert_eq!(std::fs::read(&dest).unwrap(), b"fresh");
+        assert_eq!(dir_entry_count(dir.path()), 1, "no temp file may be left");
+    }
+
+    /// A mode the user widened on purpose is preserved too — the rule is
+    /// "carry the destination's mode", not "force 0600 on everything".
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn write_atomic_preserves_an_existing_permissive_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("trackers.txt");
+        std::fs::write(&dest, b"stale").unwrap();
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        write_atomic(&dest, b"fresh").await.unwrap();
+
+        let mode = mode_of(&dest);
+        assert_eq!(mode, 0o644, "a widened mode must survive too, got {mode:o}");
+    }
+
+    /// With no destination to inherit from, the new file is owner-only rather
+    /// than whatever the ambient umask would have allowed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn write_atomic_creates_a_new_file_owner_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("cookies.json");
+        assert!(!dest.exists());
+
+        write_atomic(&dest, b"fresh").await.unwrap();
+
+        let mode = mode_of(&dest);
+        assert_eq!(
+            mode, 0o600,
+            "a freshly created cookie jar must default to owner-only, got {mode:o}"
+        );
+        assert_eq!(std::fs::read(&dest).unwrap(), b"fresh");
+        assert_eq!(dir_entry_count(dir.path()), 1, "no temp file may be left");
+    }
+
+    /// Pins the behavior the rustdoc warns about: because the write ends in a
+    /// `rename`, a symlinked destination is *replaced* by a regular file
+    /// instead of written through. If this ever changes, the docs on
+    /// `write_atomic` and `save_to_file` change with it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn write_atomic_replaces_a_symlinked_destination() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real.json");
+        let link = dir.path().join("cookies.json");
+        std::fs::write(&real, b"original").unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        write_atomic(&link, b"fresh").await.unwrap();
+
+        assert!(
+            !std::fs::symlink_metadata(&link).unwrap().is_symlink(),
+            "the rename unlinks the symlink and leaves a regular file"
+        );
+        assert_eq!(std::fs::read(&link).unwrap(), b"fresh");
+        assert_eq!(
+            std::fs::read(&real).unwrap(),
+            b"original",
+            "the link target stops receiving writes"
+        );
+        // The mode is still read through the link, so the replacement keeps
+        // the target's restrictive permissions.
+        let mode = mode_of(&link);
+        assert_eq!(
+            mode, 0o600,
+            "the replacement must inherit the link target's mode, got {mode:o}"
+        );
+    }
+
+    /// The regression as reported, end to end through the public API: a jar
+    /// file at 0600 that a real `save_to_file` must not widen.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn save_to_file_preserves_a_restrictive_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (mut mock, conn) = MockConnection::pair();
+        let jar = CookieJar::new(conn.clone());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cookies.json");
+        std::fs::write(&path, b"stale").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let save = tokio::spawn({
+            let j = jar.clone();
+            let p = path.clone();
+            async move { j.save_to_file(p).await }
+        });
+
+        let id = mock.expect_cmd("Storage.getCookies").await;
+        mock.reply(
+            id,
+            json!({
+                "cookies": [
+                    { "name": "session", "value": "secret", "domain": ".x.test", "path": "/",
+                      "httpOnly": true, "secure": true },
+                ]
+            }),
+        )
+        .await;
+        save.await.unwrap().unwrap();
+
+        let mode = mode_of(&path);
+        assert_eq!(
+            mode, 0o600,
+            "save_to_file must not widen a 0600 jar holding session cookies, got {mode:o}"
+        );
+        assert_eq!(dir_entry_count(dir.path()), 1, "no temp file may be left");
+
+        conn.shutdown();
     }
 
     /// End-to-end round-trip: dump the cookie store to disk, then load it back
