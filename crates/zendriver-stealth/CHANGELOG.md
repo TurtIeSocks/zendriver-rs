@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.12.0] - 2026-08-05
+
+### Added
+
+- Present a capture's MEASURED screen insets, not derived constants **(BREAKING)**
+
+
 ## [0.11.6] - 2026-07-31
 
 ### Fixed
