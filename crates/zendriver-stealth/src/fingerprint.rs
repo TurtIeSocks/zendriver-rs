@@ -753,7 +753,27 @@ mod fingerprint_tests {
         };
         fp.recompose();
         assert!(fp.ua_string.contains("Windows NT 10.0"));
-        assert!(fp.ua_string.contains("Chrome/120.0.6099.234"));
+        // The UA string carries the REDUCED version and the full build number
+        // never reaches it — Chrome froze the minor/build/patch at `0.0.0` in
+        // v110. This assertion used to demand the opposite.
+        assert!(
+            fp.ua_string.contains("Chrome/120.0.0.0"),
+            "recompose must reduce the UA version: {}",
+            fp.ua_string
+        );
+        assert!(
+            !fp.ua_string.contains("120.0.6099.234"),
+            "the full build number must not reach the UA string: {}",
+            fp.ua_string
+        );
+        // ...while UA-CH keeps it, which is the asymmetry a real Chrome shows.
+        assert!(
+            fp.ua_metadata
+                .full_version_list
+                .iter()
+                .any(|b| b.version == "120.0.6099.234"),
+            "fullVersionList must still carry the complete version"
+        );
     }
 
     #[test]
