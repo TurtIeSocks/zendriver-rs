@@ -113,8 +113,26 @@ pub(crate) async fn check_visible(el: &Element) -> Result<bool> {
 
             // On-screen test: the bbox must overlap the viewport by at least a
             // sliver. `getBoundingClientRect` is already viewport-relative.
-            const vw = window.innerWidth || document.documentElement.clientWidth;
-            const vh = window.innerHeight || document.documentElement.clientHeight;
+            //
+            // `documentElement.clientWidth/Height` FIRST, and never
+            // `window.inner*` first — the order is load-bearing, not style.
+            // A stealth persona rewrites `window.innerWidth/innerHeight` to its
+            // claimed screen size minus browser chrome, while `scroll_into_view`
+            // moves the element using Chrome's real viewport. Reading the
+            // spoofed value here compares a real-geometry scroll against a
+            // fabricated viewport, so every element landing between the two
+            // heights is permanently "not visible" — which made `focus`, and so
+            // `type_text`/`press`/`type_keys`, fail on any below-the-fold field
+            // whenever stealth was on. Stealth is the default posture, so that
+            // was the normal case, not an edge one.
+            //
+            // `clientWidth/Height` is unspoofed and is also the more correct
+            // pairing: it reports the layout viewport, which is the box
+            // `getBoundingClientRect` is measured against. `window.inner*`
+            // survives only as a quirks-mode fallback, where `documentElement`
+            // reports 0.
+            const vw = document.documentElement.clientWidth || window.innerWidth;
+            const vh = document.documentElement.clientHeight || window.innerHeight;
             if (rect.right <= 0 || rect.bottom <= 0 || rect.left >= vw || rect.top >= vh) {
                 return false;
             }
@@ -328,8 +346,49 @@ mod tests {
         let (js, _) = probe_check_visible(true).await;
         // `visible_only(true)` promises offscreen candidates are filtered
         // out; that requires comparing the bbox against the viewport box.
-        assert!(js.contains("window.innerWidth"), "{js}");
-        assert!(js.contains("window.innerHeight"), "{js}");
+        //
+        // The viewport must come from `documentElement.client*` BEFORE
+        // `window.inner*`. A stealth persona rewrites `window.inner*` to its
+        // claimed screen size, and comparing a real-geometry scroll against
+        // that fabricated viewport made every below-the-fold element
+        // permanently invisible under the default posture. Asserting the
+        // ordering, not just the presence of a viewport read — the previous
+        // version of this test pinned `window.innerWidth` and so pinned the
+        // bug.
+        // Assert on the assignment lines, not the whole script: the comment
+        // above them names `window.inner*` while explaining why it must not be
+        // read first, so a raw substring search matches the prose.
+        let assignment = |name: &str| -> String {
+            js.lines()
+                .map(str::trim)
+                .find(|l| l.starts_with(&format!("const {name} =")))
+                .unwrap_or_else(|| panic!("no `const {name} =` in probe: {js}"))
+                .to_owned()
+        };
+        for (name, real, spoofable) in [
+            (
+                "vw",
+                "document.documentElement.clientWidth",
+                "window.innerWidth",
+            ),
+            (
+                "vh",
+                "document.documentElement.clientHeight",
+                "window.innerHeight",
+            ),
+        ] {
+            let line = assignment(name);
+            let real_at = line.find(real);
+            let spoofable_at = line.find(spoofable);
+            assert!(
+                real_at.is_some(),
+                "`{name}` must read a real viewport: {line}"
+            );
+            assert!(
+                spoofable_at.is_none_or(|s| real_at.is_some_and(|r| r < s)),
+                "`{name}` must prefer {real} over the spoofable {spoofable}: {line}"
+            );
+        }
         assert!(js.contains("rect.right <= 0"), "{js}");
         assert!(js.contains("rect.bottom <= 0"), "{js}");
         assert!(js.contains("rect.left >= vw"), "{js}");
