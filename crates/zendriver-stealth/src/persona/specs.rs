@@ -123,6 +123,64 @@ pub struct ScreenSpec {
     pub width: u32,
     pub height: u32,
     pub device_pixel_ratio: f64,
+    /// Work-area width, i.e. `screen.availWidth`. `None` keeps the derived
+    /// default (the full width — no vertical dock or side panel).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avail_width: Option<u32>,
+    /// Work-area height, i.e. `screen.availHeight` — `height` minus whatever
+    /// the OS reserves (Windows taskbar, macOS menu bar plus dock).
+    ///
+    /// `None` keeps the derived default of `height - 48`. That constant is a
+    /// plausible Windows taskbar and nothing more: it exists so a caller who
+    /// supplies no capture still gets `availHeight < height`, which is the
+    /// relationship the tell lives in. A caller REPLAYING a real device should
+    /// pass the value it measured — a real macOS reports `height - 25` minus
+    /// the dock, a real Windows `- 40/48/72` depending on DPI scaling, or
+    /// `- 0` with the taskbar auto-hidden, and none of those can be expressed
+    /// by a constant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avail_height: Option<u32>,
+    /// Viewport height, i.e. `window.innerHeight`. `None` keeps the derived
+    /// default of `height - 86` (a plausible tab strip + omnibox + bookmarks
+    /// bar). Same reasoning as [`Self::avail_height`]: the browser chrome's
+    /// real height varies with the user's toolbars and zoom.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inner_height: Option<u32>,
+}
+
+impl ScreenSpec {
+    /// A screen of `width x height` at `device_pixel_ratio`, with every inset
+    /// left to the patch's own derivation.
+    ///
+    /// Use the `with_*` setters to replay a MEASURED device instead. They are
+    /// separate because the derived defaults are a plausible fiction and a
+    /// measurement is not: a caller should have to say which one it means.
+    #[must_use]
+    pub fn new(width: u32, height: u32, device_pixel_ratio: f64) -> Self {
+        Self {
+            width,
+            height,
+            device_pixel_ratio,
+            avail_width: None,
+            avail_height: None,
+            inner_height: None,
+        }
+    }
+
+    /// Replay a measured `screen.availWidth` / `screen.availHeight`.
+    #[must_use]
+    pub fn with_avail(mut self, width: u32, height: u32) -> Self {
+        self.avail_width = Some(width);
+        self.avail_height = Some(height);
+        self
+    }
+
+    /// Replay a measured `window.innerHeight`.
+    #[must_use]
+    pub fn with_inner_height(mut self, height: u32) -> Self {
+        self.inner_height = Some(height);
+        self
+    }
 }
 
 /// WebGL value substitution.
@@ -447,11 +505,7 @@ mod tests {
 
     #[test]
     fn screen_spec_round_trips_json() {
-        let s = ScreenSpec {
-            width: 1536,
-            height: 864,
-            device_pixel_ratio: 1.25,
-        };
+        let s = ScreenSpec::new(1536, 864, 1.25);
         let json = serde_json::to_string(&s).unwrap();
         let back: ScreenSpec = serde_json::from_str(&json).unwrap();
         assert_eq!(s, back);

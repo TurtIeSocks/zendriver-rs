@@ -11,7 +11,7 @@
 use serde_json::json;
 use zendriver_transport::{CallError, ObserverError, PausedSession, TargetObserver};
 
-use crate::patches::{bootstrap_script, bootstrap_script_native_webgl, geometry_bootstrap};
+use crate::patches::{bootstrap_script, bootstrap_script_native_webgl, geometry_bootstrap_with};
 use crate::persona::GeoPos;
 use crate::persona::specs::{ScreenSpec, UaMetadata};
 use crate::{Fingerprint, Persona, ProfileKind, StealthProfile};
@@ -81,7 +81,12 @@ impl StealthObserver {
             // its own window) and `availHeight === height` (no taskbar inset). Those are
             // artifacts this library introduces, not properties of the host, so repairing
             // them keeps `Native` native rather than spoofing anything.
-            ProfileKind::Native => geometry_bootstrap(),
+            // The persona's screen still reaches this arm even in `Native`: it
+            // carries no identity, only the geometry CDP cannot set. A profile
+            // captured on real hardware brings its own insets, and presenting
+            // the derived defaults instead would describe a machine that does
+            // not exist. `None` is byte-identical to the old call.
+            ProfileKind::Native => geometry_bootstrap_with(persona.screen.as_ref()),
             ProfileKind::Off => String::new(),
         };
         let geolocation = persona.geolocation;
@@ -824,11 +829,7 @@ mod tests {
                 }),
                 ..Default::default()
             }),
-            screen: Some(crate::persona::specs::ScreenSpec {
-                width: 1536,
-                height: 864,
-                device_pixel_ratio: 1.25,
-            }),
+            screen: Some(crate::persona::specs::ScreenSpec::new(1536, 864, 1.25)),
             ..crate::Persona::default()
         };
         let profile = StealthProfile::spoofed();
