@@ -9,10 +9,22 @@
 //! [`HostMatcher`]: zendriver_interception::HostMatcher
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// Bundled curated list, embedded at compile time (feature-gated, so it only
 /// costs binary size when `tracker-blocking` is enabled).
 const BUNDLED: &str = include_str!("trackers.txt");
+
+/// Connect timeout for a `tracker_blocklist_url` download.
+const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Whole-request timeout (connect, headers, and body) for a
+/// `tracker_blocklist_url` download.
+///
+/// This download runs on the `Browser::launch()` path, so an unbounded fetch
+/// against a half-open host would hang the launch forever. Both bounds exist
+/// to keep the worst case a bounded, reported failure.
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Parse the bundled list into hosts.
 pub(crate) fn bundled_hosts() -> Vec<String> {
@@ -51,13 +63,54 @@ fn cache_path(url: &str) -> PathBuf {
         .join(format!("{:016x}.txt", h.finish()))
 }
 
+/// Download a blocklist over HTTP with both bounds applied.
+///
+/// Split out from [`load_or_download_blocklist`] so the timeouts are
+/// injectable in tests; production callers pass the two constants above.
+/// `reqwest` failures are surfaced as [`std::io::Error`] so the caller folds
+/// them into `ZendriverError::Io` without a new public error variant.
+async fn download_blocklist(
+    url: &str,
+    connect_timeout: Duration,
+    request_timeout: Duration,
+) -> Result<String, std::io::Error> {
+    // reqwest 0.13 installs no rustls crypto provider of its own (see the
+    // workspace manifest), and the omission surfaces as a runtime panic rather
+    // than a build error. Install before the client exists.
+    crate::tls::install_default_crypto_provider();
+    let client = reqwest::Client::builder()
+        .connect_timeout(connect_timeout)
+        .timeout(request_timeout)
+        .build()
+        .map_err(std::io::Error::other)?;
+    client
+        .get(url)
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(std::io::Error::other)?
+        .text()
+        .await
+        .map_err(std::io::Error::other)
+}
+
 /// Load a host list from local cache, or download from `url` and cache it.
 ///
 /// Mirrors the atomic-write download-on-first-use pattern in
-/// `zendriver-fingerprints` `pool::load_or_download` (write `<path>.tmp`, then
-/// `rename`). `reqwest`/IO failures are surfaced as [`std::io::Error`] so the
-/// caller folds them into `ZendriverError::Io` without a new public error
-/// variant.
+/// `zendriver-fingerprints` `pool::load_or_download` (write a temp sibling,
+/// then `rename`) via the shared [`crate::cookies::persistence::write_atomic`]
+/// helper. The download is bounded by [`DOWNLOAD_CONNECT_TIMEOUT`] /
+/// [`DOWNLOAD_TIMEOUT`]; `reqwest`/IO failures are surfaced as
+/// [`std::io::Error`] so the caller folds them into `ZendriverError::Io`
+/// without a new public error variant.
+///
+/// The cache file inherits that helper's owner-only `0600` default. Nothing in
+/// a public blocklist is secret, so the restriction buys no confidentiality
+/// here — but it costs nothing either (the cache root is already per-user, and
+/// a miss just re-downloads), and one rule across both callers beats a second
+/// mode knob threaded through the helper for a file nobody needs to share.
+/// An operator who does want it group-readable can `chmod` once; the helper
+/// preserves an existing destination's mode on every later refresh.
 pub(crate) async fn load_or_download_blocklist(url: &str) -> Result<Vec<String>, std::io::Error> {
     let cache = cache_path(url);
 
@@ -68,29 +121,19 @@ pub(crate) async fn load_or_download_blocklist(url: &str) -> Result<Vec<String>,
     }
 
     tracing::debug!(url, "tracker blocklist cache miss — downloading");
-    crate::tls::install_default_crypto_provider();
-    let body = reqwest::get(url)
-        .await
-        .and_then(reqwest::Response::error_for_status)
-        .map_err(std::io::Error::other)?
-        .text()
-        .await
-        .map_err(std::io::Error::other)?;
+    let body = download_blocklist(url, DOWNLOAD_CONNECT_TIMEOUT, DOWNLOAD_TIMEOUT).await?;
 
-    // Atomic write: tmp -> rename.
     if let Some(parent) = cache.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let tmp = cache.with_extension("tmp");
-    std::fs::write(&tmp, &body)?;
-    std::fs::rename(&tmp, &cache)?;
+    crate::cookies::persistence::write_atomic(&cache, body.as_bytes()).await?;
 
     tracing::debug!(path = %cache.display(), "tracker blocklist cached");
     Ok(parse_blocklist(&body))
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -109,6 +152,43 @@ mod tests {
         assert_eq!(
             hosts,
             vec!["tracker.com".to_string(), "fp.example.org".to_string()]
+        );
+    }
+
+    /// A host that completes the TCP handshake and then never answers must
+    /// not hang the caller — and with it `Browser::launch()`. The request
+    /// timeout has to turn it into a bounded error.
+    #[tokio::test]
+    async fn download_times_out_against_a_silent_server() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        // Accept connections and hold them open, never writing a response.
+        let _server = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                held.push(stream);
+            }
+        });
+
+        let url = format!("http://{addr}/trackers.txt");
+        let started = std::time::Instant::now();
+        // The outer timeout is the failure mode under test: without a client
+        // timeout the inner future never resolves and this expect() fires.
+        let res = tokio::time::timeout(
+            Duration::from_secs(5),
+            download_blocklist(&url, Duration::from_millis(500), Duration::from_millis(200)),
+        )
+        .await
+        .expect("download_blocklist hung past its own request timeout");
+
+        assert!(
+            res.is_err(),
+            "a server that never answers must surface as an error, got {res:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the 200ms request timeout should fire promptly, took {:?}",
+            started.elapsed()
         );
     }
 

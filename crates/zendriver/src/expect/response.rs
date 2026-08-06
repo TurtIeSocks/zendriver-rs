@@ -4,7 +4,8 @@
 //! Mirrors [`crate::expect::request`] but watches `Network.responseReceived`
 //! and exposes [`MatchedResponse::body`] for fetching the response body via
 //! `Network.getResponseBody`. The subscriber task self-cancels after sending
-//! the first match so each `expect_response` call is observably one-shot.
+//! the first match — or as soon as the expectation is dropped — so each
+//! `expect_response` call is observably one-shot and outlives nothing.
 //!
 //! `Network.enable` is already on for every Tab via the per-Tab in-flight
 //! network tracker, so this module does not re-enable the domain.
@@ -270,38 +271,47 @@ struct ResponsePayload {
 /// `tx`, and exits. Subscription registers synchronously before the returned
 /// [`ResponseExpectation`] is constructed so events fired immediately after
 /// a trigger action cannot slip past us.
+///
+/// The task also exits as soon as the receiver goes away — dropping the
+/// [`ResponseExpectation`] (including on timeout) closes the channel, and the
+/// subscribe loop selects on that. Otherwise a caller who gave up would leave
+/// a task decoding every response on the session for as long as it lives.
 pub(crate) fn register(session: &SessionHandle, matcher: UrlMatcher) -> ResponseExpectation {
-    let (tx, rx) = oneshot::channel();
+    let (mut tx, rx) = oneshot::channel();
     let mut stream =
         crate::expect::watch::<ResponseReceivedEvent>(session, "Network.responseReceived");
     let session_for_match = session.clone();
     tokio::spawn(async move {
-        while let Some(res) = stream.next().await {
-            match res {
-                Ok(ev) => {
-                    if matcher.matches(&ev.response.url) {
-                        let matched = MatchedResponse {
-                            url: ev.response.url,
-                            status: ev.response.status,
-                            status_text: ev.response.status_text,
-                            headers: ev.response.headers,
-                            request_id: ev.request_id,
-                            session: session_for_match,
-                        };
-                        // Send is fallible only if the receiver was
-                        // dropped; in that case the caller no longer
-                        // cares and we just exit.
-                        let _ = tx.send(Ok(matched));
-                        return;
+        let outcome = loop {
+            tokio::select! {
+                // The caller dropped the expectation, so nobody is waiting
+                // for a result. Exit instead of consuming events for the
+                // rest of the session.
+                () = tx.closed() => return,
+                next = stream.next() => match next {
+                    Some(Ok(ev)) => {
+                        if matcher.matches(&ev.response.url) {
+                            break Ok(MatchedResponse {
+                                url: ev.response.url,
+                                status: ev.response.status,
+                                status_text: ev.response.status_text,
+                                headers: ev.response.headers,
+                                request_id: ev.request_id,
+                                session: session_for_match,
+                            });
+                        }
+                        // Non-matching response — keep waiting.
                     }
-                    // Non-matching response — keep waiting.
-                }
-                Err(e) => {
-                    let _ = tx.send(Err(e));
-                    return;
-                }
+                    Some(Err(e)) => break Err(e),
+                    // Stream ended without a match; drop `tx` so the
+                    // expectation resolves via its `Poll::Ready(Err(_))` arm.
+                    None => return,
+                },
             }
-        }
+        };
+        // Send is fallible only if the receiver was dropped between the last
+        // poll and here; in that case the caller no longer cares.
+        let _ = tx.send(outcome);
     });
     ResponseExpectation {
         rx,
@@ -493,6 +503,39 @@ mod tests {
             .expect("body task panicked")
             .expect("body returned Err");
         assert_eq!(bytes, raw);
+
+        conn.shutdown();
+    }
+
+    /// Dropping the expectation must stop the subscriber task. Otherwise every
+    /// abandoned (or timed-out) `expect_response` leaves a task decoding every
+    /// response on the session for as long as the session lives. Observed
+    /// through the runtime's alive-task count: it rises when `register` spawns
+    /// the subscriber and must fall back to the baseline once the receiver is
+    /// gone.
+    #[tokio::test]
+    async fn subscriber_task_exits_when_expectation_is_dropped() {
+        let (_mock, conn) = MockConnection::pair();
+        let session = SessionHandle::new(conn.clone(), "S1");
+        let metrics = tokio::runtime::Handle::current().metrics();
+
+        let baseline = metrics.num_alive_tasks();
+        let expectation = register(&session, UrlMatcher::from("/api/"));
+        tokio::task::yield_now().await;
+        assert!(
+            metrics.num_alive_tasks() > baseline,
+            "subscriber task should be running while the expectation is alive"
+        );
+
+        drop(expectation);
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while metrics.num_alive_tasks() > baseline {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("subscriber task still alive 2s after the expectation was dropped");
 
         conn.shutdown();
     }

@@ -35,8 +35,8 @@ use futures::{Stream, StreamExt};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
-use zendriver_transport::{AccountedRawEvent, SessionHandle};
+use tracing::{debug, warn};
+use zendriver_transport::{AccountedRawEvent, CallError, SessionHandle};
 
 use crate::url_matcher::UrlMatcher;
 use events::{
@@ -650,11 +650,13 @@ async fn run_monitor(
                                     && filter_allows(filter.as_ref(), Some(p.request.url.as_str()))
                                 {
                                     // Once one `streamResourceContent` call has
-                                    // failed (old Chrome / unsupported), skip
-                                    // future enable attempts — the whole-body
+                                    // come back "method not found" (old Chrome),
+                                    // skip future enable attempts — the whole-body
                                     // `body()` path is the fallback, and there's
                                     // no point re-spending a doomed CDP round-trip
-                                    // per request. Matches the warn message.
+                                    // per request. Only that error latches the
+                                    // flag; a lost `-32602` race is per-request
+                                    // and leaves streaming on.
                                     streaming.insert(p.request_id.clone());
                                     spawn_stream_resource_content(
                                         &session,
@@ -940,6 +942,11 @@ async fn emit_decode_failed(tx: &mpsc::Sender<NetworkEvent>) -> bool {
     emit_boundary(tx, NetworkDeliveryBoundary::DecodeFailed).await
 }
 
+/// JSON-RPC "method not found" — the one CDP error code that means this
+/// Chrome build does not implement the command at all, as opposed to
+/// refusing this particular invocation of it.
+const JSON_RPC_METHOD_NOT_FOUND: i32 = -32601;
+
 /// Enable `Network.streamResourceContent` for `request_id` in a spawned
 /// task, mirroring the correlator's existing fire-and-forget
 /// `Network.enable` call: the CDP round-trip must not block the main
@@ -948,11 +955,18 @@ async fn emit_decode_failed(tx: &mpsc::Sender<NetworkEvent>) -> bool {
 /// On success, any `bufferedData` (bytes Chrome already had before the
 /// enable call landed) is emitted as the first [`NetworkEvent::HttpData`]
 /// chunk for this request — so nothing received in that pre-enable window is
-/// lost. On failure (old Chrome / unsupported), logs one `tracing::warn!`
-/// via `warned` (shared across every call this monitor makes, so the warning
-/// fires once per monitor rather than once per request) and otherwise does
-/// nothing — the monitor keeps running and [`NetworkExchange::body`] remains
-/// the working fallback for this request.
+/// lost.
+///
+/// Failures split two ways. A JSON-RPC `-32601` ("method not found") is the
+/// only reply that proves this Chrome build has no
+/// `Network.streamResourceContent` at all: it latches `warned` — shared
+/// across every call this monitor makes — so the warning fires once and the
+/// caller stops spending a doomed CDP round-trip per request. Every other
+/// error is per-request (most often the `-32602` "already finished loading"
+/// race documented at the call site) and is logged at debug without
+/// disabling streaming for later requests. Either way the monitor keeps
+/// running and [`NetworkExchange::body`] remains the working fallback for
+/// this request.
 fn spawn_stream_resource_content(
     session: &SessionHandle,
     tx: &mpsc::Sender<NetworkEvent>,
@@ -985,11 +999,28 @@ fn spawn_stream_resource_content(
                 }
             }
             Err(e) => {
-                if !warned.swap(true, Ordering::Relaxed) {
-                    warn!(
+                // Only "method not found" proves the browser lacks the
+                // command; that is the sole justification for disabling
+                // streaming for the monitor's whole lifetime. Anything else
+                // is about this one request — above all the `-32602`
+                // "Request with the provided ID has already finished
+                // loading" race, which a single fast favicon can lose
+                // without saying anything about the next request.
+                if matches!(&e, CallError::Rpc(code, ..) if *code == JSON_RPC_METHOD_NOT_FOUND) {
+                    if !warned.swap(true, Ordering::Relaxed) {
+                        warn!(
+                            error = %e,
+                            "network monitor: Network.streamResourceContent is unsupported by this \
+                             browser (needs Chrome ~124+); stream_bodies falling back to whole-body \
+                             capture for this and future requests"
+                        );
+                    }
+                } else {
+                    debug!(
                         error = %e,
-                        "network monitor: Network.streamResourceContent failed (needs Chrome ~124+); \
-                         stream_bodies falling back to whole-body capture for this and future requests"
+                        %request_id,
+                        "network monitor: Network.streamResourceContent failed for this request; \
+                         falling back to whole-body capture (streaming stays enabled)"
                     );
                 }
             }
@@ -1063,6 +1094,70 @@ mod tests {
     use super::*;
 
     const SID: &str = "S1";
+
+    /// Drive one `spawn_stream_resource_content` call, answer it with the
+    /// given JSON-RPC error, and return the latch once the spawned task has
+    /// actually finished — so the assertion never races the reply. Task
+    /// completion is observed via the runtime's alive-task count; the only
+    /// other task on this runtime is the mock connection's actor, which stays
+    /// alive for the whole test.
+    async fn latch_after_stream_error(code: i32, message: &str) -> bool {
+        let (mut mock, conn) = MockConnection::pair();
+        let session = SessionHandle::new(conn.clone(), SID);
+        let (tx, _rx) = mpsc::channel::<NetworkEvent>(8);
+        let warned = Arc::new(AtomicBool::new(false));
+
+        let metrics = tokio::runtime::Handle::current().metrics();
+        let baseline = metrics.num_alive_tasks();
+        spawn_stream_resource_content(&session, &tx, &warned, "R1".to_string());
+
+        let id = tokio::time::timeout(
+            Duration::from_secs(2),
+            mock.expect_cmd("Network.streamResourceContent"),
+        )
+        .await
+        .expect("no Network.streamResourceContent command was sent");
+        assert_eq!(mock.last_sent()["params"]["requestId"], "R1");
+        mock.reply_err(id, code, message).await;
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while metrics.num_alive_tasks() > baseline {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("streamResourceContent task did not finish after the error reply");
+
+        let latched = warned.load(Ordering::Relaxed);
+        conn.shutdown();
+        latched
+    }
+
+    /// The `-32602` "already finished loading" race is per-request — a single
+    /// fast favicon losing it must not disable body streaming for the rest of
+    /// the monitor's life.
+    #[tokio::test]
+    async fn stream_resource_content_race_error_keeps_streaming_enabled() {
+        assert!(
+            !latch_after_stream_error(
+                -32602,
+                "Request with the provided ID has already finished loading",
+            )
+            .await,
+            "a lost -32602 race must not disable streaming"
+        );
+    }
+
+    /// `-32601` "method not found" is the one reply that proves the browser
+    /// has no `Network.streamResourceContent` — that latches the flag so the
+    /// monitor stops spending a doomed round-trip per request.
+    #[tokio::test]
+    async fn stream_resource_content_method_not_found_disables_streaming() {
+        assert!(
+            latch_after_stream_error(-32601, "'Network.streamResourceContent' wasn't found").await,
+            "method-not-found must disable streaming for this monitor"
+        );
+    }
 
     /// Spawn a monitor over a fresh mock session and return the live monitor
     /// plus the mock (to emit events) and connection (to shut down).
