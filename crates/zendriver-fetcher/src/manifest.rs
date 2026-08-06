@@ -11,50 +11,41 @@ use serde::Deserialize;
 
 use crate::error::FetcherError;
 
-#[allow(dead_code, reason = "consumed by resolver in Task 18")]
 #[derive(Debug, Deserialize)]
 pub(crate) struct KnownGoodVersionsResponse {
     pub versions: Vec<VersionEntry>,
 }
 
-#[allow(dead_code, reason = "consumed by resolver in Task 18")]
+/// One version in the flat manifest.
+///
+/// Only the fields resolution reads are modelled — the manifest also carries a
+/// Chromium `revision` per entry, which nothing here keys on, and serde drops
+/// what is not declared.
 #[derive(Debug, Deserialize)]
 pub(crate) struct VersionEntry {
     pub version: String,
-    pub revision: String,
     pub downloads: Downloads,
 }
 
-#[allow(dead_code, reason = "consumed by resolver in Task 18")]
 #[derive(Debug, Deserialize)]
 pub(crate) struct Downloads {
     pub chrome: Vec<Download>,
 }
 
-#[allow(dead_code, reason = "consumed by resolver in Task 18")]
 #[derive(Debug, Deserialize)]
 pub(crate) struct Download {
     pub platform: String,
     pub url: String,
 }
 
-#[expect(dead_code, reason = "consumed by resolver in Task 18")]
-pub(crate) async fn fetch_manifest() -> Result<KnownGoodVersionsResponse, FetcherError> {
-    fetch_manifest_from(
-        "https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json",
-    )
-    .await
-}
-
-/// Test helper — same as [`fetch_manifest`] but allows overriding the URL for
-/// wiremock-based testing.
+/// Fetch and parse Chrome for Testing's flat version manifest from `url`.
+///
+/// The URL is a parameter rather than a constant so tests can point it at a
+/// wiremock server; callers pass [`DEFAULT_CFT_URL`](crate::fetcher::DEFAULT_CFT_URL).
 pub(crate) async fn fetch_manifest_from(
     url: &str,
 ) -> Result<KnownGoodVersionsResponse, FetcherError> {
-    let resp = crate::tls::get(url).await?;
-    let text = resp.text().await?;
-    let parsed: KnownGoodVersionsResponse = serde_json::from_str(&text)?;
-    Ok(parsed)
+    Ok(serde_json::from_str(&fetch_text(url).await?)?)
 }
 
 /// Chrome for Testing's per-channel manifest —
@@ -69,26 +60,31 @@ pub(crate) struct ChannelsResponse {
 /// One channel's entry in [`ChannelsResponse`] — same shape as
 /// [`VersionEntry`] (the manifest omits only the redundant `channel` name
 /// field, already carried as this entry's map key).
-#[allow(
-    dead_code,
-    reason = "revision not consumed by the resolver yet, same as VersionEntry"
-)]
 #[derive(Debug, Deserialize)]
 pub(crate) struct ChannelEntry {
     pub version: String,
-    pub revision: String,
     pub downloads: Downloads,
 }
 
-/// Same rationale as [`fetch_manifest_from`] — allows overriding the URL
-/// for wiremock-based testing.
+/// Same rationale as [`fetch_manifest_from`] — the URL is a parameter so tests
+/// can point it at a wiremock server.
 pub(crate) async fn fetch_channels_manifest_from(
     url: &str,
 ) -> Result<ChannelsResponse, FetcherError> {
-    let resp = crate::tls::get(url).await?;
-    let text = resp.text().await?;
-    let parsed: ChannelsResponse = serde_json::from_str(&text)?;
-    Ok(parsed)
+    Ok(serde_json::from_str(&fetch_text(url).await?)?)
+}
+
+/// GET `url` and return the body, failing on a non-success status.
+///
+/// The `error_for_status` is the point: without it a 404 or a CDN 503 is an
+/// HTML error page handed to `serde_json`, and the operator gets
+/// "expected value at line 1 column 1" instead of the status code.
+async fn fetch_text(url: &str) -> Result<String, FetcherError> {
+    Ok(crate::tls::get(url)
+        .await?
+        .error_for_status()?
+        .text()
+        .await?)
 }
 
 /// One entry from GitHub's `GET /repos/{owner}/{repo}/releases` response.
@@ -145,11 +141,7 @@ pub(crate) async fn fetch_last_change(
         "{}/{platform_dir}/LAST_CHANGE",
         snapshot_base.trim_end_matches('/')
     );
-    let text = crate::tls::get(&url)
-        .await?
-        .error_for_status()?
-        .text()
-        .await?;
+    let text = fetch_text(&url).await?;
     text.trim().parse::<u64>().map_err(|_| {
         FetcherError::VersionNotFound(format!(
             "{url} returned {:?}, which is not a revision number",
@@ -183,7 +175,8 @@ mod tests {
         assert_eq!(manifest.versions.len(), 1);
         let v = &manifest.versions[0];
         assert_eq!(v.version, "120.0.6099.234");
-        assert_eq!(v.revision, "1234");
+        // The fixture carries `revision` too; undeclared fields are dropped
+        // rather than failing the parse.
         assert_eq!(v.downloads.chrome.len(), 2);
         assert_eq!(v.downloads.chrome[0].platform, "linux64");
         assert_eq!(
@@ -195,5 +188,27 @@ mod tests {
             v.downloads.chrome[1].url,
             "https://example.com/chrome-mac-x64.zip"
         );
+    }
+
+    /// A CDN that answers 503 with an HTML error page must surface as the
+    /// status code. Feeding that page to `serde_json` instead reports
+    /// "expected value at line 1 column 1", which sends the operator looking
+    /// for a manifest-format change that never happened.
+    #[tokio::test]
+    async fn an_http_error_is_reported_as_http_not_as_a_parse_failure() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/manifest.json"))
+            .respond_with(
+                ResponseTemplate::new(503).set_body_string("<html>Service Unavailable</html>"),
+            )
+            .mount(&server)
+            .await;
+
+        let err = fetch_manifest_from(&format!("{}/manifest.json", server.uri()))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, FetcherError::Http(_)), "{err:?}");
+        assert!(err.to_string().contains("503"), "{err}");
     }
 }
