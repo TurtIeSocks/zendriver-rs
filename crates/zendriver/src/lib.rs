@@ -245,18 +245,23 @@ pub use expect::file_chooser::{FileChooserExpectation, FileChooserMode, MatchedF
 /// `zendriver-fetcher` sub-crate; these aliases let downstream code reach the
 /// types without depending on the sub-crate directly. Drive via
 /// [`BrowserBuilder::ensure_chrome`] for the common "just download Chrome"
-/// case, or instantiate [`Fetcher`] directly for version/channel/cache
-/// customization.
+/// case, or instantiate [`Fetcher`] directly for
+/// distribution/version/channel/cache customization.
+///
+/// [`Distribution`] picks which build to fetch: Chrome for Testing (the
+/// default), ungoogled-chromium, or a Chromium snapshot.
 ///
 /// The fetcher's release-channel enum is re-exported as `FetcherChannel` to
 /// avoid colliding with the browser-discovery [`Channel`] enum (Chrome /
 /// Chromium / Brave / Edge / Auto): the two name different concepts — a
 /// Chrome-for-Testing *release* channel (Stable/Beta/Dev/Canary) versus which
-/// installed *browser* to launch.
+/// installed *browser* to launch. `Build` is likewise re-exported as
+/// `FetcherBuild`, since a "build" here is one downloadable browser rather
+/// than anything to do with building the crate.
 #[cfg(feature = "fetcher")]
 pub use zendriver_fetcher::{
-    Channel as FetcherChannel, Fetcher, FetcherError, FetcherPhase, FetcherProgress, Platform,
-    VersionSpec,
+    Build as FetcherBuild, Channel as FetcherChannel, Distribution, Fetcher, FetcherError,
+    FetcherPhase, FetcherProgress, Platform, VersionSpec, list_builds,
 };
 
 /// Proxied exit-IP -> country resolver, derived from the browser's proxy.

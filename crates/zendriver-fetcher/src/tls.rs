@@ -31,6 +31,77 @@ pub(crate) async fn get(url: &str) -> Result<reqwest::Response, reqwest::Error> 
     reqwest::get(url).await
 }
 
+/// User-Agent sent to `api.github.com`.
+///
+/// Not cosmetic: GitHub's API answers **403** to any request without a
+/// User-Agent, which reads exactly like a rate-limit rejection and sends you
+/// hunting for a token you do not need.
+const GITHUB_USER_AGENT: &str = concat!("zendriver-fetcher/", env!("CARGO_PKG_VERSION"));
+
+/// GET a JSON document from GitHub's REST API.
+///
+/// Sends the required User-Agent, pins the `2022-11-28` API version, and
+/// attaches `GITHUB_TOKEN` as a bearer token when the environment has one.
+/// A rejection that looks like rate limiting becomes
+/// [`FetcherError::GitHubRateLimited`](crate::FetcherError::GitHubRateLimited),
+/// whose message names the 60/hour unauthenticated ceiling and the variable
+/// that lifts it — a bare `403` would leave the caller guessing.
+pub(crate) async fn get_github(url: &str) -> Result<String, crate::error::FetcherError> {
+    install_default_crypto_provider();
+
+    let mut req = reqwest::Client::builder()
+        .user_agent(GITHUB_USER_AGENT)
+        .build()?
+        .get(url)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28");
+
+    if let Ok(token) = std::env::var("GITHUB_TOKEN")
+        && !token.trim().is_empty()
+    {
+        req = req.bearer_auth(token.trim());
+    }
+
+    let resp = req.send().await?;
+
+    if is_rate_limited(resp.status(), resp.headers()) {
+        return Err(crate::error::FetcherError::GitHubRateLimited {
+            reset_hint: reset_hint(resp.headers()),
+        });
+    }
+
+    Ok(resp.error_for_status()?.text().await?)
+}
+
+/// True when a GitHub response is a rate-limit rejection.
+///
+/// GitHub signals the primary limit with `403` + `x-ratelimit-remaining: 0`,
+/// and secondary/abuse limits with `429`. A `403` with budget left over is
+/// something else (a bad token, say) and is left to `error_for_status`.
+fn is_rate_limited(status: reqwest::StatusCode, headers: &reqwest::header::HeaderMap) -> bool {
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return true;
+    }
+    if status != reqwest::StatusCode::FORBIDDEN {
+        return false;
+    }
+    headers
+        .get("x-ratelimit-remaining")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .is_some_and(|remaining| remaining == 0)
+}
+
+/// `", resets at <unix timestamp>"` when GitHub told us when the window rolls
+/// over, otherwise an empty string.
+fn reset_hint(headers: &reqwest::header::HeaderMap) -> String {
+    headers
+        .get("x-ratelimit-reset")
+        .and_then(|v| v.to_str().ok())
+        .map(|ts| format!(", resets at {}", ts.trim()))
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -52,6 +123,64 @@ mod tests {
         let _ = rustls::ClientConfig::builder()
             .with_root_certificates(rustls::RootCertStore::empty())
             .with_no_client_auth();
+    }
+
+    fn headers(pairs: &[(&str, &str)]) -> reqwest::header::HeaderMap {
+        let mut h = reqwest::header::HeaderMap::new();
+        for (k, v) in pairs {
+            h.insert(
+                reqwest::header::HeaderName::from_bytes(k.as_bytes()).unwrap(),
+                v.parse().unwrap(),
+            );
+        }
+        h
+    }
+
+    #[test]
+    fn forbidden_with_no_budget_left_is_rate_limiting() {
+        assert!(is_rate_limited(
+            reqwest::StatusCode::FORBIDDEN,
+            &headers(&[("x-ratelimit-remaining", "0")]),
+        ));
+    }
+
+    /// A 403 that still has budget is a different problem (bad token, blocked
+    /// resource) and must not be reported as rate limiting.
+    #[test]
+    fn forbidden_with_budget_left_is_not_rate_limiting() {
+        assert!(!is_rate_limited(
+            reqwest::StatusCode::FORBIDDEN,
+            &headers(&[("x-ratelimit-remaining", "41")]),
+        ));
+        assert!(!is_rate_limited(
+            reqwest::StatusCode::FORBIDDEN,
+            &headers(&[]),
+        ));
+    }
+
+    #[test]
+    fn too_many_requests_is_rate_limiting_regardless_of_headers() {
+        assert!(is_rate_limited(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            &headers(&[]),
+        ));
+    }
+
+    #[test]
+    fn success_is_never_rate_limiting() {
+        assert!(!is_rate_limited(
+            reqwest::StatusCode::OK,
+            &headers(&[("x-ratelimit-remaining", "0")]),
+        ));
+    }
+
+    #[test]
+    fn reset_hint_is_empty_without_the_header() {
+        assert_eq!(reset_hint(&headers(&[])), "");
+        assert_eq!(
+            reset_hint(&headers(&[("x-ratelimit-reset", "1786023295")])),
+            ", resets at 1786023295"
+        );
     }
 
     /// End-to-end proof over real HTTPS, through the same door the crate's own requests use.

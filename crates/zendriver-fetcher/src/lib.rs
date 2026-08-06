@@ -1,13 +1,12 @@
-//! Chrome for Testing binary downloader.
+//! Chromium binary downloader.
 //!
 //! See the [Fetcher chapter](https://turtiesocks.github.io/zendriver-rs/fetcher.html)
 //! of the [zendriver-rs user guide](https://turtiesocks.github.io/zendriver-rs/)
 //! for cache-layout details, offline-mode workflows, and CI integration tips.
 //!
-//! Resolves a [`VersionSpec`] + [`Platform`] pair against the
-//! [Chrome for Testing manifest][cft-manifest], downloads the matching zip,
-//! extracts it into an atomic cache layout, and hands back a path to the
-//! executable.
+//! Resolves a [`Distribution`] + [`VersionSpec`] + [`Platform`] triple against
+//! that distribution's index, downloads the matching archive, unpacks it into
+//! an atomic cache layout, and hands back a path to the executable.
 //!
 //! Public entry point is [`Fetcher`]; progress is reported through
 //! [`FetcherProgress`] callbacks tagged with a [`FetcherPhase`].
@@ -24,22 +23,58 @@
 //! # Ok(()) }
 //! ```
 //!
+//! # Distributions
+//!
+//! [`Distribution::default()`] is [`Distribution::ChromeForTesting`], so the
+//! example above fetches exactly what this crate always has. Two further
+//! indexes are available, and *only* resolution differs between them —
+//! download, integrity check, unpack and cache are one shared path:
+//!
+//! | [`Distribution`] | Index | Keyed by |
+//! |---|---|---|
+//! | [`ChromeForTesting`](Distribution::ChromeForTesting) | one [JSON manifest][cft-manifest] | version |
+//! | [`UngoogledChromium`](Distribution::UngoogledChromium) | three GitHub repos, one per OS | version (tag prefix) |
+//! | [`ChromiumSnapshot`](Distribution::ChromiumSnapshot) | a GCS bucket per platform | **revision** |
+//!
+//! ```no_run
+//! # async fn ex() -> Result<(), zendriver_fetcher::FetcherError> {
+//! use zendriver_fetcher::{Distribution, Fetcher, VersionSpec};
+//!
+//! let chromium = Fetcher::new()
+//!     .distribution(Distribution::UngoogledChromium)
+//!     .version(VersionSpec::Explicit("151.0.7922.71".into()))
+//!     .ensure_chrome()
+//!     .await?;
+//! # let _ = chromium; Ok(()) }
+//! ```
+//!
+//! Availability is a per-platform question — the three ungoogled repos
+//! release independently, and the snapshot bucket has no version index at all
+//! — so [`list_builds`] answers it for the platform you actually want instead
+//! of assuming parity.
+//!
 //! [cft-manifest]: https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json
 
+pub mod archive;
 pub mod cache;
+pub mod distribution;
 pub mod download;
 pub mod error;
 pub mod extract;
 pub mod fetcher;
+pub mod list;
 pub mod manifest;
 pub mod platform;
 pub mod resolver;
 pub mod tls;
 pub mod version;
 
+pub use distribution::Distribution;
 pub use error::FetcherError;
 pub use fetcher::Fetcher;
+pub use list::list_builds;
 pub use platform::Platform;
+pub use resolver::Build;
 pub use version::{Channel, VersionSpec};
 
 /// Lifecycle phase of an in-flight fetch.

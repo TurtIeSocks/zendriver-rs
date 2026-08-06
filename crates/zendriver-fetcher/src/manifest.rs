@@ -91,6 +91,73 @@ pub(crate) async fn fetch_channels_manifest_from(
     Ok(parsed)
 }
 
+/// One entry from GitHub's `GET /repos/{owner}/{repo}/releases` response.
+///
+/// ungoogled-chromium publishes no manifest — the release list *is* the
+/// index, one per OS. Only the fields resolution needs are modelled; GitHub's
+/// payload is large and the rest is ignored.
+#[derive(Debug, Deserialize)]
+pub(crate) struct GitHubRelease {
+    pub tag_name: String,
+    #[serde(default)]
+    pub draft: bool,
+    #[serde(default)]
+    pub prerelease: bool,
+    #[serde(default)]
+    pub assets: Vec<GitHubAsset>,
+}
+
+/// A file attached to a [`GitHubRelease`].
+#[derive(Debug, Deserialize)]
+pub(crate) struct GitHubAsset {
+    pub name: String,
+    pub browser_download_url: String,
+}
+
+/// Fetch a repo's release list, newest first (GitHub's own ordering).
+///
+/// One request with `per_page=100` rather than pagination: each page costs
+/// one of the 60 unauthenticated requests per hour, and a single page covers
+/// well over a year of ungoogled releases.
+pub(crate) async fn fetch_github_releases(
+    api_base: &str,
+    repo: &str,
+) -> Result<Vec<GitHubRelease>, FetcherError> {
+    let url = format!(
+        "{}/repos/{repo}/releases?per_page=100",
+        api_base.trim_end_matches('/')
+    );
+    let text = crate::tls::get_github(&url).await?;
+    Ok(serde_json::from_str(&text)?)
+}
+
+/// Fetch the newest revision published for `platform_dir` in Chromium's
+/// snapshot bucket.
+///
+/// `LAST_CHANGE` is a plain-text integer, not JSON. The snapshot bucket has
+/// no manifest of any kind — which is precisely why snapshots cannot be
+/// resolved by version.
+pub(crate) async fn fetch_last_change(
+    snapshot_base: &str,
+    platform_dir: &str,
+) -> Result<u64, FetcherError> {
+    let url = format!(
+        "{}/{platform_dir}/LAST_CHANGE",
+        snapshot_base.trim_end_matches('/')
+    );
+    let text = crate::tls::get(&url)
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+    text.trim().parse::<u64>().map_err(|_| {
+        FetcherError::VersionNotFound(format!(
+            "{url} returned {:?}, which is not a revision number",
+            text.chars().take(64).collect::<String>()
+        ))
+    })
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {

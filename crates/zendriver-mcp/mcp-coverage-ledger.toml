@@ -1011,3 +1011,19 @@ excluded = "process-wide TLS setup, not browser automation; the MCP server insta
 [[entry]]
 api = "zendriver::tls::install_default_crypto_provider"
 excluded = "process-wide TLS setup, not browser automation; exposed for embedders that want to install eagerly, and meaningless over the MCP wire"
+
+# ── fetcher distributions: ungoogled-chromium + Chromium snapshots ─────────
+# The fetcher grew a distribution axis. `browser_fetch_chrome` still resolves
+# Chrome for Testing (the default), so these are library-level selectors the
+# MCP wire surface does not yet expose.
+[[entry]]
+api = "zendriver::Distribution"
+excluded = "selects which Chromium build the fetcher downloads; browser_fetch_chrome exposes only the Chrome for Testing default so far"
+
+[[entry]]
+api = "zendriver::FetcherBuild"
+excluded = "one row of a build listing (selector + label); a menu type for CLI/library callers, not a browser-automation action"
+
+[[entry]]
+api = "zendriver::list_builds"
+excluded = "enumerates downloadable builds for a platform; a discovery helper for pickers, and browser_fetch_chrome takes a version directly"
