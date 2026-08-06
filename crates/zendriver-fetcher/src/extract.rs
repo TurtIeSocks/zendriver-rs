@@ -20,14 +20,18 @@
 //! write outside `dest_dir`. The extractor defends against those classes
 //! of attack:
 //!
-//! 1. `zip::read::ZipFile::enclosed_name()` rejects any entry whose
-//!    normalized path escapes the archive root (absolute, parent-traversal).
+//! 1. `zip::read::ZipFile::enclosed_name()` refuses an absolute entry path,
+//!    and any path whose running depth goes negative. Note what it does NOT
+//!    do: it returns what it accepts **unnormalized**, so `a/b/../../c`
+//!    survives with its `..` intact. Nothing here may assume otherwise.
 //! 2. After joining with `dest_dir`, the resolved path is verified to still
 //!    sit under `dest_dir` — defense in depth against any future change
-//!    to `enclosed_name`'s semantics.
+//!    to `enclosed_name`'s semantics. The probe that finds an existing
+//!    ancestor to canonicalize uses `symlink_metadata`, which does not follow
+//!    links, so a DANGLING link is seen rather than stepped over.
 //! 3. Symlink entries (detected via `unix_mode() & S_IFMT == S_IFLNK`) are
-//!    extracted only after their TARGET is validated to stay inside
-//!    `dest_dir`; anything else is refused.
+//!    extracted only after their TARGET is validated to stay inside the
+//!    archive's top-level directory; anything else is refused.
 //!
 //!    This used to refuse every symlink, justified as "Chrome for Testing
 //!    archives never ship symlinks". That is FALSE on macOS: every `.app`
@@ -43,13 +47,23 @@
 //!    The refusal existed for a real reason and the replacement keeps it
 //!    closed. Symlinks are the primary FOLLOW-ON vector for zip-slip: extract
 //!    `evil -> /etc`, then extract `evil/passwd` and the write lands outside
-//!    while every path in the archive looks innocent. So a target is accepted
-//!    only when it is relative AND `<entry's parent>/<target>`, normalized
-//!    LEXICALLY, still sits under the archive root.
+//!    while every path in the archive looks innocent.
 //!
-//!    Lexically, not via the filesystem, because the target frequently does
-//!    not exist yet — `Versions/Current` is written before `Versions/A`, so
-//!    `canonicalize` would fail on a link that is perfectly legitimate.
+//!    So a target is accepted only when it is relative AND resolves, from the
+//!    directory that really contains the link, to somewhere still inside the
+//!    top-level directory — checked at every step of the climb, not just at
+//!    the end.
+//!
+//!    **"Really contains" is load-bearing and was once the bug.** Taking the
+//!    link's parent from the archive text instead of from `canonicalize`
+//!    leaves the extractor reasoning about a different directory than the
+//!    kernel writes to, because an earlier entry can plant a link that a later
+//!    entry's own path runs through. See
+//!    `a_symlink_reached_through_an_earlier_symlink_cannot_escape` for the
+//!    three-entry archive that exploited exactly that gap. The target is still
+//!    resolved lexically from that canonical parent, with no stat, because the
+//!    target frequently does not exist yet — `Versions/Current` is written
+//!    before `Versions/A`, so stat-ing it would reject legitimate links.
 //!
 //!    Windows keeps skipping them: creating a symlink there needs privileges,
 //!    and no Windows Chrome archive contains one.
@@ -138,28 +152,31 @@ fn extract_blocking(
         if is_symlink(&entry) {
             let mut target = String::new();
             io::Read::read_to_string(&mut entry, &mut target)?;
-            let resolved = resolve_target(&rel_path, Path::new(&target)).ok_or_else(|| {
-                FetcherError::Extraction(format!(
-                    "zip entry {rel_path:?} is a symlink to {target:?}, which escapes the \
-                     destination directory; refusing"
-                ))
-            })?;
+
+            // The parent chain has to exist before the target can be resolved:
+            // resolution runs against where this link REALLY lands, which means
+            // canonicalizing its parent.
+            if let Some(parent) = out_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+
             // Files are already locked to the archive's single top-level
             // directory; hold links to it too. A link that leaves it stays
             // inside dest_dir, so it is not a zip-slip, but it can only point
             // at something this archive does not own — and dest_dir is shared
             // with other installs.
-            if let Some(top) = expected_top_prefix {
-                if !resolved.starts_with(top) {
-                    return Err(FetcherError::Extraction(format!(
-                        "zip entry {rel_path:?} is a symlink to {target:?}, which leaves the \
-                         archive's top-level directory {top:?}; refusing"
-                    )));
-                }
-            }
-            if let Some(parent) = out_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
+            let containment_root = match expected_top_prefix {
+                Some(top) => dest_canonical.join(top),
+                None => dest_canonical.clone(),
+            };
+            resolve_target(&out_path, Path::new(&target), &containment_root).ok_or_else(|| {
+                FetcherError::Extraction(format!(
+                    "zip entry {rel_path:?} is a symlink to {target:?}, which escapes {}; \
+                     refusing",
+                    containment_root.display()
+                ))
+            })?;
+
             // A re-extraction over a populated dir would otherwise fail with
             // EEXIST; the fetcher extracts into a fresh staging dir, but this
             // keeps the function idempotent rather than order-dependent.
@@ -187,7 +204,12 @@ fn extract_blocking(
         // `dest_canonical`. Catches future regressions in `enclosed_name`
         // semantics or surprise from filesystem-level path resolution.
         let mut probe_path = out_path.clone();
-        while !probe_path.exists() {
+        // `symlink_metadata`, not `exists()`: `exists` follows links, so a
+        // DANGLING one reads as absent and the walk steps straight over it to a
+        // parent that passes — then `File::create` follows it and writes
+        // wherever it pointed. Not following means a dangling link is seen,
+        // and `assert_under_dest` then fails to canonicalize it and refuses.
+        while std::fs::symlink_metadata(&probe_path).is_err() {
             // Walk up until we hit a directory that exists, so canonicalize
             // can succeed. The leaf file doesn't exist yet (we're about to
             // create it), so canonicalize its parent chain.
@@ -219,23 +241,35 @@ fn is_symlink(entry: &zip::read::ZipFile<'_>) -> bool {
         .is_some_and(|mode| mode & S_IFMT == S_IFLNK)
 }
 
-/// Where does a symlink at `link_rel` pointing at `target` actually land,
-/// expressed relative to the destination? `None` means it leaves.
+/// Where does a symlink at `link_path` pointing at `target` actually land?
+/// `None` means it leaves `containment_root`.
 ///
-/// Resolves `.` and `..` LEXICALLY — no filesystem access — because the target
-/// routinely does not exist yet at extraction time (`Versions/Current` precedes
-/// `Versions/A` in a macOS framework), so anything that stats the path would
-/// reject links that are perfectly legitimate.
+/// `link_path` is the link's absolute path on disk, and its parent must already
+/// exist. The target resolves against the DIRECTORY CONTAINING the link — not
+/// the link itself. Getting that wrong by one level makes every sibling link
+/// look like an escape, and makes a real escape look like a sibling.
 ///
-/// `link_rel` is the entry's own path relative to the destination, and the
-/// target resolves relative to the DIRECTORY CONTAINING the link — not to the
-/// link itself. Getting that wrong by one level makes every sibling link look
-/// like an escape, and makes a real escape look like a sibling.
+/// That containing directory is **canonicalized**, not taken from the entry's
+/// declared path, and the difference is the whole defence. An archive is
+/// extracted in order, so an earlier entry can plant a symlink that a later
+/// entry's own path then runs through. Reading the parent off the archive text
+/// makes `top/a/b/c/up/hop -> ../../../../X` look like it lands on `top/X`,
+/// while the kernel — for which `up` is already a link to `top` — creates it at
+/// `top/hop` and resolves four levels up from there, clear of the destination.
+/// Canonicalizing collapses that gap: the parent is wherever the kernel says it
+/// is, and there is no second opinion to disagree with.
+///
+/// The target itself is still resolved lexically from there, with no stat, and
+/// the containment check runs at every step of the climb rather than on the
+/// final result. Both matter: the target routinely does not exist yet at
+/// extraction time (`Versions/Current` precedes `Versions/A` in a macOS
+/// framework), so anything that stats it would reject legitimate links; and
+/// checking only the endpoint would admit `../../a/b`, which leaves and returns.
 ///
 /// Unix-only, because only the Unix arm creates symlinks — Windows skips those
 /// entries outright, and an ungated definition is dead code there.
 #[cfg(unix)]
-fn resolve_target(link_rel: &Path, target: &Path) -> Option<PathBuf> {
+fn resolve_target(link_path: &Path, target: &Path, containment_root: &Path) -> Option<PathBuf> {
     use std::path::Component;
 
     // An absolute target ignores the destination entirely: `evil -> /etc` then
@@ -244,21 +278,20 @@ fn resolve_target(link_rel: &Path, target: &Path) -> Option<PathBuf> {
         return None;
     }
 
-    let mut resolved = PathBuf::new();
-    for comp in link_rel
-        .parent()
-        .unwrap_or_else(|| Path::new(""))
-        .components()
-        .chain(target.components())
-    {
+    let mut resolved = std::fs::canonicalize(link_path.parent()?).ok()?;
+    if !resolved.starts_with(containment_root) {
+        return None;
+    }
+
+    for comp in target.components() {
         match comp {
             Component::Normal(name) => resolved.push(name),
             Component::CurDir => {}
-            // `pop` fails exactly when the climb has reached the top, which is
-            // the escape. Checked as we walk rather than on the final result,
-            // so `a/../../a/b` is refused even though it ends up inside.
+            // `pop` fails at the filesystem root; leaving the containment root
+            // is the escape. Checked as we climb rather than on the final
+            // result, so `../../a/b` is refused even though it ends up inside.
             Component::ParentDir => {
-                if !resolved.pop() {
+                if !resolved.pop() || !resolved.starts_with(containment_root) {
                     return None;
                 }
             }
@@ -408,13 +441,81 @@ mod tests {
         );
     }
 
+    /// A symlink whose own ENTRY PATH runs through a symlink an earlier entry
+    /// created. The archive is extracted in order, so the attacker controls
+    /// that ordering.
+    ///
+    /// Validating the target against the entry's *lexical* parent says
+    /// `top/a/b/c/up/hop -> ../../../../ESCAPED` lands on `top/ESCAPED`. The
+    /// kernel disagrees: `up` is already a link to `top`, so the link is really
+    /// created at `top/hop` and its target climbs four levels from there —
+    /// clear of the destination. A third entry writing to `top/hop` then
+    /// follows it and lands outside.
+    ///
+    /// `zip`'s `enclosed_name` is no help: it only refuses a path whose running
+    /// depth goes negative, and returns what it accepts unnormalized.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_symlink_reached_through_an_earlier_symlink_cannot_escape() {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let opts = zip::write::SimpleFileOptions::default();
+            let mut writer = zip::ZipWriter::new(&mut buf);
+            // 1. A link back up to the top-level dir. Contained, and legal.
+            writer
+                .add_symlink("top/a/b/c/up", "../../..", opts)
+                .unwrap();
+            // 2. Created THROUGH it, so it really lands at `top/hop`.
+            writer
+                .add_symlink("top/a/b/c/up/hop", "../../../../ESCAPED", opts)
+                .unwrap();
+            // 3. Written through the link planted by 2.
+            writer
+                .start_file("top/hop", opts.unix_permissions(0o755))
+                .unwrap();
+            writer.write_all(b"payload").unwrap();
+            writer.finish().unwrap();
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = dir.path().join("evil.zip");
+        // Nested deep enough that anything this archive manages to escape to
+        // still lands inside the tempdir, and so is both detectable here and
+        // cleaned up afterwards rather than left in the system temp root.
+        let dest = dir.path().join("l1/l2/l3/l4/out");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(&zip_path, buf.into_inner()).unwrap();
+
+        let result = extract(&zip_path, &dest, Some("top")).await;
+
+        // Nothing may land outside the destination, whatever the outcome.
+        let mut probe = dest.clone();
+        for _ in 0..4 {
+            probe.pop();
+            assert!(
+                !probe.join("ESCAPED").exists(),
+                "payload escaped to {}",
+                probe.join("ESCAPED").display()
+            );
+        }
+        result.expect_err("an archive that escapes through a chained symlink must be refused");
+    }
+
     /// The containment predicate on its own, including the shapes that are
-    /// easy to get wrong by one level.
+    /// easy to get wrong by one level. The directories are real, because
+    /// resolution runs against the link's canonicalized parent.
     #[cfg(unix)]
     #[test]
     fn target_containment_rules() {
-        let inside =
-            |link: &str, target: &str| resolve_target(Path::new(link), Path::new(target)).is_some();
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        std::fs::create_dir_all(root.join("fw/Versions")).unwrap();
+        std::fs::create_dir_all(root.join("a/b")).unwrap();
+
+        let inside = |link: &str, target: &str| {
+            resolve_target(&root.join(link), Path::new(target), &root).is_some()
+        };
+
         // A target resolves relative to the link's PARENT, not the link.
         assert!(inside("fw/Versions/Current", "A"));
         assert!(inside("a/b/link", "../sibling"));
@@ -426,7 +527,7 @@ mod tests {
         assert!(!inside("a/b/link", "../../../etc"));
         assert!(!inside("link", ""));
         // Refused even though it ENDS inside — the climb itself is the escape,
-        // which is why depth is checked as we walk rather than at the end.
+        // which is why containment is checked as we walk rather than at the end.
         assert!(!inside("a/link", "../../a/b"));
     }
 
