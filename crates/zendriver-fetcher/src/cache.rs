@@ -76,21 +76,20 @@ pub(crate) fn build_dir(cache_dir: &Path, distribution: Distribution, build_id: 
 /// Used against the published `<cache>/<version>/` layout and against the
 /// in-progress `<cache>/<version>.tmp/` staging dir, so the binary can be
 /// made executable *before* it is atomically renamed into place.
+///
+/// The leading directory comes from [`Platform::cft_top_dir`] — the same value
+/// the extractor pins the archive to, so the two cannot drift into disagreeing
+/// about where the binary landed.
 pub(crate) fn cft_binary_subpath(platform: Platform) -> PathBuf {
+    let top = PathBuf::from(platform.cft_top_dir());
     match platform {
-        Platform::LinuxX64 => PathBuf::from("chrome-linux64").join("chrome"),
-        Platform::MacX64 => PathBuf::from("chrome-mac-x64")
+        Platform::LinuxX64 => top.join("chrome"),
+        Platform::MacX64 | Platform::MacArm64 => top
             .join("Google Chrome for Testing.app")
             .join("Contents")
             .join("MacOS")
             .join("Google Chrome for Testing"),
-        Platform::MacArm64 => PathBuf::from("chrome-mac-arm64")
-            .join("Google Chrome for Testing.app")
-            .join("Contents")
-            .join("MacOS")
-            .join("Google Chrome for Testing"),
-        Platform::Win32 => PathBuf::from("chrome-win32").join("chrome.exe"),
-        Platform::Win64 => PathBuf::from("chrome-win64").join("chrome.exe"),
+        Platform::Win32 | Platform::Win64 => top.join("chrome.exe"),
     }
 }
 
