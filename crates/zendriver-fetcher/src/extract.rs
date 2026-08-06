@@ -136,6 +136,22 @@ fn extract_blocking(
             )));
         };
 
+        // `enclosed_name` accepts `a/b/../c`: it only refuses a path whose
+        // running depth goes negative, and returns what it accepts
+        // unnormalized. A surviving `..` makes the top-level check below mean
+        // less than it reads — that check inspects only the FIRST component,
+        // so `chrome-linux64/../elsewhere/x` passes it — and it lets the
+        // `create_dir_all` calls further down run on a path that validation
+        // later refuses. No archive from any of the three indexes ships one.
+        if rel_path
+            .components()
+            .any(|c| c == std::path::Component::ParentDir)
+        {
+            return Err(FetcherError::Extraction(format!(
+                "zip entry {rel_path:?} contains a parent-directory component; refusing"
+            )));
+        }
+
         // Enforce CfT top-level directory when the caller supplies one.
         if let Some(prefix) = expected_top_prefix {
             let top = rel_path.components().next().and_then(|c| match c {
