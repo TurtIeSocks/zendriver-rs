@@ -56,7 +56,7 @@ More working examples in [`crates/zendriver/examples/`](crates/zendriver/example
 | `monitor`      | no       | Passive network monitor — buffered HTTP / WebSocket / SSE events via `tab.monitor()`, plus opt-in incremental body streaming | (in-tree, no extra crate)             |
 | `geo`          | no       | Country code → coherent `locale` + `languages` (Accept-Language) + representative `timezone` persona overlay, plus opt-in `geo_auto()` exit-IP auto-resolution (exact probe timezone, not just representative) | `reqwest` (via `zendriver-stealth`) |
 | `tracker-blocking` | no   | Opt-in third-party tracker / fingerprinter host blocklist (curated bundled list + BYO file / URL) | `reqwest` + `dirs`         |
-| `fetcher`      | no       | Auto-download a pinned Chrome for Testing build               | `zendriver-fetcher` + `reqwest`/`zip` |
+| `fetcher`      | no       | Auto-download a pinned Chromium build — Chrome for Testing (default), ungoogled-chromium, or a Chromium snapshot | `zendriver-fetcher` + `reqwest`/`zip` |
 
 Separate binary crate (not a feature on `zendriver`):
 

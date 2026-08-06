@@ -1,10 +1,13 @@
 # Fetcher
 
-The `fetcher` Cargo feature downloads a Chrome binary from Google's
-[Chrome for Testing][cft] (CFT) distribution and hands back a path you
-can pass to `BrowserBuilder::executable`. Useful in CI runners that
-don't ship Chrome, in containers, or whenever you want a version pinned
-independently of the host's Chrome install.
+The `fetcher` Cargo feature downloads a Chromium build and hands back a
+path you can pass to `BrowserBuilder::executable`. Useful in CI runners
+that don't ship Chrome, in containers, or whenever you want a version
+pinned independently of the host's Chrome install.
+
+It fetches Google's [Chrome for Testing][cft] (CFT) by default; two other
+distributions are available, described under
+[Distributions](#distributions).
 
 [cft]: https://googlechromelabs.github.io/chrome-for-testing/
 
@@ -72,9 +75,90 @@ Customization points:
   shared CI volume so multiple jobs share one download.
 - **`.on_progress(cb)`** — receive a [`FetcherProgress`] snapshot on
   every phase transition + per-chunk during download.
+- **`.distribution(Distribution)`** — choose which Chromium build to
+  fetch. Defaults to `ChromeForTesting`; see below.
 
 [`Platform::auto_detect`]: https://docs.rs/zendriver/latest/zendriver/enum.Platform.html#method.auto_detect
 [`FetcherProgress`]: https://docs.rs/zendriver/latest/zendriver/struct.FetcherProgress.html
+
+## Distributions
+
+`Distribution::default()` is `ChromeForTesting`, so everything above
+describes what you get without touching this knob. Only *resolution*
+varies between distributions — download, integrity check, unpacking and
+the atomic cache are one shared path.
+
+| Distribution | Index | Keyed by | Packaging |
+|---|---|---|---|
+| `ChromeForTesting` | one JSON manifest | version | zip (all platforms) |
+| `UngoogledChromium` | three GitHub repos, one per OS | version (tag prefix) | zip / AppImage / dmg |
+| `ChromiumSnapshot` | a GCS bucket per platform | **revision** | zip (all platforms) |
+
+```rust,no_run
+# async fn ex() -> Result<(), zendriver::FetcherError> {
+use zendriver::{Distribution, Fetcher, VersionSpec};
+
+let chromium = Fetcher::new()
+    .distribution(Distribution::UngoogledChromium)
+    .version(VersionSpec::Explicit("151.0.7922.71".into()))
+    .ensure_chrome()
+    .await?;
+# let _ = chromium; Ok(()) }
+```
+
+### ungoogled-chromium
+
+Chromium with Google integration stripped out. There is no single
+manifest: binaries come from three independent per-OS repos under the
+`ungoogled-software` org, each releasing on its own cadence.
+
+- Tags carry a packaging suffix (`151.0.7922.71-1.1`), so
+  `VersionSpec::Explicit("151.0.7922.71")` matches on the version
+  **prefix** rather than by equality.
+- **Availability differs per platform, and that is not a bug.** On
+  2026-08-06 Windows and Linux were on `151.0.7922.71` while macOS was
+  still on `150.0.7871.46`. `list_builds` answers the question for the
+  platform you actually asked about.
+- Packaging differs too: Windows a zip, Linux an AppImage (taken over
+  the `.tar.xz` so no xz decompressor enters the dependency graph), and
+  macOS a `.dmg`. Disk images are unpacked with `hdiutil`, so
+  ungoogled-on-macOS can only be fetched **from** a macOS host; every
+  other combination is cross-platform.
+- Release lookups hit `api.github.com`, which allows **60 requests per
+  hour** unauthenticated. Set `GITHUB_TOKEN` to raise that to 5000; the
+  rate-limit error names both.
+
+### Chromium snapshots
+
+Per-commit continuous builds from Google's GCS bucket, laid out
+`<platform>/<revision>/chrome-<os>.zip`.
+
+**Snapshots are keyed by revision, not by version**, and the bucket
+publishes no version index — so there is nothing to look
+`151.0.7922.76` up in. `VersionSpec::Explicit` is therefore *refused*
+here rather than quietly resolved to the newest snapshot, since handing
+back a different browser than the one requested is worse than an error.
+Pin one with `VersionSpec::Revision(1674890)`, or take the tip with
+`VersionSpec::Latest`.
+
+Snapshots also use their own platform spelling (`Mac_Arm`, `Win_x64`,
+`Linux_x64`) rather than CFT's (`mac-arm64`, `win64`, `linux64`); the
+translation is internal, and you keep using the CFT names.
+
+### Listing what is available
+
+```rust,no_run
+# async fn ex() -> Result<(), zendriver::FetcherError> {
+use zendriver::{Distribution, Platform, list_builds};
+
+for build in list_builds(Distribution::UngoogledChromium, Platform::MacArm64).await? {
+    println!("{}", build.label);
+}
+# Ok(()) }
+```
+
+Snapshots return a single entry — the tip named by `LAST_CHANGE`. Older
+snapshots remain reachable, but only by revision.
 
 ## Cache layout
 
@@ -98,11 +182,66 @@ layout verbatim:
       Google Chrome for Testing.app/Contents/MacOS/...  (macOS Apple Silicon)
 ```
 
-Writes are atomic. The fetcher downloads + extracts into a
-`<version>.tmp/` sibling, then a single `rename` promotes it to
-`<version>/`. Crashing mid-download leaves a `.tmp/` that the next run
+The other distributions namespace themselves one level deeper:
+
+```text
+<cache_dir>/
+  ungoogled/151.0.7922.71/...
+  snapshot/r1674890/...
+```
+
+CFT stays un-prefixed so caches populated by earlier versions of the
+crate keep hitting. The others are prefixed because a Chrome version
+number is not unique across distributions — CFT `151.0.7922.71` and
+ungoogled `151.0.7922.71` are different binaries, and a shared directory
+would serve whichever landed first.
+
+Writes are atomic. The fetcher downloads + unpacks into a
+`<build>.tmp/` sibling, then a single `rename` promotes it to
+`<build>/`. Crashing mid-download leaves a `.tmp/` that the next run
 detects, deletes, and retries — no half-extracted binaries ever appear
 under the canonical name.
+
+## The `zendriver-fetch` CLI
+
+The same resolver, as a standalone binary:
+
+```bash
+cargo install zendriver-fetcher --features cli
+```
+
+The `cli` feature is off by default — this is a library first, and
+`clap` has no business in the dependency graph of a crate that only
+downloads a browser.
+
+Fully specified, it never prompts and exits non-zero on failure, which
+is what CI needs:
+
+```bash
+zendriver-fetch --distribution cft --version 146.0.7680.153 \
+                --platform mac-arm64 --out ./chrome
+```
+
+It prints the resolved binary path on stdout and progress on stderr, so
+`CHROME=$(zendriver-fetch ... )` works. `--quiet` drops the progress.
+
+Run it with a distribution or version missing and it turns interactive:
+it asks which distribution, lists the builds that distribution really
+publishes for the resolved platform (newest first, paged), and confirms
+before downloading.
+
+**If stdin is not a terminal, it refuses to prompt** and prints the
+flags it needed instead. A CLI that blocks on stdin inside CI does not
+fail — it hangs until the job times out.
+
+| Flag | Meaning |
+|---|---|
+| `-d, --distribution` | `cft`, `ungoogled`, or `snapshot` |
+| `--version` | Browser version, or `latest` |
+| `--revision` | Chromium revision (snapshots only; conflicts with `--version`) |
+| `-p, --platform` | `linux64`, `mac-x64`, `mac-arm64`, `win32`, `win64`; defaults to this host |
+| `-o, --out` | Cache directory; defaults to the OS cache dir |
+| `-q, --quiet` | Suppress progress output |
 
 ## Progress callbacks
 
@@ -178,4 +317,9 @@ runners; cached runs take &lt;1 s in `ensure_chrome`.
 - **You need Chrome stable on Linux ARM64** — CFT doesn't ship a
   `linux-arm64` build today;
   [`Platform::auto_detect`] returns `None` on that host and
-  `ensure_chrome` errors out.
+  `ensure_chrome` errors out. (ungoogled-chromium's portablelinux repo
+  *does* publish arm64 AppImages, but `Platform` has no `LinuxArm64`
+  variant yet, so they aren't selectable.)
+- **You want ungoogled-chromium for macOS from a Linux or Windows
+  box** — it ships as a `.dmg`, and unpacking one needs macOS's
+  `hdiutil`.

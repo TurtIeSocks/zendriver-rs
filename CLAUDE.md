@@ -115,7 +115,7 @@ check above.
 | `zendriver-interception` | Network interception via the `Fetch.*` CDP domain. |
 | `zendriver-cloudflare` | Cloudflare Turnstile bypass. |
 | `zendriver-imperva` | Imperva WAF / Incapsula bypass. |
-| `zendriver-fetcher` | Chrome binary downloader. |
+| `zendriver-fetcher` | Chromium binary downloader (Chrome for Testing / ungoogled-chromium / snapshots), plus the `zendriver-fetch` CLI behind the non-default `cli` feature. |
 | `zendriver-mcp` | MCP server exposing the `zendriver` surface as agent tools (see MCP coverage above). |
 
 Capability crates are wired into `zendriver` behind features (`interception` /
