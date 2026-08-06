@@ -57,6 +57,13 @@ pub(crate) struct Resolved {
     /// How the download is packaged.
     pub archive: Archive,
     /// Executable path relative to the build directory.
+    ///
+    /// **Invariant: this must stay inside the build directory.** It is joined
+    /// onto the cache path and the result is both `chmod +x`'d and handed to
+    /// the caller to *execute*, so a `..` reaching it is a code-execution
+    /// primitive rather than a wrong-path bug. Every component is either a
+    /// crate constant or an index-supplied name validated by
+    /// [`is_plain_filename`].
     pub binary_subpath: PathBuf,
 }
 
@@ -294,7 +301,36 @@ fn asset_for<'a>(
     release: &'a GitHubRelease,
     suffix: &str,
 ) -> Option<&'a crate::manifest::GitHubAsset> {
-    release.assets.iter().find(|a| a.name.ends_with(suffix))
+    release
+        .assets
+        .iter()
+        .find(|a| is_plain_filename(&a.name) && a.name.ends_with(suffix))
+}
+
+/// Is `name` a single, ordinary filename?
+///
+/// Asset names are index-controlled data that end up in **filesystem paths**:
+/// the Windows zip's top-level directory is its asset name minus `.zip`, and
+/// that becomes a component of the cached binary's path. A name carrying `..`
+/// or a separator would push [`Resolved::binary_subpath`] outside the build
+/// directory, and `ensure_chrome`'s cache-hit check runs
+/// `build_dir.join(binary_subpath)` *before* downloading anything — so a
+/// compromised repo could hand the caller an arbitrary existing executable to
+/// launch, without ever serving a byte.
+///
+/// Matching only plain filenames closes that without trusting the index. It
+/// fails closed: an unusable asset simply does not match, and the caller gets
+/// the ordinary [`FetcherError::AssetNotFound`].
+fn is_plain_filename(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains('/')
+        // Rejected on every host, not just Windows: the name has to be safe
+        // wherever the cache is later read, and archives are routinely
+        // fetched for a platform other than the running one.
+        && !name.contains('\\')
+        && !name.contains('\0')
 }
 
 /// Does `tag` name Chrome version `want`?
@@ -834,6 +870,59 @@ mod tests {
         let msg = err.to_string();
         assert!(matches!(err, FetcherError::AssetNotFound { .. }));
         assert!(msg.contains("_windows_x86.zip"), "{msg}");
+    }
+
+    /// An asset name reaches the filesystem: the Windows zip's top-level
+    /// directory is that name minus `.zip`, and it lands in
+    /// `binary_subpath`. `ensure_chrome` joins that onto the cache path and
+    /// returns it for the caller to *execute*, checking it before any
+    /// download — so a `..` here would let a compromised repo nominate an
+    /// arbitrary existing binary without serving a byte. Such assets must
+    /// not match at all.
+    #[test]
+    fn an_asset_name_that_escapes_the_build_directory_is_never_selected() {
+        let releases: Vec<GitHubRelease> = serde_json::from_str(
+            r#"[{
+                "tag_name": "151.0.7922.71-1.1",
+                "draft": false,
+                "prerelease": false,
+                "assets": [
+                    {"name": "../../../../../../usr/bin_windows_x64.zip",
+                     "browser_download_url": "https://example.com/evil.zip"},
+                    {"name": "nested/path_windows_x64.zip",
+                     "browser_download_url": "https://example.com/evil2.zip"}
+                ]
+            }]"#,
+        )
+        .unwrap();
+
+        let err = resolve_ungoogled(&releases, &VersionSpec::Latest, Platform::Win64, "repo")
+            .unwrap_err();
+        // Fails closed: the hostile asset simply is not a candidate.
+        assert!(matches!(err, FetcherError::VersionNotFound(_)), "{err:?}");
+        assert!(list_ungoogled(&releases, Platform::Win64).is_empty());
+    }
+
+    #[test]
+    fn plain_filename_check_accepts_real_assets_and_rejects_path_shapes() {
+        assert!(is_plain_filename(
+            "ungoogled-chromium_151.0.7922.71-1.1_windows_x64.zip"
+        ));
+        assert!(is_plain_filename(
+            "ungoogled-chromium-151.0.7922.71-1-x86_64.AppImage"
+        ));
+        // A leading dot is only suspicious, not an escape.
+        assert!(is_plain_filename("..leading-dots_windows_x64.zip"));
+
+        assert!(!is_plain_filename(""));
+        assert!(!is_plain_filename("."));
+        assert!(!is_plain_filename(".."));
+        assert!(!is_plain_filename("../evil.zip"));
+        assert!(!is_plain_filename("a/b.zip"));
+        // Backslashes are rejected on every host, since a build is routinely
+        // fetched for a platform other than the running one.
+        assert!(!is_plain_filename(r"..\evil.zip"));
+        assert!(!is_plain_filename("evil\0.zip"));
     }
 
     #[test]
