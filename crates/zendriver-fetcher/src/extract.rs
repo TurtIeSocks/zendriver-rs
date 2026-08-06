@@ -1,16 +1,18 @@
 //! Zip archive extraction.
 //!
-//! Unzips a Chrome for Testing archive into a destination directory.
-//! Chrome for Testing ships a `.zip` on every platform (Linux, macOS, Windows),
-//! so a single sync `zip::ZipArchive` walk wrapped in
-//! [`tokio::task::spawn_blocking`] handles all three.
+//! Unzips a Chromium archive into a destination directory. Chrome for Testing
+//! and the Chromium snapshot bucket ship a `.zip` on every platform, as does
+//! ungoogled-chromium on Windows, so a single sync `zip::ZipArchive` walk
+//! wrapped in [`tokio::task::spawn_blocking`] handles all of them.
+//! ungoogled's other two packagings are [`crate::archive`]'s problem.
 //!
 //! On Unix, executable bits from the archive's `unix_mode()` are preserved
 //! so the extracted Chrome binary stays runnable without a chmod pass.
 //!
 //! # Trust boundary
 //!
-//! The archives we accept come from the Chrome for Testing CDN (Google).
+//! The archives reaching here come from Google's Chrome for Testing CDN, the
+//! Chromium snapshot bucket, and GitHub release assets.
 //! We trust the *content* of those archives — they may include arbitrary
 //! files and executable bits because that's what running Chrome requires.
 //! We do **not** trust the archive's *paths*: a malicious or corrupt zip

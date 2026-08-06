@@ -218,7 +218,9 @@ fn prompt_distribution() -> Result<Distribution, String> {
         let line = read_line("distribution [1]: ")?;
         let line = line.trim();
         if line.is_empty() {
-            return Ok(Distribution::ChromeForTesting);
+            // Whatever `1)` printed above — reordering the menu must not leave
+            // the default pointing somewhere else.
+            return Ok(Distribution::ALL[0]);
         }
         if let Some(d) = line
             .parse::<usize>()

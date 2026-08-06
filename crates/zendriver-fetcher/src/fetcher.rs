@@ -461,6 +461,11 @@ async fn is_runnable(path: &std::path::Path) -> bool {
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
+    use super::*;
+    use std::io::Write as _;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
     /// The macOS end-to-end case that could never have worked: a Chrome for
     /// Testing `.app` bundle carries framework symlinks, so `ensure_chrome()`
     /// aborted on the first one and no Mac user ever got a binary out of it.
@@ -510,11 +515,6 @@ mod tests {
         );
         assert!(resources.is_dir(), "and must resolve to the versioned dir");
     }
-
-    use super::*;
-    use std::io::Write as _;
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     /// Build a tiny zip in-memory containing a single entry at `entry` with
     /// the given sentinel content. Returns the raw zip bytes.
