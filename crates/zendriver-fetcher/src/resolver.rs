@@ -51,6 +51,13 @@ pub(crate) const DEFAULT_GITHUB_API_BASE: &str = "https://api.github.com";
 pub(crate) struct Resolved {
     /// Cache directory name and the build identity reported to the caller:
     /// a Chrome version for CfT/ungoogled, `r<revision>` for snapshots.
+    ///
+    /// **Invariant: a single plain directory name.** It is joined onto the
+    /// cache root to form the build directory, so a `..` or an absolute value
+    /// relocates the whole install — and, because the cache-hit check runs
+    /// before any download, can nominate an existing binary to execute.
+    /// Enforced by [`checked_build_id`] at every construction site that takes
+    /// it from an index.
     pub build_id: String,
     /// Where to download it from.
     pub url: String,
@@ -144,7 +151,7 @@ pub(crate) fn resolve_cft(
         .find(|d| d.platform == key)
         .ok_or(FetcherError::UnsupportedPlatform)?;
 
-    Ok(cft_resolved(&entry.version, &download.url, platform))
+    cft_resolved(&entry.version, &download.url, platform)
 }
 
 /// Resolve a non-stable [`Channel`] from Chrome for Testing's
@@ -174,18 +181,18 @@ pub(crate) fn resolve_cft_channel(
         .find(|d| d.platform == platform_key)
         .ok_or(FetcherError::UnsupportedPlatform)?;
 
-    Ok(cft_resolved(&entry.version, &download.url, platform))
+    cft_resolved(&entry.version, &download.url, platform)
 }
 
-fn cft_resolved(version: &str, url: &str, platform: Platform) -> Resolved {
-    Resolved {
-        build_id: version.to_string(),
+fn cft_resolved(version: &str, url: &str, platform: Platform) -> Result<Resolved, FetcherError> {
+    Ok(Resolved {
+        build_id: checked_build_id(version, Distribution::ChromeForTesting)?,
         url: url.to_string(),
         archive: Archive::Zip {
             top_dir: platform.cft_top_dir().to_string(),
         },
         binary_subpath: cft_binary_subpath(platform),
-    }
+    })
 }
 
 /// Versions the manifest actually publishes for `platform`, newest first.
@@ -195,6 +202,9 @@ pub(crate) fn list_cft(manifest: &KnownGoodVersionsResponse, platform: Platform)
         .versions
         .iter()
         .rev() // the manifest is oldest-first
+        // Never offer a build that resolution would refuse — same rule, and
+        // the same fail-closed direction, as `asset_for`.
+        .filter(|v| is_plain_filename(&v.version))
         .filter(|v| v.downloads.chrome.iter().any(|d| d.platform == key))
         .map(|v| Build {
             spec: VersionSpec::Explicit(v.version.clone()),
@@ -282,7 +292,10 @@ pub(crate) fn resolve_ungoogled(
     let archive_top = asset.name.strip_suffix(".zip").unwrap_or(&asset.name);
 
     Ok(Resolved {
-        build_id: chrome_version_of_tag(&release.tag_name).to_string(),
+        build_id: checked_build_id(
+            chrome_version_of_tag(&release.tag_name),
+            Distribution::UngoogledChromium,
+        )?,
         url: asset.browser_download_url.clone(),
         archive: ungoogled_archive(platform, archive_top),
         binary_subpath: ungoogled_binary_subpath(platform, archive_top),
@@ -295,6 +308,7 @@ pub(crate) fn list_ungoogled(releases: &[GitHubRelease], platform: Platform) -> 
     releases
         .iter()
         .filter(|r| is_published(r))
+        .filter(|r| is_plain_filename(chrome_version_of_tag(&r.tag_name)))
         .filter(|r| asset_for(r, suffix).is_some())
         .map(|r| {
             let version = chrome_version_of_tag(&r.tag_name);
@@ -447,6 +461,33 @@ pub(crate) fn resolve_snapshot(base: &str, revision: u64, platform: Platform) ->
 // ---------------------------------------------------------------------------
 // shared
 // ---------------------------------------------------------------------------
+
+/// Accept a build id only if it is a single plain directory name.
+///
+/// `build_id` is index-controlled — a Chrome for Testing manifest `version`, or
+/// the version half of an ungoogled release tag — and [`crate::cache::build_dir`]
+/// joins it straight onto the cache root. `VersionSpec::Latest`, the default,
+/// constrains it not at all: whatever the index says is newest is what lands in
+/// a path.
+///
+/// So the same reasoning as [`is_plain_filename`] applies with the same force.
+/// `ensure_chrome` joins `binary_subpath` onto the build directory and checks it
+/// for runnability *before* downloading anything, then returns it for the caller
+/// to execute — so a `..` or an absolute value here lets a compromised index
+/// nominate an arbitrary existing binary without ever serving a byte, and an
+/// ordinary one relocates the whole install outside the cache.
+///
+/// Fails closed, like every other check on index data here.
+fn checked_build_id(build_id: &str, distribution: Distribution) -> Result<String, FetcherError> {
+    if is_plain_filename(build_id) {
+        Ok(build_id.to_string())
+    } else {
+        Err(FetcherError::VersionNotFound(format!(
+            "the {} index offered build id {build_id:?}, which is not a plain directory name",
+            distribution.title()
+        )))
+    }
+}
 
 fn revision_unsupported(distribution: &'static str, revision: u64) -> FetcherError {
     FetcherError::UnsupportedSelector {
@@ -920,6 +961,69 @@ mod tests {
         // Fails closed: the hostile asset simply is not a candidate.
         assert!(matches!(err, FetcherError::VersionNotFound(_)), "{err:?}");
         assert!(list_ungoogled(&releases, Platform::Win64).is_empty());
+    }
+
+    /// The tag is the *other* index-controlled string that reaches a path, and
+    /// it reaches a bigger one: `build_id` is the cache directory itself.
+    /// `VersionSpec::Latest` — the default — puts no constraint on the tag at
+    /// all, so whatever the index calls newest is what gets joined onto the
+    /// cache root.
+    #[test]
+    fn a_tag_that_escapes_the_cache_root_is_refused() {
+        let releases = |tag: &str| -> Vec<GitHubRelease> {
+            serde_json::from_str(&format!(
+                r#"[{{
+                    "tag_name": "{tag}",
+                    "draft": false,
+                    "prerelease": false,
+                    "assets": [
+                        {{"name": "ungoogled-chromium_151_windows_x64.zip",
+                         "browser_download_url": "https://example.com/x.zip"}}
+                    ]
+                }}]"#
+            ))
+            .unwrap()
+        };
+
+        // `chrome_version_of_tag` splits on `-`, so a tag without one passes
+        // through whole.
+        for tag in ["../../../../PLANTED", "/tmp/evil", "..", "."] {
+            let rs = releases(tag);
+            let err =
+                resolve_ungoogled(&rs, &VersionSpec::Latest, Platform::Win64, "repo").unwrap_err();
+            assert!(
+                matches!(err, FetcherError::VersionNotFound(_)),
+                "tag {tag:?} produced {err:?}"
+            );
+            assert!(
+                list_ungoogled(&rs, Platform::Win64).is_empty(),
+                "tag {tag:?} was still offered in the listing"
+            );
+        }
+
+        // A normal tag still resolves, packaging suffix and all.
+        let ok = resolve_ungoogled(
+            &releases("151.0.7922.71-1.1"),
+            &VersionSpec::Latest,
+            Platform::Win64,
+            "repo",
+        )
+        .unwrap();
+        assert_eq!(ok.build_id, "151.0.7922.71");
+    }
+
+    /// Same hole, reached through the Chrome for Testing manifest's `version`.
+    #[test]
+    fn a_manifest_version_that_escapes_the_cache_root_is_refused() {
+        let manifest: KnownGoodVersionsResponse = serde_json::from_str(
+            r#"{"versions":[{"version":"../../../../PLANTED","revision":"1","downloads":{
+                "chrome":[{"platform":"linux64","url":"https://example.com/x.zip"}]}}]}"#,
+        )
+        .unwrap();
+
+        let err = resolve_cft(&manifest, &VersionSpec::Latest, Platform::LinuxX64).unwrap_err();
+        assert!(matches!(err, FetcherError::VersionNotFound(_)), "{err:?}");
+        assert!(list_cft(&manifest, Platform::LinuxX64).is_empty());
     }
 
     #[test]
