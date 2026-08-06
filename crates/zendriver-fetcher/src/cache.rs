@@ -47,6 +47,20 @@ pub(crate) fn default_cache_dir() -> PathBuf {
         .join("zendriver/chrome")
 }
 
+/// `path` with `suffix` appended to its last component: `<build>` + `.tmp`
+/// becomes the `<build>.tmp` staging sibling.
+///
+/// Appends to the `OsString` rather than going through
+/// `format!("{}", path.display())`, because `display()` substitutes U+FFFD for
+/// bytes that are not valid UTF-8. On a cache directory containing any such
+/// byte that spelling would stage into — and try to promote from — a directory
+/// other than the one intended.
+pub(crate) fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut joined = path.to_path_buf().into_os_string();
+    joined.push(suffix);
+    PathBuf::from(joined)
+}
+
 /// Directory holding one unpacked build.
 ///
 /// See the module docs for why Chrome for Testing is the un-prefixed case.
@@ -136,6 +150,35 @@ mod tests {
             p.ends_with("zendriver/chrome"),
             "expected suffix zendriver/chrome, got {}",
             p.display()
+        );
+    }
+
+    /// The staging sibling has to be exactly the build directory plus a
+    /// suffix — a lossy round-trip through `display()` would promote a
+    /// different directory than the one that was written.
+    #[test]
+    fn with_suffix_appends_to_the_last_component() {
+        assert_eq!(
+            with_suffix(Path::new("/tmp/cache/120.0.6099.234"), ".tmp"),
+            Path::new("/tmp/cache/120.0.6099.234.tmp")
+        );
+        assert_eq!(
+            with_suffix(Path::new("/tmp/cache/ungoogled/151.0.7922.71"), ".tmp.zip"),
+            Path::new("/tmp/cache/ungoogled/151.0.7922.71.tmp.zip")
+        );
+    }
+
+    /// Non-UTF-8 bytes in the cache path must survive verbatim.
+    #[cfg(unix)]
+    #[test]
+    fn with_suffix_preserves_non_utf8_path_bytes() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let base = Path::new(OsStr::from_bytes(b"/tmp/ca\xffche/120.0.6099.234"));
+        assert_eq!(
+            with_suffix(base, ".tmp").as_os_str().as_bytes(),
+            b"/tmp/ca\xffche/120.0.6099.234.tmp"
         );
     }
 

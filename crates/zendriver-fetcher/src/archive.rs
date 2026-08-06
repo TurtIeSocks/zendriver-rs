@@ -127,7 +127,7 @@ async fn install_dmg(
 ) -> Result<(), FetcherError> {
     // A private mountpoint beside the staging dir, so two concurrent fetches
     // of different builds cannot collide and nothing lands in /Volumes.
-    let mountpoint = std::path::PathBuf::from(format!("{}.mnt", dest_dir.display()));
+    let mountpoint = crate::cache::with_suffix(dest_dir, ".mnt");
     let _ = tokio::fs::remove_dir_all(&mountpoint).await;
     tokio::fs::create_dir_all(&mountpoint).await?;
 

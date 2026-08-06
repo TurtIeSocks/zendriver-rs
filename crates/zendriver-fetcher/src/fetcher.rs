@@ -13,7 +13,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::cache::{build_dir, default_cache_dir};
+use crate::cache::{build_dir, default_cache_dir, with_suffix};
 use crate::distribution::Distribution;
 use crate::download::download;
 use crate::error::FetcherError;
@@ -257,12 +257,11 @@ impl Fetcher {
 
         // Phase 2: download to <build>.tmp.<ext>, beside the build directory
         // so the staging paths are namespaced exactly like the final one.
-        let tmp_archive = PathBuf::from(format!(
-            "{}.tmp.{}",
-            final_dir.display(),
-            resolved.archive.tmp_extension()
-        ));
-        let tmp_dir = PathBuf::from(format!("{}.tmp", final_dir.display()));
+        let tmp_archive = with_suffix(
+            &final_dir,
+            &format!(".tmp.{}", resolved.archive.tmp_extension()),
+        );
+        let tmp_dir = with_suffix(&final_dir, ".tmp");
 
         // Clean up any stale tmp from a prior crashed run.
         let _ = tokio::fs::remove_file(&tmp_archive).await;
