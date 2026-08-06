@@ -54,16 +54,22 @@
 //!    top-level directory — checked at every step of the climb, not just at
 //!    the end.
 //!
-//!    **"Really contains" is load-bearing and was once the bug.** Taking the
-//!    link's parent from the archive text instead of from `canonicalize`
-//!    leaves the extractor reasoning about a different directory than the
-//!    kernel writes to, because an earlier entry can plant a link that a later
-//!    entry's own path runs through. See
-//!    `a_symlink_reached_through_an_earlier_symlink_cannot_escape` for the
-//!    three-entry archive that exploited exactly that gap. The target is still
-//!    resolved lexically from that canonical parent, with no stat, because the
-//!    target frequently does not exist yet — `Versions/Current` is written
-//!    before `Versions/A`, so stat-ing it would reject legitimate links.
+//!    **Reasoning lexically about a path the kernel resolves differently was
+//!    the bug, twice.** An earlier entry can plant a symlink, and a later entry
+//!    can reach through it two ways — by its own entry path, or by its target
+//!    string. Both were exploitable and both are now closed by following the
+//!    filesystem rather than the archive's text:
+//!
+//!    - the link's parent is `canonicalize`d, not taken from the entry path
+//!      (`a_symlink_reached_through_an_earlier_symlink_cannot_escape`);
+//!    - each target component that ALREADY EXISTS as a symlink is resolved as
+//!      the walk pushes it, so `u1/u2/u3/up/../../../X` cannot pop three levels
+//!      lexically from `up` while the kernel pops them from wherever `up`
+//!      pointed (`a_symlink_target_walking_through_an_earlier_symlink_cannot_escape`).
+//!
+//!    Components that do not exist yet stay lexical, and that is what keeps
+//!    legitimate links working: `Versions/Current` is written before
+//!    `Versions/A`, so stat-ing the whole target would reject it.
 //!
 //!    Windows keeps skipping them: creating a symlink there needs privileges,
 //!    and no Windows Chrome archive contains one.
@@ -285,7 +291,29 @@ fn resolve_target(link_path: &Path, target: &Path, containment_root: &Path) -> O
 
     for comp in target.components() {
         match comp {
-            Component::Normal(name) => resolved.push(name),
+            // Follow rather than assume. If this component already exists and is
+            // itself a symlink, the kernel follows it when resolving this
+            // target — so the walk has to follow it too, or every component
+            // after this one is reasoning about a directory the kernel is not
+            // standing in. That is the same lexical-vs-real gap canonicalizing
+            // the parent closes, reached through the target instead:
+            // `u1/u2/u3/up/../../../X` pops three lexically from `u1/u2/u3/up`
+            // and lands inside, while the kernel pops them from wherever `up`
+            // pointed and leaves.
+            //
+            // A component that does not exist yet stays lexical, which is what
+            // keeps `Versions/Current -> A` working: `A` is written after the
+            // link that names it.
+            Component::Normal(name) => {
+                resolved.push(name);
+                if std::fs::symlink_metadata(&resolved).is_ok_and(|md| md.file_type().is_symlink())
+                {
+                    resolved = std::fs::canonicalize(&resolved).ok()?;
+                    if !resolved.starts_with(containment_root) {
+                        return None;
+                    }
+                }
+            }
             Component::CurDir => {}
             // `pop` fails at the filesystem root; leaving the containment root
             // is the escape. Checked as we climb rather than on the final
@@ -499,6 +527,61 @@ mod tests {
             );
         }
         result.expect_err("an archive that escapes through a chained symlink must be refused");
+    }
+
+    /// The same divergence as the test above, one axis over: this time the
+    /// planted link is walked through by the TARGET STRING rather than by the
+    /// entry path.
+    ///
+    /// `chrome` resolves lexically to `chrome-linux64/u1/VICTIM` — pushed four,
+    /// popped three, comfortably inside. The kernel instead follows `up` to
+    /// `chrome-linux64` and *then* spends the three `..`, landing two levels
+    /// above the destination. Canonicalizing the link's parent does not help
+    /// here; the symlink is in the middle of the target.
+    ///
+    /// Nothing is written outside either way — a file entry through an escaping
+    /// link is still refused — but the link itself is what `ensure_chrome`
+    /// returns for the caller to *execute*, and phase 4 `chmod +x`'s whatever it
+    /// points at.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_symlink_target_walking_through_an_earlier_symlink_cannot_escape() {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let opts = zip::write::SimpleFileOptions::default();
+            let mut writer = zip::ZipWriter::new(&mut buf);
+            writer
+                .add_symlink("chrome-linux64/u1/u2/u3/up", "../../..", opts)
+                .unwrap();
+            writer
+                .add_symlink("chrome-linux64/chrome", "u1/u2/u3/up/../../../VICTIM", opts)
+                .unwrap();
+            writer.finish().unwrap();
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let zip_path = root.join("evil.zip");
+        let dest = root.join("l1/l2/out");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(&zip_path, buf.into_inner()).unwrap();
+        // Where the kernel actually lands: `up` reaches `chrome-linux64`, and
+        // the three `..` are spent from there — out, l2, l1.
+        std::fs::write(root.join("l1/VICTIM"), b"not the browser").unwrap();
+
+        let result = extract(&zip_path, &dest, Some("chrome-linux64")).await;
+
+        // Whatever the outcome, the path a caller would launch must not resolve
+        // out of the destination.
+        let launched = dest.join("chrome-linux64/chrome");
+        if let Ok(real) = std::fs::canonicalize(&launched) {
+            assert!(
+                real.starts_with(std::fs::canonicalize(&dest).unwrap()),
+                "returned browser path resolves to {}, outside the cache",
+                real.display()
+            );
+        }
+        result.expect_err("a target walking through a planted symlink must be refused");
     }
 
     /// The containment predicate on its own, including the shapes that are
