@@ -174,6 +174,44 @@ jobs:
           Write-Host "Using preinstalled Chrome $version at $chrome"
       - run: cargo nextest run --workspace --features integration-tests --locked --profile ci-integration -E '${{ matrix.filter }}'
 
+  # `zendriver-fetcher` is the one crate whose unit tests encode OS-specific
+  # *path* semantics rather than browser behaviour, and until now none of them
+  # ran on Windows: `test-unit` is ubuntu-only, and the Windows leg of
+  # `test-integration` is filtered to a single `zendriver` binary.
+  #
+  # Two fixes shipped on reasoning alone because of that gap, both invisible
+  # from Linux or macOS by construction:
+  #  - `resolve_target` in `extract.rs` is reachable only from the
+  #    `#[cfg(unix)]` symlink arm, so on Windows it is an unreferenced function
+  #    and the workspace's `-D warnings` turned that into a hard build failure.
+  #    It was caught only because `test-integration`'s Windows leg happens to
+  #    compile the crate on the way to a `zendriver` test.
+  #  - Asset names are rejected when they contain `:`, because a
+  #    drive-relative name like `C:evil` has no separator to catch yet
+  #    `Path::join` DISCARDS the base for it on Windows -- the same escape as
+  #    `..`, reached without a `..`.
+  #
+  # No browser is launched here and no Chrome is needed, which is why this is
+  # its own job rather than another leg of `test-integration`: it has no
+  # business inheriting that job's 90-minute budget or its Chrome setup. It is
+  # also NOT the widening of that leg's filter discussed above -- that remains
+  # its own change, for the reasons documented there.
+  test-fetcher-windows:
+    runs-on: windows-latest
+    # One crate and its dependencies, not the workspace, and the tests
+    # themselves are offline and finish in under a second. This budget is
+    # almost entirely a cold compile against an empty rust-cache.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # `--lib --bins` in one invocation: the CLI's argument-contract tests
+      # live in a binary, behind the same non-default `cli` feature. The
+      # workflow-wide `RUSTFLAGS: -D warnings` is what makes this also catch
+      # the dead-code class that only appears once `cfg(unix)` is false.
+      - run: cargo test -p zendriver-fetcher --lib --bins --features cli --locked
+
   # The only check that puts this repo's WebGL/WebGPU spoofing in front of a
   # real browser. Everything else guarding it -- the tier-table unit tests, the
   # `gpu-tier-gen` regeneration diff in `fmt`, the hand-written Node model of
@@ -273,9 +311,13 @@ jobs:
   # requires makes it genuinely blocking today. If it is later added to the
   # ruleset under its own name, drop it from `needs` here so the two do not
   # report the same failure twice.
+  #
+  # `test-fetcher-windows` is folded in on exactly that reasoning — it is the
+  # only job that can observe the fetcher's Windows path handling, so it being
+  # red-but-mergeable would defeat the point of adding it.
   test-integration-gate:
     name: test-integration
-    needs: [test-integration, test-gpu-coherence]
+    needs: [test-integration, test-gpu-coherence, test-fetcher-windows]
     # Not stylistic. Without `always()`, a FAILED leg skips this job, and a
     # skipped check never reports a failure — the gate would fall silent in
     # exactly the case it exists to catch, which is worse than no gate at all.
@@ -287,8 +329,10 @@ jobs:
           set -euo pipefail
           matrix='${{ needs.test-integration.result }}'
           gpu='${{ needs.test-gpu-coherence.result }}'
+          fetcher='${{ needs.test-fetcher-windows.result }}'
           echo "test-integration matrix aggregate result: ${matrix}"
           echo "test-gpu-coherence result: ${gpu}"
+          echo "test-fetcher-windows result: ${fetcher}"
           # For a matrix dependency this is `success` only when EVERY leg
           # succeeded. Treat everything else -- failure, cancelled, and skipped
           # -- as blocking: a leg that silently stops running must not read as
@@ -303,7 +347,11 @@ jobs:
             echo "::error::test-gpu-coherence did not succeed (result=${gpu}) — the spoofed GPU surface disagreed with the committed tier tables in a real browser, or the ANGLE canary drifted"
             failed=1
           fi
-          # Report BOTH before exiting, so one failure does not hide the other.
+          if [ "${fetcher}" != 'success' ]; then
+            echo "::error::test-fetcher-windows did not succeed (result=${fetcher}) — the fetcher's path handling differs on Windows and no other job can see it"
+            failed=1
+          fi
+          # Report ALL of them before exiting, so one failure does not hide another.
           exit "${failed}"
 
   nightly-stealth-tests:
