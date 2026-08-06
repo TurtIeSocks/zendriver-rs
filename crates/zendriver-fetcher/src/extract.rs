@@ -229,6 +229,10 @@ fn is_symlink(entry: &zip::read::ZipFile<'_>) -> bool {
 /// target resolves relative to the DIRECTORY CONTAINING the link — not to the
 /// link itself. Getting that wrong by one level makes every sibling link look
 /// like an escape, and makes a real escape look like a sibling.
+///
+/// Unix-only, because only the Unix arm creates symlinks — Windows skips those
+/// entries outright, and an ungated definition is dead code there.
+#[cfg(unix)]
 fn resolve_target(link_rel: &Path, target: &Path) -> Option<PathBuf> {
     use std::path::Component;
 
@@ -404,6 +408,7 @@ mod tests {
 
     /// The containment predicate on its own, including the shapes that are
     /// easy to get wrong by one level.
+    #[cfg(unix)]
     #[test]
     fn target_containment_rules() {
         let inside =
