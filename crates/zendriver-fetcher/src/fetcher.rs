@@ -462,6 +462,56 @@ async fn is_runnable(path: &std::path::Path) -> bool {
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
+    /// The macOS end-to-end case that could never have worked: a Chrome for
+    /// Testing `.app` bundle carries framework symlinks, so `ensure_chrome()`
+    /// aborted on the first one and no Mac user ever got a binary out of it.
+    ///
+    /// Ignored by default because it needs the network and downloads ~150 MB.
+    /// Downloading is not the assertion — the assertion is that what lands is a
+    /// binary that RUNS, which is the only thing that proves the bundle came
+    /// out intact rather than merely extracted without error.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn mac_chrome_for_testing_extracts_to_a_runnable_binary() {
+        let cache = tempfile::tempdir().unwrap();
+        let binary = Fetcher::new()
+            .cache_dir(cache.path())
+            // Explicit rather than relying on the default, so this keeps
+            // testing CfT if the default distribution ever changes.
+            .distribution(Distribution::ChromeForTesting)
+            .version(VersionSpec::Explicit("146.0.7680.153".to_string()))
+            .platform(Platform::MacArm64)
+            .ensure_chrome()
+            .await
+            .expect("a macOS CfT archive must extract");
+
+        let out = std::process::Command::new(&binary)
+            .arg("--version")
+            .output()
+            .expect("the extracted binary must be executable");
+        let version = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            version.contains("146.0.7680.153"),
+            "wrong or unrunnable binary at {binary:?}: {version:?}"
+        );
+
+        // The framework symlink from the original error, resolving to a real
+        // directory inside the bundle.
+        let resources = binary
+            .parent()
+            .unwrap()
+            .join("../Frameworks/Google Chrome for Testing Framework.framework/Resources");
+        assert!(
+            std::fs::symlink_metadata(&resources)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the framework link must survive as a symlink"
+        );
+        assert!(resources.is_dir(), "and must resolve to the versioned dir");
+    }
+
     use super::*;
     use std::io::Write as _;
     use wiremock::matchers::{method, path};
