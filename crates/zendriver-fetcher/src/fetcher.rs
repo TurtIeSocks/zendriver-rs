@@ -255,17 +255,28 @@ impl Fetcher {
             return Ok(target_bin);
         }
 
-        // Phase 2: download to <build>.tmp.<ext>, beside the build directory
-        // so the staging paths are namespaced exactly like the final one.
+        // Phase 2: download to <build>.tmp.<stamp>.<ext>, beside the build
+        // directory so the staging paths are namespaced exactly like the final
+        // one.
+        //
+        // The stamp makes staging per-FETCH, not per-build. Two `ensure_chrome`
+        // calls for the same build previously derived the same `<build>.tmp`,
+        // and each one's "clean up a stale tmp" step deleted the other's
+        // half-written tree — after which one of them renamed whatever was left
+        // into the cache under the canonical name, where the cache-hit check
+        // accepts a truncated browser from then on.
+        //
+        // ponytail: a hard crash now leaks `<build>.tmp.<stamp>` instead of it
+        // being cleared by the next run of the same build. That is the right
+        // side of the trade — a leaked directory in a cache is recoverable,
+        // a silently truncated browser promoted under the canonical name is
+        // not. Reap by mtime age if the leakage ever actually matters.
+        let stamp = staging_stamp();
         let tmp_archive = with_suffix(
             &final_dir,
-            &format!(".tmp.{}", resolved.archive.tmp_extension()),
+            &format!(".tmp.{stamp}.{}", resolved.archive.tmp_extension()),
         );
-        let tmp_dir = with_suffix(&final_dir, ".tmp");
-
-        // Clean up any stale tmp from a prior crashed run.
-        let _ = tokio::fs::remove_file(&tmp_archive).await;
-        let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
+        let tmp_dir = with_suffix(&final_dir, &format!(".tmp.{stamp}"));
 
         emit(&progress_cb, FetcherPhase::Downloading, 0, None);
         download(
@@ -402,6 +413,25 @@ fn emit(
             phase,
         });
     }
+}
+
+/// Token that makes a staging path unique to one fetch.
+///
+/// Process id covers concurrent processes sharing a cache directory (the CI
+/// case the `cache_dir` option exists for), and the clock plus an in-process
+/// counter covers concurrent tasks inside one process.
+fn staging_stamp() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    format!(
+        "{}-{nanos}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 /// Compute the lowercase-hex SHA256 of `path`'s contents. The hash is
@@ -588,9 +618,14 @@ mod tests {
         let extracted = tokio::fs::read(&bin_path).await.unwrap();
         assert_eq!(extracted, sentinel);
 
-        // No leftover tmp artifacts.
-        assert!(!cache_root.path().join("120.0.6099.234.tmp.zip").exists());
-        assert!(!cache_root.path().join("120.0.6099.234.tmp").exists());
+        // No leftover staging artifacts of any shape.
+        let leftovers: Vec<_> = std::fs::read_dir(cache_root.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "staging left behind: {leftovers:?}");
 
         // Executable bit set on Unix.
         #[cfg(unix)]
@@ -750,6 +785,70 @@ mod tests {
         );
         let extracted = tokio::fs::read(&bin_path).await.unwrap();
         assert_eq!(extracted, sentinel);
+    }
+
+    /// Two fetches of the SAME build sharing a cache directory — the CI shape
+    /// the `cache_dir` option exists for.
+    ///
+    /// They used to derive the same `<build>.tmp`, so each one's stale-tmp
+    /// cleanup deleted the other's half-written tree, and whichever won the
+    /// rename published whatever was left under the canonical name. A
+    /// truncated browser passes `is_runnable` and is then served from cache
+    /// forever, so the damage outlives the run that caused it.
+    ///
+    /// Both must come back with the whole binary.
+    #[tokio::test]
+    async fn concurrent_fetches_of_one_build_do_not_corrupt_the_cache() {
+        let server = MockServer::start().await;
+        let sentinel: Vec<u8> = std::iter::repeat_n(b"chrome-payload-", 4096)
+            .flatten()
+            .copied()
+            .collect();
+        let zip_bytes = build_stub_chrome_zip(&sentinel);
+
+        let manifest_json = format!(
+            r#"{{"versions":[{{"version":"120.0.6099.234","revision":"1234","downloads":{{"chrome":[{{"platform":"linux64","url":"{server}/chrome.zip"}}]}}}}]}}"#,
+            server = server.uri()
+        );
+        Mock::given(method("GET"))
+            .and(path("/manifest.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(manifest_json))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/chrome.zip"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(zip_bytes))
+            .mount(&server)
+            .await;
+
+        let cache_root = tempfile::tempdir().unwrap();
+        let manifest_url = format!("{}/manifest.json", server.uri());
+
+        let fetch = || {
+            let (dir, url) = (cache_root.path().to_path_buf(), manifest_url.clone());
+            async move {
+                Fetcher::new()
+                    .cache_dir(dir)
+                    .platform(Platform::LinuxX64)
+                    .version(VersionSpec::Latest)
+                    .manifest_url(url)
+                    .ensure_chrome()
+                    .await
+            }
+        };
+
+        let (a, b) = tokio::join!(fetch(), fetch());
+        let (a, b) = (a.unwrap(), b.unwrap());
+
+        assert_eq!(a, b, "both fetches must name the same cached binary");
+        for path in [&a, &b] {
+            assert_eq!(
+                tokio::fs::read(path).await.unwrap(),
+                sentinel,
+                "cache holds a truncated binary at {}",
+                path.display()
+            );
+        }
     }
 
     /// The default must stay Chrome for Testing, or every existing caller
