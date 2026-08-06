@@ -268,13 +268,28 @@ pub(crate) fn resolve_ungoogled(
                 *rev,
             ));
         }
-        VersionSpec::Explicit(want) => releases
-            .iter()
-            .filter(|r| is_published(r))
-            .find(|r| tag_matches_version(&r.tag_name, want))
-            .ok_or_else(|| {
-                FetcherError::VersionNotFound(format!("{want} (searched {repo} releases)"))
-            })?,
+        VersionSpec::Explicit(want) => {
+            // One Chrome version can be tagged more than once — the packaging
+            // revision differs (`-1`, `-1.1`) and the repos re-cut a release to
+            // add an arch. So prefer a matching release that actually carries
+            // this platform's asset, rather than whichever tag matched first;
+            // otherwise a version the listing offers can fail to resolve.
+            let matching = || {
+                releases
+                    .iter()
+                    .filter(|r| is_published(r))
+                    .filter(|r| tag_matches_version(&r.tag_name, want))
+            };
+            matching()
+                .find(|r| asset_for(r, suffix).is_some())
+                // Fall back to any tag match so a version built for no arch at
+                // all still reports `AssetNotFound`, naming the suffix it
+                // looked for, rather than the blunter `VersionNotFound`.
+                .or_else(|| matching().next())
+                .ok_or_else(|| {
+                    FetcherError::VersionNotFound(format!("{want} (searched {repo} releases)"))
+                })?
+        }
     };
 
     let asset = asset_for(release, suffix).ok_or_else(|| FetcherError::AssetNotFound {
@@ -901,6 +916,43 @@ mod tests {
         assert!(matches!(err, FetcherError::VersionNotFound(_)));
         assert!(msg.contains("151.0.7922.71"), "{msg}");
         assert!(msg.contains("ungoogled-chromium-macos"), "{msg}");
+    }
+
+    /// One Chrome version, two tags — the repos re-cut a release to add an
+    /// arch, so the tag that matches first is not always the one carrying this
+    /// platform's build. Picking by tag order alone makes a version the listing
+    /// offers fail to resolve.
+    #[test]
+    fn an_explicit_version_prefers_the_tag_that_has_this_platforms_asset() {
+        let releases: Vec<GitHubRelease> = serde_json::from_str(
+            r#"[
+                {"tag_name": "151.0.7922.71-1.2", "draft": false, "prerelease": false,
+                 "assets": [{"name": "ungoogled-chromium_151.0.7922.71-1.2_windows_x64.zip",
+                             "browser_download_url": "https://example.com/x64.zip"}]},
+                {"tag_name": "151.0.7922.71-1.1", "draft": false, "prerelease": false,
+                 "assets": [{"name": "ungoogled-chromium_151.0.7922.71-1.1_windows_x86.zip",
+                             "browser_download_url": "https://example.com/x86.zip"}]}
+            ]"#,
+        )
+        .unwrap();
+
+        // win32's asset is on the SECOND tag; the first one matches the version
+        // just as well and has no x86 build.
+        let r = resolve_ungoogled(
+            &releases,
+            &VersionSpec::Explicit("151.0.7922.71".into()),
+            Platform::Win32,
+            "repo",
+        )
+        .unwrap();
+        assert_eq!(r.url, "https://example.com/x86.zip");
+
+        // And the listing offered it, so the two now agree.
+        assert!(
+            list_ungoogled(&releases, Platform::Win32)
+                .iter()
+                .any(|b| b.spec == VersionSpec::Explicit("151.0.7922.71".into()))
+        );
     }
 
     /// A release that exists but carries no asset for this arch is a distinct
