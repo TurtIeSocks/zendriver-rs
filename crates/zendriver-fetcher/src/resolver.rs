@@ -330,6 +330,10 @@ fn is_plain_filename(name: &str) -> bool {
         // wherever the cache is later read, and archives are routinely
         // fetched for a platform other than the running one.
         && !name.contains('\\')
+        // A drive-relative name like `C:evil` has no separator at all, yet
+        // `Path::join` on Windows *replaces* the base with it rather than
+        // appending — same escape as `..`, reached without a `..`.
+        && !name.contains(':')
         && !name.contains('\0')
 }
 
@@ -923,6 +927,35 @@ mod tests {
         // fetched for a platform other than the running one.
         assert!(!is_plain_filename(r"..\evil.zip"));
         assert!(!is_plain_filename("evil\0.zip"));
+        // Drive-relative: no separator anywhere, but `Path::join` on Windows
+        // discards the base for it, so it escapes exactly like `..` would.
+        assert!(!is_plain_filename("C:evil_windows_x64.zip"));
+        assert!(!is_plain_filename(r"C:\evil_windows_x64.zip"));
+    }
+
+    /// The Windows half of the escape the plain-filename check exists to
+    /// close. `..` was covered; a drive letter reaches the same place without
+    /// one, because `Path::join` on Windows *replaces* the base when the
+    /// joined path carries a prefix.
+    #[test]
+    fn a_drive_relative_asset_name_is_never_selected() {
+        let releases: Vec<GitHubRelease> = serde_json::from_str(
+            r#"[{
+                "tag_name": "151.0.7922.71-1.1",
+                "draft": false,
+                "prerelease": false,
+                "assets": [
+                    {"name": "C:evil_windows_x64.zip",
+                     "browser_download_url": "https://example.com/evil.zip"}
+                ]
+            }]"#,
+        )
+        .unwrap();
+
+        let err = resolve_ungoogled(&releases, &VersionSpec::Latest, Platform::Win64, "repo")
+            .unwrap_err();
+        assert!(matches!(err, FetcherError::VersionNotFound(_)), "{err:?}");
+        assert!(list_ungoogled(&releases, Platform::Win64).is_empty());
     }
 
     #[test]
