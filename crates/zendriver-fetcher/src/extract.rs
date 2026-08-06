@@ -49,27 +49,30 @@
 //!    `evil -> /etc`, then extract `evil/passwd` and the write lands outside
 //!    while every path in the archive looks innocent.
 //!
-//!    So a target is accepted only when it is relative AND resolves, from the
-//!    directory that really contains the link, to somewhere still inside the
-//!    top-level directory — checked at every step of the climb, not just at
-//!    the end.
+//!    Containment is decided by [`assert_symlinks_contained`], which runs once
+//!    on the FINISHED tree rather than per entry. `resolve_target` still gives
+//!    each link a cheap lexical look on the way past, so an obviously bad one
+//!    is refused early with a precise message, but it is not the guarantee.
 //!
-//!    **Reasoning lexically about a path the kernel resolves differently was
-//!    the bug, twice.** An earlier entry can plant a symlink, and a later entry
-//!    can reach through it two ways — by its own entry path, or by its target
-//!    string. Both were exploitable and both are now closed by following the
-//!    filesystem rather than the archive's text:
+//!    **That split exists because per-entry validation failed three times.**
+//!    Deciding where a link will point, at the moment it is created, means
+//!    predicting — and the prediction is made against a filesystem the archive
+//!    is still building, in an order the archive chooses. The same gap was
+//!    reached three ways: through the link's parent, through a component of its
+//!    target, and through time, by aiming a target at a component that a later
+//!    entry turns into a symlink. Each fix made the prediction consult the
+//!    filesystem a little more and left the same residual: whatever had not
+//!    been created yet.
 //!
-//!    - the link's parent is `canonicalize`d, not taken from the entry path
-//!      (`a_symlink_reached_through_an_earlier_symlink_cannot_escape`);
-//!    - each target component that ALREADY EXISTS as a symlink is resolved as
-//!      the walk pushes it, so `u1/u2/u3/up/../../../X` cannot pop three levels
-//!      lexically from `up` while the kernel pops them from wherever `up`
-//!      pointed (`a_symlink_target_walking_through_an_earlier_symlink_cannot_escape`).
+//!    Real archives make that residual unavoidable. A Chrome for Testing macOS
+//!    bundle lists `Framework.framework/Resources -> Versions/Current/Resources`
+//!    around entry 132 and does not create `Versions/Current` until entry 646,
+//!    so refusing to reason lexically about not-yet-existing components would
+//!    reject Google's own build.
 //!
-//!    Components that do not exist yet stay lexical, and that is what keeps
-//!    legitimate links working: `Versions/Current` is written before
-//!    `Versions/A`, so stat-ing the whole target would reject it.
+//!    Checking the end state removes the question. Once the loop is done there
+//!    is no "not yet": `canonicalize` reports the path the kernel will use, and
+//!    the only thing left to ask is whether it is inside.
 //!
 //!    Windows keeps skipping them: creating a symlink there needs privileges,
 //!    and no Windows Chrome archive contains one.
@@ -247,8 +250,22 @@ fn extract_blocking(
         #[cfg(unix)]
         if let Some(mode) = entry.unix_mode() {
             use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(mode))?;
+            // Permission bits only. setuid/setgid/sticky are carried in the
+            // same field and no browser bundle needs them, so an archive is
+            // never the reason a file in the cache gains one.
+            std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(mode & 0o777))?;
         }
+    }
+
+    // Authoritative containment check, on the finished tree. See
+    // `assert_symlinks_contained` for why it cannot live inside the loop.
+    #[cfg(unix)]
+    {
+        let containment_root = match expected_top_prefix {
+            Some(top) => dest_canonical.join(top),
+            None => dest_canonical.clone(),
+        };
+        assert_symlinks_contained(&dest_canonical, &containment_root)?;
     }
 
     Ok(())
@@ -307,29 +324,7 @@ fn resolve_target(link_path: &Path, target: &Path, containment_root: &Path) -> O
 
     for comp in target.components() {
         match comp {
-            // Follow rather than assume. If this component already exists and is
-            // itself a symlink, the kernel follows it when resolving this
-            // target — so the walk has to follow it too, or every component
-            // after this one is reasoning about a directory the kernel is not
-            // standing in. That is the same lexical-vs-real gap canonicalizing
-            // the parent closes, reached through the target instead:
-            // `u1/u2/u3/up/../../../X` pops three lexically from `u1/u2/u3/up`
-            // and lands inside, while the kernel pops them from wherever `up`
-            // pointed and leaves.
-            //
-            // A component that does not exist yet stays lexical, which is what
-            // keeps `Versions/Current -> A` working: `A` is written after the
-            // link that names it.
-            Component::Normal(name) => {
-                resolved.push(name);
-                if std::fs::symlink_metadata(&resolved).is_ok_and(|md| md.file_type().is_symlink())
-                {
-                    resolved = std::fs::canonicalize(&resolved).ok()?;
-                    if !resolved.starts_with(containment_root) {
-                        return None;
-                    }
-                }
-            }
+            Component::Normal(name) => resolved.push(name),
             Component::CurDir => {}
             // `pop` fails at the filesystem root; leaving the containment root
             // is the escape. Checked as we climb rather than on the final
@@ -345,6 +340,62 @@ fn resolve_target(link_path: &Path, target: &Path, containment_root: &Path) -> O
         }
     }
     Some(resolved)
+}
+
+/// Verify every symlink in the finished tree resolves inside
+/// `containment_root`, refusing the whole extraction if any does not.
+///
+/// **This is the authoritative containment check, and it deliberately runs
+/// after the extraction loop rather than inside it.**
+///
+/// Validating a link as it is created means predicting where it will point.
+/// That prediction is made against a filesystem the archive is still building,
+/// in an order the archive chooses, and three separate escapes came out of that
+/// one gap — reached through the link's parent, then through a component of its
+/// target, then through *time*, by pointing a target at a component that a
+/// later entry turns into a symlink. Each was closed by making the prediction
+/// consult the filesystem a little more, and each left the same residual:
+/// whatever had not been created yet.
+///
+/// Predicting cannot converge, so this stops predicting. Once the loop is done
+/// there is no "not yet" left to reason about: `canonicalize` gives the path
+/// the kernel will actually use, and the only question is whether it is inside.
+///
+/// It also costs nothing in fidelity to real archives. A Chrome for Testing
+/// macOS bundle relies on exactly the ordering that made the prediction
+/// unsound — `Framework.framework/Resources -> Versions/Current/Resources`
+/// appears around entry 132, while `Versions/Current` is not created until
+/// entry 646 — and it passes here, because by the end everything resolves.
+///
+/// A symlink that does not resolve at all is refused too: a real bundle has
+/// none, and a dangling link is a path something else could later fill in.
+#[cfg(unix)]
+fn assert_symlinks_contained(dir: &Path, containment_root: &Path) -> Result<(), FetcherError> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        // `file_type` on a `DirEntry` does not follow links, so a symlinked
+        // directory is inspected rather than descended into — which is also
+        // what keeps a link cycle from recursing forever.
+        let file_type = entry.file_type()?;
+
+        if file_type.is_symlink() {
+            let resolved = std::fs::canonicalize(&path).map_err(|e| {
+                FetcherError::Extraction(format!(
+                    "zip entry {path:?} is a symlink that does not resolve ({e}); refusing"
+                ))
+            })?;
+            if !resolved.starts_with(containment_root) {
+                return Err(FetcherError::Extraction(format!(
+                    "zip entry {path:?} is a symlink resolving to {resolved:?}, outside \
+                     {containment_root:?}; refusing"
+                )));
+            }
+        } else if file_type.is_dir() {
+            assert_symlinks_contained(&path, containment_root)?;
+        }
+    }
+    Ok(())
 }
 
 /// Verify `path`, after `canonicalize`, still has `dest_canonical` as a
@@ -585,19 +636,109 @@ mod tests {
         // the three `..` are spent from there — out, l2, l1.
         std::fs::write(root.join("l1/VICTIM"), b"not the browser").unwrap();
 
-        let result = extract(&zip_path, &dest, Some("chrome-linux64")).await;
+        extract(&zip_path, &dest, Some("chrome-linux64"))
+            .await
+            .expect_err("a target walking through a planted symlink must be refused");
 
-        // Whatever the outcome, the path a caller would launch must not resolve
-        // out of the destination.
-        let launched = dest.join("chrome-linux64/chrome");
-        if let Ok(real) = std::fs::canonicalize(&launched) {
-            assert!(
-                real.starts_with(std::fs::canonicalize(&dest).unwrap()),
-                "returned browser path resolves to {}, outside the cache",
-                real.display()
-            );
+        assert_eq!(
+            std::fs::read(root.join("l1/VICTIM")).unwrap(),
+            b"not the browser",
+            "the out-of-tree file was touched"
+        );
+    }
+
+    /// The third shape, and the one that retired per-entry prediction: a target
+    /// validated against a filesystem state that a LATER entry invalidates.
+    ///
+    /// When `chrome` is checked, `u` and `d` do not exist, so the walk treats
+    /// them lexically and scores the target as landing on `chrome-linux64/evil`.
+    /// A later entry then makes `d` a symlink to `..` — contained, and accepted
+    /// honestly on its own terms — after which the *stored* target string
+    /// resolves through it to outside the destination. Nothing re-checked the
+    /// earlier link.
+    ///
+    /// The lexical treatment of not-yet-existing components could not simply be
+    /// removed: a real Chrome for Testing macOS bundle depends on it, listing
+    /// `Framework.framework/Resources -> Versions/Current/Resources` hundreds of
+    /// entries before it creates `Versions/Current`. Hence the end-state sweep.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_symlink_whose_target_a_later_entry_redirects_cannot_escape() {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let opts = zip::write::SimpleFileOptions::default();
+            let mut writer = zip::ZipWriter::new(&mut buf);
+            // Exactly `cft_binary_subpath(LinuxX64)` — the path ensure_chrome
+            // returns for the caller to execute.
+            writer
+                .add_symlink("chrome-linux64/chrome", "u/d/../../evil", opts)
+                .unwrap();
+            // Planted afterwards, which is what makes the earlier check stale.
+            writer
+                .add_symlink("chrome-linux64/u/d", "..", opts)
+                .unwrap();
+            writer.finish().unwrap();
         }
-        result.expect_err("a target walking through a planted symlink must be refused");
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let zip_path = root.join("evil.zip");
+        let dest = root.join("cache/build");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(&zip_path, buf.into_inner()).unwrap();
+        std::fs::write(root.join("cache/evil"), b"not the browser").unwrap();
+
+        // Refusing the whole extraction is the guarantee. The staging tree is
+        // discarded unpromoted, so a link left inside it is never reached; what
+        // must not happen is `ensure_chrome` succeeding and handing that path
+        // back.
+        extract(&zip_path, &dest, Some("chrome-linux64"))
+            .await
+            .expect_err("a target redirected by a later entry must be refused");
+
+        assert_eq!(
+            std::fs::read(root.join("cache/evil")).unwrap(),
+            b"not the browser",
+            "the out-of-tree file was touched"
+        );
+    }
+
+    /// setuid/setgid ride in the same field as the permission bits, and a
+    /// tampered archive is not a reason for a file in the cache to carry one.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn setuid_bits_from_an_archive_are_not_honoured() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut buf);
+            writer
+                .start_file(
+                    "chrome-linux64/chrome",
+                    zip::write::SimpleFileOptions::default().unix_permissions(0o4755),
+                )
+                .unwrap();
+            writer.write_all(b"payload").unwrap();
+            writer.finish().unwrap();
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = dir.path().join("suid.zip");
+        let dest = dir.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(&zip_path, buf.into_inner()).unwrap();
+
+        extract(&zip_path, &dest, Some("chrome-linux64"))
+            .await
+            .unwrap();
+
+        let mode = std::fs::metadata(dest.join("chrome-linux64/chrome"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o7000, 0, "setuid/setgid/sticky survived: {mode:o}");
+        assert!(mode & 0o111 != 0, "the executable bit must still be set");
     }
 
     /// The containment predicate on its own, including the shapes that are

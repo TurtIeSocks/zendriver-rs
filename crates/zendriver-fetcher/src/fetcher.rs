@@ -250,7 +250,7 @@ impl Fetcher {
             tokio::fs::create_dir_all(parent).await?;
         }
         let target_bin = final_dir.join(&resolved.binary_subpath);
-        if is_runnable(&target_bin).await {
+        if is_runnable(&target_bin).await && resolves_inside(&target_bin, &final_dir).await {
             emit(&progress_cb, FetcherPhase::Done, 0, None);
             return Ok(target_bin);
         }
@@ -323,7 +323,12 @@ impl Fetcher {
         {
             use std::os::unix::fs::PermissionsExt as _;
             let tmp_bin = tmp_dir.join(&resolved.binary_subpath);
-            if tmp_bin.exists() {
+            // `metadata` and `set_permissions` both FOLLOW symlinks, so this is
+            // a chmod aimed at wherever the path really lands. Extraction is
+            // supposed to have guaranteed that is inside the staging dir; check
+            // it here rather than inherit the guarantee, because the cost of
+            // being wrong is `+x` on someone else's file.
+            if tmp_bin.exists() && resolves_inside(&tmp_bin, &tmp_dir).await {
                 let mut perms = tokio::fs::metadata(&tmp_bin).await?.permissions();
                 perms.set_mode(perms.mode() | 0o111);
                 tokio::fs::set_permissions(&tmp_bin, perms).await?;
@@ -339,6 +344,16 @@ impl Fetcher {
                 let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
             }
             Err(e) => return Err(FetcherError::Io(e)),
+        }
+
+        // The returned path is executed by the caller, so the last thing this
+        // function does is confirm it still lands inside the build directory.
+        if !resolves_inside(&target_bin, &final_dir).await {
+            return Err(FetcherError::Extraction(format!(
+                "resolved browser path {} does not lie inside {}; refusing to return it",
+                target_bin.display(),
+                final_dir.display()
+            )));
         }
 
         emit(&progress_cb, FetcherPhase::Done, 0, None);
@@ -467,6 +482,27 @@ fn hex_encode(bytes: &[u8]) -> String {
         out.push(HEX[(b & 0x0f) as usize] as char);
     }
     out
+}
+
+/// True when `path` exists and, with every symlink followed, still lies inside
+/// `root`.
+///
+/// Both callers hand the path to something that follows links and then does
+/// something dangerous with what it finds — one `chmod +x`'s it, the other
+/// returns it to be executed as a browser. Extraction already refuses an
+/// archive whose symlinks leave the tree; this re-asks the question at the
+/// point of use, so the guarantee is checked where it matters rather than
+/// inherited from a check that ran earlier over different code.
+async fn resolves_inside(path: &std::path::Path, root: &std::path::Path) -> bool {
+    let (path, root) = (path.to_path_buf(), root.to_path_buf());
+    tokio::task::spawn_blocking(move || {
+        let (Ok(real), Ok(root)) = (path.canonicalize(), root.canonicalize()) else {
+            return false;
+        };
+        real.starts_with(root)
+    })
+    .await
+    .unwrap_or(false)
 }
 
 /// True iff `path` exists and (on Unix) has any executable bit set.
