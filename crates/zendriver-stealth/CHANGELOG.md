@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.12.1] - 2026-08-06
+
+### Fixed
+
+- The UA string must carry the reduced version, not the build
+
+
 ## [0.12.0] - 2026-08-05
 
 ### Added
