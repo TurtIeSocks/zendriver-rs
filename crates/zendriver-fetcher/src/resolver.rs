@@ -274,16 +274,17 @@ pub(crate) fn resolve_ungoogled(
         suffix,
     })?;
 
-    let archive = ungoogled_archive(platform, &asset.name);
-    // The Windows zip's top-level directory is the asset name without its
-    // extension, so the binary path has to be threaded through from the asset
-    // rather than derived from the platform alone.
-    let archive_top = asset.name.trim_end_matches(".zip");
+    // The Windows zip's top-level directory is the asset name minus `.zip`, so
+    // unlike every other case it comes from the asset rather than from the
+    // platform. Derived once and shared: the archive's expected top-level
+    // directory and the binary's path through it have to be the same string,
+    // or extraction succeeds and the lookup afterwards misses.
+    let archive_top = asset.name.strip_suffix(".zip").unwrap_or(&asset.name);
 
     Ok(Resolved {
         build_id: chrome_version_of_tag(&release.tag_name).to_string(),
         url: asset.browser_download_url.clone(),
-        archive,
+        archive: ungoogled_archive(platform, archive_top),
         binary_subpath: ungoogled_binary_subpath(platform, archive_top),
     })
 }
@@ -369,7 +370,9 @@ fn chrome_version_of_tag(tag: &str) -> &str {
     tag.split('-').next().unwrap_or(tag)
 }
 
-fn ungoogled_archive(platform: Platform, asset_name: &str) -> Archive {
+/// How this platform's ungoogled asset is packaged. `archive_top` is the zip's
+/// top-level directory, used only on Windows — see [`resolve_ungoogled`].
+fn ungoogled_archive(platform: Platform, archive_top: &str) -> Archive {
     match platform {
         Platform::LinuxX64 => Archive::Executable {
             file_name: UNGOOGLED_APPIMAGE_NAME.to_string(),
@@ -378,7 +381,7 @@ fn ungoogled_archive(platform: Platform, asset_name: &str) -> Archive {
             app_dir: UNGOOGLED_APP_BUNDLE.to_string(),
         },
         Platform::Win32 | Platform::Win64 => Archive::Zip {
-            top_dir: asset_name.trim_end_matches(".zip").to_string(),
+            top_dir: archive_top.to_string(),
         },
     }
 }
