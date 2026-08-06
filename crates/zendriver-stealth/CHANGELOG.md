@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.12.2] - 2026-08-06
+
+### Fixed
+
+- Stop fabricating 8 GB when the memory probe fails
+
+
 ## [0.12.1] - 2026-08-06
 
 ### Fixed
