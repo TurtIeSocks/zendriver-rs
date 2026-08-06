@@ -318,6 +318,11 @@ async fn main() -&gt; zendriver::Result&lt;()&gt; {
     browser.close().await?;
     Ok(())
 }</code></pre></pre>
+<p>The headers you copy forward are in a stable order, but not the browser's
+original one: CDP delivers request headers as an object keyed by header name,
+so Chrome has already merged duplicate names and the on-the-wire ordering is
+gone before the closure runs. Response headers (<code>modify_response</code>) keep both,
+since CDP sends those as an array.</p>
 <p>The closure runs synchronously per-event on the actor task; it should
 not block. Spawn off the runtime if you need to call out to an async
 service before deciding the override.</p>
