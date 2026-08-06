@@ -141,22 +141,36 @@ impl std::fmt::Display for AbortReason {
 /// Information about an intercepted request, surfaced to rule closures and
 /// stream consumers.
 ///
-/// Headers are a `Vec<(name, value)>` rather than a `HashMap` so duplicates
-/// (multiple `Set-Cookie`, multi-value `Cookie`, etc.) and Chrome's emission
-/// order survive the round-trip into user code and back through
-/// [`RequestOverrides`]. CDP's underlying wire shape is a `[{name, value}]`
-/// array; this type matches that shape.
+/// Headers are a `Vec<(name, value)>` rather than a `HashMap` so the set
+/// round-trips through user code and back into [`RequestOverrides`] in a
+/// stable order, and so response headers keep their duplicates (multiple
+/// `Set-Cookie`, etc.) — CDP's wire shape for *responses* is a
+/// `[{name, value}]` array, which this type matches.
+///
+/// Request headers are the exception: CDP delivers those as an object keyed
+/// by header name (`Network.Headers`), so Chrome has already merged
+/// duplicate-named request headers and the browser's on-the-wire header
+/// **order is not recoverable** — do not rely on `RequestInfo::headers` for
+/// header-order fingerprint work.
 #[derive(Debug, Clone)]
 pub struct RequestInfo {
     /// Full request URL (post-redirect resolution by Chrome).
     pub url: String,
     /// HTTP method (`GET`, `POST`, ...).
     pub method: String,
-    /// Request headers as Chrome reported them. Order is Chrome's emission
-    /// order; duplicates are preserved.
+    /// Request headers as Chrome reported them.
+    ///
+    /// Deterministic, but **not** Chrome's emission order, and duplicate names
+    /// are already merged: CDP sends request headers as a name-keyed object
+    /// (see the type-level docs). Contrast [`ResponseInfo::headers`], which
+    /// does keep order and duplicates.
     pub headers: Vec<(String, String)>,
     /// Request body, if any. Sourced from `postDataEntries` (binary-safe)
     /// when present, otherwise the UTF-8 bytes of `postData`.
+    ///
+    /// `None` also covers an undecodable `postDataEntries` body: a chunk that
+    /// fails to decode yields `None` rather than a silently truncated body, so
+    /// a closure that signs this never signs a partial payload.
     pub post_data: Option<Vec<u8>>,
     /// Chrome's classification of the request's resource type.
     pub resource_type: ResourceType,

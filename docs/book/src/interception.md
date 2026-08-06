@@ -71,6 +71,12 @@ top:
 {{#include ../../../crates/zendriver/examples/intercept_modify_headers.rs}}
 ```
 
+The headers you copy forward are in a stable order, but not the browser's
+original one: CDP delivers request headers as an object keyed by header name,
+so Chrome has already merged duplicate names and the on-the-wire ordering is
+gone before the closure runs. Response headers (`modify_response`) keep both,
+since CDP sends those as an array.
+
 The closure runs synchronously per-event on the actor task; it should
 not block. Spawn off the runtime if you need to call out to an async
 service before deciding the override.
