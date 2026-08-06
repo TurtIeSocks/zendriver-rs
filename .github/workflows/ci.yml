@@ -41,6 +41,10 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # zendriver-fetcher's `cli` feature is off by default (library first),
+      # so the sweep above never compiles the `zendriver-fetch` binary. Lint
+      # it explicitly, or it rots unnoticed.
+      - run: cargo clippy -p zendriver-fetcher --all-targets --features cli --locked -- -D warnings
 
   test-unit:
     runs-on: ubuntu-latest
@@ -49,6 +53,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --lib --locked
+      # `--lib` skips binaries, and the CLI's argument-contract tests live in
+      # one — behind the same non-default `cli` feature.
+      - run: cargo test -p zendriver-fetcher --bins --features cli --locked
 
   test-doc:
     runs-on: ubuntu-latest
