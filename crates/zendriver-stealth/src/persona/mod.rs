@@ -260,18 +260,56 @@ impl Persona {
 
     /// Host-probed persona (sysinfo). Cached: first call probes, rest clone.
     /// Runtime — NOT a build-script const (build host != run host).
+    ///
+    /// Reports only what it could actually read. An attribute whose probe fails
+    /// is left `None` (with a `WARN` naming it) rather than filled with a
+    /// stand-in value, so a caller never mistakes a library default for this
+    /// host. Downstream resolution supplies the fallback explicitly.
     pub fn system() -> Persona {
         SYSTEM.get_or_init(Persona::probe_system).clone()
     }
 
     fn probe_system() -> Persona {
-        let platform = crate::fingerprint::detect_platform();
-        let cpu = crate::fingerprint::clamp_cpu_count(num_cpus::get() as u32);
-        let mem = crate::fingerprint::detect_memory_gb().unwrap_or(8);
+        Persona::from_host_probe(
+            crate::fingerprint::detect_platform(),
+            crate::fingerprint::clamp_cpu_count(num_cpus::get() as u32),
+            crate::fingerprint::detect_memory_gb(),
+        )
+    }
+
+    /// Assemble the host persona from already-probed values. Split out of
+    /// [`Persona::probe_system`] so the failure path is reachable from tests
+    /// without a host that actually fails to report its RAM (the same idiom as
+    /// `fingerprint::parse_version_banner`).
+    ///
+    /// A probe that fails leaves its field `None` — never a stand-in constant.
+    /// This persona's entire contract is "the real host", so substituting a
+    /// plausible-looking value would be the worst available failure: the caller
+    /// believes they hold a coherent host identity while every user of this
+    /// crate whose probe failed ships the *same* value, which is exactly the
+    /// cross-user correlation signal a persona exists to avoid. `None` is the
+    /// persona's "unset, resolve downstream" state, and downstream resolution
+    /// is already explicit — `patches::identity_iife` falls back to the
+    /// [`Fingerprint`](crate::fingerprint::Fingerprint)'s own probed memory,
+    /// which surfaces an error rather than inventing one if it, too, fails.
+    fn from_host_probe(
+        platform: Platform,
+        cpu: u32,
+        memory_gb: Result<u32, crate::StealthError>,
+    ) -> Persona {
+        let device_memory_gb = memory_gb
+            .inspect_err(|e| {
+                tracing::warn!(
+                    "host memory probe failed: {e}; leaving device_memory_gb unset \
+                     (resolved from the probed fingerprint downstream) rather than \
+                     reporting a fabricated value"
+                );
+            })
+            .ok();
         Persona {
             platform: Some(platform),
             hardware_concurrency: Some(cpu),
-            device_memory_gb: Some(mem),
+            device_memory_gb,
             timezone: None,
             locale: None,
             seed: Some(Seed::random()),
@@ -413,6 +451,97 @@ mod persona_tests {
         let b = Persona::system();
         // Cached → same values.
         assert_eq!(a.device_memory_gb, b.device_memory_gb);
+    }
+
+    /// Run `f` with a tracing subscriber capturing WARN and above, and return
+    /// what it logged. A failure warning nobody can observe is
+    /// indistinguishable from the silent fabrication it replaced. (Twin of the
+    /// helper in `patches.rs`'s test module — kept local rather than shared to
+    /// avoid a test-support module for two callers.)
+    fn captured_warnings(f: impl FnOnce()) -> String {
+        use std::io::Write;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Default)]
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl Write for Sink {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Sink {
+            type Writer = Self;
+            fn make_writer(&'a self) -> Self {
+                self.clone()
+            }
+        }
+
+        let sink = Sink::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(sink.clone())
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+        tracing::subscriber::with_default(subscriber, f);
+        let bytes = sink.0.lock().unwrap().clone();
+        String::from_utf8(bytes).expect("log output is utf-8")
+    }
+
+    // `StealthError` is large because `PatchFailed` wraps `CallError` (~152B);
+    // bypass per-fn, as the rest of the crate does.
+    #[allow(clippy::result_large_err)]
+    fn failed_memory_probe() -> Result<u32, crate::StealthError> {
+        Err(crate::StealthError::SystemInfo(
+            "total_memory returned 0".into(),
+        ))
+    }
+
+    /// The shipped bug: an unreadable host reported a library-wide constant
+    /// 8 GB, so every user whose probe failed shipped one correlatable value
+    /// while believing they held their own host's identity.
+    #[test]
+    fn failed_memory_probe_leaves_the_field_unset_never_fabricated() {
+        let p = Persona::from_host_probe(Platform::MacIntel, 8, failed_memory_probe());
+        assert_eq!(
+            p.device_memory_gb, None,
+            "a failed probe must surface as unset, not as a plausible constant"
+        );
+        // Guard the exact regression, in case some other default creeps back.
+        assert_ne!(p.device_memory_gb, Some(8));
+    }
+
+    /// Only the attribute that failed goes unset — a memory probe failure must
+    /// not discard the platform/CPU the host *did* report.
+    #[test]
+    fn failed_memory_probe_keeps_the_attributes_that_succeeded() {
+        let p = Persona::from_host_probe(Platform::Win32, 12, failed_memory_probe());
+        assert_eq!(p.platform, Some(Platform::Win32));
+        assert_eq!(p.hardware_concurrency, Some(12));
+        assert!(p.seed.is_some());
+    }
+
+    /// Unset alone is a silent hole; the failure has to be observable.
+    #[test]
+    fn failed_memory_probe_warns_naming_the_attribute() {
+        let logs = captured_warnings(|| {
+            let p = Persona::from_host_probe(Platform::LinuxX86_64, 4, failed_memory_probe());
+            assert!(p.device_memory_gb.is_none());
+        });
+        assert!(logs.contains("device_memory_gb"), "got: {logs}");
+        // The underlying probe error is carried through, not swallowed.
+        assert!(logs.contains("total_memory returned 0"), "got: {logs}");
+    }
+
+    /// The happy path is verbatim: a successful probe is reported as probed,
+    /// with no second-guessing between the probe and the persona.
+    #[test]
+    fn successful_memory_probe_is_reported_verbatim() {
+        let p = Persona::from_host_probe(Platform::MacIntel, 10, Ok(16));
+        assert_eq!(p.device_memory_gb, Some(16));
+        assert_eq!(p.hardware_concurrency, Some(10));
     }
 
     #[test]
