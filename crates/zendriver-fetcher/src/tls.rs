@@ -56,7 +56,8 @@ pub(crate) async fn get_github(url: &str) -> Result<String, crate::error::Fetche
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28");
 
-    if let Ok(token) = std::env::var("GITHUB_TOKEN")
+    if is_github_api(url)
+        && let Ok(token) = std::env::var("GITHUB_TOKEN")
         && !token.trim().is_empty()
     {
         req = req.bearer_auth(token.trim());
@@ -71,6 +72,20 @@ pub(crate) async fn get_github(url: &str) -> Result<String, crate::error::Fetche
     }
 
     Ok(resp.error_for_status()?.text().await?)
+}
+
+/// Is `url` GitHub's own API host, over TLS?
+///
+/// The release-lookup base is overridable — that is how the tests point it at
+/// a wiremock server — and `GITHUB_TOKEN` is a credential. It goes to
+/// `https://api.github.com` or it does not go at all; an unauthenticated
+/// request to somewhere else is a smaller failure than a leaked token.
+///
+/// The scheme is half the check: `http://api.github.com` is the right host and
+/// would still put a bearer token on the wire in cleartext.
+fn is_github_api(url: &str) -> bool {
+    reqwest::Url::parse(url)
+        .is_ok_and(|u| u.scheme() == "https" && u.host_str() == Some("api.github.com"))
 }
 
 /// True when a GitHub response is a rate-limit rejection.
@@ -172,6 +187,25 @@ mod tests {
             reqwest::StatusCode::OK,
             &headers(&[("x-ratelimit-remaining", "0")]),
         ));
+    }
+
+    /// The token is scoped to GitHub's host, not to "whatever base was
+    /// configured" — the base is overridable, and a bearer token sent to an
+    /// arbitrary host is a leaked credential.
+    #[test]
+    fn only_githubs_own_api_host_is_credentialed() {
+        assert!(is_github_api(
+            "https://api.github.com/repos/ungoogled-software/ungoogled-chromium-macos/releases"
+        ));
+
+        assert!(!is_github_api("http://127.0.0.1:8080/repos/x/y/releases"));
+        // Right host, no TLS: the token would go out in cleartext.
+        assert!(!is_github_api("http://api.github.com/repos/x/y/releases"));
+        // Suffix and userinfo tricks both resolve to a host that is not ours.
+        assert!(!is_github_api("https://api.github.com.evil.test/repos"));
+        assert!(!is_github_api("https://api.github.com@evil.test/repos"));
+        assert!(!is_github_api("https://github.com/repos/x/y/releases"));
+        assert!(!is_github_api("not a url"));
     }
 
     #[test]
