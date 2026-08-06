@@ -109,14 +109,26 @@ pub(crate) fn resolve_cft(
                 .last()
                 .ok_or_else(|| FetcherError::VersionNotFound("manifest is empty".to_string()))?
         }
-        VersionSpec::Channel(Channel::Beta | Channel::Dev | Channel::Canary) => {
+        VersionSpec::Channel(channel @ (Channel::Beta | Channel::Dev | Channel::Canary)) => {
             // Callers route these through `resolve_cft_channel` +
             // `ChannelsResponse` (see `Fetcher::ensure_chrome`). Defensive
             // fallback if this is ever called directly with a non-stable
-            // channel against the flat manifest.
-            return Err(FetcherError::UnsupportedPlatform);
+            // channel against the flat manifest — which tracks stable only,
+            // so there is genuinely nothing here to answer with.
+            return Err(FetcherError::UnsupportedSelector {
+                distribution: Distribution::ChromeForTesting.title(),
+                selector: format!("the {} channel", channel.as_cft_str()),
+                reason: "the flat known-good-versions manifest tracks stable only; the \
+                         non-stable channels resolve through the per-channel manifest"
+                    .to_string(),
+            });
         }
-        VersionSpec::Revision(rev) => return Err(revision_unsupported(spec_dist_cft(), *rev)),
+        VersionSpec::Revision(rev) => {
+            return Err(revision_unsupported(
+                Distribution::ChromeForTesting.title(),
+                *rev,
+            ));
+        }
         VersionSpec::Explicit(want) => manifest
             .versions
             .iter()
@@ -433,10 +445,6 @@ pub(crate) fn resolve_snapshot(base: &str, revision: u64, platform: Platform) ->
 // shared
 // ---------------------------------------------------------------------------
 
-fn spec_dist_cft() -> &'static str {
-    Distribution::ChromeForTesting.title()
-}
-
 fn revision_unsupported(distribution: &'static str, revision: u64) -> FetcherError {
     FetcherError::UnsupportedSelector {
         distribution,
@@ -513,18 +521,22 @@ mod tests {
         }
     }
 
+    /// The flat manifest never resolves a non-stable channel — that routes
+    /// through `resolve_cft_channel` + `ChannelsResponse` instead. The
+    /// defensive fallback has to name the channel, not report an unsupported
+    /// *platform*, which would send the reader debugging platform detection.
     #[test]
-    fn beta_channel_returns_unsupported_platform_against_flat_manifest() {
-        // The flat manifest never resolves a non-stable channel — that routes
-        // through `resolve_cft_channel` + `ChannelsResponse` instead. This
-        // pins the defensive fallback.
+    fn beta_channel_is_refused_by_name_against_the_flat_manifest() {
         let err = resolve_cft(
             &fixture_manifest(),
             &VersionSpec::Channel(Channel::Beta),
             Platform::LinuxX64,
         )
         .unwrap_err();
-        assert!(matches!(err, FetcherError::UnsupportedPlatform));
+        let msg = err.to_string();
+        assert!(matches!(err, FetcherError::UnsupportedSelector { .. }));
+        assert!(msg.contains("Beta channel"), "{msg}");
+        assert!(msg.contains("per-channel manifest"), "{msg}");
     }
 
     #[test]
