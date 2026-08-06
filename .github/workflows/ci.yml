@@ -336,19 +336,35 @@ jobs:
           # For a matrix dependency this is `success` only when EVERY leg
           # succeeded. Treat everything else -- failure, cancelled, and skipped
           # -- as blocking: a leg that silently stops running must not read as
-          # a pass. Same rule for the GPU coherence job, which is a plain job
-          # rather than a matrix but earns no more leniency for it.
+          # a pass. Same rule for the other jobs, which are plain rather than
+          # matrices but earn no more leniency for it.
+          #
+          # Blocking on all of them is not the same as EXPLAINING all of them
+          # identically. A job that ran and failed has a verdict, and naming the
+          # likely cause is the useful thing to print. A job that was cancelled
+          # or skipped produced no verdict at all, and asserting a cause there
+          # is actively misleading -- "the tier tables disagreed" sent a reader
+          # off to regenerate tables that had never been checked, when the real
+          # story was a GitHub outage cancelling the runner mid-queue.
+          report() {
+            if [ "$2" = 'failure' ]; then
+              echo "::error::$1 failed — $3"
+            else
+              echo "::error::$1 produced no verdict (result=$2) — re-run it. Not running is not a pass, but it is also not evidence that anything is broken."
+            fi
+          }
+
           failed=0
           if [ "${matrix}" != 'success' ]; then
-            echo "::error::integration matrix did not succeed (result=${matrix})"
+            report 'test-integration matrix' "${matrix}" 'a real-Chrome integration test broke on at least one OS'
             failed=1
           fi
           if [ "${gpu}" != 'success' ]; then
-            echo "::error::test-gpu-coherence did not succeed (result=${gpu}) — the spoofed GPU surface disagreed with the committed tier tables in a real browser, or the ANGLE canary drifted"
+            report 'test-gpu-coherence' "${gpu}" 'the spoofed GPU surface disagreed with the committed tier tables in a real browser, or the ANGLE canary drifted'
             failed=1
           fi
           if [ "${fetcher}" != 'success' ]; then
-            echo "::error::test-fetcher-windows did not succeed (result=${fetcher}) — the fetcher's path handling differs on Windows and no other job can see it"
+            report 'test-fetcher-windows' "${fetcher}" "the fetcher's path handling differs on Windows and no other job can see it"
             failed=1
           fi
           # Report ALL of them before exiting, so one failure does not hide another.
