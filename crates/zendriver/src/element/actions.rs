@@ -19,9 +19,14 @@
 //!      `hover` uses a realistic Bezier path; `hover_fast` uses a single
 //!      teleport dispatch for test/automation paths.
 //!
-//! `focus`: actionability gate (visible + enabled — no pointer or stability
-//! requirement; focus routes through the focused element, not the cursor's
-//! position), then `el.focus()` in the main world.
+//! `focus`: `scroll_into_view`, then the actionability gate (visible +
+//! enabled — no pointer or stability requirement; focus routes through the
+//! focused element, not the cursor's position), then `el.focus()` in the main
+//! world. The scroll leads for the same reason it does under `hover` and
+//! `click`: the visibility check is a viewport intersection, so a field below
+//! the fold — the ordinary case for a sign-up or checkout form, and the whole
+//! typing surface (`type_text`, `press`, `type_keys`) focuses first — would
+//! otherwise fail the gate outright.
 //!
 //! `scroll_into_view`: no actionability gate (this *is* the visibility
 //! prereq other actions wait for). Calls `el.scrollIntoView({ block:
@@ -78,6 +83,13 @@ const CLEAR_BY_DELETING_SLACK: usize = 2;
 /// Bounds the keystroke loop so a pathological / lying `value.length` can't
 /// spin it unboundedly.
 const CLEAR_BY_DELETING_MAX: usize = 4096;
+
+/// How often [`Element::clear_by_deleting`] re-reads the field to see whether
+/// it is already empty. Each Backspace is a CDP round-trip, so probing lets the
+/// common case (the select-all chord cleared the whole value in one stroke)
+/// exit after a single extra read instead of spending the full budget; probing
+/// every stroke would double the round-trips on fields that do need them.
+const PROBE_EVERY_N_BACKSPACES: usize = 16;
 
 /// Per-call knobs for [`Element::click_with`].
 ///
@@ -221,6 +233,7 @@ impl Element {
                     self,
                     ActionabilityCheck::FULL,
                     DEFAULT_ACTIONABILITY_TIMEOUT,
+                    opts.position,
                 )
                 .await?;
             }
@@ -233,16 +246,7 @@ impl Element {
                 None => (bbox.x + bbox.width / 2.0, bbox.y + bbox.height / 2.0),
             };
             let input = self.inner.tab.input().clone();
-            mouse::click_at(
-                &input,
-                &self.inner.tab,
-                tx,
-                ty,
-                opts.button,
-                opts.click_count,
-                opts.realistic,
-            )
-            .await
+            mouse::click_at(&input, &self.inner.tab, tx, ty, &opts).await
         })
         .await
     }
@@ -283,6 +287,7 @@ impl Element {
                 self,
                 ActionabilityCheck::FULL,
                 DEFAULT_ACTIONABILITY_TIMEOUT,
+                None,
             )
             .await?;
             let bbox = self
@@ -325,6 +330,7 @@ impl Element {
                     receives_pointer: true,
                 },
                 DEFAULT_ACTIONABILITY_TIMEOUT,
+                None,
             )
             .await?;
             let bbox = self
@@ -334,7 +340,7 @@ impl Element {
             let cx = bbox.x + bbox.width / 2.0;
             let cy = bbox.y + bbox.height / 2.0;
             let input = self.inner.tab.input().clone();
-            mouse::move_realistic(&input, &self.inner.tab, cx, cy).await
+            mouse::move_realistic(&input, &self.inner.tab, cx, cy, KeyModifiers::empty()).await
         })
         .await
     }
@@ -369,6 +375,7 @@ impl Element {
                     receives_pointer: true,
                 },
                 DEFAULT_ACTIONABILITY_TIMEOUT,
+                None,
             )
             .await?;
             let bbox = self
@@ -378,7 +385,7 @@ impl Element {
             let cx = bbox.x + bbox.width / 2.0;
             let cy = bbox.y + bbox.height / 2.0;
             let input = self.inner.tab.input().clone();
-            mouse::move_raw(&input, &self.inner.tab, cx, cy).await
+            mouse::move_raw(&input, &self.inner.tab, cx, cy, KeyModifiers::empty()).await
         })
         .await
     }
@@ -403,10 +410,12 @@ impl Element {
     /// ```
     pub async fn focus(&self) -> Result<()> {
         self.with_refresh(|| async move {
+            self.scroll_into_view().await?;
             actionability::wait_actionable(
                 self,
                 ActionabilityCheck::TEXT_INPUT,
                 DEFAULT_ACTIONABILITY_TIMEOUT,
+                None,
             )
             .await?;
             let _ = self
@@ -551,9 +560,13 @@ impl Element {
         self.with_refresh(|| {
             let value = value.clone();
             async move {
+                // Leading `el` absorbs the element handle `call_on_main`
+                // prepends, so `v` binds to the caller's text (same shape as
+                // `NATIVE_VALUE_SETTER_JS`); the body reads the element off
+                // `this`, which `Runtime.callFunctionOn` binds to it.
                 let _ = self
                     .call_on_main(
-                        "function(v){ this.textContent = v; }",
+                        "function(el, v){ this.textContent = v; }",
                         json!([{ "value": value }]),
                     )
                     .await?;
@@ -604,24 +617,47 @@ impl Element {
             };
             self.press_with(Key::Char('a'), select_all).await?;
 
-            let len: usize = {
-                let res = self
-                    .call_on_main("function(){ return (this.value || '').length; }", json!([]))
-                    .await?;
-                res.get("value")
-                    .and_then(serde_json::Value::as_u64)
-                    .and_then(|n| usize::try_from(n).ok())
-                    .unwrap_or(0)
-            };
+            let len = self.value_len().await?;
             let presses = len
                 .saturating_add(CLEAR_BY_DELETING_SLACK)
                 .min(CLEAR_BY_DELETING_MAX);
-            for _ in 0..presses {
+            // Re-probe the value periodically and stop as soon as it is empty
+            // instead of always spending the full `len + slack` budget. Every
+            // `press` is a CDP round-trip (and re-runs the focus gate), so on a
+            // field the select-all chord already cleared this turns thousands of
+            // round-trips into one probe. The cadence keeps the probe overhead
+            // proportional rather than doubling the round-trips on short fields.
+            for i in 0..presses {
+                // Deliberately never probes within the first
+                // `PROBE_EVERY_N_BACKSPACES` strokes: `CLEAR_BY_DELETING_SLACK`
+                // exists precisely because `value.length` under-reports on
+                // off-by-one and IME-composition tails, so exiting early on a
+                // near-empty field would trust the number the slack is there to
+                // distrust. Long fields are where the budget actually hurts, and
+                // by stroke 16 a reported-empty field really is empty.
+                if i > 0 && i % PROBE_EVERY_N_BACKSPACES == 0 && self.value_len().await? == 0 {
+                    return Ok(());
+                }
                 self.press(Key::Special(SpecialKey::Backspace)).await?;
             }
             Ok(())
         })
         .await
+    }
+
+    /// Length of this element's `value`, or 0 if it has none.
+    ///
+    /// Used by [`Element::clear_by_deleting`] to size its Backspace budget and
+    /// then to detect early that the field is already empty.
+    async fn value_len(&self) -> Result<usize> {
+        let res = self
+            .call_on_main("function(){ return (this.value || '').length; }", json!([]))
+            .await?;
+        Ok(res
+            .get("value")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|n| usize::try_from(n).ok())
+            .unwrap_or(0))
     }
 
     /// Attach files to this `<input type="file">` element via
@@ -718,9 +754,11 @@ impl Element {
             let cy = bbox.y + bbox.height / 2.0;
             // Inject the dot in the main world with the element bound (house
             // pattern); the args carry the viewport-center coords + lifetime.
+            // Leading `el` absorbs the element handle `call_on_main` prepends,
+            // so `cx`/`cy`/`ms` line up with the args passed below.
             // The dot is `position:fixed` so the coords are viewport-relative,
             // matching `bounding_box`'s frame and `Tab::flash_point`.
-            let js = "function(cx, cy, ms){ \
+            let js = "function(el, cx, cy, ms){ \
                     const d = document.createElement('div'); \
                     d.style.cssText = 'position:fixed;left:'+cx+'px;top:'+cy+'px;\
 width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:50%;background:red;\
@@ -848,8 +886,30 @@ z-index:2147483647;pointer-events:none;opacity:0.85;'; \
 mod tests {
     use super::*;
     use crate::tab::Tab;
+    use crate::test_support::{expect, serve_gate_probes, serve_scroll_into_view};
     use zendriver_transport::SessionHandle;
     use zendriver_transport::testing::MockConnection;
+
+    /// Parameter names of a `function(a, b, ...){ ... }` declaration, in order.
+    ///
+    /// `call_on_main` prepends the element handle to the argument list, so the
+    /// parameter at index `i` binds to `arguments[i]`. Asserting the parameter
+    /// list against the emitted arguments is what catches an off-by-one — a
+    /// body declared `function(v)` reads the *element* out of `arguments[0]`
+    /// while the caller's value sits unread at `arguments[1]`, and every
+    /// assertion about the arguments array alone still passes.
+    ///
+    /// The first `(`/`)` pair is the parameter list: parameter names can't
+    /// contain parentheses, so a body that does (`setTimeout(...)`) is safe.
+    fn js_params(decl: &str) -> Vec<&str> {
+        let open = decl.find('(').expect("declaration opens a param list");
+        let close = decl.find(')').expect("declaration closes its param list");
+        decl[open + 1..close]
+            .split(',')
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .collect()
+    }
 
     #[tokio::test]
     async fn hover_dispatches_input_dispatchmouseevent_with_type_mousemoved() {
@@ -868,7 +928,7 @@ mod tests {
         });
 
         // Step 1: scroll_into_view → Runtime.callFunctionOn.
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
         assert!(
             sent["params"]["functionDeclaration"]
@@ -879,31 +939,13 @@ mod tests {
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
 
-        // Step 2: actionability gate runs check_visible first.
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
-        mock.reply(
-            id,
-            json!({ "result": { "value": true, "type": "boolean" } }),
-        )
-        .await;
-        // check_stable (gate order: visible → enabled → stable → receives_pointer;
-        // enabled is disabled for hover, so stable is next).
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
-        mock.reply(
-            id,
-            json!({ "result": { "value": true, "type": "boolean" } }),
-        )
-        .await;
-        // check_receives_pointer.
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
-        mock.reply(
-            id,
-            json!({ "result": { "value": true, "type": "boolean" } }),
-        )
-        .await;
+        // Step 2: actionability gate — visible → stable → receives_pointer
+        // (gate order is visible → enabled → stable → receives_pointer, and
+        // hover doesn't require enabled).
+        serve_gate_probes(&mut mock, 3).await;
 
         // Step 3: bounding_box → DOM.getBoxModel.
-        let id = mock.expect_cmd("DOM.getBoxModel").await;
+        let id = expect(&mut mock, "DOM.getBoxModel").await;
         mock.reply(
             id,
             json!({
@@ -973,23 +1015,16 @@ mod tests {
         });
 
         // Step 1: scroll_into_view → Runtime.callFunctionOn.
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
 
         // Step 2: actionability gate (FULL = visible → enabled → stable →
         // receives_pointer); reply true to each.
-        for _ in 0..4 {
-            let id = mock.expect_cmd("Runtime.callFunctionOn").await;
-            mock.reply(
-                id,
-                json!({ "result": { "value": true, "type": "boolean" } }),
-            )
-            .await;
-        }
+        serve_gate_probes(&mut mock, 4).await;
 
         // Step 3: bounding_box → DOM.getBoxModel.
-        let id = mock.expect_cmd("DOM.getBoxModel").await;
+        let id = expect(&mut mock, "DOM.getBoxModel").await;
         mock.reply(
             id,
             json!({
@@ -1072,24 +1107,17 @@ mod tests {
         });
 
         // Step 1: scroll_into_view → Runtime.callFunctionOn.
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
 
         // Step 2: actionability gate (FULL = visible → enabled → stable →
-        // receives_pointer); reply true to each, matching `click`'s gate.
-        for _ in 0..4 {
-            let id = mock.expect_cmd("Runtime.callFunctionOn").await;
-            mock.reply(
-                id,
-                json!({ "result": { "value": true, "type": "boolean" } }),
-            )
-            .await;
-        }
+        // receives_pointer), matching `click`'s gate.
+        serve_gate_probes(&mut mock, 4).await;
 
         // Step 3: bounding_box → DOM.getBoxModel. Box top-left (10,20),
         // 100x50 ⇒ center (60, 45).
-        let id = mock.expect_cmd("DOM.getBoxModel").await;
+        let id = expect(&mut mock, "DOM.getBoxModel").await;
         mock.reply(
             id,
             json!({
@@ -1106,7 +1134,7 @@ mod tests {
         .await;
 
         // Step 4: touchStart at the bbox center, then touchEnd empty.
-        let id = mock.expect_cmd("Input.dispatchTouchEvent").await;
+        let id = expect(&mut mock, "Input.dispatchTouchEvent").await;
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["type"], "touchStart");
         let points = sent["params"]["touchPoints"].as_array().unwrap();
@@ -1115,7 +1143,7 @@ mod tests {
         assert_eq!(points[0]["y"], 45.0);
         mock.reply(id, json!({})).await;
 
-        let id = mock.expect_cmd("Input.dispatchTouchEvent").await;
+        let id = expect(&mut mock, "Input.dispatchTouchEvent").await;
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["type"], "touchEnd");
         assert_eq!(sent["params"]["touchPoints"].as_array().unwrap().len(), 0);
@@ -1137,7 +1165,7 @@ mod tests {
             async move { e.set_value("hello world").await }
         });
 
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
         let decl = sent["params"]["functionDeclaration"].as_str().unwrap();
         // Assign through the native prototype value-setter so React's
@@ -1157,6 +1185,14 @@ mod tests {
         assert_eq!(args.len(), 2);
         assert_eq!(args[0]["objectId"], "R1");
         assert_eq!(args[1]["value"], "hello world");
+        // ...and the JS reads it there: the leading parameter absorbs the
+        // prepended element handle so `v` binds to arguments[1]. `clear`
+        // shares this declaration, so this pins the shape for both.
+        assert_eq!(
+            js_params(decl),
+            vec!["el", "v"],
+            "value must land on the parameter the body assigns"
+        );
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
 
@@ -1176,7 +1212,7 @@ mod tests {
             async move { e.clear().await }
         });
 
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
         let decl = sent["params"]["functionDeclaration"].as_str().unwrap();
         // `clear` routes through the same native-setter JS as `set_value`,
@@ -1187,11 +1223,14 @@ mod tests {
         assert!(decl.contains("HTMLInputElement"));
         assert!(decl.contains("'input'"));
         assert!(decl.contains("'change'"));
-        // The cleared value is the empty string, passed at arguments[1].
+        // The cleared value is the empty string, passed at arguments[1] — and
+        // read there, since the leading parameter absorbs the prepended
+        // element handle.
         let args = sent["params"]["arguments"].as_array().unwrap();
         assert_eq!(args.len(), 2);
         assert_eq!(args[0]["objectId"], "R1");
         assert_eq!(args[1]["value"], "");
+        assert_eq!(js_params(decl), vec!["el", "v"]);
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
 
@@ -1211,7 +1250,7 @@ mod tests {
             async move { e.set_text("New title").await }
         });
 
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
         let decl = sent["params"]["functionDeclaration"].as_str().unwrap();
         // Faithful-simpler port of nodriver's DOM.setNodeValue: assign
@@ -1223,6 +1262,14 @@ mod tests {
         assert_eq!(args.len(), 2);
         assert_eq!(args[0]["objectId"], "R1");
         assert_eq!(args[1]["value"], "New title");
+        // The body must READ it at arguments[1] too. Without the leading `el`
+        // the assigned parameter binds to the element handle and the element's
+        // text becomes "[object HTMLDivElement]" instead of the caller's text.
+        assert_eq!(
+            js_params(decl),
+            vec!["el", "v"],
+            "assigned parameter must bind to the caller's text, not the element"
+        );
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
 
@@ -1242,17 +1289,13 @@ mod tests {
             async move { e.clear_by_deleting().await }
         });
 
-        // Step 1: explicit focus() — actionability gate (visible → enabled)
-        // then this.focus().
-        for _ in 0..2 {
-            let id = mock.expect_cmd("Runtime.callFunctionOn").await;
-            mock.reply(
-                id,
-                json!({ "result": { "value": true, "type": "boolean" } }),
-            )
-            .await;
-        }
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        // Step 1: explicit focus() — scroll_into_view, actionability gate
+        // (visible → enabled), then this.focus(). The scroll leads because
+        // the visibility gate is a viewport check: a field under the fold
+        // fails it outright without one.
+        serve_scroll_into_view(&mut mock).await;
+        serve_gate_probes(&mut mock, 2).await;
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
         assert!(
             sent["params"]["functionDeclaration"]
@@ -1264,26 +1307,20 @@ mod tests {
             .await;
 
         // Step 2: select-all chord via press_with(Key::Char('a'), Ctrl|Meta).
-        // press_with focuses first (gate visible → enabled, then this.focus()),
-        // then emits the chord. Since A2 (full keyboard parity) press_with
+        // press_with focuses first (scroll, gate visible → enabled, then
+        // this.focus()), then emits the chord. Since A2 (full keyboard parity) press_with
         // dispatches the modifier as REAL wrapper key events, so the chord is
         // four dispatches: modifier keyDown → 'a' keyDown → 'a' keyUp →
         // modifier keyUp. Ctrl on Windows/Linux, Meta on macOS.
-        for _ in 0..2 {
-            let id = mock.expect_cmd("Runtime.callFunctionOn").await;
-            mock.reply(
-                id,
-                json!({ "result": { "value": true, "type": "boolean" } }),
-            )
-            .await;
-        }
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        serve_scroll_into_view(&mut mock).await;
+        serve_gate_probes(&mut mock, 2).await;
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
         let ctrl = i64::from(KeyModifiers::CTRL.cdp_bits());
         let meta = i64::from(KeyModifiers::META.cdp_bits());
         // 1: modifier keyDown (Meta or Control).
-        let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+        let id = expect(&mut mock, "Input.dispatchKeyEvent").await;
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["type"], "keyDown");
         let mod_key = sent["params"]["key"].as_str().unwrap();
@@ -1293,7 +1330,7 @@ mod tests {
         );
         mock.reply(id, json!({})).await;
         // 2: 'a' keyDown with the modifier bit set.
-        let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+        let id = expect(&mut mock, "Input.dispatchKeyEvent").await;
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["type"], "keyDown");
         assert_eq!(sent["params"]["key"], "a");
@@ -1304,11 +1341,11 @@ mod tests {
         );
         mock.reply(id, json!({})).await;
         // 3: 'a' keyUp.
-        let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+        let id = expect(&mut mock, "Input.dispatchKeyEvent").await;
         assert_eq!(mock.last_sent()["params"]["type"], "keyUp");
         mock.reply(id, json!({})).await;
         // 4: modifier keyUp.
-        let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+        let id = expect(&mut mock, "Input.dispatchKeyEvent").await;
         assert_eq!(mock.last_sent()["params"]["type"], "keyUp");
         mock.reply(id, json!({})).await;
 
@@ -1316,7 +1353,7 @@ mod tests {
         // so only the fixed slack-count of Backspaces follows — keeps the
         // remaining frame sequence deterministic regardless of the value the
         // page reports.
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
         assert!(
             sent["params"]["functionDeclaration"]
@@ -1329,26 +1366,20 @@ mod tests {
 
         // Step 4: with reported length 0 the impl still presses Backspace a
         // small fixed slack number of times so a near-empty field still gets
-        // a couple of deletes. Each press(Backspace) re-focuses (gate:
-        // visible → enabled, then this.focus()) then dispatches
+        // a couple of deletes. Each press(Backspace) re-focuses (scroll,
+        // gate: visible → enabled, then this.focus()) then dispatches
         // rawKeyDown + keyUp for the Backspace virtual key. The whole
         // sequence is deterministic; drive every frame explicitly.
         let mut saw_backspace = false;
         for _ in 0..CLEAR_BY_DELETING_SLACK {
-            // press(Backspace) focus: 2 gate calls + this.focus().
-            for _ in 0..2 {
-                let id = mock.expect_cmd("Runtime.callFunctionOn").await;
-                mock.reply(
-                    id,
-                    json!({ "result": { "value": true, "type": "boolean" } }),
-                )
-                .await;
-            }
-            let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+            // press(Backspace) focus: scroll + 2 gate probes + this.focus().
+            serve_scroll_into_view(&mut mock).await;
+            serve_gate_probes(&mut mock, 2).await;
+            let id = expect(&mut mock, "Runtime.callFunctionOn").await;
             mock.reply(id, json!({ "result": { "type": "undefined" } }))
                 .await;
             // rawKeyDown for Backspace (never forward Delete).
-            let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+            let id = expect(&mut mock, "Input.dispatchKeyEvent").await;
             let sent = mock.last_sent();
             assert_eq!(sent["params"]["type"], "rawKeyDown");
             assert_eq!(sent["params"]["key"], "Backspace");
@@ -1356,7 +1387,7 @@ mod tests {
             saw_backspace = true;
             mock.reply(id, json!({})).await;
             // keyUp.
-            let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+            let id = expect(&mut mock, "Input.dispatchKeyEvent").await;
             assert_eq!(mock.last_sent()["params"]["type"], "keyUp");
             mock.reply(id, json!({})).await;
         }
@@ -1385,7 +1416,7 @@ mod tests {
             async move { e.upload_files(&paths).await }
         });
 
-        let id = mock.expect_cmd("DOM.setFileInputFiles").await;
+        let id = expect(&mut mock, "DOM.setFileInputFiles").await;
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["backendNodeId"], 42);
         let files = sent["params"]["files"].as_array().unwrap();
@@ -1411,7 +1442,7 @@ mod tests {
         });
 
         // Step 1: scroll_into_view → Runtime.callFunctionOn.
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         assert!(
             mock.last_sent()["params"]["functionDeclaration"]
                 .as_str()
@@ -1423,7 +1454,7 @@ mod tests {
 
         // Step 2: bounding_box → DOM.getBoxModel. Box top-left (10,20), 100x50
         // ⇒ center (60, 45).
-        let id = mock.expect_cmd("DOM.getBoxModel").await;
+        let id = expect(&mut mock, "DOM.getBoxModel").await;
         mock.reply(
             id,
             json!({
@@ -1442,7 +1473,7 @@ mod tests {
         // Step 3: overlay injected via Runtime.callFunctionOn carrying the
         // dot-building JS (createElement + setTimeout/remove), with the
         // viewport-center coords + duration passed as arguments.
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
         let decl = sent["params"]["functionDeclaration"].as_str().unwrap();
         assert!(decl.contains("createElement"), "should build a dot element");
@@ -1452,10 +1483,19 @@ mod tests {
         );
         let args = sent["params"]["arguments"].as_array().unwrap();
         // call_on_main prepends the element {objectId}; then cx, cy, ms.
+        assert_eq!(args.len(), 4);
         assert_eq!(args[0]["objectId"], "R1");
         assert_eq!(args[1]["value"], 60.0); // center x
         assert_eq!(args[2]["value"], 45.0); // center y
         assert_eq!(args[3]["value"], 500); // duration ms
+        // Each coordinate must be read at the index it was sent. Without the
+        // leading `el` every parameter shifts by one: the dot is positioned
+        // at the stringified element, and `ms` reads undefined.
+        assert_eq!(
+            js_params(decl),
+            vec!["el", "cx", "cy", "ms"],
+            "coords/duration must bind to the parameters the body reads"
+        );
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
 
@@ -1476,11 +1516,11 @@ mod tests {
         });
 
         // Step 1: Overlay.enable (highlightNode is a no-op without it).
-        let id = mock.expect_cmd("Overlay.enable").await;
+        let id = expect(&mut mock, "Overlay.enable").await;
         mock.reply(id, json!({})).await;
 
         // Step 2: Overlay.highlightNode { backendNodeId, highlightConfig }.
-        let id = mock.expect_cmd("Overlay.highlightNode").await;
+        let id = expect(&mut mock, "Overlay.highlightNode").await;
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["backendNodeId"], 42);
         assert!(
@@ -1506,7 +1546,7 @@ mod tests {
         });
 
         // Step 1: scroll_into_view → Runtime.callFunctionOn.
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         assert!(
             mock.last_sent()["params"]["functionDeclaration"]
                 .as_str()
@@ -1518,7 +1558,7 @@ mod tests {
 
         // Step 2: bounding_box → DOM.getBoxModel. Box top-left (10,20), 100x50
         // ⇒ center (60, 45) = the drag source.
-        let id = mock.expect_cmd("DOM.getBoxModel").await;
+        let id = expect(&mut mock, "DOM.getBoxModel").await;
         mock.reply(
             id,
             json!({
