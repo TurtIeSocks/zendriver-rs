@@ -42,8 +42,13 @@ let browser = zendriver::Browser::builder()
 
 `ensure_chrome` resolves the latest stable CFT version for the host
 platform, downloads + extracts it on cache miss, and points the
-[`BrowserBuilder`] at the resulting binary. On a cache hit the call
-returns in milliseconds and skips the network.
+[`BrowserBuilder`] at the resulting binary.
+
+Resolution runs on every call, before the cache is consulted — the cache
+is keyed by the resolved build id, so the manifest has to be fetched to
+know which key to look for. A cache hit skips the download and the
+extraction, not the manifest request, so `ensure_chrome` is not an
+offline path.
 
 ## The full builder
 
@@ -303,17 +308,22 @@ A minimal `.github/workflows/test.yml` snippet:
 - run: cargo test --features fetcher
 ```
 
-`actions/cache` rehydrates the cache dir; the fetcher detects the cache
-hit and skips the download. First run takes ~30 s on GitHub's free
-runners; cached runs take &lt;1 s in `ensure_chrome`.
+`actions/cache` rehydrates the cache dir; the fetcher resolves the
+manifest, detects the cache hit, and skips the download. First run takes
+~30 s on GitHub's free runners; cached runs take &lt;1 s in
+`ensure_chrome` — the manifest request, not the archive transfer. The
+runner still needs egress to the manifest host either way.
 
 ## When NOT to use it
 
 - **You already have Chrome on the host** and don't care about
   version-pinning — the built-in PATH discovery is faster.
 - **Network-restricted environments** that can't reach
-  `https://googlechromelabs.github.io` or the CFT CDN — pre-populate
-  the cache out-of-band or ship a Docker image with Chrome baked in.
+  `https://googlechromelabs.github.io` or the CFT CDN. Pre-populating the
+  cache dir is not enough — the manifest is resolved before the cache is
+  probed, so `ensure_chrome` still errors. Point
+  [`BrowserBuilder::executable`] at the binary directly, or ship a Docker
+  image with Chrome baked in.
 - **You need Chrome stable on Linux ARM64** — CFT doesn't ship a
   `linux-arm64` build today;
   [`Platform::auto_detect`] returns `None` on that host and

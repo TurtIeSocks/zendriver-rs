@@ -211,7 +211,11 @@ impl Fetcher {
     /// Resolve, download, extract (on cache miss), and return the path
     /// to the cached Chrome binary.
     ///
-    /// On a cache hit, returns immediately without touching the network.
+    /// Resolution runs on every call, *before* the cache is consulted: the
+    /// cache is keyed by the resolved build id, so the manifest has to be
+    /// fetched to know which key to look for. A cache hit therefore skips the
+    /// download and the extraction, but not the manifest request — a fully
+    /// populated cache still fails without egress.
     ///
     /// # Errors
     ///
