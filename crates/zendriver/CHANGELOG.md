@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-08-07
+
+### Added
+
+- Resolve ungoogled-chromium and Chromium snapshots
+
+
 ## [0.5.3] - 2026-08-06
 
 
