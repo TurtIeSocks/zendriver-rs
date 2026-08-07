@@ -2,7 +2,7 @@
 //!
 //! See the [Fetcher chapter](https://turtiesocks.github.io/zendriver-rs/fetcher.html)
 //! of the [zendriver-rs user guide](https://turtiesocks.github.io/zendriver-rs/)
-//! for cache-layout details, offline-mode workflows, and CI integration tips.
+//! for cache-layout details and CI integration tips.
 //!
 //! Resolves a [`Distribution`] + [`VersionSpec`] + [`Platform`] triple against
 //! that distribution's index, downloads the matching archive, unpacks it into

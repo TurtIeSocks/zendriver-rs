@@ -8,9 +8,10 @@
 //!
 //! [`Fetcher::ensure_chrome`] resolves the manifest, downloads + extracts
 //! into the OS-conventional cache dir on a cache miss, and returns a
-//! [`PathBuf`] to a runnable Chrome binary. On a cache hit (binary already
-//! extracted under `<cache>/<version>/`), it skips the network entirely
-//! and returns the cached path.
+//! [`PathBuf`] to a runnable Chrome binary. The manifest is resolved on
+//! every call, before the cache is probed, so a cache hit (binary already
+//! extracted under `<cache>/<build-id>/`) skips the download and the
+//! extraction but still needs to reach the manifest host.
 //!
 //! After resolving the path, you can hand it to a [`Browser`] launch:
 //! `Browser::builder().executable(path).launch().await?` — or use the
