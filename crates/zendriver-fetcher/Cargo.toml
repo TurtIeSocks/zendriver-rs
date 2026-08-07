@@ -1,6 +1,6 @@
 [package]
 name = "zendriver-fetcher"
-description = "Chrome binary downloader for zendriver"
+description = "Chromium binary downloader for zendriver — Chrome for Testing, ungoogled-chromium and Chromium snapshots"
 version = "0.1.15"
 edition.workspace = true
 rust-version.workspace = true
@@ -19,6 +19,18 @@ rustdoc-args = ["--cfg", "docsrs"]
 [lints]
 workspace = true
 
+# Library first: the CLI is opt-in, so `clap` never lands in the dependency
+# graph of a crate that only wants to download a browser.
+#   cargo install zendriver-fetcher --features cli
+[features]
+default = []
+cli = ["dep:clap"]
+
+[[bin]]
+name              = "zendriver-fetch"
+path              = "src/bin/zendriver-fetch.rs"
+required-features = ["cli"]
+
 [dependencies]
 tokio.workspace      = true
 reqwest.workspace    = true
@@ -31,6 +43,9 @@ serde_json.workspace = true
 thiserror.workspace  = true
 tracing.workspace    = true
 futures.workspace    = true
+
+# CLI only.
+clap = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio-test.workspace = true

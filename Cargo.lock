@@ -3493,6 +3493,7 @@ dependencies = [
 name = "zendriver-fetcher"
 version = "0.1.15"
 dependencies = [
+ "clap",
  "dirs",
  "futures",
  "reqwest",

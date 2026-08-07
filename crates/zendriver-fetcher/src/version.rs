@@ -32,17 +32,39 @@ impl Channel {
     }
 }
 
-/// How to resolve a Chrome for Testing version.
+/// Which build to resolve.
+///
+/// Not every selector is meaningful for every
+/// [`Distribution`](crate::Distribution): a snapshot bucket has no channels
+/// and no version index, and a version-keyed distribution has no revisions.
+/// The combinations that cannot be honoured return
+/// [`FetcherError::UnsupportedSelector`](crate::FetcherError::UnsupportedSelector)
+/// naming the alternative, rather than quietly resolving something else.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum VersionSpec {
-    /// Last entry in the manifest (effectively the newest known good version).
+    /// Newest build the distribution publishes for the target platform.
     Latest,
     /// Alias for the stable channel; for now identical to [`VersionSpec::Latest`].
     Stable,
-    /// Pick a specific release channel.
+    /// Pick a specific release channel. Chrome for Testing only — neither
+    /// ungoogled-chromium nor the snapshot bucket publishes channels.
     Channel(Channel),
     /// Exact version string, e.g. `"126.0.6478.182"`.
+    ///
+    /// Matched exactly against Chrome for Testing's manifest, and as a **tag
+    /// prefix** for ungoogled-chromium, whose tags append a packaging suffix
+    /// (`151.0.7922.71-1.1`). Refused for
+    /// [`Distribution::ChromiumSnapshot`](crate::Distribution::ChromiumSnapshot),
+    /// which has no version index — use [`VersionSpec::Revision`] there.
     Explicit(String),
+    /// Exact Chromium revision (commit position), e.g. `1674890`.
+    ///
+    /// The only way to pin a specific
+    /// [`Distribution::ChromiumSnapshot`](crate::Distribution::ChromiumSnapshot)
+    /// build, since that bucket is keyed by revision. Refused for the
+    /// version-keyed distributions.
+    Revision(u64),
 }
 
 #[cfg(test)]
