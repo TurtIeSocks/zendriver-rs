@@ -3,6 +3,37 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.2.0] - 2026-08-07
+
+### Added
+
+- Resolve ungoogled-chromium and Chromium snapshots
+- Add the zendriver-fetch CLI behind a non-default cli feature
+
+### Changed
+
+- Build staging paths without a lossy display() round-trip
+- Derive the CfT binary path from cft_top_dir
+- Compute the ungoogled zip top-level directory once
+
+### Fixed
+
+- Ignore ungoogled assets whose name is not a plain filename
+- Extract validated symlinks, or macOS never gets a binary
+- Gate resolve_target to unix so Windows builds compile
+- Reject drive-relative ungoogled asset names
+- Send GITHUB_TOKEN only to https://api.github.com
+- Fail manifest fetches on HTTP status
+- Name the channel the flat manifest cannot resolve
+- Resolve symlink targets against the link's real parent
+- Validate the build id an index hands back
+- Resolve symlink target components against the filesystem
+- Refuse zip entries carrying a parent-directory component
+- Give each fetch its own staging directory
+- Prefer the ungoogled tag that has this platform's asset
+- Verify symlink containment on the finished tree
+
+
 ## [0.1.15] - 2026-07-29
 
 
