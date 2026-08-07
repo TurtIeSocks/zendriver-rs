@@ -1,2 +1,2 @@
-window.ALL_CRATES = ["gpu_catalogue_gen","gpu_tier_gen","locale_gen","zendriver","zendriver_cloudflare","zendriver_datadome","zendriver_fetcher","zendriver_fingerprints","zendriver_imperva","zendriver_interception","zendriver_mcp","zendriver_stealth","zendriver_transport"];
-//{"start":21,"fragment_lengths":[19,15,13,12,23,21,20,25,20,25,16,20,22]}
+window.ALL_CRATES = ["gpu_catalogue_gen","gpu_tier_gen","locale_gen","zendriver","zendriver_cloudflare","zendriver_datadome","zendriver_fetch","zendriver_fetcher","zendriver_fingerprints","zendriver_imperva","zendriver_interception","zendriver_mcp","zendriver_stealth","zendriver_transport"];
+//{"start":21,"fragment_lengths":[19,15,13,12,23,21,18,20,25,20,25,16,20,22]}
