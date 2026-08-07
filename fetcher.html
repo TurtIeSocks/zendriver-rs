@@ -211,8 +211,12 @@ zendriver = { version = "0.1", features = ["fetcher"] }
 </span><span class="boring">}</span></code></pre></pre>
 <p><code>ensure_chrome</code> resolves the latest stable CFT version for the host
 platform, downloads + extracts it on cache miss, and points the
-[<code>BrowserBuilder</code>] at the resulting binary. On a cache hit the call
-returns in milliseconds and skips the network.</p>
+[<code>BrowserBuilder</code>] at the resulting binary.</p>
+<p>Resolution runs on every call, before the cache is consulted — the cache
+is keyed by the resolved build id, so the manifest has to be fetched to
+know which key to look for. A cache hit skips the download and the
+extraction, not the manifest request, so <code>ensure_chrome</code> is not an
+offline path.</p>
 <h2 id="the-full-builder"><a class="header" href="#the-full-builder">The full builder</a></h2>
 <p><a href="https://docs.rs/zendriver/latest/zendriver/struct.Fetcher.html#method.new"><code>Fetcher::new</code></a> returns a builder with sensible defaults. Configure as
 needed, then call <a href="https://docs.rs/zendriver/latest/zendriver/struct.Fetcher.html#method.ensure_chrome"><code>ensure_chrome</code></a>:</p>
@@ -226,9 +230,10 @@ needed, then call <a href="https://docs.rs/zendriver/latest/zendriver/struct.Fet
 //!
 //! [`Fetcher::ensure_chrome`] resolves the manifest, downloads + extracts
 //! into the OS-conventional cache dir on a cache miss, and returns a
-//! [`PathBuf`] to a runnable Chrome binary. On a cache hit (binary already
-//! extracted under `&lt;cache&gt;/&lt;version&gt;/`), it skips the network entirely
-//! and returns the cached path.
+//! [`PathBuf`] to a runnable Chrome binary. The manifest is resolved on
+//! every call, before the cache is probed, so a cache hit (binary already
+//! extracted under `&lt;cache&gt;/&lt;build-id&gt;/`) skips the download and the
+//! extraction but still needs to reach the manifest host.
 //!
 //! After resolving the path, you can hand it to a [`Browser`] launch:
 //! `Browser::builder().executable(path).launch().await?` — or use the
@@ -457,16 +462,21 @@ binaries are ~150 MB compressed; one download serves every job).</li>
     key: zendriver-chrome-${{ runner.os }}-126.0.6478.182
 - run: cargo test --features fetcher
 </code></pre>
-<p><code>actions/cache</code> rehydrates the cache dir; the fetcher detects the cache
-hit and skips the download. First run takes ~30 s on GitHub's free
-runners; cached runs take &lt;1 s in <code>ensure_chrome</code>.</p>
+<p><code>actions/cache</code> rehydrates the cache dir; the fetcher resolves the
+manifest, detects the cache hit, and skips the download. First run takes
+~30 s on GitHub's free runners; cached runs take &lt;1 s in
+<code>ensure_chrome</code> — the manifest request, not the archive transfer. The
+runner still needs egress to the manifest host either way.</p>
 <h2 id="when-not-to-use-it"><a class="header" href="#when-not-to-use-it">When NOT to use it</a></h2>
 <ul>
 <li><strong>You already have Chrome on the host</strong> and don't care about
 version-pinning — the built-in PATH discovery is faster.</li>
 <li><strong>Network-restricted environments</strong> that can't reach
-<code>https://googlechromelabs.github.io</code> or the CFT CDN — pre-populate
-the cache out-of-band or ship a Docker image with Chrome baked in.</li>
+<code>https://googlechromelabs.github.io</code> or the CFT CDN. Pre-populating the
+cache dir is not enough — the manifest is resolved before the cache is
+probed, so <code>ensure_chrome</code> still errors. Point
+[<code>BrowserBuilder::executable</code>] at the binary directly, or ship a Docker
+image with Chrome baked in.</li>
 <li><strong>You need Chrome stable on Linux ARM64</strong> — CFT doesn't ship a
 <code>linux-arm64</code> build today;
 <a href="https://docs.rs/zendriver/latest/zendriver/enum.Platform.html#method.auto_detect"><code>Platform::auto_detect</code></a> returns <code>None</code> on that host and
