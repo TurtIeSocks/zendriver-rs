@@ -89,6 +89,13 @@ fn cache_path(url: &str) -> PathBuf {
 /// `Response::text()`, because `max_bytes` has to hold against a source that
 /// simply keeps sending: a `Content-Length` check only helps when the server
 /// is honest, and a chunked response advertises nothing at all.
+///
+/// The decode is deliberately **lossy**, which keeps the behavior
+/// `Response::text()` had (reqwest is pulled without the `charset` feature, so
+/// its `text()` is `from_utf8_lossy` too). A strict decode would turn one
+/// latin-1 byte in a third-party list's licence header into a hard
+/// `Browser::launch()` failure — see [`crate::BrowserBuilder::tracker_blocklist_url`]
+/// for why that trade goes this way.
 async fn download_blocklist(
     url: &str,
     connect_timeout: Duration,
@@ -132,8 +139,7 @@ async fn download_blocklist(
         }
         body.extend_from_slice(&chunk);
     }
-    String::from_utf8(body)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.utf8_error()))
+    Ok(String::from_utf8_lossy(&body).into_owned())
 }
 
 /// Load a host list from local cache, or download from `url` and cache it.
@@ -343,6 +349,49 @@ mod tests {
         );
 
         server.abort();
+    }
+
+    /// A third-party list whose *comments* are latin-1 must still load. The
+    /// decode is lossy on purpose: `download_blocklist` runs inside
+    /// `Browser::launch()` and caches nothing on failure, so a strict decode
+    /// makes one cosmetic byte in a licence header an unrecoverable launch
+    /// error. Host lines are ASCII, so the replacement character lands only in
+    /// text `parse_blocklist` throws away.
+    #[tokio::test]
+    async fn download_decodes_a_latin1_body_instead_of_failing() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // `\xa9` is `©` in Windows-1252 and an invalid UTF-8 sequence on its
+        // own — exactly the byte a mirror's copyright line carries.
+        let body: Vec<u8> =
+            b"# Peter Lowe's list \xa9 2026\n0.0.0.0 tracker.test\nevil.test\n".to_vec();
+        assert!(
+            std::str::from_utf8(&body).is_err(),
+            "precondition: the fixture must actually be invalid UTF-8"
+        );
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/trackers.txt"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body))
+            .mount(&server)
+            .await;
+
+        let text = download_blocklist(
+            &format!("{}/trackers.txt", server.uri()),
+            Duration::from_secs(2),
+            Duration::from_secs(5),
+            MAX_BLOCKLIST_BYTES,
+        )
+        .await
+        .expect("a latin-1 comment must not fail the download");
+
+        assert_eq!(
+            parse_blocklist(&text),
+            vec!["tracker.test".to_string(), "evil.test".to_string()],
+            "every host line must survive the lossy decode"
+        );
     }
 
     #[test]

@@ -1011,6 +1011,20 @@ impl BrowserBuilder {
     /// exceeds any of them fails [`Self::launch`] rather than stalling or
     /// buffering it — so if the mirror you want is slow or enormous, seed the
     /// cache yourself or use [`Self::tracker_blocklist_file`] instead.
+    ///
+    /// The body is decoded as UTF-8 **lossily**: a byte sequence that is not
+    /// valid UTF-8 becomes `U+FFFD` rather than failing the launch. The three
+    /// bounds above are about resources this process must spend, and each of
+    /// them is a real reason to give up; a stray encoding byte is not. Host
+    /// lines are ASCII, so in practice the bad bytes sit in a comment or
+    /// licence header — a latin-1 `©`, a Windows-1252 apostrophe — that the
+    /// parser discards either way. Failing instead would cost more than it
+    /// buys, because this download happens inside [`Self::launch`] and nothing
+    /// is cached when it fails: every later launch would re-fetch and fail
+    /// identically, over a file the user does not control and whose offending
+    /// bytes never reach the matcher. If you need the bytes to be exactly what
+    /// the mirror served, fetch the list yourself and pass it via
+    /// [`Self::tracker_blocklist_file`].
     #[cfg(feature = "tracker-blocking")]
     #[must_use]
     pub fn tracker_blocklist_url(mut self, url: impl Into<String>) -> Self {

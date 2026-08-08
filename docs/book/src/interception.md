@@ -181,6 +181,11 @@ whole request, 32 MiB of body. None of those are configurable, and a source that
 exceeds one fails the launch. For a mirror that is slow or unusually large,
 pre-seed the cache or point `tracker_blocklist_file` at a local copy.
 
+Those three bounds are the only things about a URL source that can fail a
+launch. The body is decoded as UTF-8 lossily, so a list whose licence header
+carries a latin-1 byte still loads: host lines are ASCII, and the replacement
+character only ever lands in text the parser discards.
+
 [`block_trackers(true)`]: https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.block_trackers
 [`tracker_blocklist_add`]: https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.tracker_blocklist_add
 [`tracker_blocklist_file`]: https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.tracker_blocklist_file
