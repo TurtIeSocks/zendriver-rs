@@ -223,6 +223,12 @@ special-cased. Wait for `wait_for_load()` / `wait_for_idle()` before
 the call, or use [`expect_response`](./expect.md) to pin the wait to
 the specific event you care about.
 
+`Tab::evaluate` and `Frame::evaluate` already recover from this on
+their own: they drop the dead execution context, create a fresh
+isolated world and retry once. Seeing the error surface from either of
+those means the context died twice in a row, which normally points at a
+page navigating in a loop rather than at a one-off race.
+
 [`ZendriverError::Navigation`]: https://docs.rs/zendriver/latest/zendriver/enum.ZendriverError.html#variant.Navigation
 
 ## `wait_for_idle` never returns on a page with a long-poll, SSE, or analytics-beacon request
