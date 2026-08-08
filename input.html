@@ -378,12 +378,18 @@ input.press_with(
 <p><a href="https://docs.rs/zendriver/latest/zendriver/enum.Key.html"><code>Key</code></a> is one of:</p>
 <ul>
 <li><code>Key::Char(char)</code> — any typeable character.</li>
-<li><code>Key::Special(SpecialKey)</code> — named non-character key.</li>
+<li><code>Key::Special(SpecialKey)</code> — a key with a name rather than a glyph.</li>
 </ul>
 <p><a href="https://docs.rs/zendriver/latest/zendriver/enum.SpecialKey.html"><code>SpecialKey</code></a> covers Enter, Tab, Escape, Backspace, Delete, Space, all
 four arrows, Home, End, PageUp, PageDown, F1-F12, Insert, CapsLock,
-NumLock, ScrollLock, PrintScreen, Pause, ContextMenu — the full
-non-character keyboard.</p>
+NumLock, ScrollLock, PrintScreen, Pause, ContextMenu — the whole named
+keyboard. Two of them still type: <code>Space</code> inserts a space, and <code>Enter</code>
+inserts a newline in a <code>&lt;textarea&gt;</code> or contenteditable while in a
+single-line <code>&lt;input&gt;</code> it inserts nothing and only submits a form that
+allows implicit submission — exactly as the physical keys do. The rest
+only run their default action. Holding Ctrl, Alt or Meta suppresses the
+insertion, for those two and for character keys alike, the same way a
+shortcut does on real hardware.</p>
 <p><a href="https://docs.rs/zendriver/latest/zendriver/struct.KeyModifiers.html"><code>KeyModifiers</code></a> is a bitflags struct:</p>
 <ul>
 <li><code>KeyModifiers::ALT</code> — Alt (Option on macOS).</li>
