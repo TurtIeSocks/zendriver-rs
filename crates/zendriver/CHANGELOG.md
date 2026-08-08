@@ -12,6 +12,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 - Rebuild the visibility predicate, and prove it against real Chrome ([#158](https://github.com/TurtIeSocks/zendriver-rs/pull/158))
 
 
+## [0.5.11] - 2026-08-08
+
+### Fixed
+
+- Rebuild the visibility predicate, and prove it against real Chrome ([#158](https://github.com/TurtIeSocks/zendriver-rs/pull/158))
+
+
 ### Fixed
 
 - Clipped screenshots no longer come back blank when the rect reaches past the
