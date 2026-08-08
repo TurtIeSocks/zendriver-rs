@@ -7,9 +7,6 @@ permissions:
 on:
   push:
     branches: [main]
-    # Don't fire on the release PR's own merge commit (release-plz
-    # commits are titled "chore: release ..."); the release workflow
-    # picks that up instead.
   workflow_dispatch:
 
 concurrency:
@@ -20,6 +17,24 @@ jobs:
   release-plz-pr:
     name: Update release PR
     runs-on: ubuntu-latest
+    # Never react to release-plz's own merge landing on main. The
+    # auto-merge step below uses the PAT, so unlike a GITHUB_TOKEN push
+    # it *does* retrigger this workflow — which closes a cycle:
+    # open release PR -> auto-merge -> push -> open release PR. The only
+    # thing normally breaking it is release-plz finding nothing to
+    # release on the second pass, and on 2026-08-08 that failed: a
+    # malformed crates/zendriver/CHANGELOG.md made `changelog_update`
+    # non-idempotent, so every pass produced a diff, read it as an
+    # unreleased change, and cut another version. 44 empty releases and
+    # 26 crates.io publishes later, the workflow had to be disabled by
+    # hand. Publishing still happens — release-plz-release.yml is what
+    # listens for the release merge.
+    #
+    # Matches both shapes the merge can take: a squash ("chore: release")
+    # and a merge commit ("Merge pull request #N from …/release-plz-…").
+    if: >-
+      !startsWith(github.event.head_commit.message, 'chore: release') &&
+      !contains(github.event.head_commit.message, '/release-plz-')
     steps:
       - uses: actions/checkout@v4
         with:

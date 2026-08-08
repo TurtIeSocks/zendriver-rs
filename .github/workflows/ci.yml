@@ -32,6 +32,37 @@ jobs:
           cargo run -p gpu-tier-gen
           git diff --exit-code crates/zendriver-stealth/src/gpu/tiers.rs
 
+      # release-plz rewrites these files on every run with
+      # `changelog_update = true`. That rewrite is only idempotent against
+      # a well-formed file: on 2026-08-08 a rebase left a duplicated,
+      # out-of-order heading in crates/zendriver/CHANGELOG.md, so every
+      # run produced a diff, read the diff as an unreleased change, and cut
+      # another version — 44 empty releases and 26 crates.io publishes
+      # before anyone noticed. Nothing else in CI reads these files, so
+      # this is the only thing standing between a bad merge and that loop.
+      - name: Changelogs are well-formed
+        run: |
+          fail=0
+          for f in CHANGELOG.md crates/*/CHANGELOG.md; do
+            titles=$(grep -c '^# Changelog' "$f")
+            if [ "$titles" -ne 1 ]; then
+              echo "::error file=$f::expected exactly 1 '# Changelog' title block, found $titles"
+              fail=1
+            fi
+            dups=$(grep -o '^## \[[^]]*\]' "$f" | sort | uniq -d)
+            if [ -n "$dups" ]; then
+              echo "::error file=$f::duplicate version headings: $(echo "$dups" | tr '\n' ' ')"
+              fail=1
+            fi
+            vers=$(grep -o '^## \[[0-9][0-9.]*\]' "$f" | tr -d '#[] ')
+            if [ -n "$vers" ] \
+              && ! diff -q <(printf '%s\n' "$vers") <(printf '%s\n' "$vers" | sort -rV) >/dev/null; then
+              echo "::error file=$f::version headings are not in descending order"
+              fail=1
+            fi
+          done
+          exit $fail
+
   clippy:
     runs-on: ubuntu-latest
     steps:
