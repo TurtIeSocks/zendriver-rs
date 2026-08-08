@@ -42,7 +42,7 @@ diff self-evidently scoped.
 | **3e** | Query builders — `RoleMatch`, `NameMatch`, `AriaRole::Other`, `FindAllBuilder`, `ClearOptions`, `ScrollOptions::anchor`; element reads through the isolated world | |
 | **4a** | `impl Default for InputProfile`, then the nine new axes across all three presets | Default must land first or every later field is breaking |
 | **4b** | Route `type_keys` / `press` / `press_with` and both `mouse_drag`s through the profile; `input_seed` | |
-| **4c** | `StealthProfile::{focus_emulation, patch_workers, default_languages}`; `Surface::{Plugins, Codecs, BrokenImage}` | |
+| **4c** | `StealthProfile::{focus_emulation, patch_workers, default_languages}`; `Surface::{Plugins, Codecs, BrokenImage}`; reconcile the two `--lang` emitters — `BrowserBuilder::lang` (`browser.rs:1718`) and `StealthProfile::locale` (`profile.rs:545`) both push one, so setting both puts two in argv | the `--lang` half of the locale axis; 2a folds the CDP half |
 | **4d** | `ScreenSpec`, `BatterySpec`, `MediaDeviceSpec`, `VoiceSpec`; probe `Browser.getVersion` instead of the pinned Chrome 148 | |
 | **5a-1** | `ignore_default_args` / `ignore_all_default_args` / `default_args()` | |
 | **5a-2** | `remote_debugging_port` / `_address` + the `parse_devtools_active_port` hardcode, `proxy_bypass`, `profile_directory`, `stray_targets` | |

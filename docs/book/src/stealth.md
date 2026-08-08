@@ -133,7 +133,7 @@ let profile = StealthProfile::spoofed()
     .cpu_count(8)               // navigator.hardwareConcurrency
     .chrome_version(126)        // Chrome major in UA + Sec-CH-UA
     .platform(Platform::Win32)  // navigator.platform + OS in UA
-    .locale("en-US")            // navigator.language + --lang flag
+    .locale("en-US")            // navigator.language + Accept-Language + --lang
     .timezone("America/New_York");
 
 let browser = Browser::builder()
@@ -142,6 +142,21 @@ let browser = Browser::builder()
     .await?;
 # Ok(()) }
 ```
+
+`locale` alone is usually enough. It sets the `--lang` launch flag, the
+JS-visible locale that `navigator.language` and `Intl` read, and an
+`Accept-Language` derived from it (`en-US` gives `en-US,en;q=0.9`). Reach
+for `.languages([...])` when you need the header to advertise a longer or
+differently-weighted list. Its first entry then becomes
+`navigator.language` as well, because Chrome always reports that as
+`navigator.languages[0]`, and a locale sitting outside the advertised
+list is a mismatch no real browser produces.
+
+A [`Persona`](https://docs.rs/zendriver-stealth/latest/zendriver_stealth/struct.Persona.html)
+carries the same `timezone` / `locale` / `languages` / `screen` fields,
+and whichever ones it sets take precedence over the profile's. Anything
+it leaves unset falls through to the values above, so a persona can pin
+one axis without restating the rest.
 
 You can also override the User-Agent string verbatim — useful when
 you need an exact UA that doesn't match the auto-composed one:
