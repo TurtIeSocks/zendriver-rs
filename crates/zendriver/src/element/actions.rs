@@ -119,8 +119,11 @@ pub struct ClickOptions {
     pub button: MouseButton,
     /// Modifier keys held during the dispatch. Empty by default.
     pub modifiers: KeyModifiers,
-    /// `clickCount` for the CDP dispatch. `1` by default; set `2` for a
-    /// double-click in a single `click_with` call.
+    /// Number of press/release pairs to emit. `1` by default; `2` sends the
+    /// two pairs carrying `clickCount` 1 then 2 that Chrome produces for a
+    /// real double-click, rather than one pair carrying `clickCount: 2`
+    /// (which a page counting `mousedown` events cannot distinguish from a
+    /// single click). `0` is treated as `1`.
     pub click_count: u32,
     /// Skip the actionability gate when true. Use sparingly — bypasses the
     /// visibility/stability/pointer checks. Mirrors Playwright's
@@ -231,9 +234,11 @@ impl Element {
             if !opts.force {
                 actionability::wait_actionable(
                     self,
-                    ActionabilityCheck::FULL,
+                    ActionabilityCheck {
+                        hit_point: opts.position,
+                        ..ActionabilityCheck::FULL
+                    },
                     DEFAULT_ACTIONABILITY_TIMEOUT,
-                    opts.position,
                 )
                 .await?;
             }
@@ -287,7 +292,6 @@ impl Element {
                 self,
                 ActionabilityCheck::FULL,
                 DEFAULT_ACTIONABILITY_TIMEOUT,
-                None,
             )
             .await?;
             let bbox = self
@@ -323,14 +327,8 @@ impl Element {
             self.scroll_into_view().await?;
             actionability::wait_actionable(
                 self,
-                ActionabilityCheck {
-                    visible: true,
-                    stable: true,
-                    enabled: false,
-                    receives_pointer: true,
-                },
+                ActionabilityCheck::HOVER,
                 DEFAULT_ACTIONABILITY_TIMEOUT,
-                None,
             )
             .await?;
             let bbox = self
@@ -368,14 +366,8 @@ impl Element {
             self.scroll_into_view().await?;
             actionability::wait_actionable(
                 self,
-                ActionabilityCheck {
-                    visible: true,
-                    stable: true,
-                    enabled: false,
-                    receives_pointer: true,
-                },
+                ActionabilityCheck::HOVER,
                 DEFAULT_ACTIONABILITY_TIMEOUT,
-                None,
             )
             .await?;
             let bbox = self
@@ -415,7 +407,6 @@ impl Element {
                 self,
                 ActionabilityCheck::TEXT_INPUT,
                 DEFAULT_ACTIONABILITY_TIMEOUT,
-                None,
             )
             .await?;
             let _ = self
@@ -586,9 +577,19 @@ impl Element {
     /// 1. [`Element::focus`] the element.
     /// 2. Select-all chord — `Cmd+A` on macOS, `Ctrl+A` elsewhere — so the
     ///    whole value is selected before deletion.
-    /// 3. Read the current `value.length`, then press
-    ///    [`SpecialKey::Backspace`] that many times plus a small slack
-    ///    ([`CLEAR_BY_DELETING_SLACK`]), bounded by [`CLEAR_BY_DELETING_MAX`].
+    /// 3. Read the current `value.length` to size a Backspace budget: that
+    ///    many presses plus a small slack ([`CLEAR_BY_DELETING_SLACK`]),
+    ///    bounded by [`CLEAR_BY_DELETING_MAX`].
+    /// 4. Press [`SpecialKey::Backspace`] up to that budget, re-reading
+    ///    `value.length` every [`PROBE_EVERY_N_BACKSPACES`] strokes and
+    ///    returning as soon as the field reports empty. The budget is a
+    ///    ceiling, not a keystroke count: a field the select-all chord
+    ///    already cleared costs 16 strokes and a probe, not `len + slack`.
+    ///
+    /// One consequence of trusting the field's own report: an element whose
+    /// `value` getter under-reports — a custom element backing its text with
+    /// a shadow-DOM node, say — can stop the loop early and leave the field
+    /// partly filled.
     ///
     /// Deletes backward (Backspace) only — never forward-Delete — because
     /// `VK_DELETE` at caret position 0 is treated as a backward delete on some
@@ -886,30 +887,9 @@ z-index:2147483647;pointer-events:none;opacity:0.85;'; \
 mod tests {
     use super::*;
     use crate::tab::Tab;
-    use crate::test_support::{expect, serve_gate_probes, serve_scroll_into_view};
+    use crate::test_support::{expect, js_params, serve_gate_probes, serve_scroll_into_view};
     use zendriver_transport::SessionHandle;
     use zendriver_transport::testing::MockConnection;
-
-    /// Parameter names of a `function(a, b, ...){ ... }` declaration, in order.
-    ///
-    /// `call_on_main` prepends the element handle to the argument list, so the
-    /// parameter at index `i` binds to `arguments[i]`. Asserting the parameter
-    /// list against the emitted arguments is what catches an off-by-one — a
-    /// body declared `function(v)` reads the *element* out of `arguments[0]`
-    /// while the caller's value sits unread at `arguments[1]`, and every
-    /// assertion about the arguments array alone still passes.
-    ///
-    /// The first `(`/`)` pair is the parameter list: parameter names can't
-    /// contain parentheses, so a body that does (`setTimeout(...)`) is safe.
-    fn js_params(decl: &str) -> Vec<&str> {
-        let open = decl.find('(').expect("declaration opens a param list");
-        let close = decl.find(')').expect("declaration closes its param list");
-        decl[open + 1..close]
-            .split(',')
-            .map(str::trim)
-            .filter(|p| !p.is_empty())
-            .collect()
-    }
 
     #[tokio::test]
     async fn hover_dispatches_input_dispatchmouseevent_with_type_mousemoved() {
@@ -942,7 +922,7 @@ mod tests {
         // Step 2: actionability gate — visible → stable → receives_pointer
         // (gate order is visible → enabled → stable → receives_pointer, and
         // hover doesn't require enabled).
-        serve_gate_probes(&mut mock, 3).await;
+        serve_gate_probes(&mut mock, ActionabilityCheck::HOVER).await;
 
         // Step 3: bounding_box → DOM.getBoxModel.
         let id = expect(&mut mock, "DOM.getBoxModel").await;
@@ -1021,7 +1001,7 @@ mod tests {
 
         // Step 2: actionability gate (FULL = visible → enabled → stable →
         // receives_pointer); reply true to each.
-        serve_gate_probes(&mut mock, 4).await;
+        serve_gate_probes(&mut mock, ActionabilityCheck::FULL).await;
 
         // Step 3: bounding_box → DOM.getBoxModel.
         let id = expect(&mut mock, "DOM.getBoxModel").await;
@@ -1113,7 +1093,7 @@ mod tests {
 
         // Step 2: actionability gate (FULL = visible → enabled → stable →
         // receives_pointer), matching `click`'s gate.
-        serve_gate_probes(&mut mock, 4).await;
+        serve_gate_probes(&mut mock, ActionabilityCheck::FULL).await;
 
         // Step 3: bounding_box → DOM.getBoxModel. Box top-left (10,20),
         // 100x50 ⇒ center (60, 45).
@@ -1294,7 +1274,7 @@ mod tests {
         // the visibility gate is a viewport check: a field under the fold
         // fails it outright without one.
         serve_scroll_into_view(&mut mock).await;
-        serve_gate_probes(&mut mock, 2).await;
+        serve_gate_probes(&mut mock, ActionabilityCheck::TEXT_INPUT).await;
         let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
         assert!(
@@ -1313,7 +1293,7 @@ mod tests {
         // four dispatches: modifier keyDown → 'a' keyDown → 'a' keyUp →
         // modifier keyUp. Ctrl on Windows/Linux, Meta on macOS.
         serve_scroll_into_view(&mut mock).await;
-        serve_gate_probes(&mut mock, 2).await;
+        serve_gate_probes(&mut mock, ActionabilityCheck::TEXT_INPUT).await;
         let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
@@ -1374,7 +1354,7 @@ mod tests {
         for _ in 0..CLEAR_BY_DELETING_SLACK {
             // press(Backspace) focus: scroll + 2 gate probes + this.focus().
             serve_scroll_into_view(&mut mock).await;
-            serve_gate_probes(&mut mock, 2).await;
+            serve_gate_probes(&mut mock, ActionabilityCheck::TEXT_INPUT).await;
             let id = expect(&mut mock, "Runtime.callFunctionOn").await;
             mock.reply(id, json!({ "result": { "type": "undefined" } }))
                 .await;

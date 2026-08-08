@@ -28,7 +28,12 @@ pub enum Key {
 ///
 /// Most of these insert nothing — pressing them runs a default action, or
 /// nothing at all. `Space` and `Enter` are the exceptions: they are printable
-/// keys that happen to have names, and they type `" "` and a newline.
+/// keys that happen to have names. `Space` types `" "`. `Enter` inserts a
+/// newline in a `<textarea>` or a contenteditable; in a single-line `<input>`
+/// it inserts nothing and only triggers implicit form submission.
+///
+/// Holding Ctrl, Alt or Meta suppresses the insertion for both — the chord
+/// routes to a shortcut instead, exactly as on a physical keyboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpecialKey {
     /// Return / Enter.
@@ -475,6 +480,26 @@ fn special_text(k: SpecialKey) -> Option<&'static str> {
     }
 }
 
+/// `true` when a held modifier means this chord inserts no character.
+///
+/// Blink generates a character for Shift+key (that is what makes a capital)
+/// but not for Ctrl/Alt/Meta+key, which route to a shortcut instead. Chrome
+/// enforces this itself — verified against Chrome 151, Ctrl+Enter carrying
+/// `text: "\r"` left a `<textarea>` unchanged while the page's keydown
+/// handler still saw `{key: "Enter", ctrlKey: true}` — so dropping the field
+/// changes no observable behavior. It matches what Puppeteer puts on the
+/// wire, which is the shape anything fingerprinting the CDP stream is
+/// calibrated against.
+///
+/// Deliberately separate from the printable/non-printable question that
+/// picks the event type. Folding the two together would send Ctrl+Enter as
+/// `rawKeyDown`, and [`special_text`] documents what that costs: ~1.1s for
+/// the first such dispatch per renderer and a dead browser process on the
+/// second. The key is still printable; this chord just does not print.
+fn modifiers_suppress_text(mods: KeyModifiers) -> bool {
+    !mods.difference(KeyModifiers::SHIFT).is_empty()
+}
+
 /// Build the ordered CDP key-event payloads for a single [`Key`] press.
 ///
 /// - `KeyPress::Char`, or a `Key::Char` whose [`char_descriptor`] is `None`
@@ -513,7 +538,11 @@ pub(crate) fn key_events(key: Key, mods: KeyModifiers, kind: KeyPress) -> Vec<Ke
         let main_down = KeyEventPayload {
             event_type: "keyDown",
             modifiers: effective.cdp_bits(),
-            text: Some(c.to_string()),
+            text: if modifiers_suppress_text(effective) {
+                None
+            } else {
+                Some(c.to_string())
+            },
             key: Some(c.to_string()),
             code: Some(d.code),
             windows_vk: Some(d.windows_vk),
@@ -530,11 +559,17 @@ pub(crate) fn key_events(key: Key, mods: KeyModifiers, kind: KeyPress) -> Vec<Ke
         unreachable!("Key::Char handled above");
     };
     if force_char {
-        // char-event for a special key: the text it inserts if it is one of
-        // the printable ones, else its CDP `key` string. Rarely used, but
-        // keep the contract total.
         let (_, key_str, _) = k.to_cdp();
-        let text = special_text(k).unwrap_or(key_str);
+        // A `char` event IS a text insertion, so a special that inserts
+        // nothing has no char event to send. The predecessor fell back to the
+        // key's CDP name, which types the literal string "Tab" / "F5" /
+        // "Escape" into the focused field — a wrong total answer where an
+        // empty one was available. Unreachable from any public API today:
+        // `KeyPress::Char` has no non-test constructor (see its doc), and the
+        // emoji fallback `type_text` uses builds its payload directly.
+        let Some(text) = special_text(k) else {
+            return Vec::new();
+        };
         return vec![KeyEventPayload {
             event_type: "char",
             modifiers: mods.cdp_bits(),
@@ -546,16 +581,21 @@ pub(crate) fn key_events(key: Key, mods: KeyModifiers, kind: KeyPress) -> Vec<Ke
     }
     let (code, key_str, vk) = k.to_cdp();
     // A key that inserts text must say so, and `rawKeyDown` means precisely
-    // "generate no character" — see [`special_text`].
-    let text = special_text(k);
+    // "generate no character" — see [`special_text`]. That is a property of
+    // the KEY, so it decides the event type on its own; whether this
+    // particular chord actually prints is the separate question
+    // `modifiers_suppress_text` answers, and it only clears the `text` field.
+    let prints = special_text(k);
     let main_down = KeyEventPayload {
-        event_type: if text.is_some() {
+        event_type: if prints.is_some() {
             "keyDown"
         } else {
             "rawKeyDown"
         },
         modifiers: mods.cdp_bits(),
-        text: text.map(str::to_string),
+        text: prints
+            .filter(|_| !modifiers_suppress_text(mods))
+            .map(str::to_string),
         key: Some(key_str.to_string()),
         code: Some(code),
         windows_vk: Some(vk),
@@ -1183,6 +1223,116 @@ mod tests {
         // Chrome turns the carriage return into a newline in a textarea, and
         // it is what triggers implicit form submission in an input.
         assert_eq!(events[0].text.as_deref(), Some("\r"));
+    }
+
+    /// A non-Shift modifier means the chord runs a shortcut instead of
+    /// printing, so `text` must not ride along — but the *key* is still
+    /// printable, so the event type must stay `keyDown`.
+    ///
+    /// The second half is the load-bearing one. Deriving the event type from
+    /// "did we send text this time" instead of "is this key printable" turns
+    /// Ctrl+Enter into a `rawKeyDown`, which `special_text`'s doc records as
+    /// ~1.1s for the first such dispatch per renderer and a dead browser
+    /// process on the second.
+    #[test]
+    fn special_key_with_a_non_shift_modifier_sends_no_text_but_still_keydown() {
+        for (k, code) in [(SpecialKey::Enter, "Enter"), (SpecialKey::Space, "Space")] {
+            for mods in [
+                KeyModifiers::CTRL,
+                KeyModifiers::ALT,
+                KeyModifiers::META,
+                KeyModifiers::CTRL | KeyModifiers::SHIFT,
+            ] {
+                let events = key_events(Key::Special(k), mods, KeyPress::DownAndUp);
+                let main = events
+                    .iter()
+                    .find(|e| e.code == Some(code))
+                    .unwrap_or_else(|| panic!("no {code} event for {mods:?}"));
+                assert_eq!(
+                    main.event_type, "keyDown",
+                    "{code} is printable, so it must never be dispatched as rawKeyDown ({mods:?})"
+                );
+                assert!(
+                    main.text.is_none(),
+                    "{code} must carry no text while {mods:?} is held, got {:?}",
+                    main.text
+                );
+            }
+        }
+    }
+
+    /// Shift is the exception: Shift+Space still types a space, because Shift
+    /// is what makes a character rather than what replaces it.
+    #[test]
+    fn special_key_with_only_shift_still_carries_its_text() {
+        let events = key_events(
+            Key::Special(SpecialKey::Space),
+            KeyModifiers::SHIFT,
+            KeyPress::DownAndUp,
+        );
+        let main = events
+            .iter()
+            .find(|e| e.code == Some("Space"))
+            .expect("a Space event");
+        assert_eq!(main.event_type, "keyDown");
+        assert_eq!(main.text.as_deref(), Some(" "));
+    }
+
+    /// The same rule on the character path: Ctrl+A is a shortcut, not the
+    /// letter "a".
+    #[test]
+    fn char_with_a_non_shift_modifier_sends_no_text() {
+        let events = key_events(Key::Char('a'), KeyModifiers::CTRL, KeyPress::DownAndUp);
+        let main = events
+            .iter()
+            .find(|e| e.code == Some("KeyA"))
+            .expect("a KeyA event");
+        assert_eq!(main.event_type, "keyDown");
+        assert!(main.text.is_none(), "got {:?}", main.text);
+        // `key` still names the character — the page's handler reads it to
+        // decide which shortcut fired.
+        assert_eq!(main.key.as_deref(), Some("a"));
+
+        // Unmodified, and Shift-only, still type.
+        let plain = key_events(Key::Char('a'), KeyModifiers::empty(), KeyPress::DownAndUp);
+        assert_eq!(plain[0].text.as_deref(), Some("a"));
+        let shifted = key_events(Key::Char('A'), KeyModifiers::empty(), KeyPress::DownAndUp);
+        assert_eq!(
+            shifted
+                .iter()
+                .find(|e| e.code == Some("KeyA"))
+                .and_then(|e| e.text.as_deref()),
+            Some("A")
+        );
+    }
+
+    /// A `char` event is a text insertion, so a special that inserts nothing
+    /// has none to send. The predecessor answered with the key's CDP name,
+    /// which types the literal string "Tab" into the focused field.
+    #[test]
+    fn forced_char_event_for_a_non_printable_special_emits_nothing() {
+        for k in [
+            SpecialKey::Tab,
+            SpecialKey::Escape,
+            SpecialKey::F5,
+            SpecialKey::ArrowLeft,
+        ] {
+            let events = key_events(Key::Special(k), KeyModifiers::empty(), KeyPress::Char);
+            assert!(
+                events.is_empty(),
+                "{k:?} inserts no character, so it has no char event: {events:?}"
+            );
+        }
+
+        // The printable two keep their char event.
+        let space = key_events(
+            Key::Special(SpecialKey::Space),
+            KeyModifiers::empty(),
+            KeyPress::Char,
+        );
+        assert_eq!(space.len(), 1);
+        assert_eq!(space[0].event_type, "char");
+        assert_eq!(space[0].text.as_deref(), Some(" "));
     }
 
     #[test]

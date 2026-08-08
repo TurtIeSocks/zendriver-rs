@@ -11,6 +11,17 @@
 //! `hover`, `focus`, `type_text`, and `screenshot` (in `element::actions`
 //! / `element::screenshot`) each pick the [`ActionabilityCheck`] preset
 //! matching what they need before dispatching.
+//!
+//! # A note on this module's unit tests
+//!
+//! The predicates are JavaScript, and `MockConnection` replays CDP frames
+//! without a JS engine, so the `probe_source_*` tests below assert on the
+//! *source text* each predicate puts on the wire. They pin that a clause is
+//! present and spelled the way a past defect proved it has to be; they do
+//! not execute it, and a mutation that rewrites a clause into something
+//! equally well-formed but wrong passes them. Behavioral coverage lives in
+//! the live-Chrome tier (`tests/find_visible_only.rs`, gated on the
+//! `integration-tests` feature).
 
 use std::time::Duration;
 
@@ -22,15 +33,22 @@ use crate::error::{Result, ZendriverError};
 
 /// Set of actionability checks an action wants the element to satisfy
 /// before its CDP dispatch. Per-field booleans gate the corresponding
-/// `check_*` predicate in `wait_actionable`. Three named presets
-/// cover the common combinations (`FULL`, `VISIBLE_ONLY`, `TEXT_INPUT`);
-/// callers may also construct ad-hoc sets directly.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// `check_*` predicate in `wait_actionable`, and `hit_point` carries the
+/// coordinate the hit-test should probe. Four named presets cover the
+/// common combinations (`FULL`, `HOVER`, `VISIBLE_ONLY`, `TEXT_INPUT`);
+/// callers may also construct ad-hoc sets directly, and a caller with an
+/// explicit click position writes
+/// `ActionabilityCheck { hit_point: opts.position, ..FULL }`.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ActionabilityCheck {
     pub visible: bool,
     pub stable: bool,
     pub enabled: bool,
     pub receives_pointer: bool,
+    /// Offset from the bbox top-left that [`check_receives_pointer`] should
+    /// hit-test, matching [`crate::ClickOptions::position`]. `None` probes
+    /// the bbox centre. Ignored unless `receives_pointer` is set.
+    pub hit_point: Option<(f64, f64)>,
 }
 
 impl ActionabilityCheck {
@@ -41,6 +59,19 @@ impl ActionabilityCheck {
         stable: true,
         enabled: true,
         receives_pointer: true,
+        hit_point: None,
+    };
+
+    /// `FULL` minus the enabled check — used by `hover` / `hover_fast`.
+    /// Hovering does not activate the element, so a disabled control still
+    /// accepts `mouseover` and gating on `enabled` would reject a hover the
+    /// browser performs happily.
+    pub(crate) const HOVER: Self = Self {
+        visible: true,
+        stable: true,
+        enabled: false,
+        receives_pointer: true,
+        hit_point: None,
     };
 
     /// Visibility only — used by `screenshot` (we just need pixels to
@@ -51,6 +82,7 @@ impl ActionabilityCheck {
         stable: false,
         enabled: false,
         receives_pointer: false,
+        hit_point: None,
     };
 
     /// Text-input combo — used by `type_text` / `focus` where the element
@@ -62,7 +94,23 @@ impl ActionabilityCheck {
         stable: false,
         enabled: true,
         receives_pointer: false,
+        hit_point: None,
     };
+
+    /// How many `Runtime.callFunctionOn` probes one pass of
+    /// [`wait_actionable`] sends for this set — one per enabled predicate.
+    ///
+    /// Exists so a test fixture can serve exactly the gate's calls without
+    /// hard-coding a count per preset: a count that drifts from the set does
+    /// not fail cleanly, it eats the *next* unrelated call and the failure
+    /// surfaces at a later, unrelated `expect`.
+    #[cfg(test)]
+    pub(crate) const fn probe_count(self) -> usize {
+        self.visible as usize
+            + self.enabled as usize
+            + self.stable as usize
+            + self.receives_pointer as usize
+    }
 }
 
 /// `true` iff the element is rendered **and on-screen**. An element is
@@ -128,12 +176,16 @@ pub(crate) async fn check_visible(el: &Element) -> Result<bool> {
             //    `StealthProfile::off()` — including `native()`, which
             //    `Browser::builder()` installs by default — runs
             //    `zendriver-stealth`'s `patches/screen.js`, which rewrites
-            //    `window.inner*` to the persona's screen size minus a fixed
-            //    86px chrome inset, while `scroll_into_view` moves the element
-            //    with Chrome's real viewport. Measured under the default
-            //    profile: `innerHeight` 994 against a real 1080. Comparing a
+            //    `window.inner*` to the persona's screen size minus a chrome
+            //    inset, while `scroll_into_view` moves the element with
+            //    Chrome's real viewport. The inset is whatever the caller's
+            //    `ScreenSpec` measured, falling back to a derived 86px when no
+            //    capture supplied one, so its size is not knowable from here —
+            //    which is the point: no constant can compensate for it.
+            //    Measured under the default profile (the 86px fallback):
+            //    `innerHeight` 994 against a real 1080. Comparing a
             //    real-geometry scroll against that fabricated viewport leaves
-            //    every element landing in the 86px band permanently "not
+            //    every element landing in the inset band permanently "not
             //    visible", which broke `focus` — and with it `type_text` /
             //    `press` / `type_keys` — on any below-the-fold field.
             //
@@ -173,12 +225,14 @@ pub(crate) async fn check_visible(el: &Element) -> Result<bool> {
             // avoid precisely because it is the one everyone already checks. 1% sits well
             // below anything a real UI renders at rest and well above the honeypot range.
             // Done last — `getComputedStyle` per ancestor is the priciest step here.
+            // Opacity is in [0, 1], so the running product only ever decreases and
+            // cannot climb back over the threshold: once it is under, stop walking.
             let effective = 1;
             for (let node = el; node; node = node.parentElement) {
                 const own = parseFloat(getComputedStyle(node).opacity);
                 if (Number.isFinite(own)) effective *= own;
+                if (effective < 0.01) return false;
             }
-            if (effective < 0.01) return false;
 
             return true;
         }
@@ -297,15 +351,15 @@ pub(crate) async fn check_receives_pointer(
 /// ordering is not, and does not claim to be — Playwright's actionability
 /// docs list visible → stable → receives events → enabled.
 ///
-/// `position` is the offset the caller will click at, forwarded to the
-/// hit-test so the gate probes the point the dispatch actually uses. `None`
-/// probes the bbox centre. It is re-read from the live bbox on every poll, so
-/// an element that moves mid-wait is hit-tested where it currently is.
+/// `require.hit_point` is the offset the caller will click at, forwarded to
+/// the hit-test so the gate probes the point the dispatch actually uses.
+/// `None` probes the bbox centre. It is re-read from the live bbox on every
+/// poll, so an element that moves mid-wait is hit-tested where it currently
+/// is.
 pub(crate) async fn wait_actionable(
     el: &Element,
     require: ActionabilityCheck,
     timeout: Duration,
-    position: Option<(f64, f64)>,
 ) -> Result<()> {
     let deadline = Instant::now() + timeout;
     let poll_interval = Duration::from_millis(50);
@@ -317,7 +371,8 @@ pub(crate) async fn wait_actionable(
             failed_reason = Some("not enabled");
         } else if require.stable && !check_stable(el).await? {
             failed_reason = Some("not stable (still animating)");
-        } else if require.receives_pointer && !check_receives_pointer(el, position).await? {
+        } else if require.receives_pointer && !check_receives_pointer(el, require.hit_point).await?
+        {
             failed_reason = Some("occluded by overlay");
         }
         match failed_reason {
@@ -337,10 +392,17 @@ pub(crate) async fn wait_actionable(
 mod tests {
     use super::*;
     use crate::tab::Tab;
-    use crate::test_support::{serve_call, serve_call_js};
+    use crate::test_support::{js_params, serve_call, serve_call_js};
     use serde_json::Value;
     use zendriver_transport::SessionHandle;
     use zendriver_transport::testing::MockConnection;
+
+    /// Collapse every run of whitespace to a single space, so a source
+    /// assertion can span what the JS literal wraps across lines without
+    /// pinning its indentation.
+    fn one_line(js: &str) -> String {
+        js.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
 
     /// Drive `check_visible` against a mock connection, answer its probe with
     /// `value`, and hand back the JS source the probe actually sent plus the
@@ -361,7 +423,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn check_visible_probe_delegates_to_check_visibility() {
+    async fn probe_source_delegates_to_check_visibility() {
         let (js, verdict) = probe_check_visible(true).await;
         assert!(verdict, "a `true` probe result must resolve to visible");
         assert!(js.contains("checkVisibility"), "{js}");
@@ -373,7 +435,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn check_visible_probe_tests_viewport_intersection() {
+    async fn probe_source_tests_viewport_intersection() {
         let (js, _) = probe_check_visible(true).await;
         // `visible_only(true)` promises offscreen candidates are filtered
         // out; that requires comparing the bbox against the viewport box.
@@ -404,18 +466,28 @@ mod tests {
     /// The whole-source substring search is safe because the probe's own
     /// comments spell the spoofable pair `window.inner*` rather than naming
     /// either property.
+    ///
+    /// The ternary is asserted whole rather than as three independent
+    /// substrings. Naming `compatMode`, `body` and `documentElement`
+    /// separately is satisfied just as well by the arms swapped the wrong way
+    /// round — which is the exact defect the second bullet describes, so a
+    /// pin that cannot tell the two apart pins nothing.
     #[tokio::test]
-    async fn check_visible_probe_reads_the_layout_viewport_in_both_rendering_modes() {
+    async fn probe_source_reads_the_layout_viewport_in_both_rendering_modes() {
         let (js, _) = probe_check_visible(true).await;
         assert!(!js.contains("window.innerWidth"), "{js}");
         assert!(!js.contains("window.innerHeight"), "{js}");
-        assert!(js.contains("document.compatMode === 'BackCompat'"), "{js}");
-        assert!(js.contains("document.body"), "{js}");
-        assert!(js.contains("document.documentElement"), "{js}");
+        assert!(
+            one_line(&js).contains(
+                "document.compatMode === 'BackCompat' ? document.body : document.documentElement"
+            ),
+            "quirks mode must select `body` and standards mode `documentElement`, \
+             in that order: {js}"
+        );
     }
 
     #[tokio::test]
-    async fn check_visible_probe_multiplies_ancestor_opacity_against_a_threshold() {
+    async fn probe_source_multiplies_ancestor_opacity_against_a_threshold() {
         let (js, _) = probe_check_visible(true).await;
         // Honeypot guard: walk the ancestor chain and compare the product
         // against a non-zero floor, so `opacity: 0.001` (self OR ancestor)
@@ -423,11 +495,18 @@ mod tests {
         assert!(js.contains("node.parentElement"), "{js}");
         assert!(js.contains("getComputedStyle(node).opacity"), "{js}");
         assert!(js.contains("effective *= own"), "{js}");
-        assert!(js.contains("effective < 0.01"), "{js}");
+        // The threshold test sits *inside* the walk: the product only ever
+        // decreases, so a chain that has already gone under can stop early.
+        assert!(
+            one_line(&js).contains(
+                "if (Number.isFinite(own)) effective *= own; if (effective < 0.01) return false; }"
+            ),
+            "the opacity floor must be checked inside the ancestor walk: {js}"
+        );
     }
 
     #[tokio::test]
-    async fn check_visible_probe_drops_the_buggy_predecessors() {
+    async fn probe_source_drops_the_buggy_predecessors() {
         let (js, _) = probe_check_visible(true).await;
         // Regression pins for the three defects this probe replaced:
         // a string compare against '0' (missed `opacity: 0.001`), an
@@ -438,10 +517,15 @@ mod tests {
         assert!(!js.contains("=== '0'"), "{js}");
     }
 
+    /// Not a source pin: this one covers the Rust side of `check_visible`,
+    /// namely that it reads the probe's verdict out of `result.value` rather
+    /// than defaulting to the `unwrap_or(false)` fallback.
     #[tokio::test]
-    async fn check_visible_reports_false_when_the_page_says_hidden() {
-        let (_, verdict) = probe_check_visible(false).await;
-        assert!(!verdict, "a `false` probe result must resolve to hidden");
+    async fn check_visible_resolves_the_probe_result_it_was_handed() {
+        let (_, hidden) = probe_check_visible(false).await;
+        assert!(!hidden, "a `false` probe result must resolve to hidden");
+        let (_, shown) = probe_check_visible(true).await;
+        assert!(shown, "a `true` probe result must resolve to visible");
     }
 
     /// `check_receives_pointer` must wrap its coordinates as CallArgument
@@ -491,13 +575,19 @@ mod tests {
         params["arguments"].clone()
     }
 
-    /// Every predicate binds the element as its first positional argument.
+    /// Every predicate binds the element as its first positional argument,
+    /// and `check_receives_pointer` takes its coordinates in `(dx, dy)` order.
     ///
     /// `call_on_main` prepends the element handle to `arguments`, so a body
     /// that forgot its leading `el` parameter would silently read the handle
     /// as its first *caller* argument — and, for the three no-argument
     /// predicates, see `el` as `undefined` and answer `false` for everything.
     /// This drives all four past that in one go.
+    ///
+    /// The whole parameter list is asserted, not just the leading name: a
+    /// `starts_with("function(el")` check accepts `function(elephant, dy, dx)`
+    /// — right prefix, transposed coordinates, every hit-test off by the
+    /// difference between the two offsets.
     #[tokio::test]
     async fn every_predicate_binds_the_element_as_its_first_argument() {
         let (mut mock, conn) = MockConnection::pair();
@@ -540,8 +630,11 @@ mod tests {
         );
         assert!(sources[3].contains("elementFromPoint"), "{}", sources[3]);
 
-        for (call, js) in calls.iter().zip(&sources) {
-            assert!(js.trim_start().starts_with("function(el"), "{js}");
+        // The three no-argument predicates bind `el` and nothing else; the
+        // hit-test binds the two offsets after it, dx before dy.
+        let expected = [vec!["el"], vec!["el"], vec!["el"], vec!["el", "dx", "dy"]];
+        for ((call, js), want) in calls.iter().zip(&sources).zip(expected) {
+            assert_eq!(js_params(js), want, "{js}");
             assert_eq!(
                 call["arguments"][0]["objectId"], "R1",
                 "the element must be the first argument the body reads",

@@ -45,8 +45,11 @@ const DEFAULT_LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 const READY_STATE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Fallback tick for [`Tab::wait_for_idle_opts`]'s wait loop, used when no
-/// membership change wakes it sooner. This is the "+50 ms" in the documented
-/// worst case of `quiet_window + 50ms`, so the two must move together.
+/// membership change wakes it sooner. It is the additive term in
+/// [`Tab::wait_for_idle_opts`]'s documented worst case, which names this
+/// constant rather than repeating the number. The two test-scenario comments
+/// that spell 50ms (`wait_for_idle_*`) are arithmetic about a specific
+/// timeline and would read worse with the name substituted in.
 const IDLE_FALLBACK_TICK: Duration = Duration::from_millis(50);
 
 /// Fixed `(x, y)` viewport anchor for [`Tab::scroll_with`] gestures. A
@@ -1788,8 +1791,9 @@ impl Tab {
     /// Wait for network idle with full control over the policy via
     /// [`IdleOptions`].
     ///
-    /// Algorithm: poll the in-flight set with a `Notify`-driven wake (or a
-    /// 50ms fallback tick). Each iteration computes the number of *active*
+    /// Algorithm: poll the in-flight set with a `Notify`-driven wake (or an
+    /// [`IDLE_FALLBACK_TICK`] fallback tick). Each iteration computes the
+    /// number of *active*
     /// requests — every in-flight request when
     /// [`IdleOptions::max_inflight_age`] is `None`, otherwise only those in
     /// flight for less than that age (older ones are treated as stuck /
@@ -1798,10 +1802,10 @@ impl Tab {
     /// count is non-zero or a membership change fires. Return once
     /// `now - quiet_start >= quiet_window`.
     ///
-    /// The 50ms tick bounds latency both for the already-idle case (no further
+    /// That tick bounds latency both for the already-idle case (no further
     /// events fire) and for an age-out crossing (which emits no CDP event), so
     /// worst-case latency to detect "stayed idle long enough" is
-    /// `quiet_window + 50ms`.
+    /// `quiet_window + `[`IDLE_FALLBACK_TICK`].
     ///
     /// Under [`IdleOptions::loss_policy`] = [`IdleLossPolicy::Strict`], the
     /// wait additionally races against this tab's connection's accounted
@@ -2202,35 +2206,27 @@ pointer-events:none;opacity:0.85;'; \
     /// # Ok(()) }
     /// ```
     pub async fn mouse_drag(&self, from: (f64, f64), to: (f64, f64), steps: usize) -> Result<()> {
-        // CDP `buttons` bitmask for a held left button — the same bit
-        // `MouseButtonSet::LEFT` uses. Every event between the press and the
-        // release must carry it: a page implementing drag with `mousemove` +
-        // `e.buttons` (the standard modern check, and what most slider widgets
-        // and DnD libraries use) drops the whole gesture without it, while
-        // every CDP call still succeeds.
-        const LEFT_HELD: u8 = crate::input::pointer_state::MouseButtonSet::LEFT.bits();
+        use crate::input::pointer_state::MouseButtonSet;
 
-        // `buttons_held` lives on the per-Tab InputController, which outlives
-        // this call, so a `?` between the press and the release — an
-        // interpolated `mouseMoved` failing partway is the realistic one —
-        // would strand the LEFT bit set for the rest of the tab's life. Every
-        // later `mouseMoved` would then report a button held with no preceding
-        // mousedown, which is a worse signal to leak to behavioral anti-bot
-        // scoring than omitting `buttons` altogether.
-        //
-        // So the whole gesture runs as one fallible section and the state fixup
-        // happens at the single exit below, rather than via a `Drop` guard:
-        // clearing the bit needs the async `Mutex`, `Drop` cannot await, and a
-        // `try_lock` inside `Drop` would silently fail under contention —
-        // exactly when another task is mid-dispatch and about to read the stale
-        // bit. More machinery, weaker guarantee.
-        //
-        // Residual case it does not cover: if the caller drops this future
-        // mid-gesture (cancellation, an outer `tokio::time::timeout`), the
-        // fixup never runs and the bit stays set. A `Drop` guard would not
-        // reliably close that either, for the `try_lock` reason above.
+        // One fallible section plus one state fixup at the single exit below,
+        // rather than a `Drop` guard. The full rationale — and the
+        // cancellation case it does not cover — is on
+        // `InputState::buttons_held`; `mouse::click_at` uses the same shape.
         let gesture: Result<()> = async {
-            // Press the left button at the source point.
+            // Press the left button at the source point. `buttons` on this
+            // frame is the set held *after* the press, so latch the bit and
+            // read the wire value out of the same locked section — every
+            // event between the press and the release has to carry it, since
+            // a page implementing drag with `mousemove` + `e.buttons` (the
+            // standard modern check, and what most slider widgets and DnD
+            // libraries use) drops the whole gesture without it while every
+            // CDP call still succeeds.
+            let held = {
+                let input = self.input().clone();
+                let mut s = input.state.lock().await;
+                s.buttons_held.insert(MouseButtonSet::LEFT);
+                s.buttons_held.bits()
+            };
             self.call(
                 "Input.dispatchMouseEvent",
                 json!({
@@ -2238,16 +2234,10 @@ pointer-events:none;opacity:0.85;'; \
                     "x": from.0, "y": from.1,
                     "button": "left",
                     "clickCount": 1,
-                    "buttons": LEFT_HELD,
+                    "buttons": held,
                 }),
             )
             .await?;
-            {
-                let input = self.input().clone();
-                let mut s = input.state.lock().await;
-                s.buttons_held
-                    .insert(crate::input::pointer_state::MouseButtonSet::LEFT);
-            }
 
             // Interpolate the move. nodriver walks i in 0..=steps (steps+1
             // points, the first coinciding with `from`); steps <= 1 collapses
@@ -2256,7 +2246,7 @@ pointer-events:none;opacity:0.85;'; \
             if steps == 1 {
                 self.call(
                     "Input.dispatchMouseEvent",
-                    json!({ "type": "mouseMoved", "x": to.0, "y": to.1, "buttons": LEFT_HELD }),
+                    json!({ "type": "mouseMoved", "x": to.0, "y": to.1, "buttons": held }),
                 )
                 .await?;
             } else {
@@ -2267,14 +2257,22 @@ pointer-events:none;opacity:0.85;'; \
                     let y = from.1 + step_y * i as f64;
                     self.call(
                         "Input.dispatchMouseEvent",
-                        json!({ "type": "mouseMoved", "x": x, "y": y, "buttons": LEFT_HELD }),
+                        json!({ "type": "mouseMoved", "x": x, "y": y, "buttons": held }),
                     )
                     .await?;
                 }
             }
 
-            // Release at the destination. `buttons` is now empty — the button
-            // is no longer held once the release is dispatched.
+            // Release at the destination. Clear the bit first and read
+            // `buttons` back out of the same locked section: the release
+            // frame reports the set held *after* it, which is empty unless
+            // something else on this tab holds a button.
+            let released = {
+                let input = self.input().clone();
+                let mut s = input.state.lock().await;
+                s.buttons_held.remove(MouseButtonSet::LEFT);
+                s.buttons_held.bits()
+            };
             self.call(
                 "Input.dispatchMouseEvent",
                 json!({
@@ -2282,7 +2280,7 @@ pointer-events:none;opacity:0.85;'; \
                     "x": to.0, "y": to.1,
                     "button": "left",
                     "clickCount": 1,
-                    "buttons": 0,
+                    "buttons": released,
                 }),
             )
             .await?;
@@ -2295,8 +2293,8 @@ pointer-events:none;opacity:0.85;'; \
             let mut s = input.state.lock().await;
             // Whether the gesture finished or a dispatch failed partway, this
             // tab is no longer holding the button as far as our state goes.
-            s.buttons_held
-                .remove(crate::input::pointer_state::MouseButtonSet::LEFT);
+            // A no-op on the happy path — the release above already cleared it.
+            s.buttons_held.remove(MouseButtonSet::LEFT);
             if gesture.is_ok() {
                 // Leave the controller's cached cursor where the drag actually
                 // ended. Skipping this made the next `move_realistic` build its
@@ -4771,32 +4769,26 @@ mod tests {
         conn.shutdown();
     }
 
-    /// Drain every `Input.dispatchMouseEvent` a click emits, returning
+    /// The fields these mouse tests assert on, projected out of
+    /// [`crate::test_support::drain_mouse_dispatches`]:
     /// `(type, buttons, modifiers, clickCount)` per frame.
+    ///
+    /// `u64::MAX` stands for an absent `buttons` / `modifiers`, so a test can
+    /// assert the field was sent at all rather than reading a missing one as
+    /// zero.
     async fn drain_mouse_dispatches(mock: &mut MockConnection) -> Vec<(String, u64, u64, u64)> {
-        let mut frames = Vec::new();
-        loop {
-            let next = tokio::time::timeout(
-                Duration::from_millis(500),
-                mock.expect_cmd("Input.dispatchMouseEvent"),
-            )
-            .await;
-            match next {
-                Ok(id) => {
-                    let sent = mock.last_sent();
-                    let p = &sent["params"];
-                    frames.push((
-                        p["type"].as_str().unwrap_or("").to_string(),
-                        p["buttons"].as_u64().unwrap_or(u64::MAX),
-                        p["modifiers"].as_u64().unwrap_or(u64::MAX),
-                        p["clickCount"].as_u64().unwrap_or(0),
-                    ));
-                    mock.reply(id, json!({})).await;
-                }
-                Err(_) => break,
-            }
-        }
-        frames
+        crate::test_support::drain_mouse_dispatches(mock)
+            .await
+            .iter()
+            .map(|p| {
+                (
+                    p["type"].as_str().unwrap_or("").to_string(),
+                    p["buttons"].as_u64().unwrap_or(u64::MAX),
+                    p["modifiers"].as_u64().unwrap_or(u64::MAX),
+                    p["clickCount"].as_u64().unwrap_or(0),
+                )
+            })
+            .collect()
     }
 
     /// Every dispatch must carry CDP's `buttons` bitmask. Without it a page
@@ -4970,30 +4962,18 @@ mod tests {
         });
 
         // Realistic move emits one-or-more mouseMoved dispatches and NO
-        // press/release. Drain them all, asserting type along the way.
-        let mut saw_moved = false;
-        loop {
-            let next = tokio::time::timeout(
-                Duration::from_millis(500),
-                mock.expect_cmd("Input.dispatchMouseEvent"),
-            )
-            .await;
-            match next {
-                Ok(id) => {
-                    let kind = mock.last_sent()["params"]["type"]
-                        .as_str()
-                        .unwrap_or("")
-                        .to_string();
-                    assert_eq!(kind, "mouseMoved", "mouse_move must only emit mouseMoved");
-                    saw_moved = true;
-                    mock.reply(id, json!({})).await;
-                }
-                Err(_) => break,
-            }
-        }
-
+        // press/release.
+        let frames = drain_mouse_dispatches(&mut mock).await;
         fut.await.unwrap().unwrap();
-        assert!(saw_moved, "expected at least one mouseMoved dispatch");
+
+        assert!(
+            !frames.is_empty(),
+            "expected at least one mouseMoved dispatch"
+        );
+        assert!(
+            frames.iter().all(|(kind, ..)| kind == "mouseMoved"),
+            "mouse_move must only emit mouseMoved: {frames:?}"
+        );
         conn.shutdown();
     }
 
@@ -5026,6 +5006,20 @@ mod tests {
         mock.reply(id, json!({})).await;
 
         fut.await.unwrap().unwrap();
+
+        // A tap moves the pointer as far as the page is concerned, so the
+        // controller's cached cursor has to follow it. Without this the next
+        // realistic mouse move builds its Bezier from a stale origin and opens
+        // by teleporting back to wherever the last mouse action landed — a
+        // visible non-human artifact, from three lines with no other guard.
+        {
+            let s = tab.input().state.lock().await;
+            assert_eq!(
+                (s.pointer_x, s.pointer_y),
+                (10.0, 20.0),
+                "tap must leave the cached cursor at the tap point"
+            );
+        }
         conn.shutdown();
     }
 
@@ -5132,7 +5126,11 @@ mod tests {
         // the actionability gate (TEXT_INPUT = visible → enabled), then
         // this.focus(). Reply truthy/undefined to each.
         crate::test_support::serve_scroll_into_view(&mut mock).await;
-        crate::test_support::serve_gate_probes(&mut mock, 2).await;
+        crate::test_support::serve_gate_probes(
+            &mut mock,
+            crate::query::actionability::ActionabilityCheck::TEXT_INPUT,
+        )
+        .await;
         let id_focus = mock.expect_cmd("Runtime.callFunctionOn").await;
         mock.reply(id_focus, json!({ "result": { "type": "undefined" } }))
             .await;

@@ -193,6 +193,7 @@ async fn dispatch_key(tab: &crate::tab::Tab, key: Key, mods: KeyModifiers) -> Re
 mod tests {
     use super::*;
     use crate::input::keyboard::SpecialKey;
+    use crate::query::actionability::ActionabilityCheck;
     use crate::tab::Tab;
     use crate::test_support::{expect, serve_gate_probes, serve_scroll_into_view};
     use serde_json::{Value, json};
@@ -219,7 +220,7 @@ mod tests {
         serve_scroll_into_view(&mut mock).await;
         // focus() then runs the actionability gate: visible → enabled.
         // ActionabilityCheck::TEXT_INPUT skips stable + receives_pointer.
-        serve_gate_probes(&mut mock, 2).await;
+        serve_gate_probes(&mut mock, ActionabilityCheck::TEXT_INPUT).await;
         // focus() then calls el.focus() — one more Runtime.callFunctionOn.
         let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
@@ -257,7 +258,7 @@ mod tests {
     /// replying to each.
     async fn drain_focus(mock: &mut MockConnection) {
         serve_scroll_into_view(mock).await;
-        serve_gate_probes(mock, 2).await;
+        serve_gate_probes(mock, ActionabilityCheck::TEXT_INPUT).await;
         let id = expect(mock, "Runtime.callFunctionOn").await;
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;

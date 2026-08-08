@@ -3,9 +3,11 @@
 //! Dispatch sequence (with internal refresh-on-stale recovery), matching the
 //! `scroll → gate → measure → dispatch` shape every action in
 //! [`mod@crate::element::actions`] uses:
-//!   1. [`Element::scroll_into_view`] — the clip in step 4 is
-//!      viewport-relative, so the element must be on-screen before it is
-//!      measured (and before the gate, which requires the same).
+//!   1. [`Element::scroll_into_view`] — the visibility gate in step 2
+//!      requires the element to overlap the viewport, so a below-the-fold
+//!      element has to be scrolled to before it can be gated. The clip in
+//!      step 4 does *not* need the scroll: it is document-relative and the
+//!      conversion there is correct wherever the element sits.
 //!   2. Visibility gate — we need pixels to capture; overlay occlusion +
 //!      disabled state are irrelevant here, so the gate is the lightest
 //!      preset.
@@ -42,10 +44,10 @@ impl Element {
     /// `Page.captureScreenshot` with a matching `clip` rect (at `scale: 1`).
     /// Returns the raw PNG bytes.
     ///
-    /// The scroll leads because an off-screen element is neither rendered nor
-    /// judged visible by the gate; the coordinate conversion follows because
-    /// Chrome reads the clip in document space while the box model is
-    /// viewport-relative.
+    /// The scroll leads because the gate requires the element to overlap the
+    /// viewport; the coordinate conversion follows because Chrome reads the
+    /// clip in document space while the box model is viewport-relative. The
+    /// two are independent — the conversion is correct at any scroll offset.
     ///
     /// For full-viewport captures, see [`crate::Tab::screenshot`].
     ///
@@ -70,17 +72,16 @@ impl Element {
     pub async fn screenshot(&self) -> Result<Vec<u8>> {
         self.with_refresh(|| async move {
             // Scroll first, exactly as every action in `element::actions`
-            // does. Two reasons: the clip below is viewport-relative, so an
-            // element measured while off-screen is cropped from the wrong
-            // place; and the visibility predicate itself requires the element
-            // to overlap the viewport, so gating before the scroll would
-            // reject every below-the-fold element.
+            // does, and for one reason: the visibility predicate requires the
+            // element to overlap the viewport, so gating before the scroll
+            // would reject every below-the-fold element. It is NOT for the
+            // clip — see the conversion below, which is correct at any scroll
+            // offset.
             self.scroll_into_view().await?;
             actionability::wait_actionable(
                 self,
                 ActionabilityCheck::VISIBLE_ONLY,
                 DEFAULT_ACTIONABILITY_TIMEOUT,
-                None,
             )
             .await?;
             let bbox = self
@@ -100,14 +101,27 @@ impl Element {
                 .call("Page.getLayoutMetrics", json!({}))
                 .await?;
             let viewport = metrics.get("cssVisualViewport");
-            let page_x = viewport
-                .and_then(|v| v.get("pageX"))
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0);
-            let page_y = viewport
-                .and_then(|v| v.get("pageY"))
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0);
+            let offset = |axis: &str| viewport.and_then(|v| v.get(axis)).and_then(Value::as_f64);
+            let (page_x, page_y) = match (offset("pageX"), offset("pageY")) {
+                (Some(x), Some(y)) => (x, y),
+                _ => {
+                    // Falling back to (0, 0) reverts the clip to viewport
+                    // coordinates — precisely the bug this conversion exists
+                    // to fix — and the symptom is a screenshot cropped from
+                    // the wrong band of the page, which reads as a product
+                    // bug with nothing in the logs pointing here. Not
+                    // reachable on any browser this crate supports
+                    // (`cssVisualViewport` long predates the Chrome 121 floor
+                    // the visibility gate imposes), so this is a tripwire
+                    // rather than a handled case.
+                    tracing::warn!(
+                        "Page.getLayoutMetrics returned no cssVisualViewport page offset; \
+                         the screenshot clip falls back to viewport coordinates and will be \
+                         cropped from the wrong region on a scrolled page"
+                    );
+                    (0.0, 0.0)
+                }
+            };
 
             let res = self
                 .inner

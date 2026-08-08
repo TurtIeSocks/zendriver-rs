@@ -50,9 +50,33 @@ pub struct InputController {
 pub(crate) struct InputState {
     pub pointer_x: f64,
     pub pointer_y: f64,
-    /// Buttons currently held down. Written by every press/release and by the
-    /// drag path, and sent as CDP's `buttons` bitmask on every dispatched
-    /// mouse event — `MouseButtonSet`'s bit values match that mask exactly.
+    /// Buttons currently held down. Written by every press/release and by
+    /// the drag path, and read back as CDP's `buttons` bitmask on every
+    /// dispatched mouse event — `MouseButtonSet`'s bit values match that
+    /// mask exactly, so [`MouseButtonSet::bits`] is the wire value directly.
+    ///
+    /// # Why the write paths look the way they do
+    ///
+    /// This field lives on the per-`Tab` [`InputController`], which outlives
+    /// any single gesture, so a `?` between a press and its matching release
+    /// would strand the bit set for the rest of the tab's life: every later
+    /// `mouseMoved` would report a button held with no preceding `mousedown`.
+    /// That impossible state is a worse signal to leak to behavioral
+    /// anti-bot scoring than omitting `buttons` altogether — it is exactly
+    /// this stream such scoring reads.
+    ///
+    /// Both gesture paths ([`mouse::click_at`] and [`crate::Tab::mouse_drag`])
+    /// therefore run as one fallible section followed by a single cleanup,
+    /// rather than using a `Drop` guard. Clearing the bit needs the async
+    /// `Mutex`; `Drop` cannot await, and a `try_lock` inside `Drop` would
+    /// silently fail under contention — precisely when another task is
+    /// mid-dispatch and would go on to read the stale bit. More machinery,
+    /// weaker guarantee.
+    ///
+    /// Residual case neither shape covers: if the caller drops the gesture
+    /// future mid-flight (cancellation, an outer `tokio::time::timeout`), no
+    /// cleanup runs and the bit stays set. A `Drop` guard would not reliably
+    /// close that either, for the `try_lock` reason above.
     pub buttons_held: MouseButtonSet,
     pub modifiers_held: KeyModifiers,
     pub rng: rand::rngs::SmallRng,

@@ -234,9 +234,12 @@ input.press_with(
 [`SpecialKey`] covers Enter, Tab, Escape, Backspace, Delete, Space, all
 four arrows, Home, End, PageUp, PageDown, F1-F12, Insert, CapsLock,
 NumLock, ScrollLock, PrintScreen, Pause, ContextMenu — the whole named
-keyboard. Two of them still type: `Space` inserts a space and `Enter`
-inserts a newline (and submits a form that allows implicit submission),
-exactly as the physical keys do. The rest only run their default action.
+keyboard. Two of them still type: `Space` inserts a space, and `Enter`
+inserts a newline in a `<textarea>` or contenteditable while in a
+single-line `<input>` it inserts nothing and only submits a form that
+allows implicit submission — exactly as the physical keys do. The rest
+only run their default action. Holding Ctrl, Alt or Meta suppresses the
+insertion for both, the same way a shortcut does on real hardware.
 
 [`KeyModifiers`] is a bitflags struct:
 
