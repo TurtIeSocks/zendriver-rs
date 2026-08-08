@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-08-08
+
+### Fixed
+
+- Report disconnects honestly and bound reconnect ([#150](https://github.com/TurtIeSocks/zendriver-rs/pull/150))
+
+
 ## [0.5.5] - 2026-08-07
 
 
