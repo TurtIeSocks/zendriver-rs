@@ -24,6 +24,11 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+# Changelog
+
+All notable changes to this crate documented here. Format: [Keep a
+Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
+
 
 ## [0.5.25] - 2026-08-08
 
