@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.5.8] - 2026-08-08
+
+### Fixed
+
+- Bound the blocklist fetch, write cookies atomically and safely ([#155](https://github.com/TurtIeSocks/zendriver-rs/pull/155))
+
+
 ## [0.5.7] - 2026-08-08
 
 ### Fixed
