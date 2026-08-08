@@ -7,9 +7,6 @@ permissions:
 on:
   push:
     branches: [main]
-    # Don't fire on the release PR's own merge commit (release-plz
-    # commits are titled "chore: release ..."); the release workflow
-    # picks that up instead.
   workflow_dispatch:
 
 concurrency:
@@ -20,6 +17,24 @@ jobs:
   release-plz-pr:
     name: Update release PR
     runs-on: ubuntu-latest
+    # Never react to release-plz's own merge landing on main. The
+    # auto-merge step below uses the PAT, so unlike a GITHUB_TOKEN push
+    # it *does* retrigger this workflow — which closes a cycle:
+    # open release PR -> auto-merge -> push -> open release PR. The only
+    # thing normally breaking it is release-plz finding nothing to
+    # release on the second pass, and on 2026-08-08 that failed: a
+    # malformed crates/zendriver/CHANGELOG.md made `changelog_update`
+    # non-idempotent, so every pass produced a diff, read it as an
+    # unreleased change, and cut another version. 44 empty releases and
+    # 26 crates.io publishes later, the workflow had to be disabled by
+    # hand. Publishing still happens — release-plz-release.yml is what
+    # listens for the release merge.
+    #
+    # Matches both shapes the merge can take: a squash ("chore: release")
+    # and a merge commit ("Merge pull request #N from …/release-plz-…").
+    if: >-
+      !startsWith(github.event.head_commit.message, 'chore: release') &&
+      !contains(github.event.head_commit.message, '/release-plz-')
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,6 +68,25 @@ jobs:
       # fallback merges immediately. Add branch protection with required
       # checks later and the --auto path will gate on green CI with no
       # further changes here.
+      # Second line of defence, independent of why a release PR appeared.
+      # A release that changes no crate version is by definition a no-op, and
+      # it was this loop's own tell: 15 consecutive changelog-only "releases"
+      # ran while nothing was watching for exactly that shape. Refuse to merge
+      # one, and leave the run red so a human sees it.
+      - name: Refuse a release PR that bumps no version
+        if: ${{ steps.release-plz.outputs.prs_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          PR_NUMBER: ${{ fromJSON(steps.release-plz.outputs.pr).number }}
+        run: |
+          if ! gh pr diff "$PR_NUMBER" --name-only | grep -q 'Cargo\.toml$'; then
+            echo "::error::release PR #$PR_NUMBER changes no Cargo.toml version."
+            echo "::error::That is the no-op release shape that looped on 2026-08-08."
+            gh pr close "$PR_NUMBER" \
+              --comment "Closed automatically: this release PR bumps no crate version." || true
+            exit 1
+          fi
+
       - name: Auto-merge the release PR
         if: ${{ steps.release-plz.outputs.prs_created == 'true' }}
         env:

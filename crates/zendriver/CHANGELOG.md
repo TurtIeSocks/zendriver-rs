@@ -4,220 +4,18 @@ All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
 ## [Unreleased]
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-
-## [0.5.25] - 2026-08-08
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
 
 ## [0.5.24] - 2026-08-08
 
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-
-## [0.5.23] - 2026-08-08
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-
-## [0.5.22] - 2026-08-08
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-
-## [0.5.21] - 2026-08-08
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-
-## [0.5.20] - 2026-08-08
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-
-## [0.5.19] - 2026-08-08
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-
-## [0.5.18] - 2026-08-08
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-
-## [0.5.17] - 2026-08-08
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-
-## [0.5.16] - 2026-08-08
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-
-## [0.5.15] - 2026-08-08
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-
-## [0.5.14] - 2026-08-08
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-
-## [0.5.13] - 2026-08-08
-
-# Changelog
-
-All notable changes to this crate documented here. Format: [Keep a
-Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
-
-
-## [0.5.12] - 2026-08-08
-
+Nothing changed in 0.5.12 through 0.5.24. A release-automation loop cut them and
+they are yanked; every one is byte-identical to 0.5.11 apart from the version
+string. Listed once here rather than as thirteen empty headings.
 
 ## [0.5.11] - 2026-08-08
 
 ### Fixed
 
 - Rebuild the visibility predicate, and prove it against real Chrome ([#158](https://github.com/TurtIeSocks/zendriver-rs/pull/158))
-
-
-## [0.5.11] - 2026-08-08
-
-### Fixed
-
-- Rebuild the visibility predicate, and prove it against real Chrome ([#158](https://github.com/TurtIeSocks/zendriver-rs/pull/158))
-
-
-### Fixed
-
 - Clipped screenshots no longer come back blank when the rect reaches past the
   area Chrome has rendered. `captureBeyondViewport` now goes out on every
   clipped capture rather than only on full-page ones. A clip that was already
@@ -243,8 +41,6 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
   `card.find().text_exact("Cancel").one()` could return an element from a
   different card; the expression is now relative to the element the query is
   scoped to. `text` (substring) was already scoped correctly.
-
-## [0.5.5] - 2026-08-07
 
 ## [0.5.10] - 2026-08-08
 
