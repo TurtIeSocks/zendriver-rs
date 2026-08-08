@@ -366,6 +366,11 @@ you're seeing the raw <code>Cdp</code> form, you're on a CDP method we haven't
 special-cased. Wait for <code>wait_for_load()</code> / <code>wait_for_idle()</code> before
 the call, or use <a href="./expect.html"><code>expect_response</code></a> to pin the wait to
 the specific event you care about.</p>
+<p><code>Tab::evaluate</code> and <code>Frame::evaluate</code> already recover from this on
+their own: they drop the dead execution context, create a fresh
+isolated world and retry once. Seeing the error surface from either of
+those means the context died twice in a row, which normally points at a
+page navigating in a loop rather than at a one-off race.</p>
 <h2 id="wait_for_idle-never-returns-on-a-page-with-a-long-poll-sse-or-analytics-beacon-request"><a class="header" href="#wait_for_idle-never-returns-on-a-page-with-a-long-poll-sse-or-analytics-beacon-request"><code>wait_for_idle</code> never returns on a page with a long-poll, SSE, or analytics-beacon request</a></h2>
 <p>By default <code>wait_for_idle</code> waits for <em>every</em> in-flight request to
 terminate, so a single never-completing request (a Server-Sent Events
