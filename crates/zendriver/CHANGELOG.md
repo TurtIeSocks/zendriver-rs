@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.5.10] - 2026-08-08
+
+### Fixed
+
+- Send buttons and modifiers, type whitespace, gate the real point ([#157](https://github.com/TurtIeSocks/zendriver-rs/pull/157))
+
+
 ## [0.5.9] - 2026-08-08
 
 ### Fixed
