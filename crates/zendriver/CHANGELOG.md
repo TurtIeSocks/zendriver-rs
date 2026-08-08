@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.5.9] - 2026-08-08
+
+### Fixed
+
+- Confirm provisional frames against the tree, warn on geo failure ([#156](https://github.com/TurtIeSocks/zendriver-rs/pull/156))
+
+
 ## [0.5.8] - 2026-08-08
 
 ### Fixed
