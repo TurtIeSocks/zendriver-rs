@@ -3512,7 +3512,7 @@ dependencies = [
 
 [[package]]
 name = "zendriver-fingerprints"
-version = "0.3.19"
+version = "0.3.20"
 dependencies = [
  "dirs",
  "fastrand",
@@ -3602,7 +3602,7 @@ dependencies = [
 
 [[package]]
 name = "zendriver-stealth"
-version = "0.12.4"
+version = "0.12.5"
 dependencies = [
  "async-trait",
  "chromiumoxide_cdp",

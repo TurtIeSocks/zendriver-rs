@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.12.5] - 2026-08-08
+
+### Fixed
+
+- Fold the persona into the fingerprint so it reaches CDP ([#222](https://github.com/TurtIeSocks/zendriver-rs/pull/222))
+
+
 ## [0.12.4] - 2026-08-08
 
 
