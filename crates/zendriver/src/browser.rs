@@ -1357,8 +1357,10 @@ impl BrowserBuilder {
         self
     }
 
-    /// Set the base fingerprint [`Persona`] driving the spoofed-mode surface
-    /// patches (canvas/WebGL/audio/fonts/clientRects/WebRTC/hardware).
+    /// Set the base fingerprint [`Persona`]: it drives the spoofed-mode
+    /// surface patches (canvas/WebGL/audio/fonts/clientRects/WebRTC/hardware)
+    /// and, for every stealth profile except `off`, the emulation overrides —
+    /// `timezone`, `locale` / `languages`, `screen` and `geolocation`.
     ///
     /// When unset, [`Persona::system`] (host-probed) is used. Combine with
     /// [`BrowserBuilder::persona_overlay`] for field-wise tweaks and

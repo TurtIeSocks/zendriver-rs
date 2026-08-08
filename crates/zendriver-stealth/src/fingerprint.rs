@@ -163,11 +163,25 @@ pub struct Fingerprint {
     pub memory_gb: u32,
     pub ua_string: String,
     pub ua_metadata: UserAgentMetadata,
+    /// IANA timezone driving `Emulation.setTimezoneOverride`, from
+    /// [`StealthProfile::timezone`](crate::StealthProfile::timezone) or from a
+    /// [`Persona`](crate::Persona), which wins and is folded in when the
+    /// observer is built. `None` sends no override.
     pub timezone: Option<String>,
+    /// Locale driving `Emulation.setLocaleOverride` when
+    /// [`languages`](Self::languages) is unset. Same two sources as
+    /// [`timezone`](Self::timezone).
     pub locale: Option<String>,
+    /// Ordered language list driving `Accept-Language`, `navigator.languages`
+    /// and — from its first entry — `Emulation.setLocaleOverride`, which is
+    /// what keeps the JS-visible locale inside the list the header advertises.
+    /// Falls back to [`locale`](Self::locale) when unset, and the header falls
+    /// back further to `["en-US", "en"]` when that is unset too (the locale
+    /// override is then simply not sent).
     pub languages: Option<Vec<String>>,
     /// Screen / device-metrics override resolved from
-    /// [`StealthProfile::screen`](crate::StealthProfile::screen). `None` by
+    /// [`StealthProfile::screen`](crate::StealthProfile::screen), or from a
+    /// [`Persona`](crate::Persona)'s own `screen`, which wins. `None` by
     /// default (`auto_detect` never probes a screen size) — the observer's
     /// fixed 1920x1080 default is untouched until this is explicitly set.
     pub screen: Option<crate::persona::specs::ScreenSpec>,
@@ -202,6 +216,44 @@ impl Fingerprint {
             languages: None,
             screen: None,
         })
+    }
+
+    /// Fold a [`Persona`](crate::Persona)'s explicitly-set fields into this
+    /// fingerprint.
+    ///
+    /// Four axes exist on both types — `timezone`, `locale`, `languages`,
+    /// `screen` — and three separate consumers read them: the CDP
+    /// `Emulation.set*Override` calls, the `Accept-Language` header, and the
+    /// JS patches. Merging once, at the single point where a persona and a
+    /// fingerprint meet
+    /// ([`StealthObserver::with_persona`](crate::StealthObserver::with_persona)),
+    /// is what keeps those consumers from disagreeing: each reads the merged
+    /// value rather than re-deriving the precedence for itself.
+    ///
+    /// Precedence: an explicitly-set persona field wins; `None` inherits
+    /// whatever the fingerprint already resolved — from
+    /// [`StealthProfile`](crate::StealthProfile)'s per-field setters, or from
+    /// the host probe. A [`Persona::default`](crate::Persona::default) is a
+    /// no-op, and the merge is idempotent.
+    ///
+    /// An empty `languages` list counts as unset, matching how every consumer
+    /// in [`lang`](crate::lang) already reads one: `Some(vec![])` describes a
+    /// persona that pins no languages, not one that advertises none, and
+    /// letting it overwrite would make an empty persona field destroy a
+    /// configured [`StealthProfile::languages`](crate::StealthProfile::languages).
+    pub(crate) fn overlay_persona(&mut self, persona: &crate::Persona) {
+        if let Some(timezone) = &persona.timezone {
+            self.timezone = Some(timezone.clone());
+        }
+        if let Some(locale) = &persona.locale {
+            self.locale = Some(locale.clone());
+        }
+        if let Some(languages) = persona.languages.as_ref().filter(|v| !v.is_empty()) {
+            self.languages = Some(languages.clone());
+        }
+        if let Some(screen) = persona.screen {
+            self.screen = Some(screen);
+        }
     }
 
     /// Recompose UA string + UAM after platform/version overrides.

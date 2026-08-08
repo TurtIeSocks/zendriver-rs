@@ -59,6 +59,13 @@ const MOUSE: &str = include_str!("patches/mouse.js");
 /// the UA coherent: when the persona changes platform we rebuild the UA-CH
 /// metadata against the real Chrome version instead of a stale fallback.
 ///
+/// The window/screen geometry is the one surface `identity` can drive on its
+/// own: `persona.screen` is used when set, and a persona that leaves it unset
+/// falls back to `identity.screen`. That keeps the emitted `avail*`/`outer*`
+/// insets describing whatever display
+/// `Emulation.setDeviceMetricsOverride` was given, which resolves the same
+/// two sources the same way.
+///
 /// Order: identity IIFE first (webdriver-most-probed-first, navigator_props
 /// last), then the PRNG definition, then each persona surface.
 #[must_use]
@@ -164,10 +171,17 @@ fn bootstrap_script_impl(persona: &Persona, identity: &Fingerprint, spoof_webgl:
     body.push('\n');
     body.push_str(PRNG);
 
-    // Geometry coherence runs unconditionally (no persona spec) — it repairs the
-    // outer*/avail* props that the CDP metrics override cannot reach.
+    // Geometry coherence runs unconditionally — it repairs the outer*/avail*
+    // props that the CDP metrics override cannot reach. Same precedence as
+    // every other shared axis (persona pin first, else the fingerprint's), so
+    // the insets describe the display `Emulation.setDeviceMetricsOverride`
+    // sizes. `StealthObserver::with_persona` has already merged the two, which
+    // makes this a no-op there; it still matters for a caller driving the
+    // public `bootstrap_script` with an unmerged pair.
     body.push('\n');
-    body.push_str(&screen_patch(persona.screen.as_ref()));
+    body.push_str(&screen_patch(
+        persona.screen.as_ref().or(identity.screen.as_ref()),
+    ));
     // Synthetic pointer entropy, also unconditional.
     body.push('\n');
     body.push_str(MOUSE);

@@ -26,13 +26,85 @@ pub fn accept_language(langs: &[String]) -> String {
         .join(",")
 }
 
-/// Resolve the effective language list at apply time.
+/// What both language surfaces fall back to when nothing at all is configured.
+fn default_languages() -> Vec<String> {
+    vec!["en-US".to_string(), "en".to_string()]
+}
+
+/// Derive a language list from a single locale.
+///
+/// A region locale yields `[locale, base_lang]` where `base_lang` is the
+/// subtag before `-` (e.g. `"fr-FR"` -> `["fr-FR", "fr"]`); a bare locale (no
+/// `-`) yields a single entry.
+fn derive_from_locale(locale: &str) -> Vec<String> {
+    let base = locale.split('-').next().unwrap_or(locale);
+    if base == locale {
+        vec![locale.to_string()]
+    } else {
+        vec![locale.to_string(), base.to_string()]
+    }
+}
+
+/// The single resolution both locale-bearing CDP surfaces read: the language
+/// list a [`Fingerprint`] actually configures, or `None` when it configures
+/// neither `languages` nor `locale`.
+///
+/// Precedence is `languages` -> derived from `locale`, and the two callers
+/// differ only in what they do with `None`: the `Accept-Language` header
+/// substitutes `["en-US", "en"]` ([`fingerprint_languages`]), while
+/// `Emulation.setLocaleOverride` sends nothing at all
+/// ([`effective_locale`]) so Chrome keeps its own.
+///
+/// # Why `languages` outranks `locale`
+///
+/// In a real Chrome `navigator.language` is always `navigator.languages[0]`.
+/// A caller who sets both and lets them disagree is asking for a browser that
+/// cannot exist, so honoring both is not an option and the list has to win:
+/// `navigator.languages` is observable in full, and a `language` that is not
+/// its head is a mismatch no genuine browser produces. Resolving the header
+/// and the locale override independently is what produced exactly that — the
+/// header advertising one list while `Intl` reported a locale from outside it.
+/// An explicit `locale` with no `languages` still drives both surfaces.
+///
+/// This is the post-merge view. Once
+/// [`Fingerprint::overlay_persona`](crate::Fingerprint::overlay_persona) has
+/// folded a persona in, the fingerprint already carries whatever the persona
+/// pinned, so the observer reads that one value instead of re-deriving the
+/// persona-vs-fingerprint precedence at each CDP call site.
+fn configured_languages(fp: &Fingerprint) -> Option<Vec<String>> {
+    if let Some(langs) = fp.languages.as_ref().filter(|v| !v.is_empty()) {
+        return Some(langs.clone());
+    }
+    fp.locale.as_deref().map(derive_from_locale)
+}
+
+/// The language list to advertise, falling back to `["en-US", "en"]` when the
+/// fingerprint configures none. See [`configured_languages`].
+pub(crate) fn fingerprint_languages(fp: &Fingerprint) -> Vec<String> {
+    configured_languages(fp).unwrap_or_else(default_languages)
+}
+
+/// The locale to pin via `Emulation.setLocaleOverride`, or `None` to send no
+/// override at all.
+///
+/// By construction this is the head of [`fingerprint_languages`] whenever
+/// anything is configured, which is the coherence the two surfaces need — see
+/// [`configured_languages`] for why the list, not `locale`, decides.
+pub(crate) fn effective_locale(fp: &Fingerprint) -> Option<String> {
+    configured_languages(fp)?.into_iter().next()
+}
+
+/// Resolve the effective language list at apply time, persona first.
 ///
 /// Precedence: `persona.languages` -> `fingerprint.languages` ->
-/// derive from the primary locale -> `["en-US", "en"]`. Deriving from a
-/// region locale yields `[locale, base_lang]` where `base_lang` is the
-/// subtag before `-` (e.g. `"fr-FR"` -> `["fr-FR", "fr"]`); a bare locale
-/// (no `-`) yields a single entry.
+/// derive from the primary locale (`persona.locale` before `fp.locale`) ->
+/// `["en-US", "en"]`.
+///
+/// For a fingerprint the persona has already been folded into, this agrees
+/// with [`fingerprint_languages`] by construction — the persona's values are
+/// on `fp` by then. It stays persona-first for the public
+/// [`bootstrap_script`](crate::patches::bootstrap_script) path, whose caller
+/// may hand it an unmerged pair.
 pub(crate) fn resolve_languages(persona: &Persona, fp: &Fingerprint) -> Vec<String> {
     if let Some(langs) = persona.languages.as_ref().filter(|v| !v.is_empty()) {
         return langs.clone();
@@ -40,17 +112,9 @@ pub(crate) fn resolve_languages(persona: &Persona, fp: &Fingerprint) -> Vec<Stri
     if let Some(langs) = fp.languages.as_ref().filter(|v| !v.is_empty()) {
         return langs.clone();
     }
-    let locale = persona.locale.clone().or_else(|| fp.locale.clone());
-    match locale {
-        Some(loc) => {
-            let base = loc.split('-').next().unwrap_or(&loc).to_string();
-            if base != loc {
-                vec![loc, base]
-            } else {
-                vec![loc]
-            }
-        }
-        None => vec!["en-US".to_string(), "en".to_string()],
+    match persona.locale.as_deref().or(fp.locale.as_deref()) {
+        Some(locale) => derive_from_locale(locale),
+        None => default_languages(),
     }
 }
 
