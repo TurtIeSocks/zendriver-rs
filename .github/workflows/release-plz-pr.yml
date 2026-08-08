@@ -62,12 +62,17 @@ jobs:
       # recursion rule). The PAT-authored merge does.
       #
       # `gh pr merge --auto` queues the merge behind required status
-      # checks when branch protection defines them. main is currently
-      # unprotected (no required checks), and GitHub refuses to *enable*
-      # auto-merge on an already-mergeable PR — so the `|| gh pr merge`
-      # fallback merges immediately. Add branch protection with required
-      # checks later and the --auto path will gate on green CI with no
-      # further changes here.
+      # checks. main's ruleset has defined five of them (fmt, clippy,
+      # test-unit, test-doc, test-integration) since 2026-05-27, so the
+      # --auto path is the one that runs and the `|| gh pr merge`
+      # fallback is a leftover for the unprotected case.
+      #
+      # Do not read that gate as protection against a runaway loop. The
+      # 2026-08-08 incident merged 44 release PRs straight through it —
+      # each one waited its full ~7 minutes for green CI and got it,
+      # because an empty release genuinely passes every check. Required
+      # checks answer "is this branch broken", never "should this exist";
+      # that question is the job of the two guards above and below.
       # Second line of defence, independent of why a release PR appeared.
       # A release that changes no crate version is by definition a no-op, and
       # it was this loop's own tell: 15 consecutive changelog-only "releases"
