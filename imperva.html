@@ -265,7 +265,8 @@ async fn main() -&gt; zendriver::Result&lt;()&gt; {
 and false negatives (cookie evicted by site CSP). Legacy flows that
 never set <code>reese84</code> resolve to <code>ChallengeGone</code> once body markers clear.</p>
 <h2 id="captcha-handling"><a class="header" href="#captcha-handling">CAPTCHA handling</a></h2>
-<p>Without an <code>on_captcha</code> callback, a CAPTCHA surface returns
+<p>A CAPTCHA surface escalates only when no usable <code>reese84</code> token is in
+hand. Without an <code>on_captcha</code> callback that case returns
 <code>ImpervaError::CaptchaRequired { kind }</code> immediately (no waiting). Plug
 in your own solver:</p>
 <pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
@@ -287,6 +288,14 @@ in your own solver:</p>
 <p><code>CaptchaChallenge</code> carries <code>kind</code>, <code>site_key</code> (when extractable), and
 <code>url</code>. <code>CaptchaSolution</code> is the token + form field name your solver
 returns.</p>
+<p>Two things worth knowing before you wire up a paid service. A snapshot
+that already carries a <code>reese84</code> never escalates, whatever the surface
+says — the site's own post-clearance form routinely mounts an ordinary
+reCAPTCHA, and a token in hand outranks it — so a registered solver can
+go uncalled for an entire run. And the solver is invoked at most once
+per <code>wait_for_clearance</code>, raced against that call's timeout: injecting
+the response does not remove the widget, so the surface stays <code>Captcha</code>
+afterwards, and an unlatched loop would buy a fresh solve every tick.</p>
 <h2 id="fetch-domain-fast-path"><a class="header" href="#fetch-domain-fast-path">Fetch-domain fast path</a></h2>
 <p><code>with_interception()</code> spawns a <code>Fetch</code> subscription that signals on
 first 2xx response to <code>Reese.js</code> or <code>_Incapsula_Resource*</code>. Polling

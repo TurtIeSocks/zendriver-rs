@@ -296,31 +296,64 @@
 <a href=#296 id=296 data-nosnippet>296</a>        conn.shutdown();
 <a href=#297 id=297 data-nosnippet>297</a>    }
 <a href=#298 id=298 data-nosnippet>298</a>
-<a href=#299 id=299 data-nosnippet>299</a>    <span class="attr">#[tokio::test]
-<a href=#300 id=300 data-nosnippet>300</a>    </span><span class="kw">async fn </span>detect_snapshot_propagates_js_exception_as_jserror() {
-<a href=#301 id=301 data-nosnippet>301</a>        <span class="kw">let </span>(<span class="kw-2">mut </span>mock, conn) = MockConnection::pair();
-<a href=#302 id=302 data-nosnippet>302</a>        <span class="kw">let </span>sess = SessionHandle::new(conn.clone(), <span class="string">"S1"</span>);
-<a href=#303 id=303 data-nosnippet>303</a>
-<a href=#304 id=304 data-nosnippet>304</a>        <span class="kw">let </span>fut = tokio::spawn({
-<a href=#305 id=305 data-nosnippet>305</a>            <span class="kw">let </span>s = sess.clone();
-<a href=#306 id=306 data-nosnippet>306</a>            <span class="kw">async move </span>{ detect_snapshot(<span class="kw-2">&amp;</span>s).<span class="kw">await </span>}
-<a href=#307 id=307 data-nosnippet>307</a>        });
-<a href=#308 id=308 data-nosnippet>308</a>
-<a href=#309 id=309 data-nosnippet>309</a>        <span class="kw">let </span>id = mock.expect_cmd(<span class="string">"Runtime.evaluate"</span>).<span class="kw">await</span>;
-<a href=#310 id=310 data-nosnippet>310</a>        mock.reply(
-<a href=#311 id=311 data-nosnippet>311</a>            id,
-<a href=#312 id=312 data-nosnippet>312</a>            <span class="macro">json!</span>({
-<a href=#313 id=313 data-nosnippet>313</a>                <span class="string">"result"</span>: { <span class="string">"type"</span>: <span class="string">"undefined" </span>},
-<a href=#314 id=314 data-nosnippet>314</a>                <span class="string">"exceptionDetails"</span>: {
-<a href=#315 id=315 data-nosnippet>315</a>                    <span class="string">"exception"</span>: { <span class="string">"description"</span>: <span class="string">"TypeError: nope" </span>}
-<a href=#316 id=316 data-nosnippet>316</a>                }
-<a href=#317 id=317 data-nosnippet>317</a>            }),
-<a href=#318 id=318 data-nosnippet>318</a>        )
-<a href=#319 id=319 data-nosnippet>319</a>        .<span class="kw">await</span>;
-<a href=#320 id=320 data-nosnippet>320</a>
-<a href=#321 id=321 data-nosnippet>321</a>        <span class="kw">let </span>err = fut.<span class="kw">await</span>.unwrap().unwrap_err();
-<a href=#322 id=322 data-nosnippet>322</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(err, ImpervaError::JsError(s) <span class="kw">if </span>s.contains(<span class="string">"TypeError"</span>)));
-<a href=#323 id=323 data-nosnippet>323</a>        conn.shutdown();
-<a href=#324 id=324 data-nosnippet>324</a>    }
-<a href=#325 id=325 data-nosnippet>325</a>}
+<a href=#299 id=299 data-nosnippet>299</a>    <span class="doccomment">/// Imperva names the load-balancer cookie `nlbi_&lt;siteid&gt;`, never a bare
+<a href=#300 id=300 data-nosnippet>300</a>    /// `nlbi`, so the `sessions` collector must match it by prefix — an
+<a href=#301 id=301 data-nosnippet>301</a>    /// equality match silently dropped it from every snapshot the caller
+<a href=#302 id=302 data-nosnippet>302</a>    /// replays.
+<a href=#303 id=303 data-nosnippet>303</a>    ///
+<a href=#304 id=304 data-nosnippet>304</a>    /// It must NOT appear in the legacy-surface scan. `nlbi_*` is routing
+<a href=#305 id=305 data-nosnippet>305</a>    /// state that is set on ordinary traffic and outlives clearance, so
+<a href=#306 id=306 data-nosnippet>306</a>    /// treating it as a challenge marker pins the surface at `Legacy` on a
+<a href=#307 id=307 data-nosnippet>307</a>    /// page that has already cleared — which blocks `ChallengeGone` outright
+<a href=#308 id=308 data-nosnippet>308</a>    /// and turns a success into a full-budget timeout.
+<a href=#309 id=309 data-nosnippet>309</a>    ///
+<a href=#310 id=310 data-nosnippet>310</a>    /// Source-level guard: `detect.js` only ever runs inside a real page, so
+<a href=#311 id=311 data-nosnippet>311</a>    /// its behavior cannot be exercised from a mocked CDP transport. This
+<a href=#312 id=312 data-nosnippet>312</a>    /// checks the cookie names the file matches on, nothing more.
+<a href=#313 id=313 data-nosnippet>313</a>    </span><span class="attr">#[test]
+<a href=#314 id=314 data-nosnippet>314</a>    </span><span class="kw">fn </span>detect_js_prefix_matches_nlbi_for_sessions_but_not_as_a_surface_signal() {
+<a href=#315 id=315 data-nosnippet>315</a>        <span class="kw">let </span>js = <span class="macro">include_str!</span>(<span class="string">"detect.js"</span>);
+<a href=#316 id=316 data-nosnippet>316</a>        <span class="macro">assert_eq!</span>(
+<a href=#317 id=317 data-nosnippet>317</a>            js.matches(<span class="string">r#"indexOf("nlbi_") === 0"#</span>).count(),
+<a href=#318 id=318 data-nosnippet>318</a>            <span class="number">1</span>,
+<a href=#319 id=319 data-nosnippet>319</a>            <span class="string">"only the sessions collector may match nlbi_&lt;siteid&gt;"
+<a href=#320 id=320 data-nosnippet>320</a>        </span>);
+<a href=#321 id=321 data-nosnippet>321</a>        <span class="macro">assert!</span>(
+<a href=#322 id=322 data-nosnippet>322</a>            !js.contains(<span class="string">r#"=== "nlbi""#</span>),
+<a href=#323 id=323 data-nosnippet>323</a>            <span class="string">"an exact nlbi match never fires against a real Imperva cookie"
+<a href=#324 id=324 data-nosnippet>324</a>        </span>);
+<a href=#325 id=325 data-nosnippet>325</a>        <span class="macro">assert!</span>(
+<a href=#326 id=326 data-nosnippet>326</a>            !js.contains(<span class="string">r#"indexOf("nlbi") === 0"#</span>),
+<a href=#327 id=327 data-nosnippet>327</a>            <span class="string">"an unanchored nlbi prefix also sweeps nlbistore / nlbi2fa into sessions, \
+<a href=#328 id=328 data-nosnippet>328</a>             and everything in sessions gets replayed to the origin"
+<a href=#329 id=329 data-nosnippet>329</a>        </span>);
+<a href=#330 id=330 data-nosnippet>330</a>    }
+<a href=#331 id=331 data-nosnippet>331</a>
+<a href=#332 id=332 data-nosnippet>332</a>    <span class="attr">#[tokio::test]
+<a href=#333 id=333 data-nosnippet>333</a>    </span><span class="kw">async fn </span>detect_snapshot_propagates_js_exception_as_jserror() {
+<a href=#334 id=334 data-nosnippet>334</a>        <span class="kw">let </span>(<span class="kw-2">mut </span>mock, conn) = MockConnection::pair();
+<a href=#335 id=335 data-nosnippet>335</a>        <span class="kw">let </span>sess = SessionHandle::new(conn.clone(), <span class="string">"S1"</span>);
+<a href=#336 id=336 data-nosnippet>336</a>
+<a href=#337 id=337 data-nosnippet>337</a>        <span class="kw">let </span>fut = tokio::spawn({
+<a href=#338 id=338 data-nosnippet>338</a>            <span class="kw">let </span>s = sess.clone();
+<a href=#339 id=339 data-nosnippet>339</a>            <span class="kw">async move </span>{ detect_snapshot(<span class="kw-2">&amp;</span>s).<span class="kw">await </span>}
+<a href=#340 id=340 data-nosnippet>340</a>        });
+<a href=#341 id=341 data-nosnippet>341</a>
+<a href=#342 id=342 data-nosnippet>342</a>        <span class="kw">let </span>id = mock.expect_cmd(<span class="string">"Runtime.evaluate"</span>).<span class="kw">await</span>;
+<a href=#343 id=343 data-nosnippet>343</a>        mock.reply(
+<a href=#344 id=344 data-nosnippet>344</a>            id,
+<a href=#345 id=345 data-nosnippet>345</a>            <span class="macro">json!</span>({
+<a href=#346 id=346 data-nosnippet>346</a>                <span class="string">"result"</span>: { <span class="string">"type"</span>: <span class="string">"undefined" </span>},
+<a href=#347 id=347 data-nosnippet>347</a>                <span class="string">"exceptionDetails"</span>: {
+<a href=#348 id=348 data-nosnippet>348</a>                    <span class="string">"exception"</span>: { <span class="string">"description"</span>: <span class="string">"TypeError: nope" </span>}
+<a href=#349 id=349 data-nosnippet>349</a>                }
+<a href=#350 id=350 data-nosnippet>350</a>            }),
+<a href=#351 id=351 data-nosnippet>351</a>        )
+<a href=#352 id=352 data-nosnippet>352</a>        .<span class="kw">await</span>;
+<a href=#353 id=353 data-nosnippet>353</a>
+<a href=#354 id=354 data-nosnippet>354</a>        <span class="kw">let </span>err = fut.<span class="kw">await</span>.unwrap().unwrap_err();
+<a href=#355 id=355 data-nosnippet>355</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(err, ImpervaError::JsError(s) <span class="kw">if </span>s.contains(<span class="string">"TypeError"</span>)));
+<a href=#356 id=356 data-nosnippet>356</a>        conn.shutdown();
+<a href=#357 id=357 data-nosnippet>357</a>    }
+<a href=#358 id=358 data-nosnippet>358</a>}
 </code></pre></div></section></main></body></html>

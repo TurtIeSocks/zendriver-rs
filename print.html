@@ -3939,17 +3939,19 @@ flow.</p>
 //!      on the page. When the interactive iframe is present and we have
 //!      not yet clicked it, the driver dispatches a single raw left-click
 //!      at the canonical (15% x, 50% y) offset (Turnstile checkbox).
-//!      Resolves the first tick a token is observed or the iframe is gone
-//!      after a click.
+//!      Resolves the first tick a token is observed, or the iframe stops
+//!      being a valid click target after a click.
 //!   4. Print the [`ClearanceOutcome`] enum variant + the page title.
 //!
 //! Outcomes:
 //!   - `TokenAcquired(_)` — Turnstile yielded a `cf-turnstile-response`
 //!     token, either after clicking the checkbox or directly (invisible
 //!     Turnstile, where the iframe never mounts).
-//!   - `ChallengeGone` — the interactive iframe was clicked and the
-//!     challenge container then disappeared without a token (e.g.
-//!     clearance-cookie shortcut).
+//!   - `ChallengeGone` — the challenge stopped being actionable without a
+//!     token (e.g. clearance-cookie shortcut): the clicked iframe is no
+//!     longer a valid click target, or every marker seen earlier is gone.
+//!     A widget that is merely hidden or zero-size is also not a valid
+//!     click target, so this is not by itself proof the gate was passed.
 //!   - `TimedOut { saw_challenge: false }` — the full timeout window
 //!     elapsed without any challenge markers ever being observed (no
 //!     container, no hidden input, no iframe). The page likely has no
@@ -4000,49 +4002,84 @@ async fn main() -&gt; zendriver::Result&lt;()&gt; {
     browser.close().await?;
     Ok(())
 }</code></pre></pre>
-<p>The driver returns a <a href="https://docs.rs/zendriver/latest/zendriver/enum.ClearanceOutcome.html"><code>ClearanceOutcome</code></a> on success:</p>
+<p>The driver returns a <a href="https://docs.rs/zendriver/latest/zendriver/enum.ClearanceOutcome.html"><code>ClearanceOutcome</code></a> on success. All three are
+ordinary terminals, the last one included:</p>
 <ul>
 <li><strong><code>TokenAcquired(token)</code></strong> — the <code>cf-turnstile-response</code> input picked
 up a non-empty value. The page can now proceed; the token is also
 forwarded to Cloudflare server-side on the next request.</li>
-<li><strong><code>ChallengeGone</code></strong> — the challenge container disappeared without
+<li><strong><code>ChallengeGone</code></strong> — the challenge stopped being actionable without
 yielding a token, typically because Cloudflare honored a clearance
-cookie and short-circuited the gate.</li>
+cookie and short-circuited the gate. Either the iframe the driver
+clicked is no longer a valid click target, or every challenge marker
+seen on an earlier tick has vanished. The first case is weaker than it
+sounds: a widget that is still mounted but hidden or zero-sized is also
+not a valid click target, so once a click has landed this outcome can
+arrive on a tick where the widget simply is not clickable at that
+moment. That case says the driver ran out of things to click, not that
+the gate is behind you; confirm the page before trusting what you
+scrape next.</li>
+<li><strong><code>TimedOut { saw_challenge }</code></strong> — the deadline elapsed.
+<code>saw_challenge</code> separates the two cases worth telling apart: <code>true</code>
+means a real challenge sat on the page and never resolved, <code>false</code>
+means no Cloudflare marker ever appeared and the bypass was probably
+called on a page with no gate on it.</li>
 </ul>
-<p>Errors are typed via <a href="https://docs.rs/zendriver/latest/zendriver/enum.CloudflareError.html"><code>CloudflareError</code></a>:</p>
+<p>A deadline is not an error here, so <a href="https://docs.rs/zendriver/latest/zendriver/enum.CloudflareError.html"><code>CloudflareError</code></a> is left to carry
+genuine faults, of which there are two:</p>
 <ul>
-<li><strong><code>NoChallenge</code></strong> — no Turnstile iframe was detected at call time.
-Often means the page already cleared you (an existing cookie) or
-there's no CF gate present. Treat as a no-op, not a failure.</li>
-<li><strong><code>ClearanceTimeout</code></strong> — the deadline elapsed without resolution.
-Usually means Cloudflare escalated to the deeper anti-bot path that
-this driver doesn't handle.</li>
+<li><strong><code>Call</code></strong> — the underlying CDP call failed, usually a dead tab or a
+closed connection.</li>
+<li><strong><code>JsError</code></strong> — the in-page evaluator raised, or handed back a payload
+the driver could not decode.</li>
 </ul>
+<p>The enum is <code>#[non_exhaustive]</code>, so a <code>match</code> on it needs a wildcard
+arm. There is no <code>NoChallenge</code> or <code>ClearanceTimeout</code> variant — if you
+are looking for those, the first is <code>TimedOut { saw_challenge: false }</code>
+and the second is <code>TimedOut { saw_challenge: true }</code>.</p>
 <h2 id="how-it-works"><a class="header" href="#how-it-works">How it works</a></h2>
-<p>The driver runs four stages internally:</p>
+<p>The driver runs a single poll loop, and each tick costs one CDP
+round-trip. A shadow-DOM-aware walk of the page's main world reports
+three things at once: the
+<code>cf-turnstile-response</code> token if one is present, the challenge iframe's
+box if that iframe is a valid click target, and whether any Cloudflare
+marker at all (container, hidden input, or live iframe) is on the page.
+The tick then resolves in this order:</p>
 <ol>
-<li><strong>Detect.</strong> A shadow-DOM-aware walk of the page's main world looks
-for the Turnstile iframe (<code>&lt;iframe&gt;</code> whose <code>src</code> matches Cloudflare's
-Turnstile widget origin). It surfaces the bounding box.</li>
-<li><strong>Click.</strong> A raw <code>mousedown</code> / <code>mouseup</code> is dispatched at offset
+<li><strong>A token wins outright.</strong> A non-empty token returns <code>TokenAcquired</code>
+immediately. This is also the invisible-Turnstile path, where no
+iframe mounts and Cloudflare's loader script fills the field in
+without anything to click.</li>
+<li><strong>Scroll, re-measure, click.</strong> Raw mouse events carry viewport
+coordinates, so a widget below the fold has to be scrolled in and
+re-measured before a click can land on it. The click goes to
 <code>(bbox.x + bbox.width * 0.15, bbox.y + bbox.height * 0.5)</code> — the
-canonical 15%-from-left, 50%-from-top position of the Turnstile
-checkbox inside the iframe. No Bezier-path motion; Cloudflare wants a
-real click on a real checkbox.</li>
-<li><strong>Poll.</strong> Every 500 ms (override via
-<a href="https://docs.rs/zendriver/latest/zendriver/struct.CloudflareBypass.html#method.poll_interval"><code>poll_interval</code></a>),
-the driver checks both <code>cf-turnstile-response</code> (for a non-empty
-token) and the challenge container (for removal from the DOM).</li>
-<li><strong>Return.</strong> First condition to fire wins; deadline elapsed →
-<code>ClearanceTimeout</code>.</li>
+canonical 15%-from-left, 50%-from-top position of the checkbox inside
+the iframe. No Bezier-path motion; Cloudflare wants a real click on a
+real checkbox. A widget that is mounted but hidden or zero-sized is
+never clicked, since there is no meaningful point to click.</li>
+<li><strong>Retry, up to a cap.</strong> Cloudflare drops clicks that land while the
+widget is still booting, so one run spends up to three of them, each
+at least four poll ticks after the last (about two seconds at the
+default interval). A swallowed first click no longer strands the run
+until the deadline.</li>
+<li><strong>Otherwise keep polling</strong> — every 500 ms by default, override via
+<a href="https://docs.rs/zendriver/latest/zendriver/struct.CloudflareBypass.html#method.poll_interval"><code>poll_interval</code></a>
+— until a terminal fires or the deadline passes.</li>
 </ol>
+<p>After ten consecutive ticks with no progress the driver logs a warning
+asking whether <code>BrowserBuilder::stealth</code> is on, which is the answer most
+of the time. See <a href="cloudflare.html#pairing-with-stealth">Pairing with stealth</a> below.</p>
 <h2 id="limitations-1"><a class="header" href="#limitations-1">Limitations</a></h2>
-<p>This driver <strong>only handles the visible interactive Turnstile checkbox</strong>.
-It does not solve:</p>
+<p>The driver <strong>clicks the visible interactive Turnstile checkbox</strong>, and
+picks up the token on the invisible path when Cloudflare's own script
+produces one. It does not solve:</p>
 <ul>
-<li><strong>Silent / invisible Turnstile</strong> (no UI element to click — relies on
-passive fingerprinting). For those, stealth alone is your only
-defense; pair <code>StealthProfile::spoofed()</code> with a clean residential IP.</li>
+<li><strong>Silent / invisible Turnstile.</strong> There is no UI element to click and
+the verdict comes from passive fingerprinting. The loop returns
+<code>TokenAcquired</code> the moment the field is populated, but nothing here
+makes Cloudflare populate it — that is stealth's job. Pair
+<code>StealthProfile::spoofed()</code> with a clean residential IP.</li>
 <li><strong>Cloudflare's full Pro / Enterprise managed challenge</strong> (which can
 escalate to image puzzles or even hCaptcha).</li>
 <li><strong>Bot Fight Mode soft blocks</strong> that issue 403s without a UI.</li>
@@ -4087,17 +4124,27 @@ tab.wait_for_load().await?;
 
 match tab.cloudflare()
     .wait_for_clearance(Duration::from_secs(30))
-    .await
+    .await?
 {
-    Ok(_) =&gt; { /* cleared */ }
-    Err(CloudflareError::NoChallenge) =&gt; { /* already cleared, fine */ }
-    Err(e) =&gt; return Err(e.into()),
+    ClearanceOutcome::TokenAcquired(_) | ClearanceOutcome::ChallengeGone =&gt; {
+        // Past the gate.
+    }
+    ClearanceOutcome::TimedOut { saw_challenge: false } =&gt; {
+        // No Cloudflare marker ever appeared — this page has no gate.
+        // Usually fine to continue.
+    }
+    ClearanceOutcome::TimedOut { saw_challenge: true } =&gt; {
+        // A real challenge that never resolved. Worth failing the job.
+        return Err("cloudflare challenge did not clear".into());
+    }
 }
 
 // Now your normal scraping / interaction code.
 let data = tab.find().css(".product-grid").one().await?;</code></pre>
-<p><code>NoChallenge</code> is informational, not an error — code should treat it as
-success. The other variants of <a href="https://docs.rs/zendriver/latest/zendriver/enum.CloudflareError.html"><code>CloudflareError</code></a> should propagate.</p>
+<p>The <code>?</code> propagates the two real faults, <code>Call</code> and <code>JsError</code>. Everything
+else is a terminal you decide about, and the <code>saw_challenge</code> split is
+the one that changes what you do: "no gate on this page" and "a gate we
+could not pass" want opposite handling.</p>
 <h2 id="tuning"><a class="header" href="#tuning">Tuning</a></h2>
 <ul>
 <li><code>.poll_interval(Duration::from_millis(200))</code> — tighter polling burns
@@ -4192,7 +4239,8 @@ async fn main() -&gt; zendriver::Result&lt;()&gt; {
 and false negatives (cookie evicted by site CSP). Legacy flows that
 never set <code>reese84</code> resolve to <code>ChallengeGone</code> once body markers clear.</p>
 <h2 id="captcha-handling"><a class="header" href="#captcha-handling">CAPTCHA handling</a></h2>
-<p>Without an <code>on_captcha</code> callback, a CAPTCHA surface returns
+<p>A CAPTCHA surface escalates only when no usable <code>reese84</code> token is in
+hand. Without an <code>on_captcha</code> callback that case returns
 <code>ImpervaError::CaptchaRequired { kind }</code> immediately (no waiting). Plug
 in your own solver:</p>
 <pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
@@ -4214,6 +4262,14 @@ in your own solver:</p>
 <p><code>CaptchaChallenge</code> carries <code>kind</code>, <code>site_key</code> (when extractable), and
 <code>url</code>. <code>CaptchaSolution</code> is the token + form field name your solver
 returns.</p>
+<p>Two things worth knowing before you wire up a paid service. A snapshot
+that already carries a <code>reese84</code> never escalates, whatever the surface
+says — the site's own post-clearance form routinely mounts an ordinary
+reCAPTCHA, and a token in hand outranks it — so a registered solver can
+go uncalled for an entire run. And the solver is invoked at most once
+per <code>wait_for_clearance</code>, raced against that call's timeout: injecting
+the response does not remove the widget, so the surface stays <code>Captcha</code>
+afterwards, and an unlatched loop would buy a fresh solve every tick.</p>
 <h2 id="fetch-domain-fast-path"><a class="header" href="#fetch-domain-fast-path">Fetch-domain fast path</a></h2>
 <p><code>with_interception()</code> spawns a <code>Fetch</code> subscription that signals on
 first 2xx response to <code>Reese.js</code> or <code>_Incapsula_Resource*</code>. Polling
@@ -4344,6 +4400,12 @@ solver:</p>
 browser by setting this cookie (not a form-field token like hCaptcha/reCAPTCHA).
 The driver applies it via <code>Network.setCookie</code> scoped to the registrable domain
 and reloads the page.</p>
+<p>The solver runs at most once per <code>wait_for_clearance</code>, and within that call's
+timeout. The reload is acked before the new document loads, so the next poll
+still sees the CAPTCHA — an unlatched loop would bill you a solve every 250ms
+until the page settled. After the one attempt the driver goes back to polling
+until the surface clears or the deadline passes; call <code>wait_for_clearance</code>
+again if you want a second solve.</p>
 <p><code>DataDomeChallenge</code> carries: <code>captcha_url</code>, <code>site_url</code>, <code>user_agent</code>, <code>cid</code>
 (DataDome challenge ID), and <code>hash</code>. <code>DataDomeSolution</code> holds
 <code>datadome_cookie</code>.</p>

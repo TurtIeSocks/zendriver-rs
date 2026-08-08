@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["MockConnection"]};
+window.SIDEBAR_ITEMS = {"struct":["LogCapture","MockConnection"]};
