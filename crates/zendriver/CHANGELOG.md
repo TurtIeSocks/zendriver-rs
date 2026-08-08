@@ -5,9 +5,11 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
-Versions 0.5.12 through 0.5.24 were published by a release-automation loop and
-are yanked. They are byte-identical to 0.5.11 apart from the version string, and
-have no entries below because they changed nothing.
+## [0.5.24] - 2026-08-08
+
+Nothing changed in 0.5.12 through 0.5.24. A release-automation loop cut them and
+they are yanked; every one is byte-identical to 0.5.11 apart from the version
+string. Listed once here rather than as thirteen empty headings.
 
 ## [0.5.11] - 2026-08-08
 

@@ -5,9 +5,11 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
-Versions 0.16.21 through 0.16.33 were published by a release-automation loop and
-are yanked. They carry no changes; the crate only moved because its `zendriver`
-dependency was being bumped.
+## [0.16.33] - 2026-08-08
+
+Nothing changed in 0.16.21 through 0.16.33. A release-automation loop cut them
+and they are yanked; this crate only moved because its `zendriver` dependency
+was being bumped. Listed once here rather than as thirteen empty headings.
 
 ## [0.16.20] - 2026-08-08
 

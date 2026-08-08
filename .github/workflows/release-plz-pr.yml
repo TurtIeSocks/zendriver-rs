@@ -68,6 +68,25 @@ jobs:
       # fallback merges immediately. Add branch protection with required
       # checks later and the --auto path will gate on green CI with no
       # further changes here.
+      # Second line of defence, independent of why a release PR appeared.
+      # A release that changes no crate version is by definition a no-op, and
+      # it was this loop's own tell: 15 consecutive changelog-only "releases"
+      # ran while nothing was watching for exactly that shape. Refuse to merge
+      # one, and leave the run red so a human sees it.
+      - name: Refuse a release PR that bumps no version
+        if: ${{ steps.release-plz.outputs.prs_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          PR_NUMBER: ${{ fromJSON(steps.release-plz.outputs.pr).number }}
+        run: |
+          if ! gh pr diff "$PR_NUMBER" --name-only | grep -q 'Cargo\.toml$'; then
+            echo "::error::release PR #$PR_NUMBER changes no Cargo.toml version."
+            echo "::error::That is the no-op release shape that looped on 2026-08-08."
+            gh pr close "$PR_NUMBER" \
+              --comment "Closed automatically: this release PR bumps no crate version." || true
+            exit 1
+          fi
+
       - name: Auto-merge the release PR
         if: ${{ steps.release-plz.outputs.prs_created == 'true' }}
         env:
