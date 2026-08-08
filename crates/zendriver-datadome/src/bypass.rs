@@ -301,6 +301,20 @@ impl<'tab> DataDomeBypass<'tab> {
             // `TimedOut { last_surface }` return value cannot tell the caller:
             // thirty seconds of silence, then a terminal that looks identical
             // to a site simply being slow. Latched, so a run emits one line.
+            //
+            // Fires on the eleventh unchanged tick, not the tenth: the first
+            // snapshot has no predecessor, so it resets the counter instead of
+            // advancing it.
+            //
+            // Deliberately still a copy of Imperva's five lines rather than a
+            // shared helper, and the reason is the size of the thing, not
+            // crate topology: `zendriver-transport` is a dependency of all
+            // three solver crates and could host it perfectly well. Two copies
+            // of a five-line counter, generic over two unrelated surface enums
+            // (`DataDomeSurface`, `ImpervaSurface`), sit below the point where
+            // an abstraction pays for itself. Cloudflare is not a third
+            // caller: it counts ticks that landed no click, which is a
+            // different question that happens to look the same.
             stall_ticks = if Some(snap.surface) == prev_surface {
                 stall_ticks + 1
             } else {
@@ -514,7 +528,9 @@ mod tests {
     #[tokio::test]
     async fn unchanging_surface_emits_the_stealth_hint() {
         /// Ticks on an unchanged surface before the page is allowed to clear.
-        /// The hint fires on the tenth.
+        /// The hint fires on the eleventh, not the tenth: the first snapshot
+        /// has no predecessor to differ from, so it resets the counter rather
+        /// than advancing it. Proven by mutation — this test fails at 10.
         const STALLED_TICKS: usize = 12;
 
         let (mut mock, conn) = MockConnection::pair();

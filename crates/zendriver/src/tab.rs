@@ -2931,8 +2931,9 @@ impl Tab {
     /// [`wait_for_clearance`](zendriver_cloudflare::CloudflareBypass::wait_for_clearance)
     /// to detect the Turnstile checkbox, click it at the canonical 15%
     /// offset, and poll until either the `cf-turnstile-response` token
-    /// appears, the challenge container disappears, or the supplied timeout
-    /// elapses. Use
+    /// appears, the challenge stops being actionable (see
+    /// [`ClearanceOutcome::ChallengeGone`](zendriver_cloudflare::ClearanceOutcome::ChallengeGone),
+    /// which is weaker than it reads), or the supplied timeout elapses. Use
     /// [`is_challenge_present`](zendriver_cloudflare::CloudflareBypass::is_challenge_present)
     /// for a one-shot probe without driving a click.
     ///

@@ -34,10 +34,17 @@ ordinary terminals, the last one included:
 - **`TokenAcquired(token)`** — the `cf-turnstile-response` input picked
   up a non-empty value. The page can now proceed; the token is also
   forwarded to Cloudflare server-side on the next request.
-- **`ChallengeGone`** — the challenge went away without yielding a
-  token, typically because Cloudflare honored a clearance cookie and
-  short-circuited the gate. Either an iframe the driver clicked was torn
-  down, or every challenge marker seen on an earlier tick has vanished.
+- **`ChallengeGone`** — the challenge stopped being actionable without
+  yielding a token, typically because Cloudflare honored a clearance
+  cookie and short-circuited the gate. Either the iframe the driver
+  clicked is no longer a valid click target, or every challenge marker
+  seen on an earlier tick has vanished. The first case is weaker than it
+  sounds: a widget that is still mounted but hidden or zero-sized is also
+  not a valid click target, so once a click has landed this outcome can
+  arrive on a tick where the widget simply is not clickable at that
+  moment. That case says the driver ran out of things to click, not that
+  the gate is behind you; confirm the page before trusting what you
+  scrape next.
 - **`TimedOut { saw_challenge }`** — the deadline elapsed.
   `saw_challenge` separates the two cases worth telling apart: `true`
   means a real challenge sat on the page and never resolved, `false`

@@ -416,6 +416,13 @@ impl<'tab> ImpervaBypass<'tab> {
                 }
             }
 
+            // Stall hint: a surface sitting unchanged tick after tick is
+            // almost always stealth being off, which a bare `TimedOut` cannot
+            // say. Latched, so a run emits one line. Fires on the eleventh
+            // unchanged tick, not the tenth — the first snapshot has no
+            // predecessor, so it resets the counter instead of advancing it.
+            // DataDome carries the same five lines; the note on why they are
+            // not shared is on that copy.
             stall_ticks = if Some(snap.surface) == prev_surface {
                 stall_ticks + 1
             } else {

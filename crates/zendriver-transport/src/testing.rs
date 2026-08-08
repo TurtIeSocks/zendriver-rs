@@ -313,6 +313,18 @@ impl MockConnection {
 /// fails in the suite. Installing one permissive global subscriber (once per
 /// process) and routing events to a task-local buffer removes the race:
 /// every callsite is registered against a subscriber that is always enabled.
+///
+/// Two consequences for the caller, since that subscriber is process-wide.
+/// It is installed on the first [`capture`](Self::capture) in the binary and
+/// stays for the run, so every other test's events go through it as well;
+/// they are dropped rather than printed, because only a task inside a
+/// `capture` has anywhere to put them. And if the binary already installed a
+/// global subscriber of its own, that one keeps the slot and a capture
+/// collects **nothing** rather than fighting for it. An empty
+/// [`events`](Self::events) therefore means "nothing was logged *or* someone
+/// else owns the subscriber", which is worth remembering before asserting a
+/// count of zero: write the assertion so the hint's presence is what proves
+/// the capture works.
 #[derive(Debug, Clone, Default)]
 pub struct LogCapture {
     events: Arc<std::sync::Mutex<Vec<String>>>,

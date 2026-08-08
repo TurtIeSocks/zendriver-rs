@@ -24,9 +24,11 @@
 //!    `CLICK_RETRY_TICKS` ticks apart, so a swallowed first click is not
 //!    the end of the run.
 //! 4. Resolves to [`ClearanceOutcome::ChallengeGone`] when the challenge
-//!    disappears without yielding a token — either the iframe we clicked is
-//!    gone, or every challenge marker observed on an earlier tick has
-//!    vanished (the JS-only interstitial that clears itself).
+//!    stops being actionable without yielding a token — either the iframe we
+//!    clicked is no longer a valid click target, or every challenge marker
+//!    observed on an earlier tick has vanished (the JS-only interstitial
+//!    that clears itself). The first of those is weaker than it sounds; see
+//!    the variant's own docs before treating it as clearance.
 //! 5. Resolves to [`ClearanceOutcome::TimedOut`] on deadline, carrying
 //!    `saw_challenge` — `true` when challenge markers were seen but never
 //!    resolved, `false` when the entire timeout window elapsed without
@@ -48,9 +50,18 @@ use crate::error::CloudflareError;
 pub enum ClearanceOutcome {
     /// Turnstile produced a token (value of `cf-turnstile-response`).
     TokenAcquired(String),
-    /// The challenge disappeared without yielding a token — the iframe we
-    /// clicked was torn down, or all challenge markers seen earlier in the
-    /// run have vanished (a JS-only interstitial that cleared itself).
+    /// The challenge stopped being actionable without yielding a token — the
+    /// iframe we clicked is no longer a valid click target, or all challenge
+    /// markers seen earlier in the run have vanished (a JS-only interstitial
+    /// that cleared itself). Usually the clearance-cookie shortcut.
+    ///
+    /// **Not proof the gate was passed.** "No longer a valid click target"
+    /// is `clickableRect` returning null, which it also does for a widget
+    /// that is still mounted but zero-size, `visibility: hidden`,
+    /// `display: none` or `opacity: 0`. So once a click has landed, a tick
+    /// where the widget is merely between states reaches this terminal too.
+    /// Confirm the page is actually through the gate before treating what
+    /// you scrape next as clean.
     ChallengeGone,
     /// Deadline elapsed without a terminal clearance state. `saw_challenge`
     /// is `true` if any challenge marker (container, hidden input, or live
@@ -113,10 +124,12 @@ impl<'a> CloudflareBypass<'a> {
     ///   `cf-turnstile-response` input picked up a non-empty value, either
     ///   after we clicked the interactive iframe or because the page uses
     ///   invisible Turnstile.
-    /// - `Ok(ClearanceOutcome::ChallengeGone)` — the challenge went away
-    ///   without yielding a token (e.g. a clearance-cookie shortcut): either
-    ///   an iframe we clicked was torn down, or challenge markers observed on
-    ///   an earlier tick are all gone.
+    /// - `Ok(ClearanceOutcome::ChallengeGone)` — the challenge stopped being
+    ///   actionable without yielding a token (e.g. a clearance-cookie
+    ///   shortcut): either an iframe we clicked is no longer a valid click
+    ///   target, or challenge markers observed on an earlier tick are all
+    ///   gone. Read [`ClearanceOutcome::ChallengeGone`] before treating this
+    ///   as proof the gate was passed.
     /// - `Ok(ClearanceOutcome::TimedOut { saw_challenge })` — `timeout`
     ///   elapsed without a terminal clearance state. `saw_challenge` is
     ///   `true` if challenge markers were observed (markers present but
@@ -189,10 +202,19 @@ impl<'a> CloudflareBypass<'a> {
                         clicked = true;
                     }
                 }
-                // The challenge went away without a token: either the iframe
-                // we clicked was torn down, or markers seen on an earlier tick
-                // are all gone (a JS-only interstitial clearing itself). Both
-                // are the clearance-cookie shortcut.
+                // The challenge stopped being actionable without a token:
+                // either the iframe we clicked is no longer a valid click
+                // target, or markers seen on an earlier tick are all gone (a
+                // JS-only interstitial clearing itself). Both are usually the
+                // clearance-cookie shortcut.
+                //
+                // OPEN QUESTION: `bbox` is `None` for a widget that is merely
+                // hidden or zero-size, so after the first landed click any
+                // unclickable tick hits this *success* terminal. Prescribed
+                // fix: return `iframePresent` alongside `bbox` from `POLL_JS`
+                // and key the `clicks > 0` disjunct off presence, not
+                // clickability. Not applied here — changing which runs report
+                // clearance is a call for a human, not a doc fix.
                 None if clicks > 0 || (seen_markers_before && !state.has_markers) => {
                     return Ok(ClearanceOutcome::ChallengeGone);
                 }
@@ -281,13 +303,33 @@ struct PollState {
 /// # JavaScript style
 /// Injected scripts in this crate declare with `var` and iterate with
 /// indexed loops, never `for...of` — `detect.js` included. `for...of` over a
-/// `NodeList` goes through `NodeList.prototype[Symbol.iterator]`, which the
-/// page can redefine to watch someone walk its DOM; an indexed loop reads
-/// `length` and integer keys, which a page cannot instrument without
-/// breaking its own scripts. In a crate whose job is to be unobservable that
-/// is worth the plainer syntax. This is a rule about declarations and
-/// iteration only — modern methods with no such hook, `String.includes`
-/// among them, are used freely.
+/// `NodeList` enters through `NodeList.prototype[Symbol.iterator]`, a
+/// writable, configurable property the page can redefine to watch someone
+/// walk its DOM. That one is worth declining: it is a single chokepoint,
+/// entered once per loop and then driven by one `next()` per element, and a
+/// handler installed there can read `new Error().stack` and filter the
+/// page's own iteration out of what it collects. An indexed loop never
+/// reaches it.
+///
+/// It buys that one signal and no more. Indexed access is *not*
+/// unobservable: `NodeList.prototype.length` is a WebIDL accessor with
+/// `configurable: true`, so a page can wrap the getter, delegate to the
+/// original, and count every read with nothing of its own broken. The rest
+/// of the walk is louder. Each tick calls `root.querySelectorAll("iframe")`
+/// and then `root.querySelectorAll("*")`, both ordinary writable methods on
+/// `Document` / `Element` / `DocumentFragment`, and the iframe test below
+/// calls `String.prototype.includes` — equally patchable — with the literal
+/// `"challenges.cloudflare.com"`. A hook there is handed the hostname the
+/// walker is hunting for, which is a sharper tell than the iterator hook
+/// this convention avoids.
+///
+/// Measured on Chrome 151 with all four wrapped: the walk still returns the
+/// right iframe, while the page observes both `querySelectorAll` selectors,
+/// every `length` read and that hostname, against zero `Symbol.iterator`
+/// calls. So the convention removes one signal from a loop that stays
+/// observable to a page that looks for it; it is not cover. This is a rule
+/// about declarations and iteration only — modern methods are used freely,
+/// since declining them would buy nothing either.
 const WALKER_JS: &str = r#"
 function findChallengeIframe(root) {
     var iframes = root.querySelectorAll ? root.querySelectorAll("iframe") : [];
@@ -469,15 +511,21 @@ mod tests {
         coords
     }
 
-    /// Names of every *named* `function` declaration in `src` that sits at
-    /// `{}` depth 0. An anonymous `function (` — the IIFE wrapper itself — is
-    /// a function expression and binds nothing, so it is not counted.
+    /// Names every declaration in `src` at `{}` depth 0 that a classic
+    /// script publishes on the page's global object: `var` and *named*
+    /// `function`. Both become enumerable `window` properties (verified on
+    /// Chrome 151); `let` / `const` / `class` are script-scoped and never
+    /// do, so they are not leaks and are not counted. An anonymous
+    /// `function (` — the IIFE wrapper itself — is an expression and binds
+    /// nothing.
     ///
     /// Brace counting is only sound because no injected source puts a brace
     /// inside a string literal. Keep it that way; the alternative is a JS
-    /// parser for a cookie-name-sized job.
-    fn top_level_function_declarations(src: &str) -> Vec<String> {
-        const KEYWORD: &str = "function";
+    /// parser for a cookie-name-sized job. Comment text is scanned like any
+    /// other, which can only ever produce a loud false positive, never a
+    /// silent pass.
+    fn top_level_page_globals(src: &str) -> Vec<String> {
+        let is_ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
         let mut found = Vec::new();
         let mut depth = 0i32;
         for (i, ch) in src.char_indices() {
@@ -486,17 +534,33 @@ mod tests {
                 '}' => depth -= 1,
                 _ => {}
             }
-            if !src[i..].starts_with(KEYWORD) {
+            if depth != 0 {
                 continue;
             }
-            let rest = src[i + KEYWORD.len()..].trim_start();
-            let name: String = rest
-                .chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$')
-                .collect();
-            // A name means a declaration; `function (` is an expression.
-            if depth == 0 && !name.is_empty() {
-                found.push(name);
+            // A keyword that is really the tail of a longer identifier
+            // declares nothing: `myvar`, `refunction`.
+            if src[..i].chars().next_back().is_some_and(is_ident) {
+                continue;
+            }
+            for keyword in ["function", "var"] {
+                let Some(rest) = src[i..].strip_prefix(keyword) else {
+                    continue;
+                };
+                // `var` needs a separator to be a declaration. `function`
+                // does not: `function(` is an expression, and the empty-name
+                // check below is what rejects it.
+                if keyword == "var" && !rest.starts_with(char::is_whitespace) {
+                    break;
+                }
+                let name: String = rest
+                    .trim_start()
+                    .chars()
+                    .take_while(|c| is_ident(*c))
+                    .collect();
+                if !name.is_empty() {
+                    found.push(name);
+                }
+                break;
             }
         }
         found
@@ -504,28 +568,43 @@ mod tests {
 
     /// The leak guard has to be able to fail. Fed the pre-fix shape — the
     /// walker evaluated beside the IIFE rather than inside it — it must name
-    /// the declaration; fed the shipped shape it must stay quiet.
+    /// the declaration; fed the shipped shape it must stay quiet. The `var`
+    /// case is here because the scan is named for page globals, and a
+    /// top-level `var` is one just as much as a `function` is.
     #[test]
-    fn top_level_function_scan_catches_a_leaked_declaration() {
+    fn top_level_scan_catches_every_leaked_page_global() {
         assert_eq!(
-            top_level_function_declarations(
+            top_level_page_globals(
                 "function findChallengeIframe(root) { return null; }\n(function(){ return 1; })()"
             ),
             vec!["findChallengeIframe".to_string()],
         );
+        assert_eq!(
+            top_level_page_globals("var iframes = document.querySelectorAll('iframe');"),
+            vec!["iframes".to_string()],
+            "a top-level `var` is a `window` property too"
+        );
         assert!(
-            top_level_function_declarations("(function(){ function nested(){} return 1; })()")
+            top_level_page_globals("(function(){ function nested(){} var local = 1; })()")
                 .is_empty(),
             "a declaration inside the wrapper is a local, not a global"
+        );
+        // Script-scoped forms never reach `window`, so flagging them would
+        // be a false positive, and a keyword inside a longer identifier is
+        // not a keyword at all.
+        assert!(
+            top_level_page_globals("let a = 1; const b = 2; class C {}\nvarnish.myvar = 3;")
+                .is_empty(),
         );
     }
 
     /// `Runtime.evaluate` with no `contextId` runs a classic script in the
-    /// page's main world, where a top-level `function foo() {}` becomes
-    /// `window.foo`. Publishing `findChallengeIframe` / `clickableRect` there
-    /// hands the challenge script — same realm, actively looking — a pair of
-    /// names belonging to an automation library, on every poll tick. Every
-    /// source this crate injects keeps its helpers inside a function scope.
+    /// page's main world, where a top-level `function foo() {}` or `var bar`
+    /// becomes `window.foo` / `window.bar`. Publishing `findChallengeIframe`
+    /// / `clickableRect` there hands the challenge script — same realm,
+    /// actively looking — a pair of names belonging to an automation
+    /// library, on every poll tick. Every source this crate injects keeps
+    /// its helpers and its locals inside a function scope.
     #[test]
     fn injected_sources_declare_no_page_globals() {
         for (name, src) in [
@@ -533,7 +612,7 @@ mod tests {
             ("scroll evaluator", main_world_expr(SCROLL_JS)),
             ("detect.js", include_str!("detect.js").to_string()),
         ] {
-            let leaked = top_level_function_declarations(&src);
+            let leaked = top_level_page_globals(&src);
             assert!(
                 leaked.is_empty(),
                 "{name} publishes {leaked:?} onto the page's global object"
