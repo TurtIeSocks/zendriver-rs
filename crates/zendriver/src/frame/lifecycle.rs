@@ -41,8 +41,9 @@
 //! Keep the arms to registry mutation; spawn anything that talks to Chrome.
 //!
 //! The task runs until its [`tokio_util::sync::CancellationToken`] fires —
-//! typically when the owning Tab is dropped. Sweeps spawned by the attach
-//! arm observe the same token, so they do not outlive it.
+//! typically when the owning Tab is dropped. Everything it spawns (the
+//! startup `Page.enable`, and each sweep from the attach arm) observes the
+//! same token, so nothing outlives it waiting out a CDP budget.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Weak};
@@ -130,13 +131,22 @@ pub(crate) async fn run(
     // call, and in production the subscribe streams above are already
     // registered, so awaiting the response would only serialize the
     // first arriving event behind the enable round-trip.
+    //
+    // Cancellation-aware for the same reason the sweep is: an unanswered
+    // call sits on the transport's default budget
+    // ([`zendriver_transport::DEFAULT_CALL_TIMEOUT`], 180s), and nothing
+    // spawned here may outlive the Tab that owns it by that much while
+    // holding a session clone.
     let enable_session = session.clone();
+    let enable_cancel = cancel.clone();
     tokio::spawn(async move {
-        if let Err(e) = enable_session
-            .call("Page.enable", serde_json::json!({}))
-            .await
-        {
-            warn!(error = %e, "frame::lifecycle: Page.enable failed; frame events may be inactive");
+        tokio::select! {
+            () = enable_cancel.cancelled() => {}
+            res = enable_session.call("Page.enable", serde_json::json!({})) => {
+                if let Err(e) = res {
+                    warn!(error = %e, "frame::lifecycle: Page.enable failed; frame events may be inactive");
+                }
+            }
         }
     });
 
@@ -209,9 +219,19 @@ pub(crate) async fn run(
                             // Every `Frame` handle a caller already took
                             // points at THIS inner, and the rename below
                             // swaps the registry row for a fresh one those
-                            // handles never see — so this is what keeps
-                            // `Frame::url()` live on a handle taken before
-                            // a rename.
+                            // handles never see. Writing first means a
+                            // pre-rename handle at least observes the
+                            // navigation that carries the rename.
+                            //
+                            // It does not survive the swap. The NEXT
+                            // `frameNavigated` resolves the new row and
+                            // writes THAT inner, so a handle taken before
+                            // the rename freezes at this URL forever. The
+                            // repair is one navigation deep, not permanent;
+                            // closing it needs interior-mutable
+                            // `FrameInner::name`, which is a public break a
+                            // maintainer has to sign off (see the ignored
+                            // two-navigation test in this module).
                             *existing.inner.url.write().await = new_url.clone();
                             if !name_changed {
                                 continue;
@@ -251,15 +271,38 @@ pub(crate) async fn run(
                     );
                     map.insert(frame_id, renamed);
                 } else {
-                    let frame = Frame::new(
-                        frame_id.clone(),
-                        ev.frame.parent_id,
-                        new_url,
-                        new_name,
-                        session.clone(),
-                        tab_weak.clone(),
-                    );
-                    map.insert(frame_id, frame);
+                    // Re-look up, for the same reason the rename path does.
+                    // The read guard said "no entry", but the OOPIF observer
+                    // and the attach arm both insert into this map, and an
+                    // OOPIF row carries a CHILD session. Inserting blind
+                    // would overwrite one with a `Frame` on the parent
+                    // session, sending every later call on that frame to the
+                    // wrong target — so a row that appeared in the gap is
+                    // refreshed in place instead.
+                    //
+                    // A name on this event is left to the next navigation:
+                    // backfilling it means swapping the row, which is the
+                    // thing being avoided here, and the rename path above
+                    // does it correctly once the row is visible to a read
+                    // guard.
+                    let raced = map.get(&frame_id).map(|f| Arc::clone(&f.inner));
+                    match raced {
+                        Some(inner) => {
+                            drop(map);
+                            *inner.url.write().await = new_url;
+                        }
+                        None => {
+                            let frame = Frame::new(
+                                frame_id.clone(),
+                                ev.frame.parent_id,
+                                new_url,
+                                new_name,
+                                session.clone(),
+                                tab_weak.clone(),
+                            );
+                            map.insert(frame_id, frame);
+                        }
+                    }
                 }
             }
             Some(ev) = detached.next() => {
@@ -500,6 +543,19 @@ mod tests {
         }
     }
 
+    /// Give a spawned sweep room to finish, for the assertions whose
+    /// expected outcome is that it did nothing.
+    ///
+    /// The sweep runs in its own task, so no registry state proves it has
+    /// run: every row it might evict is already in the map before it is
+    /// spawned, and the row it leaves alone looks the same before and
+    /// after. A negative therefore has no event to wait on. Past the probe
+    /// reply the sweep is one lock acquisition from done, so this window is
+    /// orders of magnitude more than it needs.
+    async fn settle() {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+
     /// Emit a `Page.frameNavigated` for `frame_id` on the test session.
     async fn navigate(mock: &MockConnection, frame_id: &str, url: &str, name: Option<&str>) {
         mock.emit_event_for_session(
@@ -545,7 +601,8 @@ mod tests {
         )
         .await;
 
-        let map = wait_for(&frames, |m| m.contains_key("F2")).await;
+        settle().await;
+        let map = frames.read().await.clone();
         assert!(
             map.contains_key("F1"),
             "a sibling Chrome still lists in the frame tree must not be swept",
@@ -601,11 +658,13 @@ mod tests {
         let id = expect_probe(&mut mock).await;
         mock.reply_err(id, -32000, "Page domain not enabled").await;
 
-        let map = wait_for(&frames, |m| m.contains_key("F2")).await;
+        settle().await;
+        let map = frames.read().await.clone();
         assert!(
             map.contains_key("F1"),
             "an unanswerable probe must not authorize an eviction",
         );
+        assert!(map.contains_key("F2"));
 
         cancel.cancel();
         conn.shutdown();
@@ -688,10 +747,7 @@ mod tests {
         )
         .await;
 
-        // A negative has no event to wait on, so give the sweep a settle
-        // window it would comfortably finish in (it is one lock acquisition
-        // past the reply) and assert the row survived it.
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        settle().await;
         assert!(
             frames.read().await.contains_key("F1"),
             "a candidate that navigated under the probe must survive the sweep",
@@ -739,7 +795,7 @@ mod tests {
         )
         .await;
 
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        settle().await;
         let map = frames.read().await;
         assert!(
             map.get("F1")
@@ -836,16 +892,48 @@ mod tests {
         conn.shutdown();
     }
 
+    /// Chrome emits `frameNavigated` for the main frame before any
+    /// subscriber sees a `frameAttached` for it, so a navigation with no
+    /// registry row is an implicit attach and has to insert one — off the
+    /// event's own `parentId`, since there was no attach to take it from.
+    ///
+    /// The insert is guarded against a row that appeared while the arm was
+    /// upgrading from the read guard to the write guard, and that guard is
+    /// what this pins: the ordinary uncontended case must still insert.
+    #[tokio::test]
+    async fn navigated_for_an_unknown_frame_inserts_it() {
+        let (mock, conn, frames, cancel) = start().await;
+
+        navigate(&mock, "MAIN", "https://host.test/", Some("top")).await;
+
+        let map = wait_for(&frames, |m| m.contains_key("MAIN")).await;
+        let frame = &map["MAIN"];
+        assert_eq!(frame.url().await, "https://host.test/");
+        assert_eq!(frame.name(), Some("top"));
+        assert_eq!(
+            frame.parent_id(),
+            Some("P"),
+            "the implicit attach takes its parent from the navigation event",
+        );
+
+        cancel.cancel();
+        conn.shutdown();
+    }
+
     /// A `Frame` is a cheap `Arc` handle and `Tab::frames()` hands out
-    /// clones, so holding one across navigations is the intended usage —
-    /// `loop { if f.url().await.contains("/checkout") { break } }` is the
-    /// obvious way to wait on an iframe.
+    /// clones, so holding one across navigations is the intended usage.
     ///
     /// The name backfill replaces the registry row with a fresh `Frame`, so
     /// a handle taken in the window between `frameAttached` and the first
     /// named `frameNavigated` points at an inner nothing would ever touch
-    /// again. Writing the URL through that inner *before* the swap is what
-    /// keeps the polling loop terminating.
+    /// again. Writing the URL through that inner *before* the swap repairs
+    /// exactly one navigation: the one carrying the rename, asserted here.
+    ///
+    /// It does **not** make the handle track the frame. Later navigations
+    /// resolve the new row and leave this one frozen — see
+    /// [`a_held_handle_stops_tracking_after_the_rename_swap`], which is the
+    /// same scenario one navigation further along and is `#[ignore]`d
+    /// because it cannot pass without the API break below.
     ///
     /// Only `url()` is repaired here. `Frame::name()` on the held handle
     /// still reads `None` forever, because `FrameInner::name` is immutable
@@ -878,6 +966,63 @@ mod tests {
             held.url().await,
             "https://host.test/checkout",
             "a handle taken before the rename must not be orphaned on url()",
+        );
+
+        cancel.cancel();
+        conn.shutdown();
+    }
+
+    /// The write-through's boundary, and the reason it is a stopgap rather
+    /// than a fix: it repairs the navigation that carries the rename and
+    /// nothing after it.
+    ///
+    /// Two navigations, one handle. The first renames the frame and swaps
+    /// the registry row; the second resolves that new row and writes its
+    /// inner. The held handle points at the old one, so it reads `/cart`
+    /// while the registry reads `/checkout` — and
+    /// `loop { if f.url().await.contains("/checkout") { break } }`, the
+    /// obvious way to wait on an iframe, never terminates on that handle.
+    ///
+    /// **Ignored, not deleted.** Passing it requires interior-mutable
+    /// `FrameInner::name` so the backfill mutates the shared inner instead
+    /// of replacing the row, which turns `Frame::name()` into an `async fn`
+    /// and breaks a public signature. That call is reserved for a
+    /// maintainer (founder's review round 1, §5 item 2 — "`Frame::name()`
+    /// and `Frame::id()` interior mutability"). Un-`#[ignore]` this the day
+    /// the break is taken; it is the acceptance test for it.
+    #[tokio::test]
+    #[ignore = "needs interior-mutable FrameInner::name; reserved public API break"]
+    async fn a_held_handle_stops_tracking_after_the_rename_swap() {
+        let (mock, conn, frames, cancel) = start().await;
+
+        attach(&mock, "FCHILD", "P").await;
+        let held = wait_for(&frames, |m| m.contains_key("FCHILD")).await["FCHILD"].clone();
+
+        // Navigation 1 carries the name, so it swaps the registry row.
+        navigate(&mock, "FCHILD", "https://host.test/cart", Some("sidebar")).await;
+        wait_for(&frames, |m| {
+            m.get("FCHILD").is_some_and(|f| f.name().is_some())
+        })
+        .await;
+
+        // Navigation 2 lands on the row the swap installed.
+        navigate(&mock, "FCHILD", "https://host.test/checkout", None).await;
+        let map = wait_for(&frames, |m| {
+            m.get("FCHILD").is_some_and(|f| {
+                f.inner
+                    .url
+                    .try_read()
+                    .is_ok_and(|u| u.ends_with("/checkout"))
+            })
+        })
+        .await;
+        assert_eq!(map["FCHILD"].url().await, "https://host.test/checkout");
+
+        assert_eq!(
+            held.url().await,
+            "https://host.test/checkout",
+            "a handle must keep tracking the frame across every navigation, \
+             not just the one that renamed it",
         );
 
         cancel.cancel();

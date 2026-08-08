@@ -127,9 +127,16 @@ impl Frame {
         }
     }
 
-    /// The frame's CDP `frameId`.
+    /// The frame's CDP `frameId`, as recorded when this handle was built.
     ///
-    /// Stable for the lifetime of the frame.
+    /// The value never changes on a given handle, which is not the same as
+    /// naming the frame forever. Chrome sometimes re-attaches an iframe
+    /// under a fresh `frameId` with no `Page.frameDetached` in between (seen
+    /// on `srcdoc` iframes under `--headless=new`), and this handle goes on
+    /// reporting the id it was built with. [`Frame::evaluate`] and the query
+    /// methods recover on their own by rebinding against the live frame
+    /// tree; a caller that hands this id to CDP itself can instead get
+    /// "No frame for given id found".
     ///
     /// # Examples
     ///
@@ -311,8 +318,8 @@ impl Frame {
                         return Err(e);
                     }
                     // Drop the dead context and let `ensure_isolated_world`
-                    // mint a new one. `main_frame_id` is deliberately left
-                    // alone: the frame still exists, only its context died.
+                    // mint a new one, rediscovering the frame id if the one
+                    // recorded at attach time has since been rewritten.
                     self.inner.isolated_world.lock().await.context_id = None;
                 }
             }
@@ -578,7 +585,6 @@ impl Frame {
         // parent, and retry with the live id.
         let frame_id_for_call = match self.create_isolated_world(&self.inner.frame_id).await {
             Ok(ctx) => {
-                cache.main_frame_id = Some(self.inner.frame_id.clone());
                 cache.context_id = Some(ctx);
                 return Ok(ctx);
             }
@@ -592,7 +598,6 @@ impl Frame {
             Err(e) => return Err(e),
         };
         let ctx = self.create_isolated_world(&frame_id_for_call).await?;
-        cache.main_frame_id = Some(frame_id_for_call);
         cache.context_id = Some(ctx);
         Ok(ctx)
     }
@@ -629,6 +634,14 @@ impl Frame {
     /// route through the cache; nothing that reads the id does. Making
     /// `frame_id` interior-mutable would fix that too, and is a separate
     /// change.
+    ///
+    /// The probe runs on the transport's default call budget
+    /// ([`zendriver_transport::DEFAULT_CALL_TIMEOUT`]), like every other CDP
+    /// call the caller is awaiting. [`crate::frame::lifecycle`] bounds its
+    /// copy of the same `Page.getFrameTree` far tighter, and the difference
+    /// is deliberate: that one runs in a detached task with nobody waiting
+    /// on it, so its budget exists to reclaim the task rather than to answer
+    /// a caller.
     ///
     /// A single child under the recorded parent is unambiguous. With
     /// several, the recorded `name` and `url` are the only things that tell
@@ -669,10 +682,17 @@ impl Frame {
             .await?;
         // EVERY child of `parent`, not just the first — the count is what
         // reveals ambiguity. The root is excluded because it is the tree's
-        // own frame rather than a child of anything in the tree; in an
-        // OOPIF's child-target tree that root can itself carry a
-        // `parentId`, so the depth check is not redundant with the
-        // comparison beside it.
+        // own frame rather than a child of anything in the tree.
+        //
+        // That exclusion also costs the OOPIF case, which is why it is
+        // written as a depth check and not folded into the `parent_id`
+        // comparison. Walked on an OOPIF's own child session, the tree's
+        // root IS this frame and carries `parent` as its `parentId` — so
+        // dropping the depth check is exactly what an OOPIF would need, and
+        // it is not done here because the shape of that tree is unverified
+        // against a real browser. Guessing wrong binds a live-looking id
+        // from the wrong target, and the paragraph above says why a wrong
+        // bind is worse than the `FrameNotFound` an OOPIF gets today.
         let mut candidates = Vec::new();
         tree::walk(&tree["frameTree"], &mut |node| {
             if node.depth > 0 && node.parent_id == Some(parent) {

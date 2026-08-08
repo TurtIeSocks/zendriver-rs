@@ -1262,7 +1262,6 @@ impl Tab {
                 "Page.createIsolatedWorld did not return executionContextId".into(),
             )
         })?;
-        cache.main_frame_id = Some(frame_id);
         cache.context_id = Some(ctx_id);
         Ok(ctx_id)
     }
