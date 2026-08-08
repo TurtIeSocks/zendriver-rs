@@ -1115,15 +1115,11 @@ impl Tab {
                         .unwrap_or(Value::Null);
                     return serde_json::from_value(value).map_err(ZendriverError::Serde);
                 }
-                // Chrome returns -32000 "Cannot find context with specified
-                // id" when the execution context we cached was destroyed
-                // (typically by a navigation). `From<CallError>` maps that
-                // to `Navigation` (see `error.rs`), so we match on that
-                // variant here — not on `Cdp` as the original P2 plan
-                // suggested.
-                Err(ZendriverError::Navigation(ref m))
-                    if attempt == 0 && m.contains("Cannot find context") =>
-                {
+                // The execution context we cached was destroyed, typically
+                // by a navigation. Drop it and let `ensure_isolated_world`
+                // mint a new one. `Frame::evaluate` runs the same recovery
+                // off the same predicate so the two cannot drift.
+                Err(ref e) if attempt == 0 && crate::isolated_world::is_stale_context(e) => {
                     self.inner.isolated_world.lock().await.context_id = None;
                     continue;
                 }

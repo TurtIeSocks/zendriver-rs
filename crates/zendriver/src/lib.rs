@@ -90,6 +90,9 @@ mod geo_resolver;
 pub mod input;
 pub(crate) mod io;
 pub(crate) mod isolated_world;
+/// Test-only helper for asserting on `tracing` output.
+#[cfg(test)]
+pub(crate) mod log_capture;
 #[cfg(feature = "monitor")]
 pub mod monitor;
 pub mod network_idle;

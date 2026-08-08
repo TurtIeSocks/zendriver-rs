@@ -33,6 +33,7 @@ use crate::tab::{Tab, TabInner};
 
 pub mod lifecycle;
 pub mod oopif;
+pub(crate) mod tree;
 
 /// Default wait window for [`Frame::wait_for_load`]. Mirrors the constant
 /// in [`crate::tab::Tab::wait_for_load`] so single-frame and tab-level
@@ -42,19 +43,17 @@ const DEFAULT_LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 /// Cheap-to-clone handle to a single document frame.
 ///
 /// Construct via [`crate::tab::Tab::main_frame`] (top-level frame for a
-/// tab); sub-frames and OOPIFs arrive via the lifecycle / OOPIF wiring
-/// in later P4 tasks. All accessor methods operate on the inner `Arc`,
-/// so cloning a `Frame` is a single refcount bump.
+/// tab); sub-frames and OOPIFs are registered by the [`lifecycle`] and
+/// [`oopif`] wiring and read back via [`crate::tab::Tab::frames`]. All
+/// accessor methods operate on the inner `Arc`, so cloning a `Frame` is a
+/// single refcount bump — and every clone of one entry observes the same
+/// [`Frame::url`], since the lifecycle subscriber writes through that
+/// shared `Arc`.
 #[derive(Clone, Debug)]
 pub struct Frame {
     inner: Arc<FrameInner>,
 }
 
-// `tab` is populated at construction but consumed by later P4 tasks (frame
-// lifecycle / OOPIF wiring in T15+T16). Silencing dead-code on that single
-// field until those land keeps clippy clean without dropping the (already
-// correct) plumbing. T13 enables `session` + `isolated_world` via the new
-// `Frame::evaluate` / `evaluate_main` / `content` accessors.
 #[derive(Debug)]
 pub(crate) struct FrameInner {
     /// CDP `frameId` (e.g. `"F0"`, a hex string at runtime). Stable for the
@@ -64,19 +63,28 @@ pub(crate) struct FrameInner {
     /// `Some` for every sub-frame and OOPIF.
     pub(crate) parent_frame_id: Option<String>,
     /// Last-known document URL for this frame. Behind an [`RwLock`] because
-    /// the lifecycle subscriber task (T15) mutates it on
-    /// `Page.frameNavigated` while readers concurrently call [`Frame::url`].
+    /// the lifecycle subscriber mutates it on `Page.frameNavigated` while
+    /// readers concurrently call [`Frame::url`].
     pub(crate) url: RwLock<String>,
-    /// `<frame name>` / `<iframe name>` attribute if present. Captured at
-    /// construction time; the spec does not currently track renames after
-    /// the fact since `Page.frameNavigated` does not carry the name field.
+    /// `<frame name>` / `<iframe name>` attribute if present.
+    ///
+    /// Set from `Page.frameNavigated`'s `frame.name` whenever Chrome
+    /// supplies a non-empty one. `Page.frameAttached` carries no name, so
+    /// an entry created from an attach starts `None` and is backfilled on
+    /// the first navigation that reports one; an event that simply omits
+    /// the field never clears a name already established.
+    ///
+    /// Immutable, which is what makes that backfill a *replacement* of the
+    /// registry entry rather than a write in place — see
+    /// [`lifecycle::run`]. Interior mutability here would make it a write,
+    /// at the cost of turning [`Frame::name`] into an `async fn`.
     pub(crate) name: Option<String>,
     /// CDP session used to dispatch commands against this frame. The main
-    /// frame shares the owning tab's session; OOPIFs (T16) attach to a
-    /// distinct child session whose handle is plumbed in at construction.
+    /// frame shares the owning tab's session; OOPIFs attach to a distinct
+    /// child session whose handle is plumbed in at construction.
     pub(crate) session: SessionHandle,
     /// Per-frame isolated-world cache. Same shape as the tab-level cache —
-    /// `Frame::evaluate` (T13) populates `executionContextId` on first call
+    /// [`Frame::evaluate`] populates `executionContextId` on first call
     /// via `Page.createIsolatedWorld { frameId: self.frame_id }` and reuses
     /// it on subsequent calls. Distinct from the tab-level cache so that
     /// per-frame contexts don't collide when the tab has multiple frames.
@@ -95,8 +103,8 @@ impl Frame {
     /// dispatch commands against it.
     ///
     /// Called by [`crate::tab::Tab::main_frame`] (main-frame path, shares
-    /// the tab's session) and — in later P4 tasks — by the lifecycle
-    /// subscriber (sub-frame attach) and the OOPIF attach observer
+    /// the tab's session), by the [`lifecycle`] subscriber (sub-frame
+    /// attach and name backfill) and by the [`oopif`] attach observer
     /// (distinct child session).
     pub(crate) fn new(
         frame_id: String,
@@ -144,9 +152,8 @@ impl Frame {
     /// session for [`crate::query::FindBuilder::new_for_frame`] queries.
     ///
     /// For the main frame and same-origin sub-frames this is identical
-    /// to the parent tab's session; for out-of-process iframes (T16
-    /// onward) it is a distinct child session attached via
-    /// `Target.attachedToTarget`.
+    /// to the parent tab's session; for out-of-process iframes it is a
+    /// distinct child session attached via `Target.attachedToTarget`.
     pub(crate) fn session(&self) -> &SessionHandle {
         &self.inner.session
     }
@@ -254,6 +261,12 @@ impl Frame {
     /// "zendriver-eval" }` on the frame's session and caches the returned
     /// `executionContextId`. Subsequent calls reuse the cached id.
     ///
+    /// A navigation inside the frame destroys that context. When Chrome
+    /// answers `Cannot find context with specified id`, the cached id is
+    /// dropped and the call retried once against a freshly created world,
+    /// so a `Frame` handle kept across a navigation keeps working — same
+    /// recovery [`crate::Tab::evaluate`] performs.
+    ///
     /// # Errors
     ///
     /// Returns [`ZendriverError::JsException`] when the expression raises;
@@ -271,21 +284,40 @@ impl Frame {
     /// # Ok(()) }
     /// ```
     pub async fn evaluate<T: DeserializeOwned>(&self, js: impl AsRef<str>) -> Result<T> {
-        let ctx_id = self.ensure_isolated_world().await?;
-        let res = self
-            .inner
-            .session
-            .call(
-                "Runtime.evaluate",
-                json!({
-                    "expression": js.as_ref(),
-                    "contextId": ctx_id,
-                    "returnByValue": true,
-                    "awaitPromise": true,
-                }),
-            )
-            .await?;
-        Self::extract_value(&res)
+        let js = js.as_ref();
+        for attempt in 0..2 {
+            let ctx_id = self.ensure_isolated_world().await?;
+            let res = self
+                .inner
+                .session
+                .call(
+                    "Runtime.evaluate",
+                    json!({
+                        "expression": js,
+                        "contextId": ctx_id,
+                        "returnByValue": true,
+                        "awaitPromise": true,
+                    }),
+                )
+                .await;
+            match res {
+                Ok(v) => return Self::extract_value(&v),
+                Err(e) => {
+                    // Convert once here: unlike `Tab::evaluate`, which goes
+                    // through a `Tab::call` wrapper, this dispatches on the
+                    // raw session and gets back a `CallError`.
+                    let e = ZendriverError::from(e);
+                    if attempt > 0 || !crate::isolated_world::is_stale_context(&e) {
+                        return Err(e);
+                    }
+                    // Drop the dead context and let `ensure_isolated_world`
+                    // mint a new one. `main_frame_id` is deliberately left
+                    // alone: the frame still exists, only its context died.
+                    self.inner.isolated_world.lock().await.context_id = None;
+                }
+            }
+        }
+        unreachable!("the retry loop returns on both the Ok and the second-attempt Err arm")
     }
 
     /// Evaluate JS in this frame's **main world** (page globals visible).
@@ -585,8 +617,18 @@ impl Frame {
         })
     }
 
-    /// Re-bind a rejected `frame_id` by finding this frame's current id in
-    /// the live `Page.getFrameTree`.
+    /// Find the frame id Chrome currently uses for this frame, by locating
+    /// it in the live `Page.getFrameTree`.
+    ///
+    /// Only the isolated-world cache is rebound by the result.
+    /// [`FrameInner::frame_id`] is immutable, so [`Frame::id`] keeps
+    /// returning the id Chrome rejected, and so does anything filtering on
+    /// it — notably [`Frame::wait_for_load`], whose
+    /// `Page.frameStoppedLoading` filter can then never match and always
+    /// burns its full timeout. `evaluate` / `find` recover because they
+    /// route through the cache; nothing that reads the id does. Making
+    /// `frame_id` interior-mutable would fix that too, and is a separate
+    /// change.
     ///
     /// A single child under the recorded parent is unambiguous. With
     /// several, the recorded `name` and `url` are the only things that tell
@@ -598,28 +640,14 @@ impl Frame {
     async fn discover_current_frame_id(&self) -> Result<String> {
         /// One candidate child frame, as reported by `Page.getFrameTree`.
         struct Child {
+            /// The live CDP `frameId` — what a successful recovery binds.
             id: String,
+            /// Chrome's reported frame name, absent when it sends none.
+            /// Compared against our own recorded name below.
             name: Option<String>,
+            /// Chrome's reported document URL, absent when it sends none.
+            /// Empty for a frame that has not navigated.
             url: Option<String>,
-        }
-        /// Depth-first collect of EVERY child of `parent` — all of them,
-        /// not just the first, since the count is what reveals ambiguity.
-        fn collect_children(node: &Value, parent: &str, out: &mut Vec<Child>) {
-            if let Some(children) = node["childFrames"].as_array() {
-                for c in children {
-                    let f = &c["frame"];
-                    if f["parentId"].as_str() == Some(parent) {
-                        if let Some(id) = f["id"].as_str() {
-                            out.push(Child {
-                                id: id.to_string(),
-                                name: f["name"].as_str().map(str::to_string),
-                                url: f["url"].as_str().map(str::to_string),
-                            });
-                        }
-                    }
-                    collect_children(c, parent, out);
-                }
-            }
         }
         /// The one candidate satisfying `pred`, or `None` when zero or
         /// several do — "several" must not resolve to "the first".
@@ -639,8 +667,22 @@ impl Frame {
             .session
             .call("Page.getFrameTree", json!({}))
             .await?;
+        // EVERY child of `parent`, not just the first — the count is what
+        // reveals ambiguity. The root is excluded because it is the tree's
+        // own frame rather than a child of anything in the tree; in an
+        // OOPIF's child-target tree that root can itself carry a
+        // `parentId`, so the depth check is not redundant with the
+        // comparison beside it.
         let mut candidates = Vec::new();
-        collect_children(&tree["frameTree"], parent, &mut candidates);
+        tree::walk(&tree["frameTree"], &mut |node| {
+            if node.depth > 0 && node.parent_id == Some(parent) {
+                candidates.push(Child {
+                    id: node.id.to_string(),
+                    name: node.name.map(str::to_string),
+                    url: node.url.map(str::to_string),
+                });
+            }
+        });
 
         if candidates.is_empty() {
             return Err(ZendriverError::FrameNotFound(format!(
@@ -727,6 +769,19 @@ mod tests {
     use super::*;
     use zendriver_transport::testing::MockConnection;
 
+    /// Wait for the driver's next `method` command and return its id.
+    ///
+    /// Always used in place of `MockConnection::expect_cmd` directly:
+    /// that method has no timeout of its own and silently discards frames
+    /// that do not match, so a command the driver never sends hangs the
+    /// test forever instead of failing it. A regression that removes a
+    /// round-trip should turn CI red, not wedge it.
+    async fn next_cmd(mock: &mut MockConnection, method: &str) -> u64 {
+        tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd(method))
+            .await
+            .unwrap_or_else(|_| panic!("driver never sent {method} within 2s"))
+    }
+
     /// Build a synthetic `Frame` whose session sits on the supplied mock
     /// connection. Mirrors `Tab::new_for_test` ergonomics — no parent tab,
     /// no parent frame, fixed frameId / url, ready for evaluate dispatch.
@@ -758,12 +813,12 @@ mod tests {
             let f = frame.clone();
             async move { f.evaluate::<i32>("1").await }
         });
-        let id_world = mock.expect_cmd("Page.createIsolatedWorld").await;
+        let id_world = next_cmd(&mut mock, "Page.createIsolatedWorld").await;
         assert_eq!(mock.last_sent()["params"]["frameId"], "FRAME_A");
         assert_eq!(mock.last_sent()["params"]["worldName"], "zendriver-eval");
         mock.reply(id_world, json!({ "executionContextId": 7 }))
             .await;
-        let id_eval1 = mock.expect_cmd("Runtime.evaluate").await;
+        let id_eval1 = next_cmd(&mut mock, "Runtime.evaluate").await;
         assert_eq!(mock.last_sent()["params"]["contextId"], 7);
         assert_eq!(mock.last_sent()["params"]["expression"], "1");
         mock.reply(
@@ -780,7 +835,7 @@ mod tests {
             let f = frame.clone();
             async move { f.evaluate::<i32>("2").await }
         });
-        let id_eval2 = mock.expect_cmd("Runtime.evaluate").await;
+        let id_eval2 = next_cmd(&mut mock, "Runtime.evaluate").await;
         assert_eq!(mock.last_sent()["params"]["contextId"], 7);
         assert_eq!(mock.last_sent()["params"]["expression"], "2");
         mock.reply(
@@ -790,6 +845,81 @@ mod tests {
         .await;
         assert_eq!(fut2.await.unwrap().unwrap(), 2);
 
+        conn.shutdown();
+    }
+
+    /// A navigation inside the frame destroys the cached execution
+    /// context. `Frame::evaluate` must then do what `Tab::evaluate` does:
+    /// drop the dead `contextId`, create a fresh isolated world and retry
+    /// once, transparently.
+    ///
+    /// Without it a `Frame` handle is permanently broken by the first
+    /// navigation of its own iframe — `evaluate` returns the same error
+    /// forever, while the identical call on the tab recovers.
+    #[tokio::test]
+    async fn evaluate_recreates_the_isolated_world_after_a_stale_context() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let frame = frame_on(sess, "FRAME_C");
+
+        let fut = tokio::spawn({
+            let f = frame.clone();
+            async move { f.evaluate::<i32>("1").await }
+        });
+
+        let id_world = next_cmd(&mut mock, "Page.createIsolatedWorld").await;
+        mock.reply(id_world, json!({ "executionContextId": 7 }))
+            .await;
+        let id_eval = next_cmd(&mut mock, "Runtime.evaluate").await;
+        assert_eq!(mock.last_sent()["params"]["contextId"], 7);
+        // Chrome's answer once the context behind id 7 is gone.
+        mock.reply_err(id_eval, -32000, "Cannot find context with specified id")
+            .await;
+
+        // The retry: a NEW isolated world, then the same expression again.
+        let id_world2 = next_cmd(&mut mock, "Page.createIsolatedWorld").await;
+        mock.reply(id_world2, json!({ "executionContextId": 9 }))
+            .await;
+        let id_eval2 = next_cmd(&mut mock, "Runtime.evaluate").await;
+        assert_eq!(mock.last_sent()["params"]["contextId"], 9);
+        assert_eq!(mock.last_sent()["params"]["expression"], "1");
+        mock.reply(
+            id_eval2,
+            json!({ "result": { "value": 1, "type": "number" } }),
+        )
+        .await;
+
+        assert_eq!(fut.await.unwrap().unwrap(), 1);
+        conn.shutdown();
+    }
+
+    /// The retry is bounded at one. A context that is stale again on the
+    /// second attempt surfaces the error instead of looping.
+    #[tokio::test]
+    async fn evaluate_retries_a_stale_context_only_once() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let frame = frame_on(sess, "FRAME_D");
+
+        let fut = tokio::spawn({
+            let f = frame.clone();
+            async move { f.evaluate::<i32>("1").await }
+        });
+
+        for ctx in [7, 9] {
+            let id_world = next_cmd(&mut mock, "Page.createIsolatedWorld").await;
+            mock.reply(id_world, json!({ "executionContextId": ctx }))
+                .await;
+            let id_eval = next_cmd(&mut mock, "Runtime.evaluate").await;
+            mock.reply_err(id_eval, -32000, "Cannot find context with specified id")
+                .await;
+        }
+
+        let err = fut.await.unwrap().expect_err("second stale must surface");
+        assert!(
+            matches!(err, ZendriverError::Navigation(ref m) if m.contains("Cannot find context")),
+            "unexpected error: {err:?}",
+        );
         conn.shutdown();
     }
 
@@ -811,7 +941,7 @@ mod tests {
         // Next outbound frame is Runtime.evaluate itself — no isolated-world
         // bootstrap. `last_sent()` after `expect_cmd` confirms there is no
         // `contextId` field on the params.
-        let id = mock.expect_cmd("Runtime.evaluate").await;
+        let id = next_cmd(&mut mock, "Runtime.evaluate").await;
         assert_eq!(mock.last_sent()["params"]["expression"], "1+1");
         assert!(mock.last_sent()["params"].get("contextId").is_none());
         mock.reply(id, json!({ "result": { "value": 2, "type": "number" } }))
@@ -864,7 +994,7 @@ mod tests {
         // rather than the session's default — i.e. the parent tab's
         // main frame). Reply with a stub executionContextId so the
         // selector can attach it to the evaluate call below.
-        let id_iso = mock.expect_cmd("Page.createIsolatedWorld").await;
+        let id_iso = next_cmd(&mut mock, "Page.createIsolatedWorld").await;
         assert_eq!(mock.last_sent()["params"]["frameId"], "FRAME_FIND");
         mock.reply(id_iso, json!({ "executionContextId": 4242 }))
             .await;
@@ -872,7 +1002,7 @@ mod tests {
         // Next dispatch: Runtime.evaluate with the document.querySelectorAll
         // expression (resolve_css_many goes through the array path), now
         // pinned to the frame's isolated-world contextId.
-        let id_q = mock.expect_cmd("Runtime.evaluate").await;
+        let id_q = next_cmd(&mut mock, "Runtime.evaluate").await;
         assert_eq!(mock.last_sent()["params"]["contextId"], 4242);
         let sent = mock.last_sent()["params"]["expression"]
             .as_str()
@@ -889,7 +1019,7 @@ mod tests {
         .await;
 
         // Enumerate the array — one match at index 0.
-        let id_p = mock.expect_cmd("Runtime.getProperties").await;
+        let id_p = next_cmd(&mut mock, "Runtime.getProperties").await;
         assert_eq!(mock.last_sent()["params"]["objectId"], "RArrF");
         mock.reply(
             id_p,
@@ -909,7 +1039,7 @@ mod tests {
         .await;
 
         // describeNode resolves the backendNodeId for the picked element.
-        let id_d = mock.expect_cmd("DOM.describeNode").await;
+        let id_d = next_cmd(&mut mock, "DOM.describeNode").await;
         assert_eq!(mock.last_sent()["params"]["objectId"], "RFN0");
         mock.reply(id_d, json!({ "node": { "backendNodeId": 77 } }))
             .await;
@@ -937,10 +1067,10 @@ mod tests {
             async move { f.goto("https://example.com").await }
         });
 
-        let id_enable = mock.expect_cmd("Page.enable").await;
+        let id_enable = next_cmd(&mut mock, "Page.enable").await;
         mock.reply(id_enable, json!({})).await;
 
-        let id_nav = mock.expect_cmd("Page.navigate").await;
+        let id_nav = next_cmd(&mut mock, "Page.navigate").await;
         assert_eq!(mock.last_sent()["params"]["url"], "https://example.com");
         mock.reply(id_nav, json!({ "frameId": "FRAME_MAIN" })).await;
 
@@ -996,11 +1126,11 @@ mod tests {
     /// Drain the rejected first `Page.createIsolatedWorld` and answer the
     /// recovery `Page.getFrameTree` with `children` under `PARENT`.
     async fn reject_then_serve_tree(mock: &mut MockConnection, children: Value) {
-        let id_world = mock.expect_cmd("Page.createIsolatedWorld").await;
+        let id_world = next_cmd(mock, "Page.createIsolatedWorld").await;
         assert_eq!(mock.last_sent()["params"]["frameId"], "STALE");
         mock.reply_err(id_world, -32602, "No frame for given id found")
             .await;
-        let id_tree = mock.expect_cmd("Page.getFrameTree").await;
+        let id_tree = next_cmd(mock, "Page.getFrameTree").await;
         mock.reply(
             id_tree,
             json!({
@@ -1074,7 +1204,7 @@ mod tests {
         )
         .await;
 
-        let id_retry = mock.expect_cmd("Page.createIsolatedWorld").await;
+        let id_retry = next_cmd(&mut mock, "Page.createIsolatedWorld").await;
         assert_eq!(
             mock.last_sent()["params"]["frameId"],
             "F2",
@@ -1106,7 +1236,7 @@ mod tests {
         )
         .await;
 
-        let id_retry = mock.expect_cmd("Page.createIsolatedWorld").await;
+        let id_retry = next_cmd(&mut mock, "Page.createIsolatedWorld").await;
         assert_eq!(mock.last_sent()["params"]["frameId"], "F2");
         mock.reply(id_retry, json!({ "executionContextId": 5 }))
             .await;
@@ -1129,7 +1259,7 @@ mod tests {
         });
         reject_then_serve_tree(&mut mock, json!([tree_frame("LIVE", "", "")])).await;
 
-        let id_retry = mock.expect_cmd("Page.createIsolatedWorld").await;
+        let id_retry = next_cmd(&mut mock, "Page.createIsolatedWorld").await;
         assert_eq!(mock.last_sent()["params"]["frameId"], "LIVE");
         mock.reply(id_retry, json!({ "executionContextId": 3 }))
             .await;

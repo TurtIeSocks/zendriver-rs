@@ -1485,12 +1485,19 @@ impl BrowserBuilder {
         // A failed probe is NOT "no geo data" — it silently launches the
         // default (US-English) persona behind whatever exit IP the proxy
         // actually has, which is exactly the incoherence `geo_auto` exists
-        // to prevent. The resolver has already logged *why* it gave up;
-        // this records the consequence, since nothing downstream can.
+        // to prevent. This records the consequence, since nothing downstream
+        // can. The *reason* is one line up in the log only when the resolver
+        // is the bundled [`crate::geo_resolver::IpApiResolver`], which logs
+        // every one of its own exits; a resolver supplied through
+        // [`Self::geo_resolver`] need not.
+        //
+        // Prefixed on the function, not on `geo_auto`: this runs for any
+        // installed resolver, and naming a builder method the caller never
+        // called is how a log line sends someone the wrong way at 2am.
         let Some(geo) = resolver.resolve().await else {
             tracing::warn!(
-                "geo_auto: resolver returned no geo; persona keeps its default locale/timezone, \
-                 which may not match the exit IP"
+                "geo overlay: resolver returned no geo; persona keeps its default \
+                 locale/timezone, which may not match the exit IP"
             );
             return;
         };
@@ -2336,17 +2343,27 @@ enum QuitOutcome {
     /// ([`zendriver_transport::TransportError::Disconnected`] covers both), so
     /// this earns the grace without ever claiming an acknowledgement.
     TransportDied,
-    /// No quit can be in flight: Chrome refused it, never answered it, or the
-    /// transport was already shut down so it was never sent at all.
-    NotPending,
+    /// No reply to this call can ever arrive: Chrome refused it, it went
+    /// unanswered within the budget, or the transport was already shut down
+    /// when we called.
+    ///
+    /// Deliberately says nothing about whether the frame reached Chrome,
+    /// because the transport cannot tell us.
+    /// [`zendriver_transport::TransportError::Shutdown`] covers both an
+    /// enqueue that failed outright *and* an already-written command drained
+    /// by a cancelled actor, and the two are indistinguishable here. Skipping
+    /// the grace is a pragmatic call — with no reply coming, waiting can only
+    /// expire — not a claim that nothing was sent.
+    Unanswerable,
 }
 
 impl QuitOutcome {
-    /// Whether a quit might still be in flight, earning Chrome the
-    /// [`SHUTDOWN_GRACE`] to act on it before the signal path takes over.
+    /// Whether Chrome has earned the [`SHUTDOWN_GRACE`] to exit on its own
+    /// before the signal path takes over.
     ///
-    /// Waiting out the grace when nothing was ever sent buys nothing: there is
-    /// no message for Chrome to act on, so the wait can only expire.
+    /// True where a reply is still possible, or where the transport died on a
+    /// call it had already accepted. False for [`Self::Unanswerable`]: no
+    /// reply can reach us, so the grace could only ever expire.
     fn may_be_in_flight(self) -> bool {
         matches!(self, Self::Accepted | Self::TransportDied)
     }
@@ -4435,19 +4452,24 @@ impl Browser {
         let outcome = match quit {
             // Chrome acknowledged the quit.
             Ok(Ok(_)) => QuitOutcome::Accepted,
-            // The transport was already stopped by a caller-requested
-            // `shutdown()` / `reconnect()` — reachable from outside via the
-            // public `Browser::cdp` — so the enqueue failed cleanly and the
-            // frame never reached the socket. Nothing is in flight for the
-            // grace wait to wait on, so go straight to signals.
+            // The transport is gone — stopped by a caller-requested
+            // `shutdown()` / `reconnect()`, reachable from outside via the
+            // public `Browser::cdp`. No reply can arrive, so the grace could
+            // only expire; go straight to signals.
+            //
+            // What we must NOT say is that nothing was sent. `Shutdown` is
+            // returned both for an enqueue that failed before the frame was
+            // written and for a written, pending command drained by a
+            // cancelled actor (`SHUTDOWN_DRAIN_CODE`). In the second case the
+            // quit is on the wire and Chrome may already be acting on it.
             Ok(Err(zendriver_transport::CallError::Transport(
                 zendriver_transport::TransportError::Shutdown,
             ))) => {
                 warn!(
-                    "Browser.close was never sent (the transport was already shut down); \
-                     falling back to signal shutdown",
+                    "Browser.close could not complete: the transport was already shut down, so \
+                     it may never have reached chrome; falling back to signal shutdown",
                 );
-                QuitOutcome::NotPending
+                QuitOutcome::Unanswerable
             }
             // Chrome commonly drops the socket on quit instead of replying, so
             // a transport that dies here usually means the quit landed. Usually
@@ -4464,20 +4486,20 @@ impl Browser {
             // it categorically is not: nothing was heard, let alone declined.
             Ok(Err(e @ zendriver_transport::CallError::Timeout { .. })) => {
                 warn!(error = %e, "Browser.close went unanswered; falling back to signal shutdown");
-                QuitOutcome::NotPending
+                QuitOutcome::Unanswerable
             }
             // An RPC refusal means Chrome heard us and declined — nothing to
             // wait for, go straight to signals.
             Ok(Err(e)) => {
                 warn!(error = %e, "Browser.close was refused; falling back to signal shutdown");
-                QuitOutcome::NotPending
+                QuitOutcome::Unanswerable
             }
             Err(_elapsed) => {
                 warn!(
                     budget = ?browser_close_budget,
                     "Browser.close went unanswered; falling back to signal shutdown",
                 );
-                QuitOutcome::NotPending
+                QuitOutcome::Unanswerable
             }
         };
 
@@ -5130,6 +5152,49 @@ mod tests {
         let p = builder.resolved_persona().unwrap();
         assert_eq!(p.locale.as_deref(), Some("de-DE"));
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// A resolver that gives up is NOT "this IP has no country". The
+    /// persona quietly keeps its default US-English locale behind whatever
+    /// exit IP the proxy actually has, which is the exact incoherence the
+    /// geo overlay exists to prevent — and nothing downstream can report
+    /// it, so `apply_geo_overlay` has to.
+    ///
+    /// The resolver here is installed through the public
+    /// [`BrowserBuilder::geo_resolver`] and `geo_auto()` is never called,
+    /// which is why the warning must not be prefixed with that builder
+    /// method's name.
+    #[cfg(feature = "geo")]
+    #[tokio::test]
+    async fn a_resolver_that_gives_up_warns_without_naming_geo_auto() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        // `StubCountryResolver` yields `None` for anything `Country` cannot
+        // parse — the stand-in for a probe that failed.
+        let mut builder = Browser::builder().geo_resolver(StubCountryResolver {
+            cc: "XYZ",
+            calls: calls.clone(),
+        });
+        let ((), logs) = crate::log_capture::with_captured_logs(builder.apply_geo_overlay()).await;
+
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the probe must actually have been attempted",
+        );
+        let warning = crate::log_capture::sole_warning(&logs);
+        assert!(
+            warning.starts_with("geo overlay:"),
+            "the warning must name the overlay, not a builder method the caller never used: \
+             {warning}",
+        );
+        assert!(
+            !warning.contains("geo_auto"),
+            "unexpected geo_auto reference: {warning}",
+        );
+        assert!(
+            builder.persona_overlay.is_none(),
+            "a failed probe must not invent a locale overlay",
+        );
     }
 
     #[cfg(feature = "geo")]

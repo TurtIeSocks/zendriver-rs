@@ -166,23 +166,42 @@ impl GeoResolver for IpApiResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::log_capture::{CapturedLog, sole_warning, warnings, with_captured_logs};
+
+    /// Stand a mock endpoint up answering `status` with `body`, run a
+    /// default [`IpApiResolver`] against it, and return the resolution plus
+    /// everything logged while it ran.
+    ///
+    /// Every probe test needs the same four lines of wiremock scaffolding;
+    /// this is them, once.
+    async fn probe(status: u16, body: &str) -> (Option<ResolvedGeo>, Vec<CapturedLog>) {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(wiremock::ResponseTemplate::new(status).set_body_string(body))
+            .mount(&server)
+            .await;
+        let resolver = IpApiResolver::new().endpoint(server.uri());
+        with_captured_logs(async move { resolver.resolve().await }).await
+    }
+
+    fn country(cc: &str) -> Country {
+        Country::try_from(cc).expect("test country code must be valid")
+    }
 
     #[tokio::test]
     async fn resolves_country_from_ipapi_json() {
-        let server = wiremock::MockServer::start().await;
-        wiremock::Mock::given(wiremock::matchers::method("GET"))
-            .respond_with(
-                wiremock::ResponseTemplate::new(200).set_body_string(r#"{"countryCode":"DE"}"#),
-            )
-            .mount(&server)
-            .await;
-        let r = IpApiResolver::new().endpoint(server.uri());
+        let (geo, logs) = probe(200, r#"{"countryCode":"DE"}"#).await;
         assert_eq!(
-            r.resolve().await,
+            geo,
             Some(ResolvedGeo {
-                country: Country::try_from("DE").unwrap(),
+                country: country("DE"),
                 timezone: None,
             })
+        );
+        assert!(
+            warnings(&logs).is_empty(),
+            "a probe that succeeded must warn about nothing: {:?}",
+            warnings(&logs),
         );
     }
 
@@ -190,19 +209,15 @@ mod tests {
     /// the EXACT probe timezone, not just the country.
     #[tokio::test]
     async fn resolves_exact_timezone_from_ipapi_json() {
-        let server = wiremock::MockServer::start().await;
-        wiremock::Mock::given(wiremock::matchers::method("GET"))
-            .respond_with(
-                wiremock::ResponseTemplate::new(200)
-                    .set_body_string(r#"{"countryCode":"US","timezone":"America/Los_Angeles"}"#),
-            )
-            .mount(&server)
-            .await;
-        let r = IpApiResolver::new().endpoint(server.uri());
+        let (geo, _) = probe(
+            200,
+            r#"{"countryCode":"US","timezone":"America/Los_Angeles"}"#,
+        )
+        .await;
         assert_eq!(
-            r.resolve().await,
+            geo,
             Some(ResolvedGeo {
-                country: Country::try_from("US").unwrap(),
+                country: country("US"),
                 timezone: Some("America/Los_Angeles".to_string()),
             })
         );
@@ -213,67 +228,67 @@ mod tests {
     /// downstream), not an error.
     #[tokio::test]
     async fn missing_timezone_field_yields_none_timezone() {
-        let server = wiremock::MockServer::start().await;
-        wiremock::Mock::given(wiremock::matchers::method("GET"))
-            .respond_with(
-                wiremock::ResponseTemplate::new(200).set_body_string(r#"{"countryCode":"US"}"#),
-            )
-            .mount(&server)
-            .await;
-        let r = IpApiResolver::new().endpoint(server.uri());
-        let resolved = r.resolve().await.unwrap();
-        assert_eq!(resolved.country, Country::try_from("US").unwrap());
+        let (geo, logs) = probe(200, r#"{"countryCode":"US"}"#).await;
+        let resolved = geo.expect("a country with no timezone is still a resolution");
+        assert_eq!(resolved.country, country("US"));
         assert_eq!(resolved.timezone, None);
+        assert!(
+            warnings(&logs).is_empty(),
+            "a missing timezone is not a failure: {:?}",
+            warnings(&logs),
+        );
     }
 
     /// Well-formed JSON that simply has no `countryCode` (ip-api answers
     /// `{"status":"fail",...}` for a reserved-range IP) is a probe FAILURE,
-    /// not geo data. It yields `None` — and, unlike before, says so in the
-    /// log rather than downgrading the persona in silence.
+    /// not geo data.
+    ///
+    /// It yielded `None` before this change too — the change is that it now
+    /// says so instead of downgrading the persona in silence, so the
+    /// warning is the only thing here worth asserting.
     #[tokio::test]
-    async fn missing_country_code_yields_none() {
-        let server = wiremock::MockServer::start().await;
-        wiremock::Mock::given(wiremock::matchers::method("GET"))
-            .respond_with(
-                wiremock::ResponseTemplate::new(200)
-                    .set_body_string(r#"{"status":"fail","message":"reserved range"}"#),
-            )
-            .mount(&server)
-            .await;
-        assert_eq!(
-            IpApiResolver::new().endpoint(server.uri()).resolve().await,
-            None
+    async fn missing_country_code_warns_and_yields_none() {
+        let (geo, logs) = probe(200, r#"{"status":"fail","message":"reserved range"}"#).await;
+        assert_eq!(geo, None);
+        let warning = sole_warning(&logs);
+        assert!(
+            warning.contains("no string `countryCode` field"),
+            "unexpected warning: {warning}",
         );
     }
 
-    /// A non-2xx answer whose body is not JSON at all (a proxy's HTML error
-    /// page is the realistic case) is likewise a logged failure, not data.
+    /// A body that is not JSON at all is one failure with one cause,
+    /// whether it arrives as a 200 or as a proxy's 502 HTML error page:
+    /// same `resp.json()` code path, same warning. Both cases live here
+    /// rather than in two tests that differ only in bytes neither asserts
+    /// on.
     #[tokio::test]
-    async fn non_json_error_page_yields_none() {
-        let server = wiremock::MockServer::start().await;
-        wiremock::Mock::given(wiremock::matchers::method("GET"))
-            .respond_with(
-                wiremock::ResponseTemplate::new(502)
-                    .set_body_string("<html><body>Bad Gateway</body></html>"),
-            )
-            .mount(&server)
-            .await;
-        assert_eq!(
-            IpApiResolver::new().endpoint(server.uri()).resolve().await,
-            None
-        );
+    async fn a_non_json_body_warns_and_yields_none() {
+        for (status, body) in [
+            (200, "nope"),
+            (502, "<html><body>Bad Gateway</body></html>"),
+        ] {
+            let (geo, logs) = probe(status, body).await;
+            assert_eq!(geo, None, "status {status}");
+            let warning = sole_warning(&logs);
+            assert!(
+                warning.contains("response body was not JSON"),
+                "status {status}: unexpected warning: {warning}",
+            );
+        }
     }
 
+    /// A `countryCode` that is not a two-letter code is a failure too, and
+    /// a distinct one — the body parsed, the field was there, the value was
+    /// junk. It must not be reported as a missing field.
     #[tokio::test]
-    async fn bad_body_yields_none() {
-        let server = wiremock::MockServer::start().await;
-        wiremock::Mock::given(wiremock::matchers::method("GET"))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("nope"))
-            .mount(&server)
-            .await;
-        assert_eq!(
-            IpApiResolver::new().endpoint(server.uri()).resolve().await,
-            None
+    async fn an_unparseable_country_code_warns_and_yields_none() {
+        let (geo, logs) = probe(200, r#"{"countryCode":"XYZ"}"#).await;
+        assert_eq!(geo, None);
+        let warning = sole_warning(&logs);
+        assert!(
+            warning.contains("unrecognized country code"),
+            "unexpected warning: {warning}",
         );
     }
 
@@ -304,10 +319,7 @@ mod tests {
         let r = IpApiResolver::new()
             .endpoint("http://geo-probe.invalid/json")
             .with_proxy(Some(proxy.uri()), Some(("bob".into(), "s3cret".into())));
-        assert_eq!(
-            r.resolve().await.map(|g| g.country),
-            Some(Country::try_from("DE").unwrap())
-        );
+        assert_eq!(r.resolve().await.map(|g| g.country), Some(country("DE")));
     }
 
     /// Without credentials, the mock (which requires `Proxy-Authorization`)
@@ -330,5 +342,29 @@ mod tests {
         // No `Proxy-Authorization` header sent -> mock doesn't match -> 404
         // from wiremock -> `.json()` fails -> `resolve()` yields `None`.
         assert_eq!(r.resolve().await, None);
+    }
+
+    /// A proxy URL reqwest cannot parse is a failure before any request is
+    /// made, and the warning must not carry the credentials that would have
+    /// gone with it.
+    #[tokio::test]
+    async fn a_bad_proxy_url_warns_without_leaking_credentials() {
+        let resolver = IpApiResolver::new()
+            .endpoint("http://geo-probe.invalid/json")
+            .with_proxy(
+                Some("not a url".into()),
+                Some(("bob".into(), "s3cret".into())),
+            );
+        let (geo, logs) = with_captured_logs(async move { resolver.resolve().await }).await;
+        assert_eq!(geo, None);
+        let warning = sole_warning(&logs);
+        assert!(
+            warning.contains("bad proxy"),
+            "unexpected warning: {warning}"
+        );
+        assert!(
+            !warning.contains("s3cret") && !warning.contains("bob"),
+            "proxy credentials must never reach the log: {warning}",
+        );
     }
 }

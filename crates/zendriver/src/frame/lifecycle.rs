@@ -18,14 +18,31 @@
 //!    - `Page.frameAttached` — construct a new [`crate::Frame`] sharing
 //!      the tab's session (same-origin sub-frame; OOPIF frames arrive
 //!      through the [`crate::frame::oopif`] observer path on their own
-//!      child session, NOT this stream) and insert it under `frameId`.
+//!      child session, NOT this stream), insert it under `frameId`, and
+//!      **spawn** `sweep_dead_provisional_siblings` to evict any dead
+//!      provisional sibling it supersedes. That sweep issues a
+//!      `Page.getFrameTree` round-trip, and it is spawned rather than
+//!      awaited here on purpose — see the note below.
 //!    - `Page.frameNavigated` — update the existing entry's URL in
 //!      place (and backfill the frame `name` the attach event could not
 //!      carry); insert a fresh [`crate::Frame`] if no entry exists.
 //!    - `Page.frameDetached` — remove the entry from the registry.
 //!
+//! ## Nothing in an arm may await a CDP round-trip
+//!
+//! A `tokio::select!` arm is not a background job: while an arm's body is
+//! pending the loop cannot advance, so no other frame event is processed.
+//! That is worse than a delay. The event source underneath is
+//! [`zendriver_transport::Connection::subscribe_raw`], a broadcast channel
+//! carrying *every* raw CDP event, and a subscriber that lags past its
+//! capacity has frames dropped silently. A stalled arm on a busy page
+//! therefore loses `Page.frameDetached` events outright, leaving the
+//! registry reporting frames that no longer exist — with no error anywhere.
+//! Keep the arms to registry mutation; spawn anything that talks to Chrome.
+//!
 //! The task runs until its [`tokio_util::sync::CancellationToken`] fires —
-//! typically when the owning Tab is dropped.
+//! typically when the owning Tab is dropped. Sweeps spawned by the attach
+//! arm observe the same token, so they do not outlive it.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Weak};
@@ -38,13 +55,16 @@ use tokio_util::sync::CancellationToken;
 use tracing::{trace, warn};
 use zendriver_transport::SessionHandle;
 
-use crate::frame::Frame;
+use crate::frame::{Frame, FrameInner};
 use crate::tab::TabInner;
 
 /// Wait budget for the `Page.getFrameTree` probe that confirms a
-/// same-parent sibling really is a dead provisional frame. Bounded so a
-/// wedged probe can never stall the event loop that keeps the registry
-/// current; on expiry the sweep fails open (nothing is evicted).
+/// same-parent sibling really is a dead provisional frame.
+///
+/// This bound does **not** protect the event loop — the sweep runs in its
+/// own task, which is what protects the loop. It caps how long a wedged
+/// probe keeps that task (and its clone of the registry `Arc`) alive. On
+/// expiry the sweep fails open: nothing is evicted.
 const PROVISIONAL_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Minimal projection of `Page.frameAttached` — only the fields we need
@@ -135,6 +155,7 @@ pub(crate) async fn run(
                     session.clone(),
                     tab_weak.clone(),
                 );
+                frames.write().await.insert(ev.frame_id.clone(), frame);
                 // Chrome occasionally fires `frameAttached` twice for a
                 // single iframe — once with a provisional `frameId` and
                 // again with the committed one — without an intervening
@@ -143,12 +164,27 @@ pub(crate) async fn run(
                 // registry doesn't accumulate frames that
                 // `Page.createIsolatedWorld` would reject with
                 // "No frame for given id found".
-                let dead = dead_provisional_siblings(&session, &frames, &ev).await;
-                let mut map = frames.write().await;
-                for id in dead {
-                    map.remove(&id);
+                //
+                // Spawned, never awaited here: distinguishing a dead
+                // provisional from a sibling that simply has not navigated
+                // yet needs a `Page.getFrameTree` round-trip, and awaiting
+                // one in this arm parks every other frame event behind it
+                // (see the module header). Nothing waits on the eviction —
+                // it is pure housekeeping, and a stale row is recoverable.
+                if let Some(parent) = ev.parent_frame_id {
+                    let session = session.clone();
+                    let frames = frames.clone();
+                    let cancel = cancel.clone();
+                    let attached_id = ev.frame_id;
+                    tokio::spawn(async move {
+                        tokio::select! {
+                            () = cancel.cancelled() => {}
+                            () = sweep_dead_provisional_siblings(
+                                &session, &frames, &attached_id, &parent,
+                            ) => {}
+                        }
+                    });
                 }
-                map.insert(ev.frame_id, frame);
             }
             Some(ev) = navigated.next() => {
                 let frame_id = ev.frame.id;
@@ -158,18 +194,47 @@ pub(crate) async fn run(
                 // `frameNavigated` as the authoritative one; never clear a
                 // known name from an event that simply omits the field.
                 let new_name = ev.frame.name.filter(|n| !n.is_empty());
-                // Update in place if known; otherwise treat the navigation
-                // as the implicit attach (Chrome may emit `frameNavigated`
-                // for the main frame before any subscriber sees an explicit
-                // `frameAttached`).
-                let mut map = frames.write().await;
-                if let Some(existing) = map.get(&frame_id) {
-                    let name_changed = new_name.is_some()
-                        && new_name.as_deref() != existing.inner.name.as_deref();
-                    if !name_changed {
-                        *existing.inner.url.write().await = new_url;
-                        continue;
+
+                // Fast path, under a READ guard: refreshing a URL mutates
+                // the `Frame`'s own `RwLock`, not the registry map, so the
+                // ordinary navigation never needs exclusive access to the
+                // registry. Only the rename below replaces a map entry.
+                let needs_rename = {
+                    let map = frames.read().await;
+                    match map.get(&frame_id) {
+                        Some(existing) => {
+                            let name_changed = new_name.is_some()
+                                && new_name.as_deref() != existing.inner.name.as_deref();
+                            // Write through the shared `Arc` on BOTH paths.
+                            // Every `Frame` handle a caller already took
+                            // points at THIS inner, and the rename below
+                            // swaps the registry row for a fresh one those
+                            // handles never see — so this is what keeps
+                            // `Frame::url()` live on a handle taken before
+                            // a rename.
+                            *existing.inner.url.write().await = new_url.clone();
+                            if !name_changed {
+                                continue;
+                            }
+                            true
+                        }
+                        // No entry: treat the navigation as the implicit
+                        // attach (Chrome may emit `frameNavigated` for the
+                        // main frame before any subscriber sees an explicit
+                        // `frameAttached`).
+                        None => false,
                     }
+                };
+
+                let mut map = frames.write().await;
+                if needs_rename {
+                    // Re-look up. The registry is mutated concurrently by
+                    // the spawned provisional sweep and by the OOPIF
+                    // observer, so the row seen under the read guard may be
+                    // gone by now. A name backfill is a refinement, never a
+                    // reason to resurrect a row something else deliberately
+                    // removed.
+                    let Some(existing) = map.get(&frame_id) else { continue };
                     // `FrameInner::name` is immutable (it backs
                     // `Frame::name() -> Option<&str>`, which cannot hand out
                     // a lock guard), so backfilling means replacing the
@@ -185,17 +250,17 @@ pub(crate) async fn run(
                         tab_weak.clone(),
                     );
                     map.insert(frame_id, renamed);
-                    continue;
+                } else {
+                    let frame = Frame::new(
+                        frame_id.clone(),
+                        ev.frame.parent_id,
+                        new_url,
+                        new_name,
+                        session.clone(),
+                        tab_weak.clone(),
+                    );
+                    map.insert(frame_id, frame);
                 }
-                let frame = Frame::new(
-                    frame_id.clone(),
-                    ev.frame.parent_id,
-                    new_url,
-                    new_name,
-                    session.clone(),
-                    tab_weak.clone(),
-                );
-                map.insert(frame_id, frame);
             }
             Some(ev) = detached.next() => {
                 frames.write().await.remove(&ev.frame_id);
@@ -208,9 +273,9 @@ pub(crate) async fn run(
     }
 }
 
-/// Registry entries that the freshly-attached `ev` supersedes: same parent,
-/// same session, still URL-less — **and confirmed gone from Chrome's live
-/// frame tree**.
+/// Evict the registry entries that the freshly-attached `attached_id`
+/// supersedes: same parent, same session, still URL-less — **and confirmed
+/// gone from Chrome's live frame tree**.
 ///
 /// The last clause is what separates a dead provisional frame from a
 /// perfectly good sibling that simply has not navigated yet. Both look
@@ -221,24 +286,61 @@ pub(crate) async fn run(
 /// the same reason `Page.createIsolatedWorld` answers "No frame for given
 /// id found" for it.
 ///
-/// Fails open in every ambiguous case (no parent, no candidates, probe
-/// error or timeout): keeping a possibly-dead entry only costs a stale row
-/// in [`crate::Tab::frames`], which
+/// ## Why the candidate snapshot is taken before the probe
+///
+/// The probe answers a question about one instant, and the answer is only
+/// sound for rows that already existed at that instant. Taking the
+/// candidate snapshot first guarantees the returned tree is at least as
+/// recent as the snapshot, so a candidate missing from it is a frame that
+/// either never made the tree or died before it was taken — both dead.
+/// Collecting candidates *after* the probe would invert that: a frame
+/// attached in the gap would be a candidate that is legitimately absent
+/// from an older tree, and evicting it would drop a live frame. The
+/// re-validation below then re-checks each survivor against the registry
+/// as it stands at eviction time, because the round-trip is a real window
+/// in which rows can be detached, replaced, or navigated.
+///
+/// ## Failing open
+///
+/// Every ambiguity this can see is resolved by keeping the row: no
+/// candidates, a probe error or timeout, a row whose identity changed
+/// under the probe, a row that navigated while it was outstanding. A stale
+/// row in [`crate::Tab::frames`] only costs a lookup that
 /// [`crate::Frame::ensure_isolated_world`] already recovers from, whereas
-/// evicting a live frame loses a handle the caller may hold.
-async fn dead_provisional_siblings(
+/// evicting a live frame loses a handle the caller may still hold.
+///
+/// One ambiguity it cannot see: a frame that is genuinely alive but absent
+/// from *this* session's `Page.getFrameTree` is evicted anyway. That covers
+/// two unverified cases, and neither is helped by the re-validation, since
+/// both look exactly like a dead provisional from here.
+///
+/// The first is a frame Chrome has announced via `Page.frameAttached` but
+/// not yet listed in the tree, if such a window exists. Running the sweep
+/// off the event loop widens that window slightly, because the candidate
+/// snapshot is now taken whenever the spawned task is first polled rather
+/// than synchronously in the arm.
+///
+/// The second is an out-of-process iframe. The session-id filter below
+/// only excludes entries already re-homed onto a child session, so a
+/// parent-side placeholder for an OOPIF would still be swept if Chrome
+/// omits remote children from the parent target's tree. Whether it does is
+/// unverified against a real
+/// browser; if it turns out to, this needs an OOPIF-aware filter or a
+/// grace period before a url-less candidate becomes eligible.
+async fn sweep_dead_provisional_siblings(
     session: &SessionHandle,
     frames: &Arc<RwLock<HashMap<String, Frame>>>,
-    ev: &FrameAttachedEvent,
-) -> Vec<String> {
-    let Some(parent) = ev.parent_frame_id.as_deref() else {
-        return Vec::new();
-    };
-    let candidates: Vec<String> = {
+    attached_id: &str,
+    parent: &str,
+) {
+    // Each candidate is carried as (id, `Arc` identity). The identity is
+    // what lets the re-validation below tell "the row I sampled" from "some
+    // other row that now holds this id".
+    let candidates: Vec<(String, Arc<FrameInner>)> = {
         let map = frames.read().await;
         map.iter()
             .filter_map(|(id, f)| {
-                if id == &ev.frame_id {
+                if id == attached_id {
                     return None;
                 }
                 if f.inner.parent_frame_id.as_deref() != Some(parent) {
@@ -251,20 +353,46 @@ async fn dead_provisional_siblings(
                     return None;
                 }
                 let url_slot = f.inner.url.try_read().ok()?;
-                url_slot.is_empty().then(|| id.clone())
+                url_slot
+                    .is_empty()
+                    .then(|| (id.clone(), Arc::clone(&f.inner)))
             })
             .collect()
     };
     if candidates.is_empty() {
-        return Vec::new();
+        return;
     }
     let Some(live) = live_frame_ids(session).await else {
-        return Vec::new();
+        return;
     };
-    candidates
-        .into_iter()
-        .filter(|id| !live.contains(id))
-        .collect()
+
+    let mut map = frames.write().await;
+    for (id, sampled) in candidates {
+        if live.contains(&id) {
+            continue;
+        }
+        let Some(current) = map.get(&id) else {
+            continue;
+        };
+        // A different `Arc` behind the same id means the row we sampled is
+        // already gone and something re-inserted under its id — a detach
+        // plus re-attach, or the `frameNavigated` rename swap. Evicting now
+        // would delete a frame the probe never asked about. Identity also
+        // subsumes re-checking `parent_frame_id` and `session`, which are
+        // immutable on `FrameInner`.
+        if !Arc::ptr_eq(&current.inner, &sampled) {
+            continue;
+        }
+        // A URL means the frame navigated while the probe was in flight,
+        // and only a live frame navigates. `try_read` rather than `read`:
+        // this runs under the registry write guard, so it must not block on
+        // a slot the navigated arm is writing — and failing open there is
+        // the correct answer anyway.
+        if !current.inner.url.try_read().is_ok_and(|u| u.is_empty()) {
+            continue;
+        }
+        map.remove(&id);
+    }
 }
 
 /// Every frame id Chrome currently reports under `Page.getFrameTree`, or
@@ -288,18 +416,10 @@ async fn live_frame_ids(session: &SessionHandle) -> Option<HashSet<String>> {
             return None;
         }
     };
-    fn collect(node: &serde_json::Value, out: &mut HashSet<String>) {
-        if let Some(id) = node["frame"]["id"].as_str() {
-            out.insert(id.to_string());
-        }
-        if let Some(children) = node["childFrames"].as_array() {
-            for c in children {
-                collect(c, out);
-            }
-        }
-    }
     let mut ids = HashSet::new();
-    collect(&tree["frameTree"], &mut ids);
+    crate::frame::tree::walk(&tree["frameTree"], &mut |node| {
+        ids.insert(node.id.to_string());
+    });
     Some(ids)
 }
 
@@ -354,16 +474,51 @@ mod tests {
         frames: &Registry,
         pred: impl Fn(&HashMap<String, Frame>) -> bool,
     ) -> HashMap<String, Frame> {
-        for _ in 0..100 {
+        wait_for_within(frames, Duration::from_secs(1), pred).await
+    }
+
+    /// [`wait_for`] with an explicit budget, for assertions where the
+    /// *deadline itself* is the thing under test.
+    async fn wait_for_within(
+        frames: &Registry,
+        budget: Duration,
+        pred: impl Fn(&HashMap<String, Frame>) -> bool,
+    ) -> HashMap<String, Frame> {
+        let deadline = tokio::time::Instant::now() + budget;
+        loop {
             {
                 let map = frames.read().await;
                 if pred(&map) {
                     return map.clone();
                 }
             }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "registry never reached the expected state within {budget:?}",
+            );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        panic!("registry never reached the expected state within 1s");
+    }
+
+    /// Emit a `Page.frameNavigated` for `frame_id` on the test session.
+    async fn navigate(mock: &MockConnection, frame_id: &str, url: &str, name: Option<&str>) {
+        mock.emit_event_for_session(
+            "Page.frameNavigated",
+            json!({
+                "frame": { "id": frame_id, "parentId": "P", "url": url, "name": name }
+            }),
+            SESSION,
+        )
+        .await;
+    }
+
+    /// Wait for the sweep's `Page.getFrameTree` probe and return its command
+    /// id. `expect_cmd` has no timeout of its own and silently discards
+    /// frames that do not match, so every wait on it is wrapped.
+    async fn expect_probe(mock: &mut MockConnection) -> u64 {
+        tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Page.getFrameTree"))
+            .await
+            .expect("attach with an url-less sibling did not probe Page.getFrameTree")
     }
 
     /// Two real iframes under one parent, neither navigated yet, are
@@ -378,9 +533,7 @@ mod tests {
         wait_for(&frames, |m| m.contains_key("F1")).await;
         attach(&mock, "F2", "P").await;
 
-        let id = tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Page.getFrameTree"))
-            .await
-            .expect("attach with an url-less sibling did not probe Page.getFrameTree");
+        let id = expect_probe(&mut mock).await;
         mock.reply(
             id,
             json!({
@@ -414,9 +567,7 @@ mod tests {
         wait_for(&frames, |m| m.contains_key("PROVISIONAL")).await;
         attach(&mock, "COMMITTED", "P").await;
 
-        let id = tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Page.getFrameTree"))
-            .await
-            .expect("attach with an url-less sibling did not probe Page.getFrameTree");
+        let id = expect_probe(&mut mock).await;
         mock.reply(
             id,
             json!({
@@ -447,9 +598,7 @@ mod tests {
         wait_for(&frames, |m| m.contains_key("F1")).await;
         attach(&mock, "F2", "P").await;
 
-        let id = tokio::time::timeout(Duration::from_secs(2), mock.expect_cmd("Page.getFrameTree"))
-            .await
-            .expect("attach with an url-less sibling did not probe Page.getFrameTree");
+        let id = expect_probe(&mut mock).await;
         mock.reply_err(id, -32000, "Page domain not enabled").await;
 
         let map = wait_for(&frames, |m| m.contains_key("F2")).await;
@@ -462,8 +611,152 @@ mod tests {
         conn.shutdown();
     }
 
+    /// **The regression the spawn exists for.** With a probe deliberately
+    /// left unanswered, an unrelated `Page.frameDetached` must still be
+    /// applied promptly rather than waiting out
+    /// [`PROVISIONAL_PROBE_TIMEOUT`].
+    ///
+    /// Awaiting the probe inside the `frameAttached` arm parks the whole
+    /// loop, and that is worse than a delay: the subscriber sits on a
+    /// bounded broadcast that drops frames for a lagging receiver
+    /// *silently*, so on a busy page a five-second stall does not delay the
+    /// detach, it loses it — leaving `Tab::frames` reporting a frame that no
+    /// longer exists, with nothing logged. Hence the 500ms budget: it is an
+    /// order of magnitude below the probe timeout, so a pass cannot be the
+    /// probe giving up.
+    #[tokio::test]
+    async fn events_are_processed_while_a_frame_tree_probe_is_outstanding() {
+        let (mut mock, conn, frames, cancel) = start().await;
+
+        attach(&mock, "F1", "P").await;
+        wait_for(&frames, |m| m.contains_key("F1")).await;
+        // The second attach makes url-less F1 a sweep candidate, which is
+        // what dispatches the probe. It is never replied to.
+        attach(&mock, "F2", "P").await;
+        let _wedged = expect_probe(&mut mock).await;
+
+        mock.emit_event_for_session("Page.frameDetached", json!({ "frameId": "F1" }), SESSION)
+            .await;
+
+        let map = wait_for_within(&frames, Duration::from_millis(500), |m| {
+            !m.contains_key("F1")
+        })
+        .await;
+        assert!(
+            map.contains_key("F2"),
+            "the loop must still be serving the registry, not just draining it",
+        );
+
+        cancel.cancel();
+        conn.shutdown();
+    }
+
+    /// The probe answers a question about one instant, but the eviction
+    /// happens a round-trip later. A candidate that navigated while the
+    /// probe was outstanding is provably alive — only a live frame
+    /// navigates — so the deferred sweep must re-check the registry at
+    /// eviction time instead of trusting its pre-probe snapshot.
+    #[tokio::test]
+    async fn a_candidate_that_navigates_during_the_probe_is_not_evicted() {
+        let (mut mock, conn, frames, cancel) = start().await;
+
+        attach(&mock, "F1", "P").await;
+        wait_for(&frames, |m| m.contains_key("F1")).await;
+        attach(&mock, "F2", "P").await;
+        // Waiting for the probe proves the candidate snapshot (which
+        // precedes it) already captured a url-less F1.
+        let id = expect_probe(&mut mock).await;
+
+        navigate(&mock, "F1", "https://host.test/one", None).await;
+        wait_for(&frames, |m| {
+            m.get("F1")
+                .is_some_and(|f| f.inner.url.try_read().is_ok_and(|u| !u.is_empty()))
+        })
+        .await;
+
+        // Answer with the tree as it stood BEFORE that navigation: F1
+        // absent. The snapshot says evict; the registry says otherwise, and
+        // the registry is the newer of the two.
+        mock.reply(
+            id,
+            json!({
+                "frameTree": {
+                    "frame": { "id": "P", "url": "https://host.test/" },
+                    "childFrames": [tree_child("F2", "P")],
+                }
+            }),
+        )
+        .await;
+
+        // A negative has no event to wait on, so give the sweep a settle
+        // window it would comfortably finish in (it is one lock acquisition
+        // past the reply) and assert the row survived it.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            frames.read().await.contains_key("F1"),
+            "a candidate that navigated under the probe must survive the sweep",
+        );
+
+        cancel.cancel();
+        conn.shutdown();
+    }
+
+    /// The other half of re-validation: a candidate that was detached and
+    /// re-attached under the *same* id while the probe was outstanding is a
+    /// different, live frame. It is still url-less, so the url re-check
+    /// cannot save it — only comparing the row's `Arc` identity against the
+    /// one actually sampled can.
+    #[tokio::test]
+    async fn a_candidate_reattached_under_the_same_id_during_the_probe_is_not_evicted() {
+        let (mut mock, conn, frames, cancel) = start().await;
+
+        attach(&mock, "F1", "P").await;
+        wait_for(&frames, |m| m.contains_key("F1")).await;
+        attach(&mock, "F2", "P").await;
+        // Dispatched => the sweep has already sampled the original F1 row.
+        let stale_probe = expect_probe(&mut mock).await;
+
+        mock.emit_event_for_session("Page.frameDetached", json!({ "frameId": "F1" }), SESSION)
+            .await;
+        wait_for(&frames, |m| !m.contains_key("F1")).await;
+        let sampled = Arc::clone(&wait_for(&frames, |m| m.contains_key("F2")).await["F2"].inner);
+        attach(&mock, "F1", "P").await;
+        let live_row = wait_for(&frames, |m| m.contains_key("F1")).await["F1"]
+            .inner
+            .clone();
+
+        // Answer the FIRST probe with the tree as it stood before the
+        // re-attach. Its snapshot named F1; the row under that id is no
+        // longer the one it named.
+        mock.reply(
+            stale_probe,
+            json!({
+                "frameTree": {
+                    "frame": { "id": "P", "url": "https://host.test/" },
+                    "childFrames": [tree_child("F2", "P")],
+                }
+            }),
+        )
+        .await;
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let map = frames.read().await;
+        assert!(
+            map.get("F1")
+                .is_some_and(|f| Arc::ptr_eq(&f.inner, &live_row)),
+            "the re-attached F1 must survive a sweep that sampled its predecessor",
+        );
+        assert!(Arc::ptr_eq(&map["F2"].inner, &sampled), "F2 is untouched");
+        drop(map);
+
+        cancel.cancel();
+        conn.shutdown();
+    }
+
     /// A single child needs no probe at all — no `Page.getFrameTree` is
-    /// dispatched, so the common case keeps its zero-round-trip cost.
+    /// dispatched, so a page with one iframe never pays for the sweep. (A
+    /// second iframe under the same parent does dispatch one; it just no
+    /// longer costs the event loop anything.)
     #[tokio::test]
     async fn lone_attach_does_not_probe_the_frame_tree() {
         let (mut mock, conn, frames, cancel) = start().await;
@@ -492,19 +785,7 @@ mod tests {
         let map = wait_for(&frames, |m| m.contains_key("FCHILD")).await;
         assert_eq!(map["FCHILD"].name(), None, "attach cannot know the name");
 
-        mock.emit_event_for_session(
-            "Page.frameNavigated",
-            json!({
-                "frame": {
-                    "id": "FCHILD",
-                    "parentId": "P",
-                    "url": "https://host.test/side",
-                    "name": "sidebar",
-                }
-            }),
-            SESSION,
-        )
-        .await;
+        navigate(&mock, "FCHILD", "https://host.test/side", Some("sidebar")).await;
 
         let map = wait_for(&frames, |m| {
             m.get("FCHILD").is_some_and(|f| f.name().is_some())
@@ -533,17 +814,10 @@ mod tests {
         attach(&mock, "FCHILD", "P").await;
         wait_for(&frames, |m| m.contains_key("FCHILD")).await;
         for (url, name) in [
-            ("https://host.test/one", json!("sidebar")),
-            ("https://host.test/two", json!(null)),
+            ("https://host.test/one", Some("sidebar")),
+            ("https://host.test/two", None),
         ] {
-            mock.emit_event_for_session(
-                "Page.frameNavigated",
-                json!({
-                    "frame": { "id": "FCHILD", "parentId": "P", "url": url, "name": name }
-                }),
-                SESSION,
-            )
-            .await;
+            navigate(&mock, "FCHILD", url, name).await;
         }
 
         // The url is the marker for "the SECOND navigation landed".
@@ -557,6 +831,54 @@ mod tests {
         })
         .await;
         assert_eq!(map["FCHILD"].name(), Some("sidebar"));
+
+        cancel.cancel();
+        conn.shutdown();
+    }
+
+    /// A `Frame` is a cheap `Arc` handle and `Tab::frames()` hands out
+    /// clones, so holding one across navigations is the intended usage —
+    /// `loop { if f.url().await.contains("/checkout") { break } }` is the
+    /// obvious way to wait on an iframe.
+    ///
+    /// The name backfill replaces the registry row with a fresh `Frame`, so
+    /// a handle taken in the window between `frameAttached` and the first
+    /// named `frameNavigated` points at an inner nothing would ever touch
+    /// again. Writing the URL through that inner *before* the swap is what
+    /// keeps the polling loop terminating.
+    ///
+    /// Only `url()` is repaired here. `Frame::name()` on the held handle
+    /// still reads `None` forever, because `FrameInner::name` is immutable
+    /// and making it interior-mutable turns `Frame::name()` into an `async
+    /// fn` — a deliberate public break that is a maintainer's call, not
+    /// this fix's.
+    #[tokio::test]
+    async fn a_handle_taken_before_the_name_backfill_still_tracks_the_url() {
+        let (mock, conn, frames, cancel) = start().await;
+
+        attach(&mock, "FCHILD", "P").await;
+        let map = wait_for(&frames, |m| m.contains_key("FCHILD")).await;
+        let held = map["FCHILD"].clone();
+        assert_eq!(held.url().await, "", "nothing has navigated yet");
+
+        navigate(
+            &mock,
+            "FCHILD",
+            "https://host.test/checkout",
+            Some("sidebar"),
+        )
+        .await;
+        let map = wait_for(&frames, |m| {
+            m.get("FCHILD").is_some_and(|f| f.name().is_some())
+        })
+        .await;
+        assert_eq!(map["FCHILD"].url().await, "https://host.test/checkout");
+
+        assert_eq!(
+            held.url().await,
+            "https://host.test/checkout",
+            "a handle taken before the rename must not be orphaned on url()",
+        );
 
         cancel.cancel();
         conn.shutdown();
