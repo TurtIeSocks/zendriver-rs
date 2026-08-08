@@ -3,47 +3,11 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
-## [0.16.34] - 2026-08-08
+## [Unreleased]
 
-
-## [0.16.33] - 2026-08-08
-
-
-## [0.16.32] - 2026-08-08
-
-
-## [0.16.31] - 2026-08-08
-
-
-## [0.16.30] - 2026-08-08
-
-
-## [0.16.29] - 2026-08-08
-
-
-## [0.16.28] - 2026-08-08
-
-
-## [0.16.27] - 2026-08-08
-
-
-## [0.16.26] - 2026-08-08
-
-
-## [0.16.25] - 2026-08-08
-
-
-## [0.16.24] - 2026-08-08
-
-
-## [0.16.23] - 2026-08-08
-
-
-## [0.16.22] - 2026-08-08
-
-
-## [0.16.21] - 2026-08-08
-
+Versions 0.16.21 through 0.16.33 were published by a release-automation loop and
+are yanked. They carry no changes; the crate only moved because its `zendriver`
+dependency was being bumped.
 
 ## [0.16.20] - 2026-08-08
 
