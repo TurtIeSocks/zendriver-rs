@@ -36,12 +36,11 @@
 use std::time::Duration;
 
 use serde::Deserialize;
-use serde_json::{Value, json};
 use tokio::time::Instant;
 use zendriver_transport::SessionHandle;
 
 use crate::click::click_at;
-use crate::detection::BoundingBox;
+use crate::detection::{BoundingBox, eval_main_world};
 use crate::error::CloudflareError;
 
 /// Result of a clearance attempt.
@@ -167,9 +166,15 @@ impl<'a> CloudflareBypass<'a> {
                 return Ok(ClearanceOutcome::TokenAcquired(token));
             }
 
+            // Click cadence: the first clickable tick clicks straight away,
+            // every later attempt waits `CLICK_RETRY_TICKS` ticks after the
+            // click that landed, and a run spends at most
+            // `MAX_CLICK_ATTEMPTS` clicks. So at the default interval the
+            // second click lands on tick 5, not tick 4.
             let may_click = clicks < MAX_CLICK_ATTEMPTS
                 && (clicks == 0 || ticks_since_click >= CLICK_RETRY_TICKS);
 
+            let mut clicked = false;
             match state.bbox {
                 Some(_) if may_click => {
                     // Raw `Input.dispatchMouseEvent` coordinates are viewport
@@ -181,6 +186,7 @@ impl<'a> CloudflareBypass<'a> {
                         click_at(self.session, click_x, click_y).await?;
                         clicks += 1;
                         ticks_since_click = 0;
+                        clicked = true;
                     }
                 }
                 // The challenge went away without a token: either the iframe
@@ -190,19 +196,36 @@ impl<'a> CloudflareBypass<'a> {
                 None if clicks > 0 || (seen_markers_before && !state.has_markers) => {
                     return Ok(ClearanceOutcome::ChallengeGone);
                 }
-                _ => {
-                    stall_ticks += 1;
-                    if stall_ticks == 10 && !warned_stall {
-                        tracing::warn!(
-                            poll_interval_ms = self.poll_interval.as_millis() as u64,
-                            "cloudflare clearance stalled — is BrowserBuilder::stealth enabled?"
-                        );
-                        warned_stall = true;
-                    }
+                _ => {}
+            }
+
+            // Every tick that did not land a click is a tick with no progress,
+            // the scroll-returned-`None` path included. That path used to skip
+            // the counter, so a widget that stayed mounted but stopped being
+            // measurable — the run this hint exists to explain — was the one
+            // run that could never produce it.
+            if clicked {
+                stall_ticks = 0;
+            } else {
+                stall_ticks += 1;
+                if stall_ticks == 10 && !warned_stall {
+                    tracing::warn!(
+                        poll_interval_ms = self.poll_interval.as_millis() as u64,
+                        "cloudflare clearance stalled — is BrowserBuilder::stealth enabled?"
+                    );
+                    // `stall_ticks` resets on a landed click, so `== 10` is
+                    // reachable more than once per run; the latch is what
+                    // keeps the hint to a single line.
+                    warned_stall = true;
                 }
             }
 
-            ticks_since_click = ticks_since_click.saturating_add(1);
+            // Only meaningful once something has been clicked — unguarded, it
+            // counted ticks before the first click, which the `clicks == 0`
+            // arm of `may_click` then had to ignore.
+            if clicks > 0 {
+                ticks_since_click = ticks_since_click.saturating_add(1);
+            }
 
             if Instant::now() >= deadline {
                 return Ok(ClearanceOutcome::TimedOut {
@@ -251,6 +274,20 @@ struct PollState {
 ///   `opacity`. A zero-size or hidden iframe is not a target — invisible
 ///   Turnstile mounts a 0×0 iframe whose token is populated with no click,
 ///   and clicking it would dispatch mouse events at a meaningless point.
+///
+/// Never evaluated on its own — [`main_world_expr`] wraps it, so nothing here
+/// reaches the page's global object. See that function for why.
+///
+/// # JavaScript style
+/// Injected scripts in this crate declare with `var` and iterate with
+/// indexed loops, never `for...of` — `detect.js` included. `for...of` over a
+/// `NodeList` goes through `NodeList.prototype[Symbol.iterator]`, which the
+/// page can redefine to watch someone walk its DOM; an indexed loop reads
+/// `length` and integer keys, which a page cannot instrument without
+/// breaking its own scripts. In a crate whose job is to be unobservable that
+/// is worth the plainer syntax. This is a rule about declarations and
+/// iteration only — modern methods with no such hook, `String.includes`
+/// among them, are used freely.
 const WALKER_JS: &str = r#"
 function findChallengeIframe(root) {
     var iframes = root.querySelectorAll ? root.querySelectorAll("iframe") : [];
@@ -280,7 +317,8 @@ function clickableRect(el) {
 }
 "#;
 
-/// Unified poll evaluator (appended to [`WALKER_JS`]). Returns:
+/// Body of the unified poll evaluator — statements only, run inside
+/// [`main_world_expr`]'s wrapper alongside [`WALKER_JS`]. Returns:
 /// - `token` — non-empty `cf-turnstile-response` (or legacy
 ///   `cf_challenge_response`) input value, else null.
 /// - `bbox` — the challenge iframe's rect when it is a valid click target,
@@ -291,7 +329,6 @@ function clickableRect(el) {
 /// The token input is in light DOM by design (page JS reads it to submit
 /// forms), so `document.querySelector` is sufficient there.
 const POLL_JS: &str = r#"
-(function () {
     var iframe = findChallengeIframe(document);
     var bbox = clickableRect(iframe);
     var input =
@@ -301,15 +338,20 @@ const POLL_JS: &str = r#"
     var hasContainer = !!document.querySelector('.cf-turnstile, .turnstile, [data-sitekey]');
     var hasMarkers = hasContainer || !!input || !!iframe;
     return { token: token, bbox: bbox, hasMarkers: hasMarkers };
-})()
 "#;
 
-/// Scroll-into-view evaluator (appended to [`WALKER_JS`]). Brings the
+/// Body of the scroll-into-view evaluator — statements only, run inside
+/// [`main_world_expr`]'s wrapper alongside [`WALKER_JS`]. Brings the
 /// challenge iframe fully into the viewport when it isn't already, then
 /// returns its *post-scroll* rect — or null if the widget vanished or is not
 /// a valid click target.
+///
+/// `behavior: "instant"` is load-bearing: the default `"auto"` resolves to
+/// the element's computed `scroll-behavior`, so on a page setting
+/// `html { scroll-behavior: smooth }` the scroll animates and the
+/// `clickableRect` call on the next synchronous line reads the *pre*-scroll
+/// rect — the one thing this round-trip exists to avoid.
 const SCROLL_JS: &str = r#"
-(function () {
     var iframe = findChallengeIframe(document);
     if (!iframe) return null;
     var r = iframe.getBoundingClientRect();
@@ -317,46 +359,30 @@ const SCROLL_JS: &str = r#"
     var vh = window.innerHeight || document.documentElement.clientHeight;
     var fullyVisible = r.top >= 0 && r.left >= 0 && r.bottom <= vh && r.right <= vw;
     if (!fullyVisible && iframe.scrollIntoView) {
-        iframe.scrollIntoView({ block: "center", inline: "center" });
+        iframe.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
     }
     return clickableRect(iframe);
-})()
 "#;
 
-/// Evaluate `WALKER_JS` + `body` in `session`'s main world and return the
-/// result value (`Value::Null` when the script produced nothing).
-async fn eval_main_world(session: &SessionHandle, body: &str) -> Result<Value, CloudflareError> {
-    let res = session
-        .call(
-            "Runtime.evaluate",
-            json!({
-                "expression": format!("{WALKER_JS}{body}"),
-                "returnByValue": true,
-                "awaitPromise": true,
-            }),
-        )
-        .await?;
-
-    if let Some(details) = res.get("exceptionDetails") {
-        let msg = details
-            .get("exception")
-            .and_then(|e| e.get("description"))
-            .and_then(|d| d.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-        return Err(CloudflareError::JsError(msg));
-    }
-
-    Ok(res
-        .get("result")
-        .and_then(|r| r.get("value"))
-        .cloned()
-        .unwrap_or(Value::Null))
+/// Compose the in-page source for `body`: [`WALKER_JS`] and `body` together
+/// inside a single IIFE, whose completion value is whatever `body` returns.
+///
+/// The wrapper is a stealth requirement, not formatting. `Runtime.evaluate`
+/// with no `contextId` runs a *classic script* in the page's main world,
+/// where a top-level `function foo() {}` becomes a property of the global
+/// object. Evaluating `WALKER_JS` unwrapped therefore published
+/// `window.findChallengeIframe` and `window.clickableRect` to the page on
+/// every poll tick — names belonging to an automation library, sitting in
+/// the same realm as the challenge script, for anything enumerating `window`
+/// to find. Inside the IIFE they are ordinary locals and the page's globals
+/// are untouched.
+fn main_world_expr(body: &str) -> String {
+    format!("(function(){{{WALKER_JS}{body}}})()")
 }
 
 /// Run [`POLL_JS`] against `session`'s main world and decode the result.
 async fn poll_state(session: &SessionHandle) -> Result<PollState, CloudflareError> {
-    let value = eval_main_world(session, POLL_JS).await?;
+    let value = eval_main_world(session, &main_world_expr(POLL_JS)).await?;
     serde_json::from_value(value)
         .map_err(|e| CloudflareError::JsError(format!("invalid poll payload: {e}")))
 }
@@ -365,7 +391,7 @@ async fn poll_state(session: &SessionHandle) -> Result<PollState, CloudflareErro
 /// iframe into view if needed and return the rect to click, or `None` when
 /// the widget is gone or not clickable.
 async fn scroll_into_view(session: &SessionHandle) -> Result<Option<BoundingBox>, CloudflareError> {
-    let value = eval_main_world(session, SCROLL_JS).await?;
+    let value = eval_main_world(session, &main_world_expr(SCROLL_JS)).await?;
     if value.is_null() {
         return Ok(None);
     }
@@ -377,8 +403,16 @@ async fn scroll_into_view(session: &SessionHandle) -> Result<Option<BoundingBox>
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
+    use serde_json::{Value, json};
+
     use super::*;
-    use zendriver_transport::testing::MockConnection;
+    use zendriver_transport::testing::{LogCapture, MockConnection};
+
+    /// How long a drain loop waits for the driver's next command before
+    /// deciding the run is over. Long enough to cover a poll interval plus
+    /// scheduling jitter, short enough that a finished driver ends the loop
+    /// promptly instead of hanging the test.
+    const DRAIN_BUDGET: Duration = Duration::from_millis(300);
 
     /// Wrap an evaluator result value in the CDP `Runtime.evaluate` envelope.
     fn eval_reply(value: Value) -> Value {
@@ -435,16 +469,184 @@ mod tests {
         coords
     }
 
-    /// Generic "next outbound command" read, bounded so a finished driver
-    /// ends the drain loop instead of hanging the test.
-    async fn next_cmd(mock: &mut MockConnection) -> Option<(String, u64)> {
-        for _ in 0..300 {
-            if let Some(cmd) = mock.try_recv_cmd() {
-                return Some(cmd);
+    /// Names of every *named* `function` declaration in `src` that sits at
+    /// `{}` depth 0. An anonymous `function (` — the IIFE wrapper itself — is
+    /// a function expression and binds nothing, so it is not counted.
+    ///
+    /// Brace counting is only sound because no injected source puts a brace
+    /// inside a string literal. Keep it that way; the alternative is a JS
+    /// parser for a cookie-name-sized job.
+    fn top_level_function_declarations(src: &str) -> Vec<String> {
+        const KEYWORD: &str = "function";
+        let mut found = Vec::new();
+        let mut depth = 0i32;
+        for (i, ch) in src.char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => depth -= 1,
+                _ => {}
             }
-            tokio::time::sleep(Duration::from_millis(1)).await;
+            if !src[i..].starts_with(KEYWORD) {
+                continue;
+            }
+            let rest = src[i + KEYWORD.len()..].trim_start();
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$')
+                .collect();
+            // A name means a declaration; `function (` is an expression.
+            if depth == 0 && !name.is_empty() {
+                found.push(name);
+            }
         }
-        None
+        found
+    }
+
+    /// The leak guard has to be able to fail. Fed the pre-fix shape — the
+    /// walker evaluated beside the IIFE rather than inside it — it must name
+    /// the declaration; fed the shipped shape it must stay quiet.
+    #[test]
+    fn top_level_function_scan_catches_a_leaked_declaration() {
+        assert_eq!(
+            top_level_function_declarations(
+                "function findChallengeIframe(root) { return null; }\n(function(){ return 1; })()"
+            ),
+            vec!["findChallengeIframe".to_string()],
+        );
+        assert!(
+            top_level_function_declarations("(function(){ function nested(){} return 1; })()")
+                .is_empty(),
+            "a declaration inside the wrapper is a local, not a global"
+        );
+    }
+
+    /// `Runtime.evaluate` with no `contextId` runs a classic script in the
+    /// page's main world, where a top-level `function foo() {}` becomes
+    /// `window.foo`. Publishing `findChallengeIframe` / `clickableRect` there
+    /// hands the challenge script — same realm, actively looking — a pair of
+    /// names belonging to an automation library, on every poll tick. Every
+    /// source this crate injects keeps its helpers inside a function scope.
+    #[test]
+    fn injected_sources_declare_no_page_globals() {
+        for (name, src) in [
+            ("poll evaluator", main_world_expr(POLL_JS)),
+            ("scroll evaluator", main_world_expr(SCROLL_JS)),
+            ("detect.js", include_str!("detect.js").to_string()),
+        ] {
+            let leaked = top_level_function_declarations(&src);
+            assert!(
+                leaked.is_empty(),
+                "{name} publishes {leaked:?} onto the page's global object"
+            );
+        }
+
+        // The two composed sources must still *contain* the helpers, so this
+        // cannot pass by the walker having quietly gone missing.
+        for body in [POLL_JS, SCROLL_JS] {
+            let expr = main_world_expr(body);
+            assert!(expr.contains("function findChallengeIframe("));
+            assert!(expr.contains("function clickableRect("));
+            assert!(
+                expr.starts_with("(function(){") && expr.ends_with("})()"),
+                "the composed source must be exactly one IIFE"
+            );
+        }
+    }
+
+    /// `scrollIntoView`'s default `behavior: "auto"` resolves to the
+    /// element's computed `scroll-behavior`, so on a page setting
+    /// `html { scroll-behavior: smooth }` the scroll animates and the
+    /// `clickableRect` call on the next synchronous line reads the
+    /// *pre*-scroll rect — the one thing this extra round-trip exists to
+    /// avoid, leaving the click aimed outside the viewport.
+    #[test]
+    fn scroll_evaluator_pins_instant_scroll_behavior() {
+        const CALL: &str = "scrollIntoView(";
+        let src = main_world_expr(SCROLL_JS);
+        let mut calls = 0;
+        for (idx, _) in src.match_indices(CALL) {
+            let after = &src[idx + CALL.len()..];
+            let end = after.find(')').expect("unterminated scrollIntoView call");
+            let args = &after[..end];
+            assert!(
+                args.contains(r#"behavior: "instant""#),
+                "scrollIntoView({args}) leaves behavior to the page's computed scroll-behavior"
+            );
+            calls += 1;
+        }
+        assert_eq!(calls, 1, "expected one scrollIntoView call to guard");
+    }
+
+    /// The stall hint must fire for the run it is most needed on: a widget
+    /// that stays mounted (the poll evaluator keeps reporting a bbox) but
+    /// never becomes measurable (the scroll evaluator keeps returning null),
+    /// so no click ever lands. That tick used to skip the stall counter
+    /// entirely, which meant the one diagnostic explaining a stuck run could
+    /// never appear on the stuck run it explains.
+    #[tokio::test]
+    async fn stalled_unmeasurable_widget_emits_the_stealth_hint() {
+        /// Stalled ticks to serve before letting the run finish. The hint
+        /// fires on the tenth.
+        const STALLED_TICKS: usize = 12;
+
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let capture = LogCapture::new();
+
+        let poll = poll_value(None, Some(rect(10.0, 20.0, 40.0, 40.0)), true);
+
+        // Not spawned: `LogCapture` follows the future it wraps, not a task
+        // spawned out of it, so the driver and the mock server share a task.
+        // The generous budget is never reached — the server ends the run — so
+        // the tick count is deterministic instead of clock-dependent.
+        let driver = capture.capture(async {
+            CloudflareBypass::new(&sess)
+                .poll_interval(Duration::from_millis(1))
+                .wait_for_clearance(Duration::from_secs(30))
+                .await
+        });
+
+        let serving = async {
+            let mut polls = 0usize;
+            while let Some((method, id)) = mock.recv_cmd_timeout(DRAIN_BUDGET).await {
+                assert_eq!(method, "Runtime.evaluate");
+                let is_scroll = mock.last_sent()["params"]["expression"]
+                    .as_str()
+                    .unwrap()
+                    .contains("scrollIntoView");
+                let value = if is_scroll {
+                    // Mounted on every poll, measurable on none: no click can
+                    // land, so every tick is a tick without progress.
+                    Value::Null
+                } else {
+                    polls += 1;
+                    if polls > STALLED_TICKS {
+                        poll_value(Some("LATE_TOKEN"), None, true)
+                    } else {
+                        poll.clone()
+                    }
+                };
+                mock.reply(id, eval_reply(value)).await;
+            }
+        };
+
+        let (outcome, ()) = tokio::join!(driver, serving);
+
+        match outcome.unwrap() {
+            ClearanceOutcome::TokenAcquired(t) => assert_eq!(t, "LATE_TOKEN"),
+            other => panic!("expected TokenAcquired, got {other:?}"),
+        }
+        assert!(
+            capture.contains("clearance stalled"),
+            "a mounted-but-unmeasurable widget is a stalled run; captured {:?}",
+            capture.events()
+        );
+        assert_eq!(
+            capture.count("clearance stalled"),
+            1,
+            "the hint is latched to one line per run"
+        );
+        conn.shutdown();
     }
 
     /// Interactive happy path: poll #1 yields a bbox → the widget is scrolled
@@ -732,7 +934,7 @@ mod tests {
         let poll = poll_value(None, Some(widget.clone()), true);
 
         let mut clicks: u32 = 0;
-        while let Some((method, id)) = next_cmd(&mut mock).await {
+        while let Some((method, id)) = mock.recv_cmd_timeout(DRAIN_BUDGET).await {
             match method.as_str() {
                 "Runtime.evaluate" => {
                     let is_scroll = mock.last_sent()["params"]["expression"]

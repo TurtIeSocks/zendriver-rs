@@ -25,19 +25,24 @@ pub(crate) struct BoundingBox {
     pub height: f64,
 }
 
-/// Run the shadow-DOM walker against `session`'s main world.
+/// Evaluate `expression` in `session`'s main world and return its completion
+/// value (`Value::Null` when the script produced nothing).
 ///
-/// Returns `Ok(Some(bbox))` when a Turnstile iframe is mounted, `Ok(None)`
-/// otherwise. Propagates [`CloudflareError::JsError`] if the evaluation
-/// raised, and [`CloudflareError::Call`] if the underlying CDP call failed.
-pub(crate) async fn detect_challenge(
+/// `expression` must already be a self-contained expression: no `contextId`
+/// is sent, so this runs as a classic script in the page's own realm and
+/// anything declared at its top level would land on the page's global object.
+///
+/// Propagates [`CloudflareError::JsError`] when the evaluation raised, and
+/// [`CloudflareError::Call`] when the CDP call itself failed.
+pub(crate) async fn eval_main_world(
     session: &SessionHandle,
-) -> Result<Option<BoundingBox>, CloudflareError> {
+    expression: &str,
+) -> Result<Value, CloudflareError> {
     let res = session
         .call(
             "Runtime.evaluate",
             json!({
-                "expression": include_str!("detect.js"),
+                "expression": expression,
                 "returnByValue": true,
                 "awaitPromise": true,
             }),
@@ -54,11 +59,25 @@ pub(crate) async fn detect_challenge(
         return Err(CloudflareError::JsError(msg));
     }
 
-    let value = res
+    Ok(res
         .get("result")
         .and_then(|r| r.get("value"))
         .cloned()
-        .unwrap_or(Value::Null);
+        .unwrap_or(Value::Null))
+}
+
+/// Run the shadow-DOM walker against `session`'s main world.
+///
+/// Returns `Ok(Some(bbox))` when a Turnstile iframe is mounted, `Ok(None)`
+/// otherwise.
+///
+/// Deliberately a different question from the poll evaluator's `bbox`: this
+/// reports a *mounted* iframe, `PollState::bbox` reports a *clickable* one.
+/// A 0×0 invisible-Turnstile iframe is mounted but must never be clicked.
+pub(crate) async fn detect_challenge(
+    session: &SessionHandle,
+) -> Result<Option<BoundingBox>, CloudflareError> {
+    let value = eval_main_world(session, include_str!("detect.js")).await?;
 
     if value.is_null() {
         return Ok(None);

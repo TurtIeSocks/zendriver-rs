@@ -116,14 +116,18 @@
     var sessionCookies = [];
     for (var m = 0; m < cookieNames.length; m++) {
         var name = cookieNames[m];
-        // Same prefix match as the legacy-cookie scan above: `nlbi_<siteid>`
-        // has to reach the caller's `sessions` snapshot for replay.
+        // `nlbi_<siteid>` has to reach the caller's `sessions` snapshot for
+        // replay even though it is not a surface signal — the scan above
+        // deliberately leaves it out. Anchor the underscore: everything in
+        // `sessions` is replayed to the origin as Imperva state, and a bare
+        // `nlbi` prefix also sweeps up unrelated `nlbistore` / `nlbi2fa`
+        // cookies.
         if (
             name === reese84Key ||
             name === "___utmvc" ||
             name.indexOf("incap_ses_") === 0 ||
             name.indexOf("visid_incap_") === 0 ||
-            name.indexOf("nlbi") === 0
+            name.indexOf("nlbi_") === 0
         ) {
             sessionCookies.push({ name: name, value: cookies[name] });
         }

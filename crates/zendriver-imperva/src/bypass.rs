@@ -115,8 +115,23 @@ impl<'tab> ImpervaBypass<'tab> {
         self
     }
 
-    /// Register a user-supplied async CAPTCHA solver. Without this, a
-    /// CAPTCHA surface returns [`ImpervaError::CaptchaRequired`] immediately.
+    /// Register a user-supplied async CAPTCHA solver.
+    ///
+    /// The solver runs when the poll loop reaches a CAPTCHA surface *and* no
+    /// usable reese84 token is in hand; without one registered, that same
+    /// condition yields [`ImpervaError::CaptchaRequired`] on the first tick
+    /// that hits it, with no waiting. A snapshot carrying a reese84 never
+    /// escalates whatever the surface says — the site's own post-clearance
+    /// form routinely mounts a plain reCAPTCHA, and a token in hand outranks
+    /// it — so a registered solver can legitimately go uncalled for a whole
+    /// run.
+    ///
+    /// Invoked at most once per
+    /// [`wait_for_clearance`](Self::wait_for_clearance): solving is billed
+    /// per call, and the injected response field never removes the widget, so
+    /// the surface stays `Captcha` afterwards and an unlatched loop would
+    /// re-enter the solver on every tick. The call is also raced against that
+    /// run's timeout, so a stalled solver cannot overrun the stated budget.
     ///
     /// ```no_run
     /// # async fn ex(tab: &zendriver_transport::SessionHandle)
@@ -191,8 +206,10 @@ impl<'tab> ImpervaBypass<'tab> {
     ///   is a normal "didn't finish, retry or give up" terminal.
     ///
     /// # Errors
-    /// - [`ImpervaError::CaptchaRequired`] — CAPTCHA surface detected
-    ///   but no `on_captcha` solver was registered.
+    /// - [`ImpervaError::CaptchaRequired`] — a CAPTCHA surface was reached
+    ///   with no usable reese84 token in hand and no `on_captcha` solver
+    ///   registered. A snapshot carrying a token keeps polling instead of
+    ///   escalating.
     /// - [`ImpervaError::CaptchaSolver`] — registered solver returned an
     ///   error.
     /// - [`ImpervaError::Interception`] — Fetch-domain hook (when set via
@@ -377,7 +394,22 @@ impl<'tab> ImpervaBypass<'tab> {
                     if let crate::detection::ImpervaSurface::Captcha(kind) = snap.surface {
                         if token.is_none() && !captcha_attempted {
                             captcha_attempted = true;
-                            self.solve_captcha(kind).await?;
+                            // The solver is caller-supplied and carries no bound
+                            // of its own. Only the loop-top probe was raced
+                            // against the deadline, so a solve entered just under
+                            // it ran to completion and overran the caller's
+                            // timeout by a full solver latency. Losing this race
+                            // drops the in-flight solve: the stated timeout is
+                            // the contract.
+                            match tokio::time::timeout_at(deadline, self.solve_captcha(kind)).await
+                            {
+                                Ok(res) => res?,
+                                Err(_) => {
+                                    return Ok(ClearanceOutcome::TimedOut {
+                                        last_surface: Some(snap.surface),
+                                    });
+                                }
+                            }
                         }
                     }
                     last_surface = Some(snap.surface);
@@ -1005,12 +1037,11 @@ mod tests {
             "sessions": [],
             "has_imperva_signal": true,
         }));
-        while let Ok(Ok(id)) = tokio::time::timeout(
+        while let Ok(id) = tokio::time::timeout(
             Duration::from_millis(120),
             mock.expect_cmd("Runtime.evaluate"),
         )
         .await
-        .map(Ok::<u64, ()>)
         {
             mock.reply(id, dirty.clone()).await;
         }
@@ -1102,12 +1133,110 @@ mod tests {
             mock.reply(id, reply).await;
         }
 
-        let _ = fut.await.unwrap();
+        let outcome = fut
+            .await
+            .unwrap()
+            .expect("a latched solve must not turn the run into an error terminal");
+        assert!(
+            matches!(outcome, ClearanceOutcome::TimedOut { .. }),
+            "a CAPTCHA that never clears must poll to its deadline, got {outcome:?}"
+        );
         assert_eq!(
             calls.load(Ordering::SeqCst),
             1,
             "solver must be latched to one attempt per clearance"
         );
+        conn.shutdown();
+    }
+
+    /// The solver is a caller-supplied network round-trip with no bound of its
+    /// own. Only the loop-top probe was raced against the deadline, so a solve
+    /// entered just under it ran to completion and overran the caller's stated
+    /// timeout by a full solver latency. The DataDome sibling bounds the same
+    /// call the same way.
+    #[tokio::test]
+    async fn solver_cannot_overrun_the_configured_timeout() {
+        use std::sync::Arc;
+
+        const SOLVER_LATENCY: Duration = Duration::from_secs(3);
+        const BUDGET: Duration = Duration::from_millis(80);
+
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let started = Instant::now();
+
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move {
+                ImpervaBypass::new(&s)
+                    .poll_interval(Duration::from_millis(1))
+                    .timeout(BUDGET)
+                    .on_captcha(|_c| async move {
+                        tokio::time::sleep(SOLVER_LATENCY).await;
+                        Ok(CaptchaSolution {
+                            token: "TOO_LATE".into(),
+                            form_field: "g-recaptcha-response".into(),
+                        })
+                    })
+                    .wait_for_clearance()
+                    .await
+            }
+        });
+
+        // Serve the whole flow — detect probe, the site-key probe, and the
+        // injection the solve would reach on its way back — and stay up for as
+        // long as the call runs, since a stalled solver sends nothing for
+        // seconds. The unbounded version therefore fails on the elapsed
+        // assertion below rather than on a dropped mock.
+        let stuck = snapshot_reply(json!({
+            "surface": { "kind": "Captcha", "captcha": "Recaptcha" },
+            "reese84": null,
+            "body_clean": false,
+            "sessions": [],
+            "has_imperva_signal": true,
+        }));
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let serving = tokio::spawn({
+            let done = Arc::clone(&done);
+            async move {
+                while !done.load(std::sync::atomic::Ordering::SeqCst) {
+                    let Some((_method, id)) = mock.try_recv_cmd() else {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                        continue;
+                    };
+                    let expr = mock.last_sent()["params"]["expression"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string();
+                    let reply = if expr.contains("has_imperva_signal") {
+                        stuck.clone()
+                    } else if expr.contains("TOO_LATE") {
+                        json!({ "result": { "type": "boolean", "value": true } })
+                    } else {
+                        json!({
+                            "result": {
+                                "type": "object",
+                                "value": { "hcap": null, "rcap": "KEY_ABC", "url": "https://x.test/p" }
+                            }
+                        })
+                    };
+                    mock.reply(id, reply).await;
+                }
+            }
+        });
+
+        let outcome = fut.await.unwrap().unwrap();
+        let elapsed = started.elapsed();
+        done.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            matches!(outcome, ClearanceOutcome::TimedOut { .. }),
+            "expected TimedOut, got {outcome:?}"
+        );
+        assert!(
+            elapsed < SOLVER_LATENCY / 2,
+            "solve must be bounded by the caller's deadline; took {elapsed:?} against a {BUDGET:?} budget"
+        );
+        serving.abort();
         conn.shutdown();
     }
 

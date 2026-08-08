@@ -28,55 +28,85 @@ flow.
 {{#include ../../../crates/zendriver/examples/cloudflare_bypass.rs}}
 ```
 
-The driver returns a [`ClearanceOutcome`] on success:
+The driver returns a [`ClearanceOutcome`] on success. All three are
+ordinary terminals, the last one included:
 
 - **`TokenAcquired(token)`** — the `cf-turnstile-response` input picked
   up a non-empty value. The page can now proceed; the token is also
   forwarded to Cloudflare server-side on the next request.
-- **`ChallengeGone`** — the challenge container disappeared without
-  yielding a token, typically because Cloudflare honored a clearance
-  cookie and short-circuited the gate.
+- **`ChallengeGone`** — the challenge went away without yielding a
+  token, typically because Cloudflare honored a clearance cookie and
+  short-circuited the gate. Either an iframe the driver clicked was torn
+  down, or every challenge marker seen on an earlier tick has vanished.
+- **`TimedOut { saw_challenge }`** — the deadline elapsed.
+  `saw_challenge` separates the two cases worth telling apart: `true`
+  means a real challenge sat on the page and never resolved, `false`
+  means no Cloudflare marker ever appeared and the bypass was probably
+  called on a page with no gate on it.
 
 [`ClearanceOutcome`]: https://docs.rs/zendriver/latest/zendriver/enum.ClearanceOutcome.html
 
-Errors are typed via [`CloudflareError`]:
+A deadline is not an error here, so [`CloudflareError`] is left to carry
+genuine faults, of which there are two:
 
-- **`NoChallenge`** — no Turnstile iframe was detected at call time.
-  Often means the page already cleared you (an existing cookie) or
-  there's no CF gate present. Treat as a no-op, not a failure.
-- **`ClearanceTimeout`** — the deadline elapsed without resolution.
-  Usually means Cloudflare escalated to the deeper anti-bot path that
-  this driver doesn't handle.
+- **`Call`** — the underlying CDP call failed, usually a dead tab or a
+  closed connection.
+- **`JsError`** — the in-page evaluator raised, or handed back a payload
+  the driver could not decode.
+
+The enum is `#[non_exhaustive]`, so a `match` on it needs a wildcard
+arm. There is no `NoChallenge` or `ClearanceTimeout` variant — if you
+are looking for those, the first is `TimedOut { saw_challenge: false }`
+and the second is `TimedOut { saw_challenge: true }`.
 
 [`CloudflareError`]: https://docs.rs/zendriver/latest/zendriver/enum.CloudflareError.html
 
 ## How it works
 
-The driver runs four stages internally:
+The driver runs a single poll loop, and each tick costs one CDP
+round-trip. A shadow-DOM-aware walk of the page's main world reports
+three things at once: the
+`cf-turnstile-response` token if one is present, the challenge iframe's
+box if that iframe is a valid click target, and whether any Cloudflare
+marker at all (container, hidden input, or live iframe) is on the page.
+The tick then resolves in this order:
 
-1. **Detect.** A shadow-DOM-aware walk of the page's main world looks
-   for the Turnstile iframe (`<iframe>` whose `src` matches Cloudflare's
-   Turnstile widget origin). It surfaces the bounding box.
-2. **Click.** A raw `mousedown` / `mouseup` is dispatched at offset
+1. **A token wins outright.** A non-empty token returns `TokenAcquired`
+   immediately. This is also the invisible-Turnstile path, where no
+   iframe mounts and Cloudflare's loader script fills the field in
+   without anything to click.
+2. **Scroll, re-measure, click.** Raw mouse events carry viewport
+   coordinates, so a widget below the fold has to be scrolled in and
+   re-measured before a click can land on it. The click goes to
    `(bbox.x + bbox.width * 0.15, bbox.y + bbox.height * 0.5)` — the
-   canonical 15%-from-left, 50%-from-top position of the Turnstile
-   checkbox inside the iframe. No Bezier-path motion; Cloudflare wants a
-   real click on a real checkbox.
-3. **Poll.** Every 500 ms (override via
-   [`poll_interval`](https://docs.rs/zendriver/latest/zendriver/struct.CloudflareBypass.html#method.poll_interval)),
-   the driver checks both `cf-turnstile-response` (for a non-empty
-   token) and the challenge container (for removal from the DOM).
-4. **Return.** First condition to fire wins; deadline elapsed →
-   `ClearanceTimeout`.
+   canonical 15%-from-left, 50%-from-top position of the checkbox inside
+   the iframe. No Bezier-path motion; Cloudflare wants a real click on a
+   real checkbox. A widget that is mounted but hidden or zero-sized is
+   never clicked, since there is no meaningful point to click.
+3. **Retry, up to a cap.** Cloudflare drops clicks that land while the
+   widget is still booting, so one run spends up to three of them, each
+   at least four poll ticks after the last (about two seconds at the
+   default interval). A swallowed first click no longer strands the run
+   until the deadline.
+4. **Otherwise keep polling** — every 500 ms by default, override via
+   [`poll_interval`](https://docs.rs/zendriver/latest/zendriver/struct.CloudflareBypass.html#method.poll_interval)
+   — until a terminal fires or the deadline passes.
+
+After ten consecutive ticks with no progress the driver logs a warning
+asking whether `BrowserBuilder::stealth` is on, which is the answer most
+of the time. See [Pairing with stealth](#pairing-with-stealth) below.
 
 ## Limitations
 
-This driver **only handles the visible interactive Turnstile checkbox**.
-It does not solve:
+The driver **clicks the visible interactive Turnstile checkbox**, and
+picks up the token on the invisible path when Cloudflare's own script
+produces one. It does not solve:
 
-- **Silent / invisible Turnstile** (no UI element to click — relies on
-  passive fingerprinting). For those, stealth alone is your only
-  defense; pair `StealthProfile::spoofed()` with a clean residential IP.
+- **Silent / invisible Turnstile.** There is no UI element to click and
+  the verdict comes from passive fingerprinting. The loop returns
+  `TokenAcquired` the moment the field is populated, but nothing here
+  makes Cloudflare populate it — that is stealth's job. Pair
+  `StealthProfile::spoofed()` with a clean residential IP.
 - **Cloudflare's full Pro / Enterprise managed challenge** (which can
   escalate to image puzzles or even hCaptcha).
 - **Bot Fight Mode soft blocks** that issue 403s without a UI.
@@ -132,19 +162,29 @@ tab.wait_for_load().await?;
 
 match tab.cloudflare()
     .wait_for_clearance(Duration::from_secs(30))
-    .await
+    .await?
 {
-    Ok(_) => { /* cleared */ }
-    Err(CloudflareError::NoChallenge) => { /* already cleared, fine */ }
-    Err(e) => return Err(e.into()),
+    ClearanceOutcome::TokenAcquired(_) | ClearanceOutcome::ChallengeGone => {
+        // Past the gate.
+    }
+    ClearanceOutcome::TimedOut { saw_challenge: false } => {
+        // No Cloudflare marker ever appeared — this page has no gate.
+        // Usually fine to continue.
+    }
+    ClearanceOutcome::TimedOut { saw_challenge: true } => {
+        // A real challenge that never resolved. Worth failing the job.
+        return Err("cloudflare challenge did not clear".into());
+    }
 }
 
 // Now your normal scraping / interaction code.
 let data = tab.find().css(".product-grid").one().await?;
 ```
 
-`NoChallenge` is informational, not an error — code should treat it as
-success. The other variants of [`CloudflareError`] should propagate.
+The `?` propagates the two real faults, `Call` and `JsError`. Everything
+else is a terminal you decide about, and the `saw_challenge` split is
+the one that changes what you do: "no gate on this page" and "a gate we
+could not pass" want opposite handling.
 
 ## Tuning
 

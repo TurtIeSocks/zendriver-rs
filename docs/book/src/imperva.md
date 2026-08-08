@@ -94,7 +94,8 @@ never set `reese84` resolve to `ChallengeGone` once body markers clear.
 
 ## CAPTCHA handling
 
-Without an `on_captcha` callback, a CAPTCHA surface returns
+A CAPTCHA surface escalates only when no usable `reese84` token is in
+hand. Without an `on_captcha` callback that case returns
 `ImpervaError::CaptchaRequired { kind }` immediately (no waiting). Plug
 in your own solver:
 
@@ -117,6 +118,15 @@ let _ = ImpervaBypass::new(tab)
 `CaptchaChallenge` carries `kind`, `site_key` (when extractable), and
 `url`. `CaptchaSolution` is the token + form field name your solver
 returns.
+
+Two things worth knowing before you wire up a paid service. A snapshot
+that already carries a `reese84` never escalates, whatever the surface
+says — the site's own post-clearance form routinely mounts an ordinary
+reCAPTCHA, and a token in hand outranks it — so a registered solver can
+go uncalled for an entire run. And the solver is invoked at most once
+per `wait_for_clearance`, raced against that call's timeout: injecting
+the response does not remove the widget, so the surface stays `Captcha`
+afterwards, and an unlatched loop would buy a fresh solve every tick.
 
 ## Fetch-domain fast path
 

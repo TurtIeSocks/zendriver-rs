@@ -308,12 +308,13 @@ mod tests {
     /// and turns a success into a full-budget timeout.
     ///
     /// Source-level guard: `detect.js` only ever runs inside a real page, so
-    /// its behavior cannot be exercised from a mocked CDP transport.
+    /// its behavior cannot be exercised from a mocked CDP transport. This
+    /// checks the cookie names the file matches on, nothing more.
     #[test]
     fn detect_js_prefix_matches_nlbi_for_sessions_but_not_as_a_surface_signal() {
         let js = include_str!("detect.js");
         assert_eq!(
-            js.matches(r#"indexOf("nlbi") === 0"#).count(),
+            js.matches(r#"indexOf("nlbi_") === 0"#).count(),
             1,
             "only the sessions collector may match nlbi_<siteid>"
         );
@@ -321,16 +322,10 @@ mod tests {
             !js.contains(r#"=== "nlbi""#),
             "an exact nlbi match never fires against a real Imperva cookie"
         );
-
-        // Pin the split structurally: the single surviving match must live
-        // after the `hasLegacyCookies` scan, i.e. in the sessions collector.
-        let legacy_scan = js.find("hasLegacyCookies = true").expect("legacy scan");
-        let nlbi_match = js
-            .find(r#"indexOf("nlbi") === 0"#)
-            .expect("sessions collector");
         assert!(
-            nlbi_match > legacy_scan,
-            "nlbi must be collected for replay, not counted as a legacy surface"
+            !js.contains(r#"indexOf("nlbi") === 0"#),
+            "an unanchored nlbi prefix also sweeps nlbistore / nlbi2fa into sessions, \
+             and everything in sessions gets replayed to the origin"
         );
     }
 

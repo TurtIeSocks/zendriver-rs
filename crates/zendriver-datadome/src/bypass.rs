@@ -218,6 +218,10 @@ impl<'tab> DataDomeBypass<'tab> {
         // the surface cannot be relied on to clear itself once a solve returns.
         let mut captcha_attempted = false;
 
+        let mut prev_surface: Option<DataDomeSurface> = None;
+        let mut stall_ticks: u32 = 0;
+        let mut warned_stall = false;
+
         loop {
             let snap = match next_snapshot.take() {
                 Some(s) => s,
@@ -291,6 +295,27 @@ impl<'tab> DataDomeBypass<'tab> {
                 }
             }
 
+            // Stall hint, ported from the Imperva sibling. A device check that
+            // sits on the same surface tick after tick is almost always
+            // stealth being off, and that is precisely what a
+            // `TimedOut { last_surface }` return value cannot tell the caller:
+            // thirty seconds of silence, then a terminal that looks identical
+            // to a site simply being slow. Latched, so a run emits one line.
+            stall_ticks = if Some(snap.surface) == prev_surface {
+                stall_ticks + 1
+            } else {
+                0
+            };
+            prev_surface = Some(snap.surface);
+            if stall_ticks == 10 && !warned_stall {
+                tracing::warn!(
+                    surface = ?snap.surface,
+                    poll_interval_ms = self.poll_interval.as_millis() as u64,
+                    "datadome clearance stalled — is BrowserBuilder::stealth enabled?"
+                );
+                warned_stall = true;
+            }
+
             if Instant::now() >= deadline {
                 return Ok(ClearanceOutcome::TimedOut { last_surface });
             }
@@ -322,7 +347,13 @@ impl<'tab> DataDomeBypass<'tab> {
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use zendriver_transport::testing::MockConnection;
+    use zendriver_transport::testing::{LogCapture, MockConnection};
+
+    /// How long a drain loop waits for the driver's next command before
+    /// deciding the run is over. Long enough to cover a poll interval plus
+    /// scheduling jitter, short enough that a finished driver ends the loop
+    /// promptly instead of hanging the test.
+    const DRAIN_BUDGET: Duration = Duration::from_millis(300);
 
     #[tokio::test]
     async fn builder_defaults_and_overrides() {
@@ -475,6 +506,65 @@ mod tests {
         conn.shutdown();
     }
 
+    /// A device check that sits on the same surface tick after tick is almost
+    /// always stealth being off, and a bare `TimedOut { last_surface }` cannot
+    /// say so. Both siblings emit that hint; DataDome tracked `last_surface`
+    /// but never compared consecutive snapshots, so its users got thirty
+    /// seconds of silence and a terminal indistinguishable from a slow site.
+    #[tokio::test]
+    async fn unchanging_surface_emits_the_stealth_hint() {
+        /// Ticks on an unchanged surface before the page is allowed to clear.
+        /// The hint fires on the tenth.
+        const STALLED_TICKS: usize = 12;
+
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let capture = LogCapture::new();
+
+        // Not spawned: `LogCapture` follows the future it wraps, not a task
+        // spawned out of it. The budget is never reached — the server ends the
+        // run — so the tick count does not depend on the clock.
+        let driver = capture.capture(async {
+            DataDomeBypass::new(&sess)
+                .poll_interval(Duration::from_millis(1))
+                .timeout(Duration::from_secs(30))
+                .wait_for_clearance()
+                .await
+        });
+
+        let serving = async {
+            let mut probes = 0usize;
+            while let Some((method, id)) = mock.recv_cmd_timeout(DRAIN_BUDGET).await {
+                assert_eq!(method, "Runtime.evaluate");
+                probes += 1;
+                let snap = if probes > STALLED_TICKS {
+                    json!({"surface":"none","datadome":"CLEARED","dd":null,"captcha_url":null,"body_clean":true})
+                } else {
+                    device_check_snap()
+                };
+                mock.reply(id, snap_reply(snap)).await;
+            }
+        };
+
+        let (outcome, ()) = tokio::join!(driver, serving);
+
+        match outcome.unwrap() {
+            ClearanceOutcome::Cleared { datadome } => assert_eq!(datadome, "CLEARED"),
+            other => panic!("expected Cleared, got {other:?}"),
+        }
+        assert!(
+            capture.contains("clearance stalled"),
+            "an unchanging device check is a stalled run; captured {:?}",
+            capture.events()
+        );
+        assert_eq!(
+            capture.count("clearance stalled"),
+            1,
+            "the hint is latched to one line per run"
+        );
+        conn.shutdown();
+    }
+
     #[tokio::test]
     async fn captcha_with_solver_applies_cookie_then_clears() {
         let (mut mock, conn) = MockConnection::pair();
@@ -598,19 +688,6 @@ mod tests {
             other => panic!("expected TimedOut, got {other:?}"),
         }
         conn.shutdown();
-    }
-
-    /// Generic bounded read of the next outbound command, for flows whose
-    /// command order is not fully deterministic (the interception task emits
-    /// `Fetch.enable` from its own spawn).
-    async fn next_cmd(mock: &mut MockConnection) -> Option<(String, u64)> {
-        for _ in 0..300 {
-            if let Some(cmd) = mock.try_recv_cmd() {
-                return Some(cmd);
-            }
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
-        None
     }
 
     fn device_check_snap() -> serde_json::Value {
@@ -771,7 +848,7 @@ mod tests {
 
         let mut saw_fetch_enable = false;
         let mut reloaded = false;
-        while let Some((method, id)) = next_cmd(&mut mock).await {
+        while let Some((method, id)) = mock.recv_cmd_timeout(DRAIN_BUDGET).await {
             match method.as_str() {
                 "Fetch.enable" => {
                     saw_fetch_enable = true;
@@ -898,7 +975,7 @@ mod tests {
         // context, and `apply_solution`'s setCookie / reload get bare acks.
         // Nothing here ever clears the surface, so only the latch can stop a
         // second solve.
-        while let Some((method, id)) = next_cmd(&mut mock).await {
+        while let Some((method, id)) = mock.recv_cmd_timeout(DRAIN_BUDGET).await {
             match method.as_str() {
                 "Runtime.evaluate" => {
                     let expr = mock.last_sent()["params"]["expression"]
