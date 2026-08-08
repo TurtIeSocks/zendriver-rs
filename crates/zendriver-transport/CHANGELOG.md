@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-08-08
+
+### Fixed
+
+- Reach terminals that were structurally unreachable ([#152](https://github.com/TurtIeSocks/zendriver-rs/pull/152))
+
+
 ## [0.2.5] - 2026-08-08
 
 ### Fixed
