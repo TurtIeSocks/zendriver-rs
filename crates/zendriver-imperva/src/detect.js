@@ -32,11 +32,18 @@
     var hasLegacyCookies = false;
     for (var j = 0; j < cookieNames.length; j++) {
         var n2 = cookieNames[j];
+        // `nlbi_*` is deliberately NOT a surface signal. It is Imperva's
+        // load-balancer cookie: pure routing state that is set on ordinary
+        // traffic and outlives clearance, unlike `incap_ses_*` / `___utmvc`,
+        // which track the challenge itself. Counting it here pinned the
+        // surface at `Legacy` on pages that had already cleared, which
+        // structurally blocks `ChallengeGone` and burns the whole budget down
+        // to `TimedOut`. It is still collected into `sessions` below, which is
+        // what the caller actually needs it for.
         if (
             n2 === "___utmvc" ||
             n2.indexOf("incap_ses_") === 0 ||
-            n2.indexOf("visid_incap_") === 0 ||
-            n2 === "nlbi"
+            n2.indexOf("visid_incap_") === 0
         ) {
             hasLegacyCookies = true;
             break;
@@ -109,12 +116,18 @@
     var sessionCookies = [];
     for (var m = 0; m < cookieNames.length; m++) {
         var name = cookieNames[m];
+        // `nlbi_<siteid>` has to reach the caller's `sessions` snapshot for
+        // replay even though it is not a surface signal — the scan above
+        // deliberately leaves it out. Anchor the underscore: everything in
+        // `sessions` is replayed to the origin as Imperva state, and a bare
+        // `nlbi` prefix also sweeps up unrelated `nlbistore` / `nlbi2fa`
+        // cookies.
         if (
             name === reese84Key ||
             name === "___utmvc" ||
             name.indexOf("incap_ses_") === 0 ||
             name.indexOf("visid_incap_") === 0 ||
-            name === "nlbi"
+            name.indexOf("nlbi_") === 0
         ) {
             sessionCookies.push({ name: name, value: cookies[name] });
         }

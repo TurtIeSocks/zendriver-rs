@@ -15,7 +15,10 @@
 //! 2. Dispatch a raw left-click at the 15% × 50% offset inside the iframe
 //!    bbox (the canonical Turnstile checkbox location).
 //! 3. Poll for either the `cf-turnstile-response` input gaining a token, or
-//!    the challenge container disappearing entirely.
+//!    the challenge ceasing to be actionable — the clicked iframe no longer
+//!    a valid click target, or every challenge marker gone. See
+//!    [`ClearanceOutcome::ChallengeGone`] for why the first of those is not
+//!    proof the gate was passed.
 //!
 //! Most users go through `zendriver`'s `Tab::cloudflare()` (feature-gated)
 //! rather than constructing the bypass directly. The

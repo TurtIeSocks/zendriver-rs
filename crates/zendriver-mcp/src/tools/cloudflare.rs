@@ -8,8 +8,8 @@
 //!
 //! - `Ok(ClearanceOutcome::TokenAcquired(t))` — the
 //!   `cf-turnstile-response` input picked up a token.
-//! - `Ok(ClearanceOutcome::ChallengeGone)` — the challenge container
-//!   vanished without a token (e.g. clearance cookie shortcut).
+//! - `Ok(ClearanceOutcome::ChallengeGone)` — the challenge stopped being
+//!   actionable without a token (e.g. clearance cookie shortcut).
 //! - `Ok(ClearanceOutcome::TimedOut { saw_challenge })` — the per-call
 //!   deadline elapsed (whether or not a challenge was ever seen).
 //!
@@ -72,8 +72,12 @@ pub enum Outcome {
     /// Turnstile produced a token (value of `cf-turnstile-response`). The
     /// token is available in [`SolveOutput::token`].
     Solved,
-    /// The challenge container disappeared without yielding a token (e.g.
-    /// a clearance cookie shortcut). `token` will be `None`.
+    /// The challenge stopped being actionable without yielding a token
+    /// (e.g. a clearance cookie shortcut). `token` will be `None`.
+    ///
+    /// Not proof the gate was passed: this also fires when the widget is
+    /// still mounted but hidden or zero-size, so verify the page before
+    /// treating what you read next as post-challenge content.
     ChallengeGone,
     /// `timeout_ms` elapsed without reaching either success state. `token`
     /// will be `None`. Not a hard error — agents can retry or give up.

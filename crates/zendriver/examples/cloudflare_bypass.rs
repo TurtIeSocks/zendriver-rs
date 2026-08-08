@@ -12,17 +12,19 @@
 //!      on the page. When the interactive iframe is present and we have
 //!      not yet clicked it, the driver dispatches a single raw left-click
 //!      at the canonical (15% x, 50% y) offset (Turnstile checkbox).
-//!      Resolves the first tick a token is observed or the iframe is gone
-//!      after a click.
+//!      Resolves the first tick a token is observed, or the iframe stops
+//!      being a valid click target after a click.
 //!   4. Print the [`ClearanceOutcome`] enum variant + the page title.
 //!
 //! Outcomes:
 //!   - `TokenAcquired(_)` — Turnstile yielded a `cf-turnstile-response`
 //!     token, either after clicking the checkbox or directly (invisible
 //!     Turnstile, where the iframe never mounts).
-//!   - `ChallengeGone` — the interactive iframe was clicked and the
-//!     challenge container then disappeared without a token (e.g.
-//!     clearance-cookie shortcut).
+//!   - `ChallengeGone` — the challenge stopped being actionable without a
+//!     token (e.g. clearance-cookie shortcut): the clicked iframe is no
+//!     longer a valid click target, or every marker seen earlier is gone.
+//!     A widget that is merely hidden or zero-size is also not a valid
+//!     click target, so this is not by itself proof the gate was passed.
 //!   - `TimedOut { saw_challenge: false }` — the full timeout window
 //!     elapsed without any challenge markers ever being observed (no
 //!     container, no hidden input, no iframe). The page likely has no

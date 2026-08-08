@@ -24,7 +24,7 @@ $defs:
       - description: "Turnstile produced a token (value of `cf-turnstile-response`). The\ntoken is available in [`SolveOutput::token`]."
         type: string
         const: solved
-      - description: "The challenge container disappeared without yielding a token (e.g.\na clearance cookie shortcut). `token` will be `None`."
+      - description: "The challenge stopped being actionable without yielding a token\n(e.g. a clearance cookie shortcut). `token` will be `None`.\n\nNot proof the gate was passed: this also fires when the widget is\nstill mounted but hidden or zero-size, so verify the page before\ntreating what you read next as post-challenge content."
         type: string
         const: challenge_gone
       - description: "`timeout_ms` elapsed without reaching either success state. `token`\nwill be `None`. Not a hard error — agents can retry or give up."
