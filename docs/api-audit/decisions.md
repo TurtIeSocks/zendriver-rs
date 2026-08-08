@@ -42,23 +42,50 @@ tautological test can go.
 
 Moves from "PR 5a, decide visibility" to "PR 5a, add the option".
 
-## 4. `CallError::Timeout` gains a field — DECIDED (question answered)
+## 4. `CallError::Timeout` gains a `stage` — DECIDED (question answered)
 
 Rin asked whether a caller can work out for themselves which half timed out. **They cannot**
 — it is genuinely hidden. `call_raw_with_timeout` wraps enqueue *and* reply in one
 `tokio::time::timeout`, and the elapsed arm constructs `CallError::Timeout { method, budget }`
 from nothing but those two values. Both halves produce a byte-identical error.
 
-That distinction is retry-safety information: a command that never reached the actor is safe
-to replay, one Chrome may have executed is not. So neither "one variant with honest docs" nor
-a two-variant split is right — add the fact to the existing variant:
+That distinction is retry-safety information: a command that never reached the socket is safe
+to replay, one Chrome may have executed is not.
+
+The first proposal here was `enqueued: bool`. Rin asked whether it should be an enum instead.
+It should, and not merely for future variants — **the bool splits at the wrong boundary.** The
+actor loop ([actor.rs:169](../../crates/zendriver-transport/src/actor.rs)) does
+`cmd_rx.recv()` → serialize → `ws.send(...).await` → `pending.insert`, and that `ws.send` is
+its own await point that can block on socket backpressure. So:
+
+| state | Chrome saw it? | what is actually wrong |
+|---|---|---|
+| caller's `cmd_tx.send()` never completed | no | actor saturated, channel full |
+| actor took it, `ws.send` unfinished | no | socket backpressured |
+| written, awaiting reply | **maybe** | Chrome wedged |
+
+`enqueued: true` spans the last two, which sit on opposite sides of the retry-safety line.
 
 ```rust
-CallError::Timeout { method, budget, enqueued: bool }
+CallError::Timeout { method, budget, stage: TimeoutStage }
+
+#[non_exhaustive]
+pub enum TimeoutStage { Queueing, Queued, AwaitingReply }
 ```
 
-An `AtomicBool` set after the send succeeds, read in the elapsed arm. No caller is forced to
-match on a second variant, and the information stops being unrecoverable.
+`stage`, not `reason`: the reason is always "the budget elapsed"; what varies is where it was.
+Put `#[non_exhaustive]` on the `Timeout` variant as well as the enum — `CallError` already
+carries it, but that guards against new *variants*, and anyone destructuring
+`Timeout { method, budget }` still breaks when a field is added. Pair it with
+`fn chrome_may_have_run(&self) -> bool` so callers get the retry answer without re-deriving
+the mapping at every site.
+
+**Staging.** `Queued` is not observable today — the caller knows whether its own
+`cmd_tx.send()` completed, but not whether the actor finished the write. That needs the actor
+publishing progress (an `Arc<AtomicU8>` in `OutboundCmd`, bumped after a successful
+`ws.send`); cheap against a websocket round-trip, but it is an actor change. Ship
+`Queueing` / `AwaitingReply` first, where `AwaitingReply` conservatively means "may have been
+written", and add `Queued` with the actor change. `#[non_exhaustive]` makes that additive.
 
 ## 5. `visid_incap_*` lifetime — DEFERRED, needs live observation
 
