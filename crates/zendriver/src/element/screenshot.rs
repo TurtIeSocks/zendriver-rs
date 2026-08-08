@@ -130,6 +130,14 @@ impl Element {
                     "Page.captureScreenshot",
                     json!({
                         "format": "png",
+                        // Scrolling the element into view only guarantees its
+                        // top is rendered. An element taller than the viewport
+                        // still has a clip reaching past what Chrome has
+                        // painted, and without this flag those rows come back
+                        // blank with no error. Matches `ScreenshotBuilder`,
+                        // which sends it on every clip — see the screenshot
+                        // module docs for the `position: fixed` caveat.
+                        "captureBeyondViewport": true,
                         "clip": {
                             "x": bbox.x + page_x,
                             "y": bbox.y + page_y,
@@ -232,6 +240,11 @@ mod tests {
         let id = expect(&mut mock, "Page.captureScreenshot").await;
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["format"], "png");
+        assert_eq!(
+            sent["params"]["captureBeyondViewport"], true,
+            "an element taller than the viewport clips past what Chrome has \
+             rendered; without this flag those rows come back blank",
+        );
         let clip = &sent["params"]["clip"];
         assert_eq!(clip["x"], 15.0);
         assert_eq!(

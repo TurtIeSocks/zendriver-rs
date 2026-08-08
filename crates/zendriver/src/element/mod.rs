@@ -326,8 +326,63 @@ impl crate::traits::Queryable for Element {
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::test_support::expect;
     use zendriver_transport::SessionHandle;
     use zendriver_transport::testing::MockConnection;
+
+    /// `call_on_main` invokes the element's own page-world handle and binds
+    /// it as the first positional argument, *ahead of* the caller's `args`.
+    /// Every declaration routed through it therefore has to open with a
+    /// leading parameter to absorb that handle.
+    ///
+    /// The ordering is the whole contract, so this passes real extra
+    /// arguments and asserts where each one lands. `check_receives_pointer(el,
+    /// dx, dy)` depends on it: push the extras ahead of the handle instead and
+    /// every multi-argument probe shifts by one — `dx` would arrive holding
+    /// the element, `Number.isFinite` would reject it, and the hit test would
+    /// silently fall back to the centre on every positioned click.
+    #[tokio::test]
+    async fn call_on_main_binds_the_element_ahead_of_the_callers_arguments() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+        let el = Element::from_jsret(tab, 1, "R_MAIN".to_string());
+
+        let fut = tokio::spawn({
+            let e = el.clone();
+            async move {
+                e.call_on_main(
+                    "function(el, dx, dy){ return el.value; }",
+                    json!([{ "value": 12.5 }, { "value": 34.0 }]),
+                )
+                .await
+            }
+        });
+
+        // A single dispatch, straight at the page-world handle: no
+        // isolated-world handshake is served here, so a path that grew one
+        // would trip this wait's timeout rather than hang the suite.
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
+        let sent = mock.last_sent();
+        assert_eq!(sent["params"]["objectId"], "R_MAIN");
+        let args = sent["params"]["arguments"].as_array().unwrap();
+        assert_eq!(args.len(), 3, "element handle plus the caller's two");
+        assert_eq!(
+            args[0]["objectId"], "R_MAIN",
+            "the element is bound as the first positional argument",
+        );
+        assert_eq!(
+            args[1]["value"], 12.5,
+            "the caller's first argument follows the element, not precedes it",
+        );
+        assert_eq!(args[2]["value"], 34.0, "caller argument order is preserved");
+        mock.reply(id, json!({ "result": { "value": "v", "type": "string" } }))
+            .await;
+
+        let res = fut.await.unwrap().unwrap();
+        assert_eq!(res["value"], "v");
+        conn.shutdown();
+    }
 
     #[tokio::test]
     async fn from_jsret_yields_evaluation_origin() {

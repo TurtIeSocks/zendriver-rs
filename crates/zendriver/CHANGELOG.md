@@ -5,6 +5,28 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+### Changed
+
+- Send `captureBeyondViewport` on every clipped screenshot, not just full-page
+  ones. A clip reaching past what Chrome has rendered used to come back blank.
+  This changes the pixels existing callers get for an on-screen clip too:
+  `position: fixed` content now renders at its document position instead of
+  pinned to the viewport, so a sticky header can land somewhere unexpected in a
+  clipped shot.
+
+### Fixed
+
+- `Element::screenshot` now sends `captureBeyondViewport`, so an element taller
+  than the viewport is captured whole instead of part-blank.
+- Text needles containing a quote no longer build a malformed XPath.
+  `text_exact("it's")` used to raise a `JsException` rather than match, because
+  the needle was quoted by swapping double quotes for single ones; needles are
+  now rendered as proper XPath literals, falling back to `concat()` when both
+  quote kinds are present.
+- `text_equals` no longer disagrees with `text_exact` on `&nbsp;` markup. The
+  page-side whitespace fold used `trim()`, which strips U+00A0, U+FEFF and the
+  Unicode space separators that XPath `normalize-space()` leaves alone.
+
 ## [0.5.10] - 2026-08-08
 
 ### Fixed

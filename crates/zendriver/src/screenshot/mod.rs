@@ -38,11 +38,33 @@
 //!
 //! When [`ScreenshotBuilder::full_page`] is `true`, [`ScreenshotBuilder::bytes`]
 //! sends an extra `Page.getLayoutMetrics` first, reads `cssContentSize.{width,height}` from
-//! the response, and forwards both as a `clip` rect with `scale: 1` plus
-//! `captureBeyondViewport: true` on the subsequent `Page.captureScreenshot`.
-//! Chrome handles the scroll-to-render-each-tile dance internally. With
-//! `full_page: false` the builder just passes `clip` through verbatim
-//! (or omits it when unset) and the capture is viewport-sized.
+//! the response, and forwards both as the `clip` rect on the subsequent
+//! `Page.captureScreenshot`. Chrome handles the scroll-to-render-each-tile
+//! dance internally. With `full_page: false` the builder passes [`ScreenshotBuilder::clip`]
+//! through verbatim (or omits it when unset, capturing the viewport).
+//!
+//! ## Clip coordinates and `captureBeyondViewport`
+//!
+//! Chrome reads the `clip` rect in **document** coordinates, not viewport
+//! ones — a distinction that only shows up once the page is scrolled, and the
+//! reason [`crate::Element::screenshot`] converts its box-model rect before
+//! sending it.
+//!
+//! Any capture carrying a `clip` — full-page or a caller's own rect — also
+//! sends `captureBeyondViewport: true`, so a rect covering area Chrome has
+//! not rendered comes back with pixels rather than blank. The flag has one
+//! side effect worth knowing: `position: fixed` elements render at their
+//! document position rather than pinned to the viewport, so a sticky header
+//! can appear in an unexpected place in a clipped shot.
+//!
+//! ## Clip scale
+//!
+//! The `clip.scale` field is required by CDP and is currently pinned to `1`,
+//! i.e. one image pixel per CSS pixel. An unclipped viewport capture, by
+//! contrast, comes back at the emulated device pixel ratio — so under a 2x-DPR
+//! persona a clipped shot is half the resolution of an unclipped one. Honoring
+//! the persona's DPR here needs the scale plumbed in from the caller; until
+//! then, clipped captures are 1x.
 
 use std::path::Path;
 
@@ -230,7 +252,12 @@ impl<'tab> ScreenshotBuilder<'tab> {
 
     /// Crop the capture to `bbox`.
     ///
-    /// Coordinates are CSS pixels relative to the viewport top-left.
+    /// Coordinates are CSS pixels relative to the **document** top-left, not
+    /// the viewport: Chrome reads `Page.captureScreenshot`'s clip in page
+    /// space. The two coincide only while the page is unscrolled. A rect may
+    /// reach past the fold and still render — see the [module docs](self) for
+    /// the `captureBeyondViewport` flag that guarantees it, its
+    /// `position: fixed` caveat, and the 1x clip scale.
     ///
     /// # Examples
     ///
@@ -347,7 +374,6 @@ impl<'tab> ScreenshotBuilder<'tab> {
                         "Page.getLayoutMetrics cssContentSize missing height".into(),
                     )
                 })?;
-            params.insert("captureBeyondViewport".to_string(), Value::Bool(true));
             Some(BoundingBox {
                 x: 0.0,
                 y: 0.0,
@@ -359,6 +385,10 @@ impl<'tab> ScreenshotBuilder<'tab> {
         };
 
         if let Some(bbox) = effective_clip {
+            // Every clip gets `captureBeyondViewport`, not just the full-page
+            // one: a clip rect below the fold is outside what Chrome has
+            // rendered, and without this it comes back blank.
+            params.insert("captureBeyondViewport".to_string(), Value::Bool(true));
             params.insert(
                 "clip".to_string(),
                 json!({
@@ -415,6 +445,7 @@ impl<'tab> ScreenshotBuilder<'tab> {
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::test_support::expect;
     use serde_json::json;
     use zendriver_transport::SessionHandle;
     use zendriver_transport::testing::MockConnection;
@@ -473,6 +504,51 @@ mod tests {
 
         let bytes = fut.await.unwrap().unwrap();
         assert_eq!(bytes, b"JPG!");
+        conn.shutdown();
+    }
+
+    /// A caller-supplied clip carries `captureBeyondViewport` too. Without it
+    /// a rect below the fold is outside what Chrome has rendered and the
+    /// capture comes back blank — the flag used to ride only on the
+    /// `full_page` branch.
+    #[tokio::test]
+    async fn caller_clip_below_the_fold_sends_capture_beyond_viewport() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let below_the_fold = BoundingBox {
+            x: 0.0,
+            y: 3000.0,
+            width: 400.0,
+            height: 200.0,
+        };
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                ScreenshotBuilder::new(&t)
+                    .clip(below_the_fold)
+                    .bytes()
+                    .await
+            }
+        });
+
+        // No Page.getLayoutMetrics: a caller's clip is passed through as-is.
+        let id = expect(&mut mock, "Page.captureScreenshot").await;
+        let params = &mock.last_sent()["params"];
+        assert_eq!(
+            params["captureBeyondViewport"], true,
+            "a clip past the fold needs captureBeyondViewport or it renders blank",
+        );
+        let clip = &params["clip"];
+        assert_eq!(clip["x"], 0.0);
+        assert_eq!(clip["y"], 3000.0);
+        assert_eq!(clip["width"], 400.0);
+        assert_eq!(clip["height"], 200.0);
+        mock.reply(id, json!({ "data": "UE5HIQ==" })).await;
+
+        let bytes = fut.await.unwrap().unwrap();
+        assert_eq!(bytes, b"PNG!");
         conn.shutdown();
     }
 
