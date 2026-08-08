@@ -487,9 +487,12 @@ fn special_text(k: SpecialKey) -> Option<&'static str> {
 /// enforces this itself — verified against Chrome 151, Ctrl+Enter carrying
 /// `text: "\r"` left a `<textarea>` unchanged while the page's keydown
 /// handler still saw `{key: "Enter", ctrlKey: true}` — so dropping the field
-/// changes no observable behavior. It matches what Puppeteer puts on the
-/// wire, which is the shape anything fingerprinting the CDP stream is
-/// calibrated against.
+/// changes no observable behavior. Puppeteer drops the same field
+/// (`cdp/Input.ts`: `if (this._modifiers & ~8) { description.text = ''; }`),
+/// but it then picks the event type *from* that text, so Puppeteer's
+/// Ctrl+Enter goes out as a `rawKeyDown` while this one stays a `keyDown`
+/// carrying no text. That divergence is deliberate and the next paragraph is
+/// what matching it would cost.
 ///
 /// Deliberately separate from the printable/non-printable question that
 /// picks the event type. Folding the two together would send Ctrl+Enter as
@@ -504,7 +507,9 @@ fn modifiers_suppress_text(mods: KeyModifiers) -> bool {
 ///
 /// - `KeyPress::Char`, or a `Key::Char` whose [`char_descriptor`] is `None`
 ///   (emoji / non-ASCII), emits a single `char`-type event carrying the
-///   character as both `text` and `key`.
+///   character as both `text` and `key` — without the `text` when a held
+///   modifier suppresses it (see [`modifiers_suppress_text`]), so Ctrl+é
+///   inserts no character, the same as Ctrl+a.
 /// - `KeyPress::DownAndUp` on a printable `Key::Char` resolves the effective
 ///   modifiers (`mods` plus Shift if the descriptor requires it) and emits,
 ///   in conventional order: a keyDown for each active modifier (accumulating
@@ -524,7 +529,10 @@ pub(crate) fn key_events(key: Key, mods: KeyModifiers, kind: KeyPress) -> Vec<Ke
             return vec![KeyEventPayload {
                 event_type: "char",
                 modifiers: mods.cdp_bits(),
-                text: Some(s.clone()),
+                // A `char` event *is* the text insertion, so the same
+                // suppression the descriptor path applies has to apply here
+                // or Ctrl+é types "é" while Ctrl+a types nothing.
+                text: (!modifiers_suppress_text(mods)).then(|| s.clone()),
                 key: Some(s),
                 code: None,
                 windows_vk: None,
@@ -673,7 +681,9 @@ pub(crate) fn whitespace_special(c: char) -> Option<SpecialKey> {
 ///   vk synthesis).
 /// - A single whitespace `char` → the matching [`SpecialKey`] `DownAndUp`.
 /// - Anything else (emoji with modifiers, combining sequences, CJK, accents)
-///   → one `char`-type event carrying the whole cluster as text.
+///   → one `char`-type event carrying the whole cluster as text, or carrying
+///   no text at all when a held modifier suppresses it (see
+///   [`modifiers_suppress_text`]).
 pub(crate) fn cluster_events(cluster: &str, mods: KeyModifiers) -> Vec<KeyEventPayload> {
     let mut chars = cluster.chars();
     if let (Some(c), None) = (chars.next(), chars.clone().next()) {
@@ -689,7 +699,9 @@ pub(crate) fn cluster_events(cluster: &str, mods: KeyModifiers) -> Vec<KeyEventP
     vec![KeyEventPayload {
         event_type: "char",
         modifiers: mods.cdp_bits(),
-        text: Some(cluster.to_string()),
+        // Same rule as the `char` fallback in `key_events`: a held Ctrl/Alt/
+        // Meta means this chord inserts nothing, whatever the cluster is.
+        text: (!modifiers_suppress_text(mods)).then(|| cluster.to_string()),
         key: Some(cluster.to_string()),
         code: None,
         windows_vk: None,
@@ -1303,6 +1315,51 @@ mod tests {
                 .find(|e| e.code == Some("KeyA"))
                 .and_then(|e| e.text.as_deref()),
             Some("A")
+        );
+    }
+
+    /// The rule cannot depend on whether the character is ASCII.
+    ///
+    /// Three paths carry text: the descriptor-backed `keyDown` above, the
+    /// `char`-event fallback every non-ASCII character takes (no descriptor),
+    /// and `cluster_events`' multi-codepoint branch. A `char` event *is* a
+    /// text insertion, so a suppressed chord that still fills `text` types the
+    /// character — `press_with(Key::Char('é'), CTRL)` inserting "é" while
+    /// `press_with(Key::Char('a'), CTRL)` inserts nothing, which is the
+    /// asymmetry a French or CJK keymap hits and an ASCII debugging session
+    /// never shows.
+    #[test]
+    fn non_ascii_char_events_also_drop_their_text_under_a_modifier() {
+        let events = key_events(Key::Char('é'), KeyModifiers::CTRL, KeyPress::DownAndUp);
+        let [main] = events.as_slice() else {
+            panic!("no descriptor for 'é', so one char event: {events:?}");
+        };
+        assert_eq!(main.event_type, "char");
+        assert!(main.text.is_none(), "got {:?}", main.text);
+        // `key` still names the character, exactly as on the descriptor path.
+        assert_eq!(main.key.as_deref(), Some("é"));
+
+        // Multi-codepoint clusters take `cluster_events`' own fallback, which
+        // never routes through `key_events` at all.
+        let cluster = cluster_events("e\u{301}", KeyModifiers::CTRL);
+        let [combined] = cluster.as_slice() else {
+            panic!("one char event for the cluster: {cluster:?}");
+        };
+        assert_eq!(combined.event_type, "char");
+        assert!(combined.text.is_none(), "got {:?}", combined.text);
+
+        // Unmodified, both paths still type.
+        assert_eq!(
+            key_events(Key::Char('é'), KeyModifiers::empty(), KeyPress::DownAndUp)[0]
+                .text
+                .as_deref(),
+            Some("é")
+        );
+        assert_eq!(
+            cluster_events("e\u{301}", KeyModifiers::empty())[0]
+                .text
+                .as_deref(),
+            Some("e\u{301}")
         );
     }
 

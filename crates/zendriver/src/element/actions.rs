@@ -625,9 +625,11 @@ impl Element {
             // Re-probe the value periodically and stop as soon as it is empty
             // instead of always spending the full `len + slack` budget. Every
             // `press` is a CDP round-trip (and re-runs the focus gate), so on a
-            // field the select-all chord already cleared this turns thousands of
-            // round-trips into one probe. The cadence keeps the probe overhead
-            // proportional rather than doubling the round-trips on short fields.
+            // field the select-all chord already cleared this caps thousands of
+            // round-trips at `PROBE_EVERY_N_BACKSPACES` strokes plus one probe,
+            // matching what the rustdoc's step 4 promises. The cadence keeps the
+            // probe overhead proportional rather than doubling the round-trips
+            // on short fields.
             for i in 0..presses {
                 // Deliberately never probes within the first
                 // `PROBE_EVERY_N_BACKSPACES` strokes: `CLEAR_BY_DELETING_SLACK`

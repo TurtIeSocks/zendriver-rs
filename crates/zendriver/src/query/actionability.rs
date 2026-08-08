@@ -19,9 +19,22 @@
 //! *source text* each predicate puts on the wire. They pin that a clause is
 //! present and spelled the way a past defect proved it has to be; they do
 //! not execute it, and a mutation that rewrites a clause into something
-//! equally well-formed but wrong passes them. Behavioral coverage lives in
-//! the live-Chrome tier (`tests/find_visible_only.rs`, gated on the
-//! `integration-tests` feature).
+//! equally well-formed but wrong passes them.
+//!
+//! The live-Chrome tier reaches part of that, and does not gate a merge.
+//! `tests/find_visible_only.rs` (gated on the `integration-tests` feature)
+//! drives `visible_only(true)` against a real browser, so `check_visible`'s
+//! `display: none` path does execute there — but every test in that file is
+//! `#[ignore]`d, and the per-PR integration job runs plain
+//! `cargo nextest run -E 'kind(test)'` with no `--run-ignored`. So it runs
+//! only in the scheduled `nightly-ignored-tests` lane, which carries
+//! `continue-on-error: true`.
+//!
+//! Nothing else is covered behaviorally: the opacity, viewport and
+//! quirks-mode clauses are pinned only by the source-text assertions below,
+//! and `check_stable` / `check_enabled` / `check_receives_pointer` have no
+//! live fixture at all. Widening any of those clauses means writing the
+//! fixture that would catch the mistake; do not assume one is waiting.
 
 use std::time::Duration;
 

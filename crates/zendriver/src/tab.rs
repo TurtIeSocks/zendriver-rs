@@ -47,7 +47,9 @@ const READY_STATE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// Fallback tick for [`Tab::wait_for_idle_opts`]'s wait loop, used when no
 /// membership change wakes it sooner. It is the additive term in
 /// [`Tab::wait_for_idle_opts`]'s documented worst case, which names this
-/// constant rather than repeating the number. The two test-scenario comments
+/// constant *and* spells the number: this constant is module-private, so it
+/// does not render on docs.rs and a reader given only the name has lost the
+/// one fact the sentence carried. Change one, change the other. The two test-scenario comments
 /// that spell 50ms (`wait_for_idle_*`) are arithmetic about a specific
 /// timeline and would read worse with the name substituted in.
 const IDLE_FALLBACK_TICK: Duration = Duration::from_millis(50);
@@ -1791,10 +1793,9 @@ impl Tab {
     /// Wait for network idle with full control over the policy via
     /// [`IdleOptions`].
     ///
-    /// Algorithm: poll the in-flight set with a `Notify`-driven wake (or an
-    /// [`IDLE_FALLBACK_TICK`] fallback tick). Each iteration computes the
-    /// number of *active*
-    /// requests — every in-flight request when
+    /// Algorithm: poll the in-flight set with a `Notify`-driven wake (or a
+    /// 50ms fallback tick, `IDLE_FALLBACK_TICK`). Each iteration computes the
+    /// number of *active* requests — every in-flight request when
     /// [`IdleOptions::max_inflight_age`] is `None`, otherwise only those in
     /// flight for less than that age (older ones are treated as stuck /
     /// background and ignored). Track `quiet_start = Some(now)` on the first
@@ -1805,7 +1806,7 @@ impl Tab {
     /// That tick bounds latency both for the already-idle case (no further
     /// events fire) and for an age-out crossing (which emits no CDP event), so
     /// worst-case latency to detect "stayed idle long enough" is
-    /// `quiet_window + `[`IDLE_FALLBACK_TICK`].
+    /// `quiet_window` plus one `IDLE_FALLBACK_TICK` (50ms).
     ///
     /// Under [`IdleOptions::loss_policy`] = [`IdleLossPolicy::Strict`], the
     /// wait additionally races against this tab's connection's accounted

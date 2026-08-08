@@ -209,6 +209,16 @@ pub(crate) async fn click_at(
     // modelling one physical button from two places and will disagree
     // whatever this does. `InputController` is per-`Tab`; keep a gesture on
     // one task.
+    //
+    // What the guard gives up: the unconditional sweep it replaced also
+    // cleaned up a bit stranded by a dropped gesture future (the cancellation
+    // case on `InputState::buttons_held`). A click that finds the bit already
+    // set now records `we_latched = false`, so if its own press fails the
+    // stranded bit survives this call too. Not permanent — the in-loop
+    // release clears the bit unconditionally, so the next click that reaches
+    // a press self-heals it — but until then this tab's `mouseMoved` frames
+    // report `buttons: 1` with no preceding `mousedown`, the impossible
+    // stream that field doc calls worse than omitting `buttons`.
     let mut we_latched = false;
     let sequence: Result<()> = async {
         for n in 1..=click_count.max(1) {
