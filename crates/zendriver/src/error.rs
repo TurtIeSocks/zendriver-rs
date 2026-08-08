@@ -113,9 +113,10 @@ pub enum ZendriverError {
     /// to change it.
     #[error("CDP call `{method}` did not complete within {budget:?}")]
     CdpTimeout {
-        /// The CDP method that was never answered (e.g. `"Page.navigate"`).
+        /// The CDP method that did not complete (e.g. `"Page.navigate"`).
         method: String,
-        /// The budget that elapsed without a reply.
+        /// The budget that elapsed. It bounds the whole call, so it may have
+        /// run out while the command was still queued, before Chrome saw it.
         budget: Duration,
     },
 

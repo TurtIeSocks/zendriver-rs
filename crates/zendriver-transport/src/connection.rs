@@ -282,7 +282,7 @@ impl Connection {
         self.inner.call_timeout_ms.store(ms, Ordering::Relaxed);
     }
 
-    /// [`Connection::call_raw`] with an explicit reply budget.
+    /// [`Connection::call_raw`] with an explicit per-call budget.
     ///
     /// `budget` of `Some(d)` bounds the wait at `d`; `None` opts out entirely
     /// and restores the old unbounded behavior for a call the caller knows is
@@ -625,10 +625,13 @@ impl Connection {
         // to also be gone before the flag is ever read, and it only mislabels
         // which kind of dead the connection is.
         //
-        // In fact this clear is defensive and currently unobservable, which is
-        // why no test pins it: `socket_died` has exactly one reader,
-        // `actor_gone_error`, and both paths to it require the *current* actor
-        // to be gone — and every actor exit re-latches the flag on its way out.
+        // This clear has no *behavioural* observer: `actor_gone_error` is the
+        // only code that branches on `socket_died`, and both paths to it
+        // require the *current* actor to be gone, while every actor exit
+        // re-latches the flag on its way out. It is not unobservable, though —
+        // `ConnectionInner`'s `Debug` prints the flag, and `Connection` is
+        // `Debug` and public via `Browser::cdp()`, so `{:?}` surfaces it
+        // without the actor being gone.
         // Do not add a read path that does not depend on the current actor
         // being gone (a `Connection::is_disconnected()` accessor is the obvious
         // temptation) without revisiting this: such a reader could observe the
