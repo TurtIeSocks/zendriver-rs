@@ -263,11 +263,17 @@ for the same request (which only fires on <code>loadingFinished</code> /
 already buffered before the enable call landed are emitted as the first
 chunk, so nothing from that window is lost.</p>
 <p><strong>Chrome version / graceful fallback:</strong> <code>Network.streamResourceContent</code>
-needs roughly Chrome 124+. On an older Chrome the enable call errors — the
-monitor logs one <code>tracing::warn!</code> (not once per request) and simply never
-emits <code>HttpData</code> for that session; <a href="https://docs.rs/zendriver/latest/zendriver/struct.NetworkExchange.html#method.body"><code>NetworkExchange::body</code></a> keeps working as
-the whole-body fallback the entire time. The monitor never fails or ends over
-this.</p>
+needs roughly Chrome 124+. On an older Chrome the enable call comes back
+"method not found" — the monitor logs one <code>tracing::warn!</code> (not once per
+request), stops issuing the call, and simply never emits <code>HttpData</code> for that
+session.</p>
+<p>Other enable errors are treated as being about that one request rather than
+about the browser, and streaming stays on for the next one. The common case is
+a response that finished loading before the enable call landed, which a fast
+(especially loopback) resource can lose without saying anything about anything
+else; that one is logged at debug. Anything else warns once.</p>
+<p>Either way <a href="https://docs.rs/zendriver/latest/zendriver/struct.NetworkExchange.html#method.body"><code>NetworkExchange::body</code></a> keeps working as the whole-body fallback
+the entire time, and the monitor never fails or ends over this.</p>
 <p>Off by default — streaming every response is wasted CDP round-trips when
 bodies are small; opt in only when you need bytes as they arrive rather than
 once the whole response completes.</p>

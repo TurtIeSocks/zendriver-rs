@@ -391,12 +391,20 @@ let browser = Browser::builder()
 <tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.block_trackers"><code>block_trackers(true)</code></a></td><td>Enable blocking with the curated bundled list (<code>include_str!</code>-embedded — only adds binary size when the feature is on)</td></tr>
 <tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.tracker_blocklist_add"><code>tracker_blocklist_add</code></a></td><td>Add extra hosts (repeatable; implicitly enables blocking)</td></tr>
 <tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.tracker_blocklist_file"><code>tracker_blocklist_file</code></a></td><td>Add hosts from a local file (one host per line; <code>0.0.0.0 host</code> hosts-file lines tolerated)</td></tr>
-<tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.tracker_blocklist_url"><code>tracker_blocklist_url</code></a></td><td>Add hosts fetched from a URL at launch</td></tr>
+<tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.tracker_blocklist_url"><code>tracker_blocklist_url</code></a></td><td>Add hosts fetched from a URL at launch (cached on disk after the first fetch)</td></tr>
 </tbody></table>
 </div>
 <p>Matching is host-based: a blocked host also blocks its subdomains. The bundle
 ships only our own clean list — point <code>tracker_blocklist_url</code> at a third-party
 list only if you accept that list's license.</p>
+<p>The URL fetch runs inside <code>launch()</code> and is bounded: 5s to connect, 20s for the
+whole request, 32 MiB of body. None of those are configurable, and a source that
+exceeds one fails the launch. For a mirror that is slow or unusually large,
+pre-seed the cache or point <code>tracker_blocklist_file</code> at a local copy.</p>
+<p>Those three bounds are the only things about a URL source that can fail a
+launch. The body is decoded as UTF-8 lossily, so a list whose licence header
+carries a latin-1 byte still loads: host lines are ASCII, and the replacement
+character only ever lands in text the parser discards.</p>
 <h2 id="pattern--stage-filters"><a class="header" href="#pattern--stage-filters">Pattern + stage filters</a></h2>
 <p>By default the builder pauses on every request at the <code>Request</code> stage.
 Restrict it with builder modifiers:</p>

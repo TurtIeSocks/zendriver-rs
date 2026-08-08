@@ -2918,12 +2918,20 @@ let browser = Browser::builder()
 <tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.block_trackers"><code>block_trackers(true)</code></a></td><td>Enable blocking with the curated bundled list (<code>include_str!</code>-embedded — only adds binary size when the feature is on)</td></tr>
 <tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.tracker_blocklist_add"><code>tracker_blocklist_add</code></a></td><td>Add extra hosts (repeatable; implicitly enables blocking)</td></tr>
 <tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.tracker_blocklist_file"><code>tracker_blocklist_file</code></a></td><td>Add hosts from a local file (one host per line; <code>0.0.0.0 host</code> hosts-file lines tolerated)</td></tr>
-<tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.tracker_blocklist_url"><code>tracker_blocklist_url</code></a></td><td>Add hosts fetched from a URL at launch</td></tr>
+<tr><td><a href="https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.tracker_blocklist_url"><code>tracker_blocklist_url</code></a></td><td>Add hosts fetched from a URL at launch (cached on disk after the first fetch)</td></tr>
 </tbody></table>
 </div>
 <p>Matching is host-based: a blocked host also blocks its subdomains. The bundle
 ships only our own clean list — point <code>tracker_blocklist_url</code> at a third-party
 list only if you accept that list's license.</p>
+<p>The URL fetch runs inside <code>launch()</code> and is bounded: 5s to connect, 20s for the
+whole request, 32 MiB of body. None of those are configurable, and a source that
+exceeds one fails the launch. For a mirror that is slow or unusually large,
+pre-seed the cache or point <code>tracker_blocklist_file</code> at a local copy.</p>
+<p>Those three bounds are the only things about a URL source that can fail a
+launch. The body is decoded as UTF-8 lossily, so a list whose licence header
+carries a latin-1 byte still loads: host lines are ASCII, and the replacement
+character only ever lands in text the parser discards.</p>
 <h2 id="pattern--stage-filters"><a class="header" href="#pattern--stage-filters">Pattern + stage filters</a></h2>
 <p>By default the builder pauses on every request at the <code>Request</code> stage.
 Restrict it with builder modifiers:</p>
@@ -3296,11 +3304,17 @@ for the same request (which only fires on <code>loadingFinished</code> /
 already buffered before the enable call landed are emitted as the first
 chunk, so nothing from that window is lost.</p>
 <p><strong>Chrome version / graceful fallback:</strong> <code>Network.streamResourceContent</code>
-needs roughly Chrome 124+. On an older Chrome the enable call errors — the
-monitor logs one <code>tracing::warn!</code> (not once per request) and simply never
-emits <code>HttpData</code> for that session; <a href="https://docs.rs/zendriver/latest/zendriver/struct.NetworkExchange.html#method.body"><code>NetworkExchange::body</code></a> keeps working as
-the whole-body fallback the entire time. The monitor never fails or ends over
-this.</p>
+needs roughly Chrome 124+. On an older Chrome the enable call comes back
+"method not found" — the monitor logs one <code>tracing::warn!</code> (not once per
+request), stops issuing the call, and simply never emits <code>HttpData</code> for that
+session.</p>
+<p>Other enable errors are treated as being about that one request rather than
+about the browser, and streaming stays on for the next one. The common case is
+a response that finished loading before the enable call landed, which a fast
+(especially loopback) resource can lose without saying anything about anything
+else; that one is logged at debug. Anything else warns once.</p>
+<p>Either way <a href="https://docs.rs/zendriver/latest/zendriver/struct.NetworkExchange.html#method.body"><code>NetworkExchange::body</code></a> keeps working as the whole-body fallback
+the entire time, and the monitor never fails or ends over this.</p>
 <p>Off by default — streaming every response is wasted CDP round-trips when
 bodies are small; opt in only when you need bytes as they arrive rather than
 once the whole response completes.</p>
