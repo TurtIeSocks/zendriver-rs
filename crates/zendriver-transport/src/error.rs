@@ -49,8 +49,16 @@ pub enum CallError {
     #[error("CDP RPC error [{0}] {1}")]
     Rpc(i32, String, Option<serde_json::Value>),
 
-    /// The command was written to the socket but Chrome never answered it
-    /// within the call's budget.
+    /// The call did not complete within its budget. The budget covers the
+    /// **whole** call, so this has two routes:
+    ///
+    /// - the command was written to the socket and Chrome never answered it;
+    ///   or
+    /// - the command never reached the socket at all, because the actor's
+    ///   command channel stayed full for the entire budget.
+    ///
+    /// The variant does not distinguish them — a caller cannot tell from the
+    /// error whether Chrome ever saw the command.
     ///
     /// Deliberately distinct from both siblings, because the three mean
     /// different things and warrant different responses:
@@ -59,14 +67,15 @@ pub enum CallError {
     ///   browser is healthy; the command was wrong. Retrying is pointless.
     /// - [`CallError::Transport`] — the **connection broke**. Chrome may be
     ///   gone; the handle is unusable.
-    /// - `Timeout` — the connection is **fine** and Chrome simply never
-    ///   replied. The browser is wedged, or the operation is slower than the
-    ///   budget allows. Retrying (or raising the budget) can be reasonable.
+    /// - `Timeout` — the connection has **not reported a failure**. Chrome is
+    ///   wedged, the operation is slower than the budget allows, or the actor
+    ///   is too backed up to take the command. Retrying (or raising the
+    ///   budget) can be reasonable.
     ///
     /// Carries the method name because that is the diagnostic that makes a
-    /// stuck call actionable: "Chrome never answered" is not a bug report,
-    /// "`Page.navigate` went unanswered after 180s" is.
-    #[error("CDP call `{method}` went unanswered after {budget:?}")]
+    /// stuck call actionable: "the call did not complete" is not a bug report,
+    /// "`Page.navigate` did not complete within 180s" is.
+    #[error("CDP call `{method}` did not complete within {budget:?}")]
     Timeout {
         /// The CDP method that was never answered (e.g. `"Page.navigate"`).
         method: String,
@@ -101,15 +110,19 @@ mod tests {
         );
     }
 
+    /// The wording is load-bearing, not cosmetic: the budget wraps the enqueue
+    /// as well as the reply, so a `Timeout` can be returned for a command
+    /// Chrome never saw. "went unanswered" claimed the command reached the
+    /// socket, which is only true on one of the two routes into this variant.
     #[test]
-    fn display_call_timeout_names_the_method_and_budget() {
+    fn display_call_timeout_names_the_method_and_budget_without_claiming_chrome_saw_it() {
         let e = CallError::Timeout {
             method: "Page.navigate".into(),
             budget: std::time::Duration::from_secs(180),
         };
         assert_eq!(
             e.to_string(),
-            "CDP call `Page.navigate` went unanswered after 180s"
+            "CDP call `Page.navigate` did not complete within 180s"
         );
     }
 

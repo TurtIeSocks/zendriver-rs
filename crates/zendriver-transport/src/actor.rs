@@ -31,6 +31,18 @@ pub(crate) struct OutboundCmd {
 /// Default broadcast bus capacity. Lagged subscribers drop frames.
 pub(crate) const EVENT_BUS_CAPACITY: usize = 1024;
 
+/// Depth of the command channel feeding the actor
+/// ([`Connection`] handle → [`run_actor`]).
+///
+/// Named rather than written at each `mpsc::channel` site because the two
+/// sites are far apart — the initial spawn and
+/// [`Connection::reconnect`](crate::connection::Connection::reconnect) — and
+/// tuning one without the other would silently give a reconnected connection a
+/// different queue depth than it had on first connect. Also depended on by
+/// [`Connection::call_raw_with_timeout`](crate::connection::Connection::call_raw_with_timeout)'s
+/// rustdoc, which explains why the per-call budget has to cover the enqueue.
+pub(crate) const CMD_CHANNEL_CAPACITY: usize = 64;
+
 /// How many dispatched commands may pass between sweeps of the pending-reply
 /// map.
 ///
@@ -40,12 +52,18 @@ pub(crate) const EVENT_BUS_CAPACITY: usize = 1024;
 /// escape, never happens. Left alone the map grows for the life of the
 /// connection.
 ///
-/// Sweeping every 256 dispatches bounds the debris at a few hundred
-/// pointer-sized entries for one `HashMap::retain` per 256 commands.
+/// Sweeping every 256 dispatches bounds the debris at a few hundred small heap
+/// entries — tens of kilobytes at the bound, since each `oneshot::Sender` is
+/// one pointer wide but retains a heap cell sized for
+/// `Result<Value, CdpRpcError>` — for one `HashMap::retain` per 256 commands.
 /// Deliberately **not** a capacity cap on `pending`: refusing to enqueue
 /// commands would shed real work on a busy connection, which is worse than a
 /// slow leak.
-const PENDING_SWEEP_INTERVAL: u64 = 256;
+///
+/// The counter advances on dispatch rather than on a clock, so this bounds the
+/// debris by command count, not by wall time: an idle connection holds whatever
+/// it has accumulated until traffic resumes.
+const PENDING_SWEEP_DISPATCH_INTERVAL: u64 = 256;
 
 /// Drop every pending entry whose caller has gone away — its reply receiver
 /// dropped, i.e. a `call_raw` that timed out or was cancelled. Returns how
@@ -131,7 +149,7 @@ pub(crate) async fn run_actor<S>(
     // subscriber, since it counts positions *on the accounted bus*.
     let mut next_accounted_sequence: u64 = 1;
     // Commands dispatched since the last `sweep_pending`. See
-    // [`PENDING_SWEEP_INTERVAL`].
+    // [`PENDING_SWEEP_DISPATCH_INTERVAL`].
     let mut dispatched_since_sweep: u64 = 0;
 
     // Sentinel stamped onto drained pendings when the loop exits. Defaults to
@@ -187,7 +205,7 @@ pub(crate) async fn run_actor<S>(
                         }
                         pending.insert(id, cmd.reply);
                         dispatched_since_sweep += 1;
-                        if dispatched_since_sweep >= PENDING_SWEEP_INTERVAL {
+                        if dispatched_since_sweep >= PENDING_SWEEP_DISPATCH_INTERVAL {
                             dispatched_since_sweep = 0;
                             let swept = sweep_pending(&mut pending);
                             if swept > 0 {
@@ -196,6 +214,20 @@ pub(crate) async fn run_actor<S>(
                                     remaining = pending.len(),
                                     "swept pendings whose caller had gone away"
                                 );
+                                // Publish the count so the sweep is observable
+                                // from outside this loop: `pending` is a local,
+                                // and a `debug!` nothing reads is not a fact a
+                                // test can assert on. The upgrade costs a
+                                // refcount bump at most once per
+                                // `PENDING_SWEEP_DISPATCH_INTERVAL` commands,
+                                // and only when the sweep actually reaped
+                                // something.
+                                if let Some(inner) = weak_inner.upgrade() {
+                                    inner.swept_total.fetch_add(
+                                        swept as u64,
+                                        std::sync::atomic::Ordering::Relaxed,
+                                    );
+                                }
                             }
                         }
                     }
@@ -364,13 +396,20 @@ pub(crate) async fn run_actor<S>(
     // `Disconnected`: every later call finds a closed command channel, whose
     // `SendError` carries no reason, and reports `Shutdown`.
     //
-    // Ordering is what makes the flag trustworthy. `cmd_rx` is dropped when
-    // this function returns, which is strictly after this store, so any sender
-    // that observes the channel closed necessarily observes the flag too —
-    // there is no window where a caller sees the death but not its cause.
-    // `Release`/`Acquire` (rather than the `Relaxed` used for the advisory
-    // counters on `ConnectionInner`) is the point: this store must be visible
-    // to the thread that later learns of the channel close.
+    // The **channel** is what makes the flag trustworthy, not the atomic
+    // ordering. `cmd_rx` is dropped when this function returns, which is
+    // strictly after this store; the drop synchronizes with a sender observing
+    // the channel closed; happens-before is transitive. So any sender that
+    // observes the channel closed necessarily observes the flag too — there is
+    // no window where a caller sees the death but not its cause, and a
+    // `Relaxed` store would be visible just the same.
+    //
+    // `Release`/`Acquire` is kept anyway (rather than the `Relaxed` used for
+    // the advisory counters on `ConnectionInner`) because it costs nothing on
+    // this once-per-actor-exit path and keeps the flag correct if a future read
+    // path ever reaches it without going through the channel. Note the pairing
+    // only orders *this* location: adding a second flag would not give an
+    // ordering guarantee between the two.
     if let Some(inner) = weak_inner.upgrade() {
         inner.socket_died.store(
             drain_code == crate::connection::DISCONNECTED_CODE,
@@ -531,46 +570,13 @@ fn panic_payload(payload: &Box<dyn Any + Send>) -> String {
 mod tests {
     use super::*;
     use crate::connection::{
-        spawn_actor_with_observers, spawn_actor_with_observers_and_timeout, test_only::DriverStream,
+        spawn_actor_with_observers, spawn_actor_with_observers_and_timeout,
+        test_only::{duplex_pair, duplex_pair_with_capacity},
     };
     use crate::observer::{ObserverError, ObserverFailurePolicy, PausedSession, TargetObserver};
     use serde_json::json;
     use std::sync::Mutex;
     use tokio_tungstenite::tungstenite::Message;
-
-    /// Build a paired (driver-side, test-side) Sink/Stream of tungstenite
-    /// `Message`s using mpsc channels. Driver writes go to `test_rx`; test
-    /// writes go to `driver_rx`.
-    fn duplex_pair() -> (
-        DriverStream,
-        mpsc::Sender<Result<Message, tokio_tungstenite::tungstenite::Error>>,
-        mpsc::Receiver<Message>,
-    ) {
-        duplex_pair_with_capacity(32)
-    }
-
-    /// [`duplex_pair`] with a caller-chosen outbound capacity. The driver's
-    /// sink is `try_send`-based, so a test that dispatches a large burst
-    /// without draining needs room for all of it — otherwise the write fails
-    /// and kills the actor, which is a different test than the one intended.
-    fn duplex_pair_with_capacity(
-        outbound_capacity: usize,
-    ) -> (
-        DriverStream,
-        mpsc::Sender<Result<Message, tokio_tungstenite::tungstenite::Error>>,
-        mpsc::Receiver<Message>,
-    ) {
-        let (driver_tx_out, test_rx) = mpsc::channel::<Message>(outbound_capacity);
-        let (test_tx_in, driver_rx_in) =
-            mpsc::channel::<Result<Message, tokio_tungstenite::tungstenite::Error>>(32);
-
-        // Driver-side: sink writes to driver_tx_out; stream reads from driver_rx_in.
-        let driver = DriverStream {
-            tx: driver_tx_out,
-            rx: driver_rx_in,
-        };
-        (driver, test_tx_in, test_rx)
-    }
 
     #[tokio::test]
     async fn cmd_id_assigned_starting_at_one_and_serialized_correctly() {
@@ -968,28 +974,38 @@ mod tests {
         );
     }
 
-    /// The sweep must reap only callers that are gone: a call still waiting
-    /// has to survive crossing the sweep boundary and still get routed when
-    /// Chrome finally answers.
+    /// The sweep has two halves and this test pins both.
+    ///
+    /// It must **run**: abandoned callers that cross the dispatch boundary get
+    /// reaped, observed through `ConnectionInner::swept_total` because
+    /// `pending` is a local inside [`run_actor`] and nothing else about the
+    /// sweep reaches the outside world. Without that assertion the entire leak
+    /// fix could be deleted from the actor loop with the suite still green —
+    /// which was the case until this test grew the counter check.
+    ///
+    /// And it must **reap only the abandoned**: a call still waiting has to
+    /// survive crossing the boundary and still get routed when Chrome finally
+    /// answers.
+    ///
+    /// Driven through the real `spawn_actor_with_observers` rather than a bare
+    /// [`run_actor`] with a `Weak::new()`, so the actor has a live
+    /// `ConnectionInner` to publish into; commands go in through the
+    /// connection's own `cmd_tx` so abandoned replies can be staged directly.
     #[tokio::test]
-    async fn live_pending_survives_the_sweep_boundary() {
-        let outbound_capacity = PENDING_SWEEP_INTERVAL as usize * 2 + 8;
-        let (ws, test_tx, _test_rx) = duplex_pair_with_capacity(outbound_capacity);
-        let (cmd_tx, cmd_rx) = mpsc::channel::<OutboundCmd>(8);
-        let (event_tx, _event_rx) = broadcast::channel::<RawEvent>(EVENT_BUS_CAPACITY);
-        let shutdown = CancellationToken::new();
-        let actor_handle = tokio::spawn(run_actor(
-            ws,
-            cmd_rx,
-            event_tx,
-            AccountedBus {
-                tx: broadcast::channel::<AccountedRawEvent>(EVENT_BUS_CAPACITY).0,
-                generation: 1,
-            },
-            shutdown.clone(),
-            Vec::new(),
-            Weak::new(),
-        ));
+    async fn the_sweep_reaps_abandoned_pendings_and_spares_live_ones() {
+        const ABANDONED: u64 = PENDING_SWEEP_DISPATCH_INTERVAL * 2;
+
+        // +8 for the live command and headroom: the driver's sink is
+        // `try_send`-based and nothing drains it here, so every dispatched
+        // frame has to fit or the write kills the actor.
+        let (ws, test_tx, _test_rx) = duplex_pair_with_capacity(ABANDONED as usize + 8);
+        let conn = spawn_actor_with_observers(ws, Vec::new());
+        let cmd_tx = conn
+            .inner
+            .cmd_tx
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
 
         // The one caller that stays alive. First command dispatched, so id 1.
         let (live_reply_tx, live_reply_rx) = oneshot::channel();
@@ -1004,7 +1020,9 @@ mod tests {
             .unwrap();
 
         // Enough abandoned callers to cross the sweep interval twice over.
-        for _ in 0..PENDING_SWEEP_INTERVAL * 2 {
+        // Dropping the receiver first is what a `call_raw` that hit its budget
+        // leaves behind.
+        for _ in 0..ABANDONED {
             let (abandoned_tx, abandoned_rx) = oneshot::channel();
             drop(abandoned_rx);
             cmd_tx
@@ -1020,7 +1038,9 @@ mod tests {
 
         // The actor's select is `biased` with `cmd_rx` ahead of the socket
         // read, so every one of those commands (and therefore both sweeps) is
-        // processed before this reply is routed.
+        // processed before this reply is routed. Awaiting the reply below is
+        // therefore also the barrier that makes `swept_total` readable without
+        // sleeping.
         test_tx
             .send(Ok(Message::text(
                 json!({ "id": 1, "result": { "frameId": "F1" } }).to_string(),
@@ -1035,8 +1055,22 @@ mod tests {
             .unwrap();
         assert_eq!(res["frameId"], "F1");
 
-        shutdown.cancel();
-        actor_handle.await.unwrap();
+        // Both sweeps have run by now. The first reaps the abandoned entries
+        // dispatched before it, the second the rest, so the total lands just
+        // under `ABANDONED` — assert the conservative lower bound rather than
+        // an exact figure that would pin the boundary arithmetic.
+        let swept = conn
+            .inner
+            .swept_total
+            .load(std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            swept >= PENDING_SWEEP_DISPATCH_INTERVAL,
+            "the actor must actually sweep abandoned pendings; swept {swept} of {ABANDONED} \
+             abandoned callers across {} dispatches",
+            ABANDONED + 1
+        );
+
+        conn.shutdown();
     }
 
     // ---------- Observer-dispatch tests (Task 11) ----------

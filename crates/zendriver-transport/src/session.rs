@@ -90,27 +90,9 @@ impl SessionHandle {
 mod tests {
     use super::*;
     use crate::connection::spawn_actor;
-    use crate::connection::test_only::DriverStream;
+    use crate::connection::test_only::duplex_pair;
     use serde_json::json;
-    use tokio::sync::mpsc;
     use tokio_tungstenite::tungstenite::Message;
-
-    fn duplex_pair() -> (
-        DriverStream,
-        mpsc::Sender<Result<Message, tokio_tungstenite::tungstenite::Error>>,
-        mpsc::Receiver<Message>,
-    ) {
-        let (tx_out, rx_out) = mpsc::channel(32);
-        let (tx_in, rx_in) = mpsc::channel(32);
-        (
-            DriverStream {
-                tx: tx_out,
-                rx: rx_in,
-            },
-            tx_in,
-            rx_out,
-        )
-    }
 
     #[tokio::test]
     async fn session_call_includes_session_id() {

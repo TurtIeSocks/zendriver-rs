@@ -96,20 +96,22 @@ pub enum ZendriverError {
     #[error("timed out after {0:?}")]
     Timeout(Duration),
 
-    /// Chrome accepted a CDP command and never answered it within the call's
-    /// budget.
+    /// A CDP call did not complete within its budget: either Chrome accepted
+    /// it and never answered, or it never left the send queue because the
+    /// transport's command channel stayed full for the whole budget. The
+    /// variant does not distinguish the two.
     ///
     /// Distinct from [`ZendriverError::Cdp`] (Chrome answered and *refused*)
     /// and [`ZendriverError::Disconnected`] (the socket died): here the
-    /// connection is healthy and the browser is simply wedged or slower than
-    /// the budget allows. Distinct from the generic
-    /// [`ZendriverError::Timeout`] because it names the CDP method, which is
-    /// what makes a stuck call diagnosable.
+    /// connection has not reported a failure, and the browser is wedged,
+    /// slower than the budget allows, or too backed up to take the command.
+    /// Distinct from the generic [`ZendriverError::Timeout`] because it names
+    /// the CDP method, which is what makes a stuck call diagnosable.
     ///
     /// See `zendriver_transport::DEFAULT_CALL_TIMEOUT` for the budget and
     /// `Connection::call_raw_with_timeout` / `Connection::set_call_timeout`
     /// to change it.
-    #[error("CDP call `{method}` went unanswered after {budget:?}")]
+    #[error("CDP call `{method}` did not complete within {budget:?}")]
     CdpTimeout {
         /// The CDP method that was never answered (e.g. `"Page.navigate"`).
         method: String,
@@ -292,9 +294,11 @@ impl From<CallError> for ZendriverError {
                 ZendriverError::Disconnected
             }
             CallError::Transport(t) => ZendriverError::Transport(Box::new(t)),
-            // Chrome never answered. Kept as its own variant rather than
-            // folded into the generic `Timeout(Duration)` so the method name
-            // — the only thing that makes a stuck call diagnosable — survives.
+            // The call ran out its budget — either Chrome never answered, or
+            // the command never left the send queue. Kept as its own variant
+            // rather than folded into the generic `Timeout(Duration)` so the
+            // method name — the only thing that makes a stuck call
+            // diagnosable — survives.
             CallError::Timeout { method, budget } => ZendriverError::CdpTimeout { method, budget },
             CallError::Rpc(code, message, data) => {
                 // Special-case: Chrome returns -32000 "Cannot find context in
