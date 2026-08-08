@@ -1,6 +1,6 @@
 //! `Connection` — the public handle to the transport actor.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -12,7 +12,9 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_util::sync::CancellationToken;
 
-use crate::actor::{AccountedBus, EVENT_BUS_CAPACITY, OutboundCmd, run_actor};
+use crate::actor::{
+    AccountedBus, CMD_CHANNEL_CAPACITY, EVENT_BUS_CAPACITY, OutboundCmd, run_actor,
+};
 use crate::error::{CallError, TransportError};
 use crate::frame::{AccountedRawEvent, RawEvent};
 use crate::observer::TargetObserver;
@@ -23,8 +25,8 @@ use crate::observer::TargetObserver;
 /// indefinitely; a misbehaving one trips the timeout and the debugger releases.
 pub(crate) const DEFAULT_OBSERVER_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Default ceiling on how long [`Connection::call_raw`] waits for Chrome to
-/// answer a single CDP command.
+/// Default per-call budget for [`Connection::call_raw`] — the ceiling on one
+/// whole CDP call, queueing included.
 ///
 /// # Why this exists
 ///
@@ -51,7 +53,11 @@ pub(crate) const DEFAULT_OBSERVER_TIMEOUT: Duration = Duration::from_secs(5);
 ///   gets Chrome's real error rather than ours. A tighter blanket default
 ///   would convert working code into flaky failures, which is strictly worse
 ///   than the hang: a false timeout is a silent behavior change in every
-///   consumer, while the hang at least only bites a wedged browser.
+///   consumer, while the hang at least only bites a wedged browser. The budget
+///   also covers time spent waiting for room in the actor's command channel,
+///   which does not move this floor: that queue is `CMD_CHANNEL_CAPACITY` deep
+///   and drains at socket speed, so any queue-wait long enough to matter
+///   against 3 minutes means the actor is already wedged on the call ahead.
 /// - **Ceiling — must stay well under `.config/nextest.toml`'s
 ///   `terminate-after = 6` (6 x 60s).** A default at or above that is
 ///   unreachable in CI: nextest hard-kills the test first, and we learn
@@ -90,6 +96,18 @@ pub(crate) const SHUTDOWN_DRAIN_CODE: i32 = -32001;
 /// unambiguous.
 pub(crate) const DISCONNECTED_CODE: i32 = -32002;
 
+/// Ceiling on a single [`Connection::redial`] — the TCP connect plus the
+/// WebSocket upgrade handshake.
+///
+/// Reconnect was the last lifecycle path with no deadline. That is exactly the
+/// shape the `zendriver` crate's `HANDSHAKE_TIMEOUT` was introduced to kill:
+/// an unbounded post-endpoint phase that "hung `launch()` forever" when
+/// Chrome's CDP responder accepted the socket and then went quiet. A reconnect
+/// dials the same kind of endpoint under worse conditions — the browser has
+/// already misbehaved once — so it gets the same 30s ceiling, deliberately
+/// matched rather than independently chosen.
+const REDIAL_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Cheap-to-clone handle to the connection actor. All `Tab`s and `Element`s
 /// hold one of these (via `Arc<...>`); the actor itself runs in a separate
 /// tokio task.
@@ -126,8 +144,8 @@ pub(crate) struct ConnectionInner {
     /// swapping here only ever cancels the latest actor.
     pub(crate) shutdown: Mutex<CancellationToken>,
     pub(crate) observer_timeout: Duration,
-    /// Default per-call reply budget, in milliseconds. See
-    /// [`DEFAULT_CALL_TIMEOUT`].
+    /// Default per-call budget, in milliseconds — covering the enqueue as well
+    /// as the reply. See [`DEFAULT_CALL_TIMEOUT`].
     ///
     /// Atomic rather than plain so it can be retuned on a live `Connection`
     /// (which is shared behind an `Arc` by every `Tab`/`SessionHandle`)
@@ -135,6 +153,33 @@ pub(crate) struct ConnectionInner {
     /// `Relaxed` is right: this is an advisory backstop read once per call,
     /// with no ordering relationship to anything else.
     pub(crate) call_timeout_ms: AtomicU64,
+    /// Why the current actor stopped, latched by the actor at exit: `true`
+    /// when the WebSocket died unexpectedly, `false` while it is still running
+    /// or when it stopped for a caller-requested [`Connection::shutdown`] /
+    /// [`Connection::reconnect`].
+    ///
+    /// Exists because a closed command channel is silent about *why* it
+    /// closed. Without this flag `TransportError::Disconnected` is reachable
+    /// only by a call already in flight when the socket died — a microsecond
+    /// window — and every call afterwards reports `Shutdown`, defeating the
+    /// `if let Err(ZendriverError::Disconnected) { browser.reconnect() }`
+    /// recipe that `Browser::reconnect` documents.
+    ///
+    /// Read via [`actor_gone_error`]; see the store in
+    /// [`crate::actor::run_actor`] for the ordering that makes it reliable.
+    pub(crate) socket_died: AtomicBool,
+    /// Total pending-reply entries reaped across every sweep this connection
+    /// has run, summed over all actor generations. Monotonic; never reset by
+    /// [`Connection::reconnect`].
+    ///
+    /// Exists because the sweep is otherwise unobservable — `pending` is a
+    /// local inside [`crate::actor::run_actor`], so without this counter the
+    /// whole leak fix could be deleted and no test would notice. A steadily
+    /// climbing value in production means callers are abandoning calls (hitting
+    /// their budget, or cancelled mid-flight) faster than Chrome answers them.
+    /// `Relaxed` suffices: an advisory count with no ordering relationship to
+    /// anything else, same rationale as `call_timeout_ms`.
+    pub(crate) swept_total: AtomicU64,
     /// Observer chain, retained so [`Connection::reconnect`] can re-spawn the
     /// actor with the same observers (so stealth re-injection etc. re-fire on
     /// the new targets). Stored as the `Vec` directly — an empty `Vec` means no
@@ -155,11 +200,30 @@ impl std::fmt::Debug for ConnectionInner {
             .field("shutdown", &self.shutdown)
             .field("observer_timeout", &self.observer_timeout)
             .field("call_timeout_ms", &self.call_timeout_ms)
+            .field("socket_died", &self.socket_died)
+            .field("swept_total", &self.swept_total)
             .field(
                 "observers",
                 &format_args!("<{} observers>", self.observers.len()),
             )
             .finish()
+    }
+}
+
+/// Which [`TransportError`] to report when the actor is no longer there — to
+/// take a command, or to answer one it already took.
+///
+/// A closed command channel only says *that* the actor is gone, never why, and
+/// defaulting that to `Shutdown` mislabels a dead browser as a deliberate
+/// close. Consulting the exit reason the actor latched on its way out
+/// ([`ConnectionInner::socket_died`]) keeps `Disconnected` reachable for the
+/// whole time the connection is dead, not just for the calls that happened to
+/// be in flight at the instant it died.
+fn actor_gone_error(inner: &ConnectionInner) -> TransportError {
+    if inner.socket_died.load(Ordering::Acquire) {
+        TransportError::Disconnected
+    } else {
+        TransportError::Shutdown
     }
 }
 
@@ -171,15 +235,17 @@ impl Connection {
     /// `session_id` routes the command to a particular target's session.
     ///
     /// Bounded by this connection's [`call_timeout`](Connection::call_timeout)
-    /// ([`DEFAULT_CALL_TIMEOUT`] unless changed): a Chrome that accepts the
-    /// command and never answers yields [`CallError::Timeout`] rather than
-    /// hanging the caller forever. Use [`Connection::call_raw_with_timeout`]
-    /// to override the budget for one call.
+    /// ([`DEFAULT_CALL_TIMEOUT`] unless changed), which covers the **whole**
+    /// call — queueing the command onto the actor as well as waiting for
+    /// Chrome's reply — so neither a wedged Chrome nor a saturated command
+    /// channel can hang the caller forever. Use
+    /// [`Connection::call_raw_with_timeout`] to override the budget for one
+    /// call.
     ///
     /// Returns [`CallError::Rpc`] when Chrome answered with a JSON-RPC error
     /// (preserving `code`, `message`, and `data`), [`CallError::Transport`]
-    /// for connection-level failures, and [`CallError::Timeout`] when Chrome
-    /// never answered at all.
+    /// for connection-level failures, and [`CallError::Timeout`] when the call
+    /// ran out its budget — whether or not Chrome ever saw it.
     pub async fn call_raw(
         &self,
         method: impl Into<String>,
@@ -190,13 +256,20 @@ impl Connection {
             .await
     }
 
-    /// This connection's default per-call reply budget.
+    /// This connection's default per-call budget. Covers the whole call —
+    /// queueing the command onto the actor as well as waiting for Chrome's
+    /// reply. See [`Connection::call_raw_with_timeout`].
     pub fn call_timeout(&self) -> Duration {
         Duration::from_millis(self.inner.call_timeout_ms.load(Ordering::Relaxed))
     }
 
-    /// Retune the default per-call reply budget for **every** future call on
-    /// this connection (and on every `Tab`/`SessionHandle` sharing it).
+    /// Retune the default per-call budget for **every** future call on this
+    /// connection (and on every `Tab`/`SessionHandle` sharing it).
+    ///
+    /// The budget covers the whole call, not just the reply: a command still
+    /// waiting for room in the actor's command channel is spending this
+    /// budget. Lowering it aggressively for a latency-sensitive workload can
+    /// therefore fail a call that Chrome never even saw.
     ///
     /// Prefer [`Connection::call_raw_with_timeout`] when only one call is
     /// unusual; reach for this when a whole workload is (a deliberately
@@ -209,7 +282,7 @@ impl Connection {
         self.inner.call_timeout_ms.store(ms, Ordering::Relaxed);
     }
 
-    /// [`Connection::call_raw`] with an explicit reply budget.
+    /// [`Connection::call_raw`] with an explicit per-call budget.
     ///
     /// `budget` of `Some(d)` bounds the wait at `d`; `None` opts out entirely
     /// and restores the old unbounded behavior for a call the caller knows is
@@ -217,9 +290,17 @@ impl Connection {
     /// resolves only if the socket dies — so it exists for deliberate,
     /// documented use, not convenience.
     ///
-    /// Note the budget covers **only** the wait for Chrome's reply. Queueing
-    /// the command onto the actor is bounded independently by the actor's
-    /// channel capacity and fails fast with [`TransportError::Shutdown`].
+    /// The budget covers the **whole** call — queueing the command onto the
+    /// actor *and* waiting for Chrome's reply. Queueing is not free: the
+    /// actor's command channel is `CMD_CHANNEL_CAPACITY` deep and applies
+    /// backpressure once a burst fills it, so a budget that started only at
+    /// the reply would not bound what the caller actually experiences.
+    /// A [`CallError::Timeout`] therefore does not imply Chrome saw the
+    /// command. Queueing fails outright
+    /// only when the actor is gone, which surfaces as
+    /// [`TransportError::Disconnected`] (the socket died) or
+    /// [`TransportError::Shutdown`] (a caller-requested
+    /// [`shutdown`](Connection::shutdown)).
     pub async fn call_raw_with_timeout(
         &self,
         method: impl Into<String>,
@@ -228,7 +309,6 @@ impl Connection {
         budget: Option<Duration>,
     ) -> Result<Value, CallError> {
         let method = method.into();
-        let (reply_tx, reply_rx) = oneshot::channel();
         // Clone the current sender out from under the lock, then release the
         // guard before the `.await` — `std::sync::Mutex` must not be held
         // across an await point, and a concurrent `reconnect()` swap is fine
@@ -241,43 +321,57 @@ impl Connection {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             guard.clone()
         };
-        cmd_tx
-            .send(OutboundCmd {
-                // Cloned so the error path can name the stuck method — one
-                // small alloc against a websocket round-trip.
-                method: method.clone(),
-                params,
-                session_id,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|_| TransportError::Shutdown)?;
 
-        // The bare `reply_rx.await` this replaces was THE hang: only a dying
-        // websocket could resolve a pending call, so a wedged-but-connected
-        // Chrome blocked the caller forever.
-        let reply = match budget {
-            Some(budget) => match tokio::time::timeout(budget, reply_rx).await {
-                Ok(reply) => reply,
-                Err(_elapsed) => return Err(CallError::Timeout { method, budget }),
-            },
-            None => reply_rx.await,
-        };
+        // Cloned so the timeout path below can still name the stuck method —
+        // one small alloc against a websocket round-trip.
+        let cmd_method = method.clone();
+        let inner: &ConnectionInner = &self.inner;
+        // Enqueue and reply live in one future so a single `timeout` can wrap
+        // both. Splitting them (the enqueue awaited bare, the timeout starting
+        // only afterwards) let a call blow far past its own budget while
+        // waiting for room in the command channel.
+        let call = async move {
+            let (reply_tx, reply_rx) = oneshot::channel();
+            cmd_tx
+                .send(OutboundCmd {
+                    method: cmd_method,
+                    params,
+                    session_id,
+                    reply: reply_tx,
+                })
+                .await
+                .map_err(|_| CallError::Transport(actor_gone_error(inner)))?;
 
-        match reply {
-            Ok(Ok(v)) => Ok(v),
-            Ok(Err(rpc_err)) => {
+            // The bare `reply_rx.await` this replaces was THE hang: only a
+            // dying websocket could resolve a pending call, so a
+            // wedged-but-connected Chrome blocked the caller forever.
+            match reply_rx.await {
+                Ok(Ok(v)) => Ok(v),
                 // Preserve the transport drain sentinels for drained pendings;
                 // everything else surfaces as a typed RPC error. Both sentinel
                 // codes are reserved internally — Chrome never emits them — so
                 // a code-only check is unambiguous.
-                match rpc_err.code {
-                    SHUTDOWN_DRAIN_CODE => Err(CallError::Transport(TransportError::Shutdown)),
-                    DISCONNECTED_CODE => Err(CallError::Transport(TransportError::Disconnected)),
-                    _ => Err(CallError::Rpc(rpc_err.code, rpc_err.message, rpc_err.data)),
-                }
+                Ok(Err(rpc_err)) => Err(match rpc_err.code {
+                    SHUTDOWN_DRAIN_CODE => CallError::Transport(TransportError::Shutdown),
+                    DISCONNECTED_CODE => CallError::Transport(TransportError::Disconnected),
+                    _ => CallError::Rpc(rpc_err.code, rpc_err.message, rpc_err.data),
+                }),
+                // The command was accepted but the actor dropped our reply
+                // sender without answering — it died between the two. Same
+                // question as a failed enqueue, so same answer.
+                Err(_) => Err(CallError::Transport(actor_gone_error(inner))),
             }
-            Err(_) => Err(CallError::Transport(TransportError::Shutdown)),
+        };
+
+        match budget {
+            None => call.await,
+            // A `match` rather than `unwrap_or_else`: a closure returning
+            // `Err(CallError)` trips `clippy::result_large_err`, and boxing
+            // the error to satisfy it would change a public type.
+            Some(budget) => match tokio::time::timeout(budget, call).await {
+                Ok(outcome) => outcome,
+                Err(_elapsed) => Err(CallError::Timeout { method, budget }),
+            },
         }
     }
 
@@ -493,7 +587,7 @@ impl Connection {
 
         // Fresh command channel + shutdown token for the new actor; reuse the
         // SAME event buses so existing subscribers keep receiving.
-        let (cmd_tx, cmd_rx) = mpsc::channel::<OutboundCmd>(64);
+        let (cmd_tx, cmd_rx) = mpsc::channel::<OutboundCmd>(CMD_CHANNEL_CAPACITY);
         let new_shutdown = CancellationToken::new();
         let weak_inner = Arc::downgrade(&self.inner);
         tokio::spawn(run_actor(
@@ -523,6 +617,27 @@ impl Connection {
             .shutdown
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = new_shutdown;
+
+        // The connection is live again, so clear the previous actor's exit
+        // reason — otherwise a later clean `shutdown()` would still report
+        // `Disconnected` from the death this reconnect just repaired. The
+        // remaining race is benign and self-limiting: it needs the *new* actor
+        // to also be gone before the flag is ever read, and it only mislabels
+        // which kind of dead the connection is.
+        //
+        // This clear has no *behavioural* observer: `actor_gone_error` is the
+        // only code that branches on `socket_died`, and both paths to it
+        // require the *current* actor to be gone, while every actor exit
+        // re-latches the flag on its way out. It is not unobservable, though —
+        // `ConnectionInner`'s `Debug` prints the flag, and `Connection` is
+        // `Debug` and public via `Browser::cdp()`, so `{:?}` surfaces it
+        // without the actor being gone.
+        // Do not add a read path that does not depend on the current actor
+        // being gone (a `Connection::is_disconnected()` accessor is the obvious
+        // temptation) without revisiting this: such a reader could observe the
+        // flag while an actor is still running, and the ordering argument above
+        // would no longer cover it.
+        self.inner.socket_died.store(false, Ordering::Release);
     }
 
     /// Dial `ws_url` afresh (re-applying the P-A A4 [`WebSocketConfig`] max-size
@@ -534,18 +649,51 @@ impl Connection {
     /// Tests that drive an in-memory duplex stream call [`Connection::reconnect`]
     /// directly instead.
     ///
+    /// Bounded at 30 seconds — matching the launch handshake's own guard — so
+    /// a Chrome that accepts the TCP connection and then never finishes the
+    /// WebSocket upgrade cannot hang the caller forever.
+    ///
     /// # Errors
     ///
     /// Returns [`TransportError::Ws`] when the dial fails (Chrome gone, refused
-    /// connection, bad URL). The existing actor is left **untouched** on dial
-    /// failure — only a successful dial swaps the socket.
+    /// connection, bad URL), and [`TransportError::Io`] with
+    /// [`std::io::ErrorKind::TimedOut`] when the dial neither succeeds nor
+    /// fails within that ceiling. The existing actor is left **untouched** on
+    /// either failure — only a successful dial swaps the socket.
     ///
     /// [`WebSocketConfig`]: tokio_tungstenite::tungstenite::protocol::WebSocketConfig
     pub async fn redial(&self, ws_url: &str) -> Result<(), TransportError> {
+        self.redial_with_timeout(ws_url, REDIAL_TIMEOUT).await
+    }
+
+    /// [`Connection::redial`] with a caller-chosen ceiling. Private: production
+    /// callers get [`REDIAL_TIMEOUT`]; tests pass a short budget so the
+    /// timeout path is assertable in milliseconds rather than 30 seconds.
+    async fn redial_with_timeout(
+        &self,
+        ws_url: &str,
+        budget: Duration,
+    ) -> Result<(), TransportError> {
         use tokio_tungstenite::connect_async_with_config;
         // Dial FIRST; only swap the live actor if the new socket is up, so a
         // failed reconnect doesn't tear down a still-usable connection.
-        let (ws, _resp) = connect_async_with_config(ws_url, Some(ws_config()), false).await?;
+        let dial = connect_async_with_config(ws_url, Some(ws_config()), false);
+        let (ws, _resp) = match tokio::time::timeout(budget, dial).await {
+            Ok(dialled) => dialled?,
+            Err(_elapsed) => {
+                // Deliberately without `ws_url`. Chrome's DevTools URL carries
+                // a per-browser UUID in its path that is a bearer capability
+                // for the whole browser, and an error `Display` travels further
+                // than a log line — it surfaces at any log level and lands in
+                // whatever error tracker the consumer wired up. The caller
+                // passed the URL in, so they already know it; the sibling
+                // `TransportError::Ws` path does not echo it either.
+                return Err(TransportError::Io(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("redial did not complete within {budget:?}"),
+                )));
+            }
+        };
         self.reconnect(ws);
         Ok(())
     }
@@ -687,7 +835,7 @@ where
         + Unpin
         + 'static,
 {
-    let (cmd_tx, cmd_rx) = mpsc::channel::<OutboundCmd>(64);
+    let (cmd_tx, cmd_rx) = mpsc::channel::<OutboundCmd>(CMD_CHANNEL_CAPACITY);
     let (event_tx, _event_rx) = broadcast::channel::<RawEvent>(EVENT_BUS_CAPACITY);
     let (accounted_tx, _accounted_rx) = broadcast::channel::<AccountedRawEvent>(accounted_capacity);
     let shutdown = CancellationToken::new();
@@ -699,6 +847,8 @@ where
         shutdown: Mutex::new(shutdown.clone()),
         observer_timeout,
         call_timeout_ms: AtomicU64::new(DEFAULT_CALL_TIMEOUT.as_millis() as u64),
+        socket_died: AtomicBool::new(false),
+        swept_total: AtomicU64::new(0),
         // Retain the observer chain so `reconnect` can re-spawn the actor with
         // the same observers without the caller re-supplying them.
         observers: observers.clone(),
@@ -777,34 +927,56 @@ pub(crate) mod test_only {
             self.rx.poll_recv(cx)
         }
     }
+
+    /// Build a paired (driver-side, test-side) Sink/Stream of tungstenite
+    /// `Message`s using mpsc channels. Driver writes go to the returned
+    /// receiver; test writes go in through the returned sender.
+    ///
+    /// Lives here, next to [`DriverStream`], because every test module in the
+    /// crate needs it — `actor`, `connection` and `session` each had their own
+    /// copy, and the capacity-aware variant below only ever reached one of
+    /// them.
+    #[cfg(test)]
+    pub fn duplex_pair() -> (
+        DriverStream,
+        mpsc::Sender<Result<Message, tokio_tungstenite::tungstenite::Error>>,
+        mpsc::Receiver<Message>,
+    ) {
+        duplex_pair_with_capacity(32)
+    }
+
+    /// [`duplex_pair`] with a caller-chosen outbound capacity. The driver's
+    /// sink is `try_send`-based, so a test that dispatches a large burst
+    /// without draining needs room for all of it — otherwise the write fails
+    /// and kills the actor, which is a different test than the one intended.
+    #[cfg(test)]
+    pub fn duplex_pair_with_capacity(
+        outbound_capacity: usize,
+    ) -> (
+        DriverStream,
+        mpsc::Sender<Result<Message, tokio_tungstenite::tungstenite::Error>>,
+        mpsc::Receiver<Message>,
+    ) {
+        let (driver_tx_out, test_rx) = mpsc::channel::<Message>(outbound_capacity);
+        let (test_tx_in, driver_rx_in) =
+            mpsc::channel::<Result<Message, tokio_tungstenite::tungstenite::Error>>(32);
+
+        // Driver-side: sink writes to driver_tx_out; stream reads from driver_rx_in.
+        let driver = DriverStream {
+            tx: driver_tx_out,
+            rx: driver_rx_in,
+        };
+        (driver, test_tx_in, test_rx)
+    }
 }
 
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::connection::test_only::DriverStream;
+    use crate::connection::test_only::duplex_pair;
     use serde_json::json;
     use tokio_tungstenite::tungstenite::Message;
-
-    fn duplex_pair() -> (
-        DriverStream,
-        tokio::sync::mpsc::Sender<Result<Message, tokio_tungstenite::tungstenite::Error>>,
-        tokio::sync::mpsc::Receiver<Message>,
-    ) {
-        let (tx_out, rx_out) = tokio::sync::mpsc::channel::<Message>(32);
-        let (tx_in, rx_in) = tokio::sync::mpsc::channel::<
-            Result<Message, tokio_tungstenite::tungstenite::Error>,
-        >(32);
-        (
-            DriverStream {
-                tx: tx_out,
-                rx: rx_in,
-            },
-            tx_in,
-            rx_out,
-        )
-    }
 
     #[tokio::test]
     async fn call_raw_round_trips_through_actor() {
@@ -841,10 +1013,26 @@ mod tests {
         conn.shutdown();
     }
 
-    #[tokio::test]
-    async fn call_raw_maps_unexpected_disconnect_to_disconnected_error() {
-        use crate::error::{CallError, TransportError};
-        let (ws, test_tx, mut test_rx) = duplex_pair();
+    /// A connection with exactly one `call_raw` already on the wire and
+    /// awaiting its reply — so the actor is provably up before a test kills
+    /// it. Shared by the four drain tests below, which all need this same
+    /// setup and then differ only in how the connection dies and what they
+    /// assert afterwards.
+    struct InFlightCall {
+        conn: Connection,
+        /// Inbound sender. Dropping it ends the stream with no caller-requested
+        /// shutdown — an unexpected disconnect.
+        inbound: mpsc::Sender<Result<Message, tokio_tungstenite::tungstenite::Error>>,
+        /// Outbound receiver, retained only to keep the driver's sink alive.
+        /// Dropping it would make the *next* write fail, which is a different
+        /// test (`failed_socket_write_reports_disconnected_to_its_own_caller`).
+        _outbound: mpsc::Receiver<Message>,
+        /// The in-flight call.
+        call: tokio::task::JoinHandle<Result<Value, CallError>>,
+    }
+
+    async fn connection_with_one_call_in_flight() -> InFlightCall {
+        let (ws, inbound, mut outbound) = duplex_pair();
         let conn = spawn_actor(ws);
 
         let call = tokio::spawn({
@@ -855,43 +1043,296 @@ mod tests {
             }
         });
 
-        // Wait for the command to land so the pending entry exists, then sever
-        // the socket without a caller-requested shutdown.
-        let _ = test_rx.recv().await.unwrap();
-        drop(test_tx);
+        // Wait for the command to reach the socket, so the pending entry
+        // exists before the caller kills anything.
+        let _sent = tokio::time::timeout(Duration::from_secs(5), outbound.recv())
+            .await
+            .expect("the in-flight command must reach the socket")
+            .expect("the driver must forward it");
 
-        let res = call.await.unwrap();
+        InFlightCall {
+            conn,
+            inbound,
+            _outbound: outbound,
+            call,
+        }
+    }
+
+    /// The narrow half of the contract: a call already in flight when the
+    /// socket dies drains as `Disconnected`. Kept separate from
+    /// `calls_made_after_the_socket_dies_still_report_disconnected` (which
+    /// starts the same way) so a regression in the drain localises here
+    /// instead of failing both with the same output.
+    #[tokio::test]
+    async fn call_raw_maps_unexpected_disconnect_to_disconnected_error() {
+        let f = connection_with_one_call_in_flight().await;
+
+        // Sever the socket without a caller-requested shutdown.
+        drop(f.inbound);
+
+        let res = f.call.await.unwrap();
         assert!(
             matches!(res, Err(CallError::Transport(TransportError::Disconnected))),
             "unexpected disconnect must map to TransportError::Disconnected, got {res:?}"
         );
 
-        conn.shutdown();
+        f.conn.shutdown();
     }
 
+    /// The `Shutdown` twin of the test above.
     #[tokio::test]
     async fn call_raw_maps_clean_shutdown_to_shutdown_error() {
-        use crate::error::{CallError, TransportError};
-        let (ws, _test_tx, mut test_rx) = duplex_pair();
-        let conn = spawn_actor(ws);
+        let f = connection_with_one_call_in_flight().await;
 
-        let call = tokio::spawn({
-            let c = conn.clone();
-            async move {
-                c.call_raw("Page.navigate", json!({ "url": "https://x.test" }), None)
-                    .await
-            }
-        });
-
-        let _ = test_rx.recv().await.unwrap();
         // Caller-requested shutdown — must stay `Shutdown`, never `Disconnected`.
-        conn.shutdown();
+        f.conn.shutdown();
 
-        let res = call.await.unwrap();
+        let res = f.call.await.unwrap();
         assert!(
             matches!(res, Err(CallError::Transport(TransportError::Shutdown))),
             "clean shutdown must map to TransportError::Shutdown, got {res:?}"
         );
+    }
+
+    /// A failed socket write means the socket died, and the caller whose
+    /// command hit that failure must be told so. It used to get a bare
+    /// `-32000` — a code Chrome itself emits constantly — so the one call that
+    /// actually discovered the disconnect was the one call that could not
+    /// match a `Disconnected` recovery arm, while every *other* pending
+    /// command in the same branch was correctly drained as `Disconnected`.
+    #[tokio::test]
+    async fn failed_socket_write_reports_disconnected_to_its_own_caller() {
+        let (ws, _test_tx, test_rx) = duplex_pair();
+        // Drop the read end of the driver's sink so the very next write fails.
+        // `_test_tx` stays alive, so the inbound stream is still pending — the
+        // write failure is the only thing that can end this actor.
+        drop(test_rx);
+        let conn = spawn_actor(ws);
+
+        let res = tokio::time::timeout(
+            Duration::from_secs(5),
+            conn.call_raw("Page.navigate", json!({ "url": "https://x.test" }), None),
+        )
+        .await
+        .expect("must not hang");
+
+        assert!(
+            matches!(res, Err(CallError::Transport(TransportError::Disconnected))),
+            "a failed socket write must surface as Disconnected, got {res:?}"
+        );
+    }
+
+    /// `Browser::reconnect`'s own rustdoc tells callers to key recovery off
+    /// `Disconnected`. Before the actor latched its exit reason, that variant
+    /// was reachable only by a call already in flight at the instant the
+    /// socket died: every call afterwards found a closed command channel —
+    /// which says nothing about *why* it closed — and reported `Shutdown`, so
+    /// the documented recipe never fired.
+    #[tokio::test]
+    async fn calls_made_after_the_socket_dies_still_report_disconnected() {
+        let f = connection_with_one_call_in_flight().await;
+        let conn = f.conn;
+        drop(f.inbound);
+
+        let drained = f.call.await.unwrap();
+        assert!(
+            matches!(
+                drained,
+                Err(CallError::Transport(TransportError::Disconnected))
+            ),
+            "the in-flight call must drain as Disconnected, got {drained:?}"
+        );
+
+        // The actual regression: calls made *after* the actor is gone. Three
+        // of them, because the first may still be buffered into the dying
+        // command channel while later ones fail the send outright — both
+        // routes must report the same thing.
+        for attempt in 1..=3 {
+            let res = tokio::time::timeout(
+                Duration::from_secs(5),
+                conn.call_raw("Page.navigate", json!({}), None),
+            )
+            .await
+            .expect("must not hang");
+            assert!(
+                matches!(res, Err(CallError::Transport(TransportError::Disconnected))),
+                "post-death call #{attempt} must report Disconnected, not Shutdown; got {res:?}"
+            );
+        }
+    }
+
+    /// A caller-requested shutdown must stay `Shutdown` even though the latch
+    /// now exists — the whole point is telling the two deaths apart.
+    #[tokio::test]
+    async fn calls_made_after_a_clean_shutdown_still_report_shutdown() {
+        let f = connection_with_one_call_in_flight().await;
+        let conn = f.conn;
+        conn.shutdown();
+
+        let drained = f.call.await.unwrap();
+        assert!(matches!(
+            drained,
+            Err(CallError::Transport(TransportError::Shutdown))
+        ));
+
+        for attempt in 1..=3 {
+            let res = tokio::time::timeout(
+                Duration::from_secs(5),
+                conn.call_raw("Page.navigate", json!({}), None),
+            )
+            .await
+            .expect("must not hang");
+            assert!(
+                matches!(res, Err(CallError::Transport(TransportError::Shutdown))),
+                "post-shutdown call #{attempt} must stay Shutdown, got {res:?}"
+            );
+        }
+    }
+
+    /// A `Connection` whose command channel has capacity `capacity` and **no
+    /// actor draining it**, so the enqueue side can be filled deterministically.
+    /// The receiver is handed back rather than dropped: dropping it would make
+    /// `send` fail fast instead of applying the backpressure under test.
+    fn stalled_connection(capacity: usize) -> (Connection, mpsc::Receiver<OutboundCmd>) {
+        let (cmd_tx, cmd_rx) = mpsc::channel::<OutboundCmd>(capacity);
+        let (event_tx, _event_rx) = broadcast::channel::<RawEvent>(EVENT_BUS_CAPACITY);
+        let (accounted_tx, _accounted_rx) =
+            broadcast::channel::<AccountedRawEvent>(EVENT_BUS_CAPACITY);
+        let inner = Arc::new(ConnectionInner {
+            cmd_tx: Mutex::new(cmd_tx),
+            event_tx,
+            accounted_tx,
+            generation: AtomicU64::new(1),
+            shutdown: Mutex::new(CancellationToken::new()),
+            observer_timeout: DEFAULT_OBSERVER_TIMEOUT,
+            call_timeout_ms: AtomicU64::new(DEFAULT_CALL_TIMEOUT.as_millis() as u64),
+            socket_died: AtomicBool::new(false),
+            swept_total: AtomicU64::new(0),
+            observers: Vec::new(),
+        });
+        (Connection { inner }, cmd_rx)
+    }
+
+    /// The budget must bound the **whole** call. It used to start only after
+    /// `cmd_tx.send().await` returned, so a call whose enqueue waited on a full
+    /// command channel sailed straight past its own budget with nothing to
+    /// stop it — `Some(100ms)` could block indefinitely.
+    #[tokio::test]
+    async fn call_budget_bounds_the_enqueue_not_just_the_reply() {
+        let (conn, _cmd_rx) = stalled_connection(1);
+
+        // Occupy the single slot, so the call under test must wait for room.
+        let (filler_reply, _filler_rx) = oneshot::channel();
+        conn.inner
+            .cmd_tx
+            .lock()
+            .unwrap()
+            .try_send(OutboundCmd {
+                method: "Filler.command".into(),
+                params: json!({}),
+                session_id: None,
+                reply: filler_reply,
+            })
+            .expect("the first slot is free");
+
+        let started = tokio::time::Instant::now();
+        let res = tokio::time::timeout(
+            Duration::from_secs(5),
+            conn.call_raw_with_timeout(
+                "Page.navigate",
+                json!({}),
+                None,
+                Some(Duration::from_millis(100)),
+            ),
+        )
+        .await
+        .expect("a blocked enqueue must still hit the budget rather than hang");
+
+        match res {
+            Err(CallError::Timeout { method, budget }) => {
+                assert_eq!(method, "Page.navigate", "must name the stuck method");
+                assert_eq!(budget, Duration::from_millis(100));
+            }
+            other => panic!("expected CallError::Timeout, got {other:?}"),
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the budget must fire on time; took {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// Reconnect used to be the one lifecycle path with no deadline. A server
+    /// that completes the TCP connect and then never answers the upgrade
+    /// request is exactly the unbounded post-endpoint phase the launch-side
+    /// `HANDSHAKE_TIMEOUT` was introduced to kill.
+    #[tokio::test]
+    async fn redial_times_out_instead_of_hanging_forever() {
+        let (ws, _test_tx, _test_rx) = duplex_pair();
+        let conn = spawn_actor(ws);
+
+        // Accepts the connection, then says nothing — ever.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let silent_server = tokio::spawn(async move {
+            // `accepted` is never read, and that is the point: it holds every
+            // accepted socket open. Dropping one closes the connection, so the
+            // client would get a fast `ConnectionReset` instead of the silence
+            // this test needs — and the failure would point at the timeout
+            // logic rather than at this server.
+            let mut accepted = Vec::new();
+            while let Ok((sock, _peer)) = listener.accept().await {
+                accepted.push(sock);
+            }
+        });
+
+        // Shaped like a real DevTools endpoint: the path UUID is a bearer
+        // capability for the whole browser.
+        let ws_url = format!("ws://{addr}/devtools/browser/6f1c0e42-secret-capability");
+        let started = tokio::time::Instant::now();
+        let res = tokio::time::timeout(
+            Duration::from_secs(10),
+            conn.redial_with_timeout(&ws_url, Duration::from_millis(150)),
+        )
+        .await
+        .expect("redial must not hang");
+
+        match res {
+            Err(TransportError::Io(io)) => {
+                assert_eq!(io.kind(), std::io::ErrorKind::TimedOut);
+                // Errors travel further than logs: an error `Display` surfaces
+                // at any log level and propagates into the consumer's error
+                // tracker, so the capability URL must not ride along. The
+                // caller passed it in and already knows it.
+                let msg = io.to_string();
+                assert!(
+                    !msg.contains("secret-capability") && !msg.contains(&ws_url),
+                    "the redial timeout error must not leak the DevTools URL; got {msg:?}"
+                );
+            }
+            other => panic!("expected a TimedOut io error, got {other:?}"),
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the redial ceiling must fire on time; took {:?}",
+            started.elapsed()
+        );
+        assert_eq!(
+            conn.connection_generation(),
+            1,
+            "a failed redial must leave the live actor untouched"
+        );
+
+        silent_server.abort();
+        conn.shutdown();
+    }
+
+    /// The redial ceiling deliberately mirrors the launch handshake's own
+    /// guard in the `zendriver` crate: same failure shape, same bound.
+    #[test]
+    fn redial_timeout_matches_the_launch_handshake_guard() {
+        const LAUNCH_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+        assert_eq!(REDIAL_TIMEOUT, LAUNCH_HANDSHAKE_TIMEOUT);
     }
 
     #[tokio::test]
