@@ -193,7 +193,9 @@ async fn dispatch_key(tab: &crate::tab::Tab, key: Key, mods: KeyModifiers) -> Re
 mod tests {
     use super::*;
     use crate::input::keyboard::SpecialKey;
+    use crate::query::actionability::ActionabilityCheck;
     use crate::tab::Tab;
+    use crate::test_support::{expect, serve_gate_probes, serve_scroll_into_view};
     use serde_json::{Value, json};
     use zendriver_transport::SessionHandle;
     use zendriver_transport::testing::MockConnection;
@@ -213,18 +215,14 @@ mod tests {
             async move { e.type_text_fast("hi").await }
         });
 
-        // focus() runs the actionability gate first: visible → enabled.
+        // focus() scrolls the element into view first — the visibility gate
+        // below is a viewport check, so a field under the fold would fail it.
+        serve_scroll_into_view(&mut mock).await;
+        // focus() then runs the actionability gate: visible → enabled.
         // ActionabilityCheck::TEXT_INPUT skips stable + receives_pointer.
-        for _ in 0..2 {
-            let id = mock.expect_cmd("Runtime.callFunctionOn").await;
-            mock.reply(
-                id,
-                json!({ "result": { "value": true, "type": "boolean" } }),
-            )
-            .await;
-        }
+        serve_gate_probes(&mut mock, ActionabilityCheck::TEXT_INPUT).await;
         // focus() then calls el.focus() — one more Runtime.callFunctionOn.
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        let id = expect(&mut mock, "Runtime.callFunctionOn").await;
         let sent = mock.last_sent();
         assert!(
             sent["params"]["functionDeclaration"]
@@ -244,7 +242,7 @@ mod tests {
             ("i", "keyUp"),
         ];
         for (ch, kind) in expected {
-            let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+            let id = expect(&mut mock, "Input.dispatchKeyEvent").await;
             let last = mock.last_sent();
             assert_eq!(last["params"]["text"].as_str().unwrap(), ch);
             assert_eq!(last["params"]["type"].as_str().unwrap(), kind);
@@ -255,18 +253,13 @@ mod tests {
         conn.shutdown();
     }
 
-    /// Drain the focus() actionability gate (visible → enabled) plus the
-    /// final `this.focus()` call, replying to each.
+    /// Drain the focus() sequence — `scroll_into_view`, the actionability
+    /// gate (visible → enabled), then the final `this.focus()` call —
+    /// replying to each.
     async fn drain_focus(mock: &mut MockConnection) {
-        for _ in 0..2 {
-            let id = mock.expect_cmd("Runtime.callFunctionOn").await;
-            mock.reply(
-                id,
-                json!({ "result": { "value": true, "type": "boolean" } }),
-            )
-            .await;
-        }
-        let id = mock.expect_cmd("Runtime.callFunctionOn").await;
+        serve_scroll_into_view(mock).await;
+        serve_gate_probes(mock, ActionabilityCheck::TEXT_INPUT).await;
+        let id = expect(mock, "Runtime.callFunctionOn").await;
         mock.reply(id, json!({ "result": { "type": "undefined" } }))
             .await;
     }
@@ -295,7 +288,7 @@ mod tests {
             ("ControlLeft", "keyUp", 0),
         ];
         for (code, kind, mods) in expected {
-            let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+            let id = expect(&mut mock, "Input.dispatchKeyEvent").await;
             let last = mock.last_sent();
             assert_eq!(last["params"]["code"].as_str().unwrap(), code);
             assert_eq!(last["params"]["type"].as_str().unwrap(), kind);
@@ -329,14 +322,15 @@ mod tests {
 
         drain_focus(&mut mock).await;
 
-        // "hi" → h/i down+up; Enter → rawKeyDown+keyUp; Ctrl+a → Control
-        // wrap around a. 10 dispatch events total.
+        // "hi" → h/i down+up; Enter → keyDown+keyUp (Enter inserts text, so
+        // it carries it like any printable key); Ctrl+a → Control wrap around
+        // a. 10 dispatch events total.
         let expected = [
             ("h", "keyDown"),
             ("h", "keyUp"),
             ("i", "keyDown"),
             ("i", "keyUp"),
-            ("Enter", "rawKeyDown"),
+            ("Enter", "keyDown"),
             ("Enter", "keyUp"),
             ("Control", "keyDown"),
             ("a", "keyDown"),
@@ -344,7 +338,7 @@ mod tests {
             ("Control", "keyUp"),
         ];
         for (key, kind) in expected {
-            let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+            let id = expect(&mut mock, "Input.dispatchKeyEvent").await;
             let last = mock.last_sent();
             assert_eq!(last["params"]["key"].as_str().unwrap(), key);
             assert_eq!(last["params"]["type"].as_str().unwrap(), kind);
@@ -370,7 +364,7 @@ mod tests {
         drain_focus(&mut mock).await;
 
         // Emoji has no physical-key descriptor → one `char`-type event.
-        let id = mock.expect_cmd("Input.dispatchKeyEvent").await;
+        let id = expect(&mut mock, "Input.dispatchKeyEvent").await;
         let last = mock.last_sent();
         assert_eq!(last["params"]["type"].as_str().unwrap(), "char");
         assert_eq!(last["params"]["text"].as_str().unwrap(), "🚀");

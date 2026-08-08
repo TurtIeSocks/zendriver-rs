@@ -36,6 +36,15 @@ pub(crate) async fn tap_at(tab: &Tab, x: f64, y: f64) -> Result<()> {
             }),
         )
         .await?;
+    // A tap moves the pointer as far as the page is concerned, so keep the
+    // controller's cached cursor in step. Without this the next realistic mouse
+    // move builds its Bezier from a stale origin and opens by teleporting back
+    // to wherever the last mouse action landed.
+    {
+        let mut s = tab.input().state.lock().await;
+        s.pointer_x = x;
+        s.pointer_y = y;
+    }
     Ok(())
 }
 
