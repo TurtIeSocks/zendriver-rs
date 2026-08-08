@@ -13,7 +13,7 @@ use zendriver_transport::{CallError, ObserverError, PausedSession, TargetObserve
 
 use crate::patches::{bootstrap_script, bootstrap_script_native_webgl, geometry_bootstrap_with};
 use crate::persona::GeoPos;
-use crate::persona::specs::{ScreenSpec, UaMetadata};
+use crate::persona::specs::UaMetadata;
 use crate::{Fingerprint, Persona, ProfileKind, StealthProfile};
 
 /// Observer that applies a [`StealthProfile`] + [`Fingerprint`] to every page
@@ -28,20 +28,19 @@ pub struct StealthObserver {
     /// need to pay the patches-bundle cost for them.
     bootstrap: String,
     /// Mock geolocation coordinates from the resolved [`Persona`], sent via
-    /// `Emulation.setGeolocationOverride`. Unlike `timezone`/`locale` (carried
-    /// on [`Fingerprint`]), geolocation has no `Fingerprint` counterpart, so
-    /// it's captured here straight off the persona at construction time.
+    /// `Emulation.setGeolocationOverride`. Unlike
+    /// `timezone`/`locale`/`languages`/`screen` (folded into `fingerprint` by
+    /// [`Fingerprint::overlay_persona`]), geolocation has no `Fingerprint`
+    /// counterpart, so it's captured here straight off the persona at
+    /// construction time.
     geolocation: Option<GeoPos>,
     /// Custom UA-CH from the resolved [`Persona`]'s `ua.ua_metadata`. When
     /// set, [`UaMetadata::resolve`] fills any unset sub-field from
     /// `fingerprint.ua_metadata` and the result drives
     /// `Emulation.setUserAgentOverride.userAgentMetadata` in place of the
-    /// fingerprint-derived value outright.
+    /// fingerprint-derived value outright. Field-wise rather than
+    /// whole-value, which is why it is not folded into `fingerprint`.
     ua_metadata: Option<UaMetadata>,
-    /// Custom screen / device-metrics from the resolved [`Persona`]. When
-    /// set, drives `Emulation.setDeviceMetricsOverride` in place of the
-    /// fixed 1920x1080 default.
-    screen: Option<ScreenSpec>,
 }
 
 impl StealthObserver {
@@ -59,13 +58,24 @@ impl StealthObserver {
     }
 
     /// Build a new observer with an explicit [`Persona`] driving the surface
-    /// patches. `identity` still supplies the coherent UA / Chrome version.
+    /// patches. `fingerprint` still supplies the coherent UA / Chrome version.
+    ///
+    /// This is where the persona and the fingerprint are combined, so it is
+    /// where they are merged: the persona's `timezone` / `locale` /
+    /// `languages` / `screen` are folded into `fingerprint` up front, and
+    /// every consumer below — the
+    /// `Emulation.set*Override` calls, the `Accept-Language` header, the
+    /// bootstrap script's geometry and `navigator.languages` patches — then
+    /// reads that one merged value. An explicitly-set persona field wins over
+    /// the fingerprint's; `None` inherits the fingerprint's.
     #[must_use]
     pub fn with_persona(
         profile: StealthProfile,
-        fingerprint: Fingerprint,
+        mut fingerprint: Fingerprint,
         persona: Persona,
     ) -> Self {
+        fingerprint.overlay_persona(&persona);
+
         let bootstrap = match profile.kind() {
             ProfileKind::Spoofed => {
                 if profile.native_webgl_enabled() {
@@ -81,24 +91,25 @@ impl StealthObserver {
             // its own window) and `availHeight === height` (no taskbar inset). Those are
             // artifacts this library introduces, not properties of the host, so repairing
             // them keeps `Native` native rather than spoofing anything.
-            // The persona's screen still reaches this arm even in `Native`: it
+            // The configured screen still reaches this arm even in `Native`: it
             // carries no identity, only the geometry CDP cannot set. A profile
             // captured on real hardware brings its own insets, and presenting
             // the derived defaults instead would describe a machine that does
-            // not exist. `None` is byte-identical to the old call.
-            ProfileKind::Native => geometry_bootstrap_with(persona.screen.as_ref()),
+            // not exist. `None` is byte-identical to the old call. It reads the
+            // merged `fingerprint.screen` so the JS geometry and the CDP metrics
+            // override below describe the same display — a screen that reached
+            // one but not the other is worse than one that reached neither.
+            ProfileKind::Native => geometry_bootstrap_with(fingerprint.screen.as_ref()),
             ProfileKind::Off => String::new(),
         };
         let geolocation = persona.geolocation;
         let ua_metadata = persona.ua.as_ref().and_then(|u| u.ua_metadata.clone());
-        let screen = persona.screen;
         Self {
             profile,
             fingerprint,
             bootstrap,
             geolocation,
             ua_metadata,
-            screen,
         }
     }
 }
@@ -125,7 +136,11 @@ impl TargetObserver for StealthObserver {
         // metadata too, so we don't have to send Network.setUserAgentOverride
         // separately.
         let accept_language = {
-            let langs = crate::lang::resolve_languages(&Persona::default(), &self.fingerprint);
+            // The fingerprint is already merged with the persona (see
+            // `with_persona`), so its language list is the effective one — a
+            // caller's `Persona::languages` / `Persona::locale` reaches the
+            // header from here.
+            let langs = crate::lang::fingerprint_languages(&self.fingerprint);
             // `Emulation.setUserAgentOverride.acceptLanguage` wants a PLAIN
             // comma-separated locale list (e.g. `en-US,en`) — Chrome appends the
             // `;q=` weights itself. Passing an already-weighted string (the
@@ -169,9 +184,11 @@ impl TargetObserver for StealthObserver {
 
         // Screen-size override + focus emulation: keeps headless from leaking
         // an oddly-shaped viewport and from reporting `document.hasFocus()`
-        // false for the (always-backgrounded) headless tab. Persona screen
-        // wins when supplied; absent → today's fixed 1920x1080 default.
-        let (screen_width, screen_height, device_scale_factor) = match self.screen {
+        // false for the (always-backgrounded) headless tab. The merged
+        // fingerprint's screen (persona's when it set one, else the
+        // `StealthProfile::screen` pin) wins; neither set → the fixed
+        // 1920x1080 default.
+        let (screen_width, screen_height, device_scale_factor) = match self.fingerprint.screen {
             Some(s) => (s.width, s.height, s.device_pixel_ratio),
             None => (1920, 1080, 1.0),
         };
@@ -202,19 +219,13 @@ impl TargetObserver for StealthObserver {
                 .await?;
         }
         // Keep the JS-visible locale (navigator.language, Intl) coherent with
-        // the always-sent Accept-Language. Prefer an explicit fingerprint
-        // locale; otherwise, if the fingerprint pins a `languages` list, derive
-        // the locale from its primary entry — a `languages`-without-`locale`
-        // fingerprint must not leave the JS locale at Chrome's default while the
-        // Accept-Language header says otherwise. A pure-default fingerprint (no
-        // locale, no languages) keeps Chrome's native locale; we don't force one.
-        let effective_locale = self.fingerprint.locale.clone().or_else(|| {
-            self.fingerprint
-                .languages
-                .as_ref()
-                .and_then(|langs| langs.first())
-                .cloned()
-        });
+        // the Accept-Language sent above by resolving both from the same
+        // helper: this is the head of that same list, so the two surfaces
+        // cannot disagree. Resolving them separately is what let them —
+        // `Intl` reported a locale the header never advertised. A fingerprint
+        // configuring neither locale nor languages yields `None` and keeps
+        // Chrome's native locale; we don't force one.
+        let effective_locale = crate::lang::effective_locale(&self.fingerprint);
         if let Some(ref locale) = effective_locale {
             // `Emulation.setLocaleOverride` is browser-global: only one override
             // can be in effect at a time. A page with a cross-origin OOPIF (its
@@ -1087,5 +1098,508 @@ mod tests {
         .unwrap();
         mock.reply(id, json!({})).await;
         conn.shutdown();
+    }
+}
+
+/// The persona has to reach the wire, not just the bootstrap script.
+///
+/// Every assertion here is over the CDP frames the observer actually sent, via
+/// [`drive_attach`] rather than `expect_cmd`: `expect_cmd` silently discards
+/// non-matching frames, so it can only prove "X arrived eventually", and it has
+/// no timeout, so a command that stops being sent hangs the test instead of
+/// failing it. The bugs in this area are precisely "the override was never
+/// sent" and "the override carried the wrong value", so the test has to see the
+/// whole ordered frame list.
+#[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used)]
+mod persona_reaches_cdp_tests {
+    use super::*;
+    use crate::Platform;
+    use crate::persona::specs::ScreenSpec;
+    use serde_json::{Value, json};
+    use zendriver_transport::testing::MockConnection;
+
+    /// A fingerprint with every persona-overlappable field left unset, so each
+    /// test pins only the axis it is about.
+    fn bare_fingerprint() -> Fingerprint {
+        Fingerprint {
+            platform: Platform::MacIntel,
+            chrome_major: 120,
+            chrome_full: "120.0.6099.234".into(),
+            cpu_count: 10,
+            memory_gb: 8,
+            ua_string: crate::ua::compose_ua_string(Platform::MacIntel, "120.0.6099.234"),
+            ua_metadata: crate::UserAgentMetadata::realistic(
+                Platform::MacIntel,
+                120,
+                "120.0.6099.234",
+            ),
+            timezone: None,
+            locale: None,
+            languages: None,
+            screen: None,
+        }
+    }
+
+    /// Drive one page-target attach through `observer` and return every CDP
+    /// frame it sent, in order, replying `{}` to each.
+    ///
+    /// Stops at the actor's terminal call — `Runtime.runIfWaitingForDebugger`
+    /// on success, `Target.detachFromTarget` when an observer errored — so a
+    /// missing override shows up as an absent entry in the returned list, and
+    /// a wedged observer fails on the per-frame budget instead of hanging.
+    async fn drive_attach(observer: StealthObserver) -> Vec<Value> {
+        const FRAME_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
+
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![std::sync::Arc::new(observer)
+                as std::sync::Arc<dyn zendriver_transport::TargetObserver>]);
+        mock.emit_event(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": "S1",
+                "targetInfo": {
+                    "targetId": "T1",
+                    "type": "page",
+                    "url": "about:blank",
+                    "attached": true,
+                },
+                "waitingForDebugger": true,
+            }),
+        )
+        .await;
+
+        let mut frames = Vec::new();
+        while let Some((method, id)) = mock.recv_cmd_timeout(FRAME_BUDGET).await {
+            frames.push(mock.last_sent().clone());
+            mock.reply(id, json!({})).await;
+            if method == "Runtime.runIfWaitingForDebugger" || method == "Target.detachFromTarget" {
+                break;
+            }
+        }
+        conn.shutdown();
+
+        let methods = method_names(&frames);
+        assert!(
+            methods
+                .iter()
+                .any(|m| m == "Runtime.runIfWaitingForDebugger"),
+            "the observer never completed — no debugger release in {methods:?}"
+        );
+        frames
+    }
+
+    /// The single trimmed line of `source` starting with `prefix`. Keeps a
+    /// failure over the bootstrap readable — the script is thousands of lines,
+    /// and only the substituted token is in question.
+    fn line_with<'a>(source: &'a str, prefix: &str) -> &'a str {
+        source
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with(prefix))
+            .unwrap_or("<no such line>")
+    }
+
+    fn method_names(frames: &[Value]) -> Vec<String> {
+        frames
+            .iter()
+            .map(|f| f["method"].as_str().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    /// The `params` of the single frame for `method`, panicking with the whole
+    /// observed sequence when it was never sent.
+    fn params<'a>(frames: &'a [Value], method: &str) -> &'a Value {
+        frames
+            .iter()
+            .find(|f| f["method"] == method)
+            .map(|f| &f["params"])
+            .unwrap_or_else(|| {
+                panic!(
+                    "{method} was never sent; the observer sent {:?}",
+                    method_names(frames)
+                )
+            })
+    }
+
+    /// `Persona::timezone` is the caller's explicit pin and must win over the
+    /// fingerprint's. The two fixtures are deliberately different real zones:
+    /// a persona value equal to the fingerprint's would be satisfied by the
+    /// bug, which sent the fingerprint's unconditionally.
+    #[tokio::test]
+    async fn persona_timezone_wins_over_the_fingerprints_in_the_cdp_override() {
+        let fp = Fingerprint {
+            timezone: Some("America/New_York".into()),
+            ..bare_fingerprint()
+        };
+        let persona = Persona {
+            timezone: Some("Asia/Tokyo".into()),
+            ..Persona::default()
+        };
+
+        let frames = drive_attach(StealthObserver::with_persona(
+            StealthProfile::spoofed(),
+            fp,
+            persona,
+        ))
+        .await;
+
+        assert_eq!(
+            params(&frames, "Emulation.setTimezoneOverride")["timezoneId"].as_str(),
+            Some("Asia/Tokyo"),
+            "an explicitly set Persona::timezone must reach Emulation.setTimezoneOverride"
+        );
+    }
+
+    /// The persona is also the only source when the fingerprint pins nothing —
+    /// the override was not sent at all in that case, so `Intl` reported the
+    /// host's real zone while the rest of the identity claimed otherwise.
+    #[tokio::test]
+    async fn persona_timezone_is_sent_when_the_fingerprint_pins_none() {
+        let persona = Persona {
+            timezone: Some("Europe/Berlin".into()),
+            ..Persona::default()
+        };
+
+        let frames = drive_attach(StealthObserver::with_persona(
+            StealthProfile::spoofed(),
+            bare_fingerprint(),
+            persona,
+        ))
+        .await;
+
+        assert_eq!(
+            params(&frames, "Emulation.setTimezoneOverride")["timezoneId"].as_str(),
+            Some("Europe/Berlin"),
+        );
+    }
+
+    /// One persona locale has to move both surfaces at once: the JS-visible
+    /// locale (`Emulation.setLocaleOverride`) and the header
+    /// (`setUserAgentOverride.acceptLanguage`). Splitting them is the
+    /// cross-surface tell the coherence work exists to close.
+    #[tokio::test]
+    async fn persona_locale_drives_both_the_locale_override_and_accept_language() {
+        let fp = Fingerprint {
+            locale: Some("en-GB".into()),
+            ..bare_fingerprint()
+        };
+        let persona = Persona {
+            locale: Some("fr-FR".into()),
+            ..Persona::default()
+        };
+
+        let frames = drive_attach(StealthObserver::with_persona(
+            StealthProfile::spoofed(),
+            fp,
+            persona,
+        ))
+        .await;
+
+        assert_eq!(
+            params(&frames, "Emulation.setLocaleOverride")["locale"].as_str(),
+            Some("fr-FR"),
+        );
+        assert_eq!(
+            params(&frames, "Emulation.setUserAgentOverride")["acceptLanguage"].as_str(),
+            Some("fr-FR,fr"),
+            "Accept-Language must be derived from the persona's locale, not the fingerprint's"
+        );
+    }
+
+    /// `Persona::languages` is the more specific pin and outranks a
+    /// fingerprint `languages` list on both surfaces.
+    ///
+    /// The fingerprint pins a *conflicting* `locale` on purpose. Leaving it
+    /// `None` is the one case where the two surfaces happened to agree no
+    /// matter which order they resolved in, so it could not tell a coherent
+    /// implementation from an incoherent one — the locale override resolved
+    /// locale-first and the header resolved languages-first, and only an
+    /// unset locale hid that.
+    #[tokio::test]
+    async fn persona_languages_drive_accept_language_and_the_locale_override() {
+        let fp = Fingerprint {
+            locale: Some("en-GB".into()),
+            languages: Some(vec!["en-GB".into(), "en".into()]),
+            ..bare_fingerprint()
+        };
+        let persona = Persona {
+            languages: Some(vec!["ja-JP".into(), "ja".into()]),
+            ..Persona::default()
+        };
+
+        let frames = drive_attach(StealthObserver::with_persona(
+            StealthProfile::spoofed(),
+            fp,
+            persona,
+        ))
+        .await;
+
+        assert_eq!(
+            params(&frames, "Emulation.setUserAgentOverride")["acceptLanguage"].as_str(),
+            Some("ja-JP,ja"),
+        );
+        assert_eq!(
+            params(&frames, "Emulation.setLocaleOverride")["locale"].as_str(),
+            Some("ja-JP"),
+            "the locale override must stay coherent with the persona's language list"
+        );
+    }
+
+    /// The other direction of the same seam: `StealthProfile::screen` lands on
+    /// `Fingerprint::screen`, which nothing read — the observer took its screen
+    /// from the persona alone, so the profile setter was inert and its rustdoc
+    /// ("replaces the observer's fixed 1920x1080 default") was false.
+    #[tokio::test]
+    async fn fingerprint_screen_reaches_device_metrics_when_the_persona_has_none() {
+        let fp = Fingerprint {
+            screen: Some(ScreenSpec::new(1366, 768, 1.0)),
+            ..bare_fingerprint()
+        };
+
+        let frames = drive_attach(StealthObserver::with_persona(
+            StealthProfile::spoofed(),
+            fp,
+            Persona::default(),
+        ))
+        .await;
+
+        let metrics = params(&frames, "Emulation.setDeviceMetricsOverride");
+        assert_eq!(metrics["width"].as_u64(), Some(1366));
+        assert_eq!(metrics["height"].as_u64(), Some(768));
+        assert_eq!(metrics["screenWidth"].as_u64(), Some(1366));
+        assert_eq!(metrics["screenHeight"].as_u64(), Some(768));
+    }
+
+    /// A screen that reaches the CDP metrics but not the geometry patch is
+    /// worse than one that reaches neither: `screen.availHeight` would then be
+    /// derived from a size the patch never saw. Both have to move together.
+    #[tokio::test]
+    async fn fingerprint_screen_also_reaches_the_geometry_patch() {
+        let fp = Fingerprint {
+            screen: Some(
+                ScreenSpec::new(1366, 768, 1.0)
+                    .with_avail(1366, 728)
+                    .with_inner_height(640),
+            ),
+            ..bare_fingerprint()
+        };
+
+        let frames = drive_attach(StealthObserver::with_persona(
+            StealthProfile::spoofed(),
+            fp,
+            Persona::default(),
+        ))
+        .await;
+
+        let source = params(&frames, "Page.addScriptToEvaluateOnNewDocument")["source"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(
+            line_with(&source, "const AVAIL_H"),
+            "const AVAIL_H = 728;",
+            "the measured availHeight must reach the geometry patch"
+        );
+        assert_eq!(
+            line_with(&source, "const INNER_H"),
+            "const INNER_H = 640;",
+            "the measured innerHeight must reach the geometry patch"
+        );
+    }
+
+    /// Precedence guard rather than a regression: the persona already won for
+    /// `screen`, and folding the two sources together must not flip that.
+    #[tokio::test]
+    async fn persona_screen_still_wins_over_the_fingerprints() {
+        let fp = Fingerprint {
+            screen: Some(ScreenSpec::new(1366, 768, 1.0)),
+            ..bare_fingerprint()
+        };
+        let persona = Persona {
+            screen: Some(ScreenSpec::new(1536, 864, 1.25)),
+            ..Persona::default()
+        };
+
+        let frames = drive_attach(StealthObserver::with_persona(
+            StealthProfile::spoofed(),
+            fp,
+            persona,
+        ))
+        .await;
+
+        let metrics = params(&frames, "Emulation.setDeviceMetricsOverride");
+        assert_eq!(metrics["width"].as_u64(), Some(1536));
+        assert_eq!(metrics["height"].as_u64(), Some(864));
+        assert_eq!(metrics["deviceScaleFactor"].as_f64(), Some(1.25));
+    }
+
+    /// An empty persona list is the absence of a value, not a value. Every
+    /// other language consumer in the crate already reads it that way
+    /// (`lang::resolve_languages` and `lang::fingerprint_languages` both
+    /// filter it), so a merge that treated `Some(vec![])` as a pin let a
+    /// persona with no languages destroy a configured one and drop both
+    /// surfaces back to the `en-US` default.
+    #[tokio::test]
+    async fn an_empty_persona_language_list_leaves_the_fingerprints_pin_alone() {
+        let fp = Fingerprint {
+            languages: Some(vec!["de-DE".into(), "de".into()]),
+            ..bare_fingerprint()
+        };
+        let persona = Persona {
+            languages: Some(Vec::new()),
+            ..Persona::default()
+        };
+
+        let frames = drive_attach(StealthObserver::with_persona(
+            StealthProfile::spoofed(),
+            fp,
+            persona,
+        ))
+        .await;
+
+        assert_eq!(
+            params(&frames, "Emulation.setUserAgentOverride")["acceptLanguage"].as_str(),
+            Some("de-DE,de"),
+            "an empty persona list must not wipe StealthProfile::languages"
+        );
+        assert_eq!(
+            params(&frames, "Emulation.setLocaleOverride")["locale"].as_str(),
+            Some("de-DE"),
+        );
+    }
+
+    /// Browser truth, and the reason the two locale surfaces resolve
+    /// languages-first: in a real Chrome `navigator.language` is always
+    /// `navigator.languages[0]`. A caller who pins a `locale` and a
+    /// disagreeing `languages` list is asking for something Chrome cannot
+    /// produce, so the list wins on both surfaces rather than each surface
+    /// picking its own answer.
+    #[tokio::test]
+    async fn the_locale_override_is_the_head_of_the_advertised_language_list() {
+        let fp = Fingerprint {
+            locale: Some("en-GB".into()),
+            languages: Some(vec!["de-DE".into(), "de".into()]),
+            ..bare_fingerprint()
+        };
+
+        let frames = drive_attach(StealthObserver::with_persona(
+            StealthProfile::spoofed(),
+            fp,
+            Persona::default(),
+        ))
+        .await;
+
+        let accept_language = params(&frames, "Emulation.setUserAgentOverride")["acceptLanguage"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let locale = params(&frames, "Emulation.setLocaleOverride")["locale"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+
+        assert_eq!(accept_language, "de-DE,de");
+        assert_eq!(
+            locale,
+            accept_language.split(',').next().unwrap_or_default(),
+            "the locale override must be the head of the list the header advertises; \
+             got locale={locale:?} against acceptLanguage={accept_language:?}"
+        );
+    }
+
+    /// The `Native` arm builds its own bootstrap (geometry repair only, no
+    /// identity spoofing) and so reads the merged screen on a different code
+    /// path from every `spoofed()` test above. Left uncovered, reverting that
+    /// one line leaves the whole suite green.
+    #[tokio::test]
+    async fn fingerprint_screen_reaches_the_native_geometry_bootstrap() {
+        let fp = Fingerprint {
+            screen: Some(
+                ScreenSpec::new(1440, 900, 2.0)
+                    .with_avail(1440, 860)
+                    .with_inner_height(780),
+            ),
+            ..bare_fingerprint()
+        };
+
+        let frames = drive_attach(StealthObserver::with_persona(
+            StealthProfile::native(),
+            fp,
+            Persona::default(),
+        ))
+        .await;
+
+        let source = params(&frames, "Page.addScriptToEvaluateOnNewDocument")["source"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(
+            line_with(&source, "const AVAIL_H"),
+            "const AVAIL_H = 860;",
+            "the measured availHeight must reach Native's geometry bootstrap"
+        );
+        assert_eq!(
+            line_with(&source, "const INNER_H"),
+            "const INNER_H = 780;",
+            "the measured innerHeight must reach Native's geometry bootstrap"
+        );
+
+        // The CDP override and the JS geometry have to describe one display,
+        // which is the whole reason the arm reads the merged value.
+        let metrics = params(&frames, "Emulation.setDeviceMetricsOverride");
+        assert_eq!(metrics["width"].as_u64(), Some(1440));
+        assert_eq!(metrics["height"].as_u64(), Some(900));
+    }
+
+    /// The documented fallback for both `Persona::timezone` and
+    /// `Fingerprint::timezone`: nothing configured means no override, so
+    /// Chrome keeps the host's zone rather than being pinned to a fabricated
+    /// default. Only [`drive_attach`] can assert this — it returns the whole
+    /// ordered frame list, where absence is observable.
+    #[tokio::test]
+    async fn no_timezone_or_locale_configured_sends_neither_override() {
+        let frames = drive_attach(StealthObserver::with_persona(
+            StealthProfile::spoofed(),
+            bare_fingerprint(),
+            Persona::default(),
+        ))
+        .await;
+
+        let methods = method_names(&frames);
+        assert!(
+            !methods.iter().any(|m| m == "Emulation.setTimezoneOverride"),
+            "no timezone is configured, so no override may be sent; got {methods:?}"
+        );
+        assert!(
+            !methods.iter().any(|m| m == "Emulation.setLocaleOverride"),
+            "no locale and no languages are configured, so no override may be sent; \
+             got {methods:?}"
+        );
+    }
+
+    /// The symmetric case to
+    /// [`persona_timezone_is_sent_when_the_fingerprint_pins_none`]: a
+    /// `StealthProfile::timezone` pin with no persona at all still has to
+    /// reach the wire. The merge is what both directions run through, so
+    /// covering only the persona direction would leave half of it unheld.
+    #[tokio::test]
+    async fn fingerprint_timezone_reaches_cdp_when_the_persona_pins_none() {
+        let fp = Fingerprint {
+            timezone: Some("Australia/Sydney".into()),
+            ..bare_fingerprint()
+        };
+
+        let frames = drive_attach(StealthObserver::with_persona(
+            StealthProfile::spoofed(),
+            fp,
+            Persona::default(),
+        ))
+        .await;
+
+        assert_eq!(
+            params(&frames, "Emulation.setTimezoneOverride")["timezoneId"].as_str(),
+            Some("Australia/Sydney"),
+        );
     }
 }

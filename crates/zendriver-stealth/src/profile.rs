@@ -235,16 +235,29 @@ impl StealthProfile {
     }
     /// Override the reported locale (e.g. `"en-US"`, `"fr-FR"`).
     ///
-    /// Sends `Emulation.setLocaleOverride` and adds `--lang=...` to the
-    /// launch flags.
+    /// Adds `--lang=...` to the launch flags, and — unless
+    /// [`languages`](Self::languages) is also set — sends
+    /// `Emulation.setLocaleOverride` and supplies the `Accept-Language` list
+    /// derived from it (`"fr-FR"` → `fr-FR,fr`).
+    ///
+    /// When both are set, the list wins the two CDP surfaces and only the
+    /// `--lang` flag still follows this value; see
+    /// [`languages`](Self::languages) for why.
     #[must_use]
     pub fn locale(mut self, l: impl Into<String>) -> Self {
         self.per_field.locale = Some(l.into());
         self
     }
-    /// Override the reported language list (drives `navigator.languages` +
-    /// q-weighted `Accept-Language`). When unset, derived from
-    /// [`locale`](Self::locale).
+    /// Override the reported language list (drives `navigator.languages`, the
+    /// q-weighted `Accept-Language`, and `Emulation.setLocaleOverride` from
+    /// its first entry). When unset, all three are derived from
+    /// [`locale`](Self::locale) instead.
+    ///
+    /// The list outranks [`locale`](Self::locale) on all three because a real
+    /// Chrome always reports `navigator.language` as `navigator.languages[0]`:
+    /// setting both to disagreeing values describes a browser that cannot
+    /// exist, and a `language` outside the advertised list is the more
+    /// visible half of that contradiction. An empty list counts as unset.
     #[must_use]
     pub fn languages(mut self, langs: impl IntoIterator<Item = String>) -> Self {
         self.per_field.languages = Some(langs.into_iter().collect());
@@ -286,7 +299,9 @@ impl StealthProfile {
     /// Override the reported screen / device-metrics
     /// (`Emulation.setDeviceMetricsOverride`) wholesale.
     ///
-    /// Replaces the observer's fixed 1920x1080 default. Like
+    /// Replaces the observer's fixed 1920x1080 default, and supplies the
+    /// bootstrap's `avail*` / `outer*` insets so the JS geometry describes the
+    /// same display CDP sizes. Like
     /// [`user_agent_metadata`](Self::user_agent_metadata), this is a
     /// profile-level pin; a [`Persona`](crate::Persona)'s `screen` field
     /// (threaded via

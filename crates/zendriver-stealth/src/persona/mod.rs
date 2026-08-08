@@ -40,19 +40,41 @@ pub struct Persona {
     pub ua: Option<UaSpec>,
     pub hardware_concurrency: Option<u32>,
     pub device_memory_gb: Option<u32>,
+    /// IANA timezone name (e.g. `"Europe/Berlin"`). Drives
+    /// `Emulation.setTimezoneOverride`, which is what `Intl` and `Date` read.
+    /// When unset, the [`Fingerprint`](crate::Fingerprint)'s own timezone
+    /// applies — from
+    /// [`StealthProfile::timezone`](crate::StealthProfile::timezone) — and
+    /// when neither is set no override is sent and Chrome keeps the host's.
     pub timezone: Option<String>,
+    /// Locale tag (e.g. `"fr-FR"`). When [`languages`](Self::languages) is
+    /// unset, drives both `Emulation.setLocaleOverride` and the
+    /// `Accept-Language` header derived from it (`"fr-FR"` → `fr-FR,fr`);
+    /// when the list is set, the list drives both instead. Same fallback as
+    /// [`timezone`](Self::timezone): the fingerprint's locale, then Chrome's
+    /// own.
     pub locale: Option<String>,
     /// Ordered language list (e.g. `["de-DE", "de"]`). Drives
-    /// `navigator.languages` and the q-weighted `Accept-Language`. When unset,
-    /// derived from [`locale`](Self::locale).
+    /// `navigator.languages`, the q-weighted `Accept-Language`, and
+    /// `Emulation.setLocaleOverride` from its first entry. When unset, all
+    /// three derive from [`locale`](Self::locale).
+    ///
+    /// The list outranks [`locale`](Self::locale) because a real Chrome
+    /// always reports `navigator.language` as `navigator.languages[0]` — a
+    /// locale outside the advertised list is a browser that cannot exist. An
+    /// empty list counts as unset and inherits the fingerprint's, rather than
+    /// erasing it.
     pub languages: Option<Vec<String>>,
     /// Mock coordinates for the Geolocation API (`Emulation.setGeolocationOverride`).
     /// Coherence axis alongside [`timezone`](Self::timezone) /
     /// [`locale`](Self::locale) — keeps `navigator.geolocation` in step with
     /// the exit IP's real location instead of leaking the host's.
     pub geolocation: Option<GeoPos>,
-    /// Screen / device-metrics override (`Emulation.setDeviceMetricsOverride`).
-    /// `None` → the observer's fixed 1920x1080 default (today's behavior).
+    /// Screen / device-metrics override (`Emulation.setDeviceMetricsOverride`
+    /// plus the bootstrap's `outer*`/`avail*` geometry repair, which CDP
+    /// cannot reach). Wins over
+    /// [`StealthProfile::screen`](crate::StealthProfile::screen); `None` falls
+    /// back to it, and to the fixed 1920x1080 default when neither is set.
     pub screen: Option<ScreenSpec>,
     pub webgl: Option<WebglSpec>,
     /// WebGPU adapter override — decorate a real adapter's `.info` (deriving
