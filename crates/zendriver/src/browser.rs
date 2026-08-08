@@ -1005,6 +1005,12 @@ impl BrowserBuilder {
     /// Use this to point at an external list (uBlock, Peter Lowe's, …) under
     /// your own acceptance of that list's license — the bundle ships only our
     /// own clean list.
+    ///
+    /// The fetch is bounded and the bounds are not configurable: 5s to
+    /// connect, 20s for the whole request, and 32 MiB of body. A source that
+    /// exceeds any of them fails [`Self::launch`] rather than stalling or
+    /// buffering it — so if the mirror you want is slow or enormous, seed the
+    /// cache yourself or use [`Self::tracker_blocklist_file`] instead.
     #[cfg(feature = "tracker-blocking")]
     #[must_use]
     pub fn tracker_blocklist_url(mut self, url: impl Into<String>) -> Self {

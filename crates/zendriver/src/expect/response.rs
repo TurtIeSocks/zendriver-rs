@@ -4,8 +4,8 @@
 //! Mirrors [`crate::expect::request`] but watches `Network.responseReceived`
 //! and exposes [`MatchedResponse::body`] for fetching the response body via
 //! `Network.getResponseBody`. The subscriber task self-cancels after sending
-//! the first match — or as soon as the expectation is dropped — so each
-//! `expect_response` call is observably one-shot and outlives nothing.
+//! the first match, and exits the moment the caller drops the expectation, so
+//! it never outlives the `expect_response` that created it.
 //!
 //! `Network.enable` is already on for every Tab via the per-Tab in-flight
 //! network tracker, so this module does not re-enable the domain.
@@ -277,11 +277,25 @@ struct ResponsePayload {
 /// subscribe loop selects on that. Otherwise a caller who gave up would leave
 /// a task decoding every response on the session for as long as it lives.
 pub(crate) fn register(session: &SessionHandle, matcher: UrlMatcher) -> ResponseExpectation {
+    // Dropping the handle detaches the task, which is exactly what this used
+    // to do; `register_with_handle` exists so the tests can join it.
+    register_with_handle(session, matcher).0
+}
+
+/// [`register`], plus the subscriber task's handle.
+///
+/// Split out for the tests: proving the task exits on drop needs a join point,
+/// and the alternative — watching the runtime's alive-task count — is a claim
+/// about what else happens to be running, which silently stops holding.
+fn register_with_handle(
+    session: &SessionHandle,
+    matcher: UrlMatcher,
+) -> (ResponseExpectation, tokio::task::JoinHandle<()>) {
     let (mut tx, rx) = oneshot::channel();
     let mut stream =
         crate::expect::watch::<ResponseReceivedEvent>(session, "Network.responseReceived");
     let session_for_match = session.clone();
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         let outcome = loop {
             tokio::select! {
                 // The caller dropped the expectation, so nobody is waiting
@@ -313,11 +327,14 @@ pub(crate) fn register(session: &SessionHandle, matcher: UrlMatcher) -> Response
         // poll and here; in that case the caller no longer cares.
         let _ = tx.send(outcome);
     });
-    ResponseExpectation {
-        rx,
-        timeout: DEFAULT_EXPECT_TIMEOUT,
-        sleep: None,
-    }
+    (
+        ResponseExpectation {
+            rx,
+            timeout: DEFAULT_EXPECT_TIMEOUT,
+            sleep: None,
+        },
+        task,
+    )
 }
 
 #[cfg(test)]
@@ -509,33 +526,30 @@ mod tests {
 
     /// Dropping the expectation must stop the subscriber task. Otherwise every
     /// abandoned (or timed-out) `expect_response` leaves a task decoding every
-    /// response on the session for as long as the session lives. Observed
-    /// through the runtime's alive-task count: it rises when `register` spawns
-    /// the subscriber and must fall back to the baseline once the receiver is
-    /// gone.
+    /// response on the session for as long as the session lives.
+    ///
+    /// Joined through the task's own handle rather than watched through the
+    /// runtime's alive-task count — that count depends on what else happens to
+    /// be running, and the day it stops holding this test reads its answer
+    /// early and passes.
     #[tokio::test]
     async fn subscriber_task_exits_when_expectation_is_dropped() {
         let (_mock, conn) = MockConnection::pair();
         let session = SessionHandle::new(conn.clone(), "S1");
-        let metrics = tokio::runtime::Handle::current().metrics();
 
-        let baseline = metrics.num_alive_tasks();
-        let expectation = register(&session, UrlMatcher::from("/api/"));
+        let (expectation, task) = register_with_handle(&session, UrlMatcher::from("/api/"));
         tokio::task::yield_now().await;
         assert!(
-            metrics.num_alive_tasks() > baseline,
+            !task.is_finished(),
             "subscriber task should be running while the expectation is alive"
         );
 
         drop(expectation);
 
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while metrics.num_alive_tasks() > baseline {
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .expect("subscriber task still alive 2s after the expectation was dropped");
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("subscriber task still alive 2s after the expectation was dropped")
+            .expect("subscriber task panicked");
 
         conn.shutdown();
     }

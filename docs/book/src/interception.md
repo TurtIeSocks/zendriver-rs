@@ -170,11 +170,16 @@ let browser = Browser::builder()
 | [`block_trackers(true)`] | Enable blocking with the curated bundled list (`include_str!`-embedded — only adds binary size when the feature is on) |
 | [`tracker_blocklist_add`] | Add extra hosts (repeatable; implicitly enables blocking) |
 | [`tracker_blocklist_file`] | Add hosts from a local file (one host per line; `0.0.0.0 host` hosts-file lines tolerated) |
-| [`tracker_blocklist_url`] | Add hosts fetched from a URL at launch |
+| [`tracker_blocklist_url`] | Add hosts fetched from a URL at launch (cached on disk after the first fetch) |
 
 Matching is host-based: a blocked host also blocks its subdomains. The bundle
 ships only our own clean list — point `tracker_blocklist_url` at a third-party
 list only if you accept that list's license.
+
+The URL fetch runs inside `launch()` and is bounded: 5s to connect, 20s for the
+whole request, 32 MiB of body. None of those are configurable, and a source that
+exceeds one fails the launch. For a mirror that is slow or unusually large,
+pre-seed the cache or point `tracker_blocklist_file` at a local copy.
 
 [`block_trackers(true)`]: https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.block_trackers
 [`tracker_blocklist_add`]: https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.tracker_blocklist_add

@@ -26,6 +26,21 @@ const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// to keep the worst case a bounded, reported failure.
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// Ceiling on the body of a `tracker_blocklist_url` download.
+///
+/// The time bound above is not a resource bound: it caps how long a source may
+/// keep sending, and on a datacentre link twenty seconds of chunked response is
+/// gigabytes of `String` inside `Browser::launch()`, followed by
+/// [`write_atomic`](crate::io::write_atomic) copying all of it into the cache
+/// directory. The URL is one the user pasted in — typically a third-party list
+/// mirror — so "the source is honest about its size" is not something this
+/// path gets to assume.
+///
+/// 32 MiB is roughly thirty times the largest lists in circulation (uBlock's
+/// and Peter Lowe's are around 1 MB), so it is a ceiling on abuse rather than a
+/// limit a real source will meet.
+const MAX_BLOCKLIST_BYTES: usize = 32 * 1024 * 1024;
+
 /// Parse the bundled list into hosts.
 pub(crate) fn bundled_hosts() -> Vec<String> {
     parse_blocklist(BUNDLED)
@@ -63,16 +78,22 @@ fn cache_path(url: &str) -> PathBuf {
         .join(format!("{:016x}.txt", h.finish()))
 }
 
-/// Download a blocklist over HTTP with both bounds applied.
+/// Download a blocklist over HTTP with all three bounds applied.
 ///
-/// Split out from [`load_or_download_blocklist`] so the timeouts are
-/// injectable in tests; production callers pass the two constants above.
-/// `reqwest` failures are surfaced as [`std::io::Error`] so the caller folds
-/// them into `ZendriverError::Io` without a new public error variant.
+/// Split out from [`load_or_download_blocklist`] so the bounds are injectable
+/// in tests; production callers pass the three constants above. `reqwest`
+/// failures are surfaced as [`std::io::Error`] so the caller folds them into
+/// `ZendriverError::Io` without a new public error variant.
+///
+/// The body is accumulated chunk by chunk rather than through
+/// `Response::text()`, because `max_bytes` has to hold against a source that
+/// simply keeps sending: a `Content-Length` check only helps when the server
+/// is honest, and a chunked response advertises nothing at all.
 async fn download_blocklist(
     url: &str,
     connect_timeout: Duration,
     request_timeout: Duration,
+    max_bytes: usize,
 ) -> Result<String, std::io::Error> {
     // reqwest 0.13 installs no rustls crypto provider of its own (see the
     // workspace manifest), and the omission surfaces as a runtime panic rather
@@ -83,26 +104,47 @@ async fn download_blocklist(
         .timeout(request_timeout)
         .build()
         .map_err(std::io::Error::other)?;
-    client
+    let mut resp = client
         .get(url)
         .send()
         .await
         .and_then(reqwest::Response::error_for_status)
-        .map_err(std::io::Error::other)?
-        .text()
-        .await
-        .map_err(std::io::Error::other)
+        .map_err(std::io::Error::other)?;
+
+    // Cheap rejection when the server declares its size, before a byte of body
+    // is read.
+    if let Some(len) = resp.content_length() {
+        if len > max_bytes as u64 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("blocklist at {url} advertises {len} bytes, over the {max_bytes} cap"),
+            ));
+        }
+    }
+
+    let mut body: Vec<u8> = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(std::io::Error::other)? {
+        if body.len() + chunk.len() > max_bytes {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("blocklist at {url} exceeded the {max_bytes} byte cap while downloading"),
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    String::from_utf8(body)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.utf8_error()))
 }
 
 /// Load a host list from local cache, or download from `url` and cache it.
 ///
 /// Mirrors the atomic-write download-on-first-use pattern in
 /// `zendriver-fingerprints` `pool::load_or_download` (write a temp sibling,
-/// then `rename`) via the shared [`crate::cookies::persistence::write_atomic`]
-/// helper. The download is bounded by [`DOWNLOAD_CONNECT_TIMEOUT`] /
-/// [`DOWNLOAD_TIMEOUT`]; `reqwest`/IO failures are surfaced as
-/// [`std::io::Error`] so the caller folds them into `ZendriverError::Io`
-/// without a new public error variant.
+/// then `rename`) via the shared [`crate::io::write_atomic`] helper. The
+/// download is bounded by [`DOWNLOAD_CONNECT_TIMEOUT`] / [`DOWNLOAD_TIMEOUT`]
+/// in time and [`MAX_BLOCKLIST_BYTES`] in size; `reqwest`/IO failures are
+/// surfaced as [`std::io::Error`] so the caller folds them into
+/// `ZendriverError::Io` without a new public error variant.
 ///
 /// The cache file inherits that helper's owner-only `0600` default. Nothing in
 /// a public blocklist is secret, so the restriction buys no confidentiality
@@ -114,27 +156,50 @@ async fn download_blocklist(
 pub(crate) async fn load_or_download_blocklist(url: &str) -> Result<Vec<String>, std::io::Error> {
     let cache = cache_path(url);
 
-    // Fast path: cache hit.
-    if let Ok(text) = std::fs::read_to_string(&cache) {
-        tracing::debug!(path = %cache.display(), "tracker blocklist cache hit");
-        return Ok(parse_blocklist(&text));
+    // Fast path: cache hit. A miss is the expected `NotFound`; anything else
+    // (a cache file the process cannot read, a broken cache root) would
+    // otherwise re-download silently on every single launch, so it gets said
+    // out loud.
+    match tokio::fs::read_to_string(&cache).await {
+        Ok(text) => {
+            tracing::debug!(path = %cache.display(), "tracker blocklist cache hit");
+            return Ok(parse_blocklist(&text));
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            tracing::debug!(url, "tracker blocklist cache miss — downloading");
+        }
+        Err(e) => {
+            tracing::warn!(
+                path = %cache.display(),
+                error = %e,
+                "tracker blocklist cache is unreadable — re-downloading (this repeats every launch \
+                 until the cache file is readable or removed)"
+            );
+        }
     }
 
-    tracing::debug!(url, "tracker blocklist cache miss — downloading");
-    let body = download_blocklist(url, DOWNLOAD_CONNECT_TIMEOUT, DOWNLOAD_TIMEOUT).await?;
+    let body = download_blocklist(
+        url,
+        DOWNLOAD_CONNECT_TIMEOUT,
+        DOWNLOAD_TIMEOUT,
+        MAX_BLOCKLIST_BYTES,
+    )
+    .await?;
 
     if let Some(parent) = cache.parent() {
-        std::fs::create_dir_all(parent)?;
+        tokio::fs::create_dir_all(parent).await?;
     }
-    crate::cookies::persistence::write_atomic(&cache, body.as_bytes()).await?;
+    crate::io::write_atomic(&cache, body.as_bytes()).await?;
 
     tracing::debug!(path = %cache.display(), "tracker blocklist cached");
     Ok(parse_blocklist(&body))
 }
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used)]
+#[allow(clippy::unwrap_used)]
 mod tests {
+    use tokio::io::AsyncWriteExt;
+
     use super::*;
 
     #[test]
@@ -176,7 +241,12 @@ mod tests {
         // timeout the inner future never resolves and this expect() fires.
         let res = tokio::time::timeout(
             Duration::from_secs(5),
-            download_blocklist(&url, Duration::from_millis(500), Duration::from_millis(200)),
+            download_blocklist(
+                &url,
+                Duration::from_millis(500),
+                Duration::from_millis(200),
+                MAX_BLOCKLIST_BYTES,
+            ),
         )
         .await
         .expect("download_blocklist hung past its own request timeout");
@@ -190,6 +260,89 @@ mod tests {
             "the 200ms request timeout should fire promptly, took {:?}",
             started.elapsed()
         );
+    }
+
+    /// A source that declares an oversized body is rejected on the headers,
+    /// before any of it is buffered.
+    #[tokio::test]
+    async fn download_rejects_an_oversized_content_length() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/trackers.txt"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![b'x'; 8192]))
+            .mount(&server)
+            .await;
+
+        let err = download_blocklist(
+            &format!("{}/trackers.txt", server.uri()),
+            Duration::from_secs(2),
+            Duration::from_secs(5),
+            1024,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string().contains("advertises 8192 bytes"),
+            "the declared size should be rejected up front, got {err}"
+        );
+    }
+
+    /// The real bound: a chunked response advertises no length at all, so the
+    /// cap has to hold against the accumulating body. Without it this streams
+    /// until the request timeout and buffers everything it received — the
+    /// gigabytes-in-`Browser::launch()` case.
+    #[tokio::test]
+    async fn download_caps_a_chunked_body_that_never_ends() {
+        const CAP: usize = 64 * 1024;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        // `wiremock` only serves fixed bodies, so the endless chunked source
+        // is hand-rolled. It writes until the client hangs up.
+        let server = tokio::spawn(async move {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            // Enough of the request to get past the headers; the body is what
+            // is under test, not the parsing.
+            let mut scratch = vec![0u8; 4096];
+            let _ = tokio::io::AsyncReadExt::read(&mut stream, &mut scratch).await;
+            if stream
+                .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+                .await
+                .is_err()
+            {
+                return;
+            }
+            let chunk = format!("1000\r\n{}\r\n", "x".repeat(0x1000));
+            while stream.write_all(chunk.as_bytes()).await.is_ok() {}
+        });
+
+        let url = format!("http://{addr}/trackers.txt");
+        let err = tokio::time::timeout(
+            Duration::from_secs(10),
+            // A request timeout far longer than the test's own: if the cap
+            // never fires, this fails on the outer timeout rather than
+            // passing because a *different* bound rescued it.
+            download_blocklist(&url, Duration::from_secs(2), Duration::from_secs(60), CAP),
+        )
+        .await
+        .expect("the size cap never fired — the download ran past its own bound")
+        .unwrap_err();
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string()
+                .contains(&format!("exceeded the {CAP} byte cap")),
+            "expected the accumulating-body cap, got {err}"
+        );
+
+        server.abort();
     }
 
     #[test]
