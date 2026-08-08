@@ -214,7 +214,12 @@ fn temp_path(path: &Path) -> std::io::Result<PathBuf> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use super::{create_temp_file, temp_path, write_atomic};
+    use super::{temp_path, write_atomic};
+    // Only the symlink-refusal test calls this directly, and that test is
+    // `#[cfg(unix)]` — an unconditional import is an unused-import error on
+    // Windows, where `-D warnings` makes it a build failure.
+    #[cfg(unix)]
+    use super::create_temp_file;
 
     /// Count the entries in a directory — the cheap proxy for "the temp file
     /// was renamed, not left behind".
