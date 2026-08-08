@@ -79,12 +79,37 @@
 //!    scroll, and `window.scrollY` never moves, so its fixture deliberately
 //!    has nothing to scroll.
 //!
+//! 6. **Quoted text needles.** `text_exact` rendered its needle by swapping
+//!    every double quote for a single one, which is a quote swap rather than
+//!    an escaping strategy: `text_exact("it's")` built a literal that ends at
+//!    the third quote, so `document.evaluate` threw a `SyntaxError` and the
+//!    caller got a `JsException` instead of a match. Fixed in this commit.
+//!
+//! 7. **Element-scoped `text_exact`.** The expression was `//*[…]`, and a
+//!    leading `//` abbreviates `/descendant-or-self::node()/` — anchored at
+//!    the root of the context node's document, whatever node
+//!    `document.evaluate` is handed. So scoping the query to one card
+//!    searched the whole page and `.one()` could hand back an element from a
+//!    different card, with nothing raised. The substring path walks
+//!    `this.querySelectorAll('*')` and was always scoped correctly, so the
+//!    two text APIs disagreed about what scoping means. Fixed in this commit.
+//!
+//! 8. **A clip reaching past the rendered area.** `Page.captureScreenshot`
+//!    returns blank pixels for a clip below what Chrome has painted unless
+//!    the capture also sends `captureBeyondViewport`. Fixed in this commit.
+//!
 //! None of these tests asserts *which* world the JS runs in; that is an
 //! implementation choice. They assert the observable behavior any world
 //! choice has to preserve, so they stay meaningful when the isolated-world
 //! move is re-landed with per-frame world resolution.
 //!
-//! Cases 2, 3 and 4 turn on fixture geometry, so each asserts that geometry
+//! Cases 6, 7 and 8 are the ones a unit test cannot reach: each pins a string
+//! the code puts on the wire, and in all three the string is well-formed and
+//! plausible while the browser does something else with it. That is the gap
+//! that let the broken quoting ship, and the gap that let a `position: fixed`
+//! caveat be written into four docs for behavior Chrome 151 does not have.
+//!
+//! Cases 2, 3, 4 and 8 turn on fixture geometry, so each asserts that geometry
 //! at runtime before asserting the behavior it is really there for. A fixture
 //! that drifts out of reproducing its trap is the failure mode those guards
 //! exist for: it does not break the test, it makes it pass for no reason.
@@ -115,7 +140,7 @@ use serial_test::serial;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 use zendriver::stealth::{InputProfile, StealthProfile};
-use zendriver::{Browser, Key, SpecialKey};
+use zendriver::{BoundingBox, Browser, Key, SpecialKey};
 
 /// Mount `html` at `at` on `mock`. These fixtures need several routes each
 /// (a second page to navigate to, an iframe document to embed), so routes are
@@ -741,6 +766,127 @@ async fn text_exact_matches_needles_carrying_either_quote_kind() {
         .await
         .expect("a non-matching quoted needle must resolve, not raise");
     assert!(missing.is_none(), "no element carries that text");
+
+    browser.close().await.unwrap();
+}
+
+/// Scoping `text_exact` to an element has to keep the search inside it.
+///
+/// The expression is evaluated with the element as `document.evaluate`'s
+/// context node, which reads like scoping and is not: `//*[…]` is anchored at
+/// the document root regardless of context node, so every match on the page
+/// comes back. `best_match` then sorts candidates by `|len(text) - len(needle)|`,
+/// they all tie because they all fold to the same text, and `.one()` returns
+/// whichever sorted first — on this fixture a foreign `div`, not even a
+/// button. Nothing raises, so the click just lands on the wrong row.
+///
+/// The unit tests cannot see this. They pin the emitted string, and the string
+/// is valid XPath either way; only evaluating it against a real DOM shows
+/// which nodes it reaches.
+#[tokio::test]
+#[serial]
+async fn element_scoped_text_exact_stays_inside_its_own_subtree() {
+    let mock = MockServer::start().await;
+    mount(
+        &mock,
+        "/cards",
+        r#"<!doctype html><html><body>
+             <div id="card1"><button id="b1">Cancel</button></div>
+             <div id="card2"><button id="b2">Cancel</button></div>
+           </body></html>"#,
+    )
+    .await;
+
+    let browser = Browser::builder().headless(true).launch().await.unwrap();
+    let tab = browser.main_tab();
+    tab.goto(&format!("{}/cards", mock.uri())).await.unwrap();
+
+    // The fixture only traps anything while both cards carry the same text.
+    let hits = tab.find_all().text_exact("Cancel").many().await.unwrap();
+    assert!(
+        hits.len() >= 4,
+        "the document-wide query must see both cards and both buttons, got {}",
+        hits.len()
+    );
+
+    let card = tab.find().css("#card2").one().await.unwrap();
+    let scoped = card.find().text_exact("Cancel").one().await.unwrap();
+    assert_eq!(
+        scoped.attr("id").await.unwrap().as_deref(),
+        Some("b2"),
+        "an element-scoped text_exact must not leave #card2's subtree"
+    );
+
+    // The substring path was always scoped; the two must now agree.
+    let loose = card.find().text("Cancel").one().await.unwrap();
+    assert_eq!(loose.attr("id").await.unwrap().as_deref(), Some("b2"));
+
+    browser.close().await.unwrap();
+}
+
+/// A clip reaching past what Chrome has painted must come back with pixels.
+///
+/// `captureBeyondViewport` is what guarantees that, and the unit test for it
+/// asserts the flag appears in the `Page.captureScreenshot` params — which
+/// says nothing about what the flag does. That gap is how a `position: fixed`
+/// side effect got documented in four places for behavior Chrome 151 does not
+/// have: there was no test the claim could fail against.
+///
+/// Asserted without decoding the PNG: a blank capture of the coloured band is
+/// byte-identical to a capture of the empty strip beside it, since both are
+/// the same size and uniformly white. The equality of two captures of that
+/// empty strip is checked first, because if encoding were not deterministic
+/// the real assertion below would pass for the wrong reason.
+#[tokio::test]
+#[serial]
+async fn a_clip_below_the_fold_comes_back_with_pixels() {
+    let mock = MockServer::start().await;
+    mount(
+        &mock,
+        "/tall",
+        r#"<!doctype html><html><body style="margin:0">
+             <div style="position:absolute;left:0;top:5000px;width:200px;height:100px;background:#00ff00"></div>
+             <div style="height:6000px"></div>
+           </body></html>"#,
+    )
+    .await;
+
+    let browser = Browser::builder().headless(true).launch().await.unwrap();
+    let tab = browser.main_tab();
+    tab.goto(&format!("{}/tall", mock.uri())).await.unwrap();
+
+    // The band has to be past the fold or this test guards nothing.
+    let viewport_height: f64 = tab.evaluate_main("window.innerHeight").await.unwrap();
+    assert!(
+        viewport_height < 5000.0,
+        "the band must sit below the rendered area; viewport is {viewport_height}px tall"
+    );
+
+    let band = BoundingBox {
+        x: 0.0,
+        y: 5000.0,
+        width: 200.0,
+        height: 100.0,
+    };
+    let empty = BoundingBox {
+        x: 400.0,
+        y: 5000.0,
+        width: 200.0,
+        height: 100.0,
+    };
+    let band_png = tab.screenshot_builder().clip(band).bytes().await.unwrap();
+    let empty_png = tab.screenshot_builder().clip(empty).bytes().await.unwrap();
+    let empty_again = tab.screenshot_builder().clip(empty).bytes().await.unwrap();
+
+    assert_eq!(
+        empty_png, empty_again,
+        "two captures of the same blank rect must encode identically, or the \
+         comparison below proves nothing"
+    );
+    assert_ne!(
+        band_png, empty_png,
+        "the below-the-fold band came back as blank as the empty strip beside it"
+    );
 
     browser.close().await.unwrap();
 }

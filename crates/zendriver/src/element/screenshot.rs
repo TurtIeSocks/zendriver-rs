@@ -135,8 +135,9 @@ impl Element {
                         // still has a clip reaching past what Chrome has
                         // painted, and without this flag those rows come back
                         // blank with no error. Matches `ScreenshotBuilder`,
-                        // which sends it on every clip — see the screenshot
-                        // module docs for the `position: fixed` caveat.
+                        // which sends it on every clip; the screenshot module
+                        // docs record what the flag does and does not change
+                        // for a clip that was already on screen.
                         "captureBeyondViewport": true,
                         "clip": {
                             "x": bbox.x + page_x,

@@ -52,10 +52,15 @@
 //!
 //! Any capture carrying a `clip` — full-page or a caller's own rect — also
 //! sends `captureBeyondViewport: true`, so a rect covering area Chrome has
-//! not rendered comes back with pixels rather than blank. The flag has one
-//! side effect worth knowing: `position: fixed` elements render at their
-//! document position rather than pinned to the viewport, so a sticky header
-//! can appear in an unexpected place in a clipped shot.
+//! not rendered comes back with pixels rather than blank.
+//!
+//! It changes nothing about a clip that was already on screen. Measured on
+//! Chrome 151 with an 800x600 viewport over a 6000px page scrolled to y=2000:
+//! an on-screen clip is byte-identical with and without the flag, a clip past
+//! the rendered area is blank without it and correct with it, and a
+//! `position: fixed` box stays pinned to the viewport either way — it is
+//! captured by a clip taken where the viewport sits, and does not appear in a
+//! clip of the document top.
 //!
 //! ## Clip scale
 //!
@@ -256,8 +261,8 @@ impl<'tab> ScreenshotBuilder<'tab> {
     /// the viewport: Chrome reads `Page.captureScreenshot`'s clip in page
     /// space. The two coincide only while the page is unscrolled. A rect may
     /// reach past the fold and still render — see the [module docs](self) for
-    /// the `captureBeyondViewport` flag that guarantees it, its
-    /// `position: fixed` caveat, and the 1x clip scale.
+    /// the `captureBeyondViewport` flag that guarantees it, and for the 1x
+    /// clip scale.
     ///
     /// # Examples
     ///

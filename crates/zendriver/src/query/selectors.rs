@@ -187,8 +187,8 @@ impl SelectorKind {
 /// (main-frame main-world) context, matching prior behavior exactly.
 ///
 /// Every `Tab`/`Frame` match arm below (css/xpath/text/text_regex/
-/// predicate, both `_one` and `_many`) routes through this one function
-/// instead of hand-rolling the `contextId` dance per resolver.
+/// predicate) routes through this one function instead of hand-rolling the
+/// `contextId` dance per resolver.
 async fn eval_expr_in_scope(scope: &QueryScope<'_>, expression: String) -> Result<Value> {
     let session = scope.session();
     let ctx = scope.execution_context_id().await?;
@@ -333,14 +333,16 @@ async fn resolve_xpath_many(scope: &QueryScope<'_>, expr: &str) -> Result<Vec<Re
 // ---------------------------------------------------------------------
 //
 // Two paths:
-//   - exact=true  -> XPath `//*[normalize-space(.)=<needle>]` with
-//     `singleNodeValue` for `_one` / `ORDERED_NODE_SNAPSHOT_TYPE` for
-//     `_many`. The XPath string is constructed *in JS* via
-//     `JSON.stringify(needle)` (then `"`->`'`) so multi-quote needles
-//     don't break XPath literal escaping.
+//   - exact=true  -> an XPath built in Rust by `text_exact_xpath` and
+//     evaluated with `ORDERED_NODE_SNAPSHOT_TYPE`. The needle is rendered as
+//     an XPath literal by `xpath_string_literal` (which has the escaping
+//     rule and the `concat()` fallback — do not restate it here). Tab and
+//     frame scope emit `//*` against `document`; element scope emits the
+//     relative `.//*` against `this`, or the walk leaves the element's
+//     subtree.
 //   - exact=false -> JS tree walk:
 //     `Array.from(ctx.querySelectorAll('*')).filter(el => (el.innerText||el.textContent).toLowerCase().includes(needle.toLowerCase()))`.
-//     `_one` slices `[0] || null`; `_many` returns the array.
+//     Both paths return an array; `.one()` takes its first element.
 //
 // `innerText||textContent` matches Playwright's `getByText` and is
 // resilient to hidden elements (which have `innerText === ""` but
@@ -437,6 +439,12 @@ fn build_text_substring_fn_body(needle: &str, best_match: bool) -> String {
 /// containing both quote kinds cannot be written as one literal at all;
 /// `concat()` over alternating pieces is the standard workaround.
 ///
+/// Reaching the `concat()` branch means `s` carries both quote kinds, so
+/// splitting on `"` yields at least two chunks and the loop pushes at least
+/// one `'"'` separator alongside the chunk holding the apostrophe:
+/// `concat()`'s two-argument minimum is satisfied by construction, not by a
+/// guard.
+///
 /// This replaced `JSON.stringify(n).replace(/"/g,"'")`, which was not an
 /// escaping strategy but a quote swap — it only moved which character
 /// broke the expression. `text_exact("it's")` built
@@ -465,20 +473,46 @@ fn xpath_string_literal(s: &str) -> String {
             parts.push("'\"'".to_string());
         }
     }
-    // XPath 1.0's `concat()` is `concat(string, string, string*)` — two
-    // arguments minimum. A needle of exactly `"` yields a single piece.
-    if parts.len() < 2 {
-        parts.push("\"\"".to_string());
-    }
+    debug_assert!(parts.len() >= 2, "concat() needs two arguments: {parts:?}");
     format!("concat({})", parts.join(","))
 }
 
-/// The `//*[normalize-space(.)=<literal>]` expression for `needle`, with
-/// the needle rendered by [`xpath_string_literal`]. Built here in Rust
-/// rather than assembled on the page so the quoting is unit-testable
-/// without a browser.
-fn text_exact_xpath(needle: &str) -> String {
-    format!("//*[normalize-space(.)={}]", xpath_string_literal(needle))
+/// Which node a text-exact expression walks down from.
+///
+/// `//` abbreviates `/descendant-or-self::node()/`, and that leading `/` is
+/// the root of the document containing the context node — so `//*` ignores
+/// whatever node `document.evaluate` was handed and enumerates the whole
+/// page. `.//` starts the same walk at the context node. The distinction is
+/// invisible until an element-scoped query returns a match from somewhere
+/// else on the page.
+#[derive(Clone, Copy)]
+enum TextExactAnchor {
+    /// Whole document. Tab and frame scope, evaluated against `document`.
+    Document,
+    /// The context node's own subtree. Element scope, evaluated against
+    /// `this`.
+    ContextNode,
+}
+
+impl TextExactAnchor {
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Document => "//",
+            Self::ContextNode => ".//",
+        }
+    }
+}
+
+/// The `//*[normalize-space(.)=<literal>]` expression for `needle`, or its
+/// relative `.//*` form (see [`TextExactAnchor`]), with the needle rendered
+/// by [`xpath_string_literal`]. Built here in Rust rather than assembled on
+/// the page so the quoting is unit-testable without a browser.
+fn text_exact_xpath(needle: &str, anchor: TextExactAnchor) -> String {
+    format!(
+        "{}*[normalize-space(.)={}]",
+        anchor.prefix(),
+        xpath_string_literal(needle)
+    )
 }
 
 fn build_text_exact_xpath_js_tab(needle: &str, best_match: bool) -> String {
@@ -492,23 +526,24 @@ fn build_text_exact_xpath_js_tab(needle: &str, best_match: bool) -> String {
     };
     format!(
         "(function(){{var xp={xp};var r=document.evaluate(xp,document,null,XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,null);var a=[];for(var i=0;i<r.snapshotLength;i++)a.push(r.snapshotItem(i));{sort};return a;}})()",
-        xp = json!(text_exact_xpath(needle)),
+        xp = json!(text_exact_xpath(needle, TextExactAnchor::Document)),
         sort = sort,
     )
 }
 
 fn build_text_exact_xpath_fn_body(needle: &str, best_match: bool) -> String {
-    // Element scope: `this` is the context node. The leading parameter
-    // absorbs the needle the caller still passes in `arguments`; the
-    // expression itself is baked in above.
+    // Element scope: `this` is the context node, so the expression has to be
+    // relative or the walk runs over the whole document and the scope means
+    // nothing. Declares no parameters — the needle is baked into the
+    // expression, so the caller sends no `arguments` either.
     let sort = if best_match {
         format!(";{}", best_match_sort_js("a", needle.chars().count()))
     } else {
         String::new()
     };
     format!(
-        "function(_n){{var xp={xp};var r=document.evaluate(xp,this,null,XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,null);var a=[];for(var i=0;i<r.snapshotLength;i++)a.push(r.snapshotItem(i));{sort};return a;}}",
-        xp = json!(text_exact_xpath(needle)),
+        "function(){{var xp={xp};var r=document.evaluate(xp,this,null,XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,null);var a=[];for(var i=0;i<r.snapshotLength;i++)a.push(r.snapshotItem(i));{sort};return a;}}",
+        xp = json!(text_exact_xpath(needle, TextExactAnchor::ContextNode)),
         sort = sort,
     )
 }
@@ -545,7 +580,6 @@ async fn resolve_text_many(
                         json!({
                             "objectId": object_id,
                             "functionDeclaration": build_text_exact_xpath_fn_body(needle, best_match),
-                            "arguments": [{ "value": needle }],
                             "returnByValue": false,
                         }),
                     )
@@ -1063,6 +1097,29 @@ mod tests {
                 r#"var xp="//*[normalize-space(.)=concat(\"it's a \",'\"',\"quote\",'\"')]";"#
             ),
             "a needle with both quote kinds must compile to concat(), got: {expr}"
+        );
+    }
+
+    /// The two text-exact builders must not share an anchor.
+    ///
+    /// `//*` resolves against the document root whatever context node
+    /// `document.evaluate` is handed, so the element-scoped builder has to
+    /// emit `.//*` or its scoping is decorative. Pinned here as well as in
+    /// `tests/element_world_regressions.rs` so a mis-wired anchor fails
+    /// without a browser; only that test proves the anchors reach the nodes
+    /// this one assumes they do.
+    #[test]
+    fn only_the_element_scoped_expression_is_relative_to_its_context_node() {
+        let tab_scope = build_text_exact_xpath_js_tab("Cancel", false);
+        assert!(
+            tab_scope.contains(r#"var xp="//*[normalize-space(.)=\"Cancel\"]""#),
+            "tab scope evaluates against `document` and stays document-anchored, got: {tab_scope}"
+        );
+
+        let element_scope = build_text_exact_xpath_fn_body("Cancel", false);
+        assert!(
+            element_scope.contains(r#"var xp=".//*[normalize-space(.)=\"Cancel\"]""#),
+            "element scope evaluates against `this` and must be relative, got: {element_scope}"
         );
     }
 
