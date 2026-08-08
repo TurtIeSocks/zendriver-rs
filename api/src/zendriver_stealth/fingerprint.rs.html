@@ -163,629 +163,681 @@
 <a href=#163 id=163 data-nosnippet>163</a>    <span class="kw">pub </span>memory_gb: u32,
 <a href=#164 id=164 data-nosnippet>164</a>    <span class="kw">pub </span>ua_string: String,
 <a href=#165 id=165 data-nosnippet>165</a>    <span class="kw">pub </span>ua_metadata: UserAgentMetadata,
-<a href=#166 id=166 data-nosnippet>166</a>    <span class="kw">pub </span>timezone: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#167 id=167 data-nosnippet>167</a>    <span class="kw">pub </span>locale: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#168 id=168 data-nosnippet>168</a>    <span class="kw">pub </span>languages: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
-<a href=#169 id=169 data-nosnippet>169</a>    <span class="doccomment">/// Screen / device-metrics override resolved from
-<a href=#170 id=170 data-nosnippet>170</a>    /// [`StealthProfile::screen`](crate::StealthProfile::screen). `None` by
-<a href=#171 id=171 data-nosnippet>171</a>    /// default (`auto_detect` never probes a screen size) — the observer's
-<a href=#172 id=172 data-nosnippet>172</a>    /// fixed 1920x1080 default is untouched until this is explicitly set.
-<a href=#173 id=173 data-nosnippet>173</a>    </span><span class="kw">pub </span>screen: <span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::persona::specs::ScreenSpec&gt;,
-<a href=#174 id=174 data-nosnippet>174</a>}
-<a href=#175 id=175 data-nosnippet>175</a>
-<a href=#176 id=176 data-nosnippet>176</a><span class="kw">impl </span>Fingerprint {
-<a href=#177 id=177 data-nosnippet>177</a>    <span class="doccomment">/// Probe host system + installed Chrome to build a realistic fingerprint.
-<a href=#178 id=178 data-nosnippet>178</a>    </span><span class="comment">// `StealthError` is large because `PatchFailed` wraps `CallError` (~152B).
-<a href=#179 id=179 data-nosnippet>179</a>    // Boxing it would cross the Task 5 file scope; bypass per-fn instead.
-<a href=#180 id=180 data-nosnippet>180</a>    </span><span class="attr">#[allow(clippy::result_large_err)]
-<a href=#181 id=181 data-nosnippet>181</a>    </span><span class="kw">pub fn </span>auto_detect(chrome_executable: <span class="kw-2">&amp;</span>Path) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, StealthError&gt; {
-<a href=#182 id=182 data-nosnippet>182</a>        <span class="kw">let </span>platform = detect_platform();
-<a href=#183 id=183 data-nosnippet>183</a>        <span class="kw">let </span>(chrome_major, chrome_full) =
-<a href=#184 id=184 data-nosnippet>184</a>            probe_chrome_version(chrome_executable).unwrap_or_else(|e| {
-<a href=#185 id=185 data-nosnippet>185</a>                <span class="macro">tracing::warn!</span>(<span class="string">"chrome version probe failed: {e}; using fallback"</span>);
-<a href=#186 id=186 data-nosnippet>186</a>                (FALLBACK_CHROME_MAJOR, FALLBACK_CHROME_FULL.to_string())
-<a href=#187 id=187 data-nosnippet>187</a>            });
-<a href=#188 id=188 data-nosnippet>188</a>        <span class="kw">let </span>cpu_count = clamp_cpu_count(num_cpus::get() <span class="kw">as </span>u32);
-<a href=#189 id=189 data-nosnippet>189</a>        <span class="kw">let </span>memory_gb = detect_memory_gb()<span class="question-mark">?</span>;
-<a href=#190 id=190 data-nosnippet>190</a>        <span class="kw">let </span>ua_string = <span class="kw">crate</span>::ua::compose_ua_string(platform, <span class="kw-2">&amp;</span>chrome_full);
-<a href=#191 id=191 data-nosnippet>191</a>        <span class="kw">let </span>ua_metadata = UserAgentMetadata::realistic(platform, chrome_major, <span class="kw-2">&amp;</span>chrome_full);
-<a href=#192 id=192 data-nosnippet>192</a>        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
-<a href=#193 id=193 data-nosnippet>193</a>            platform,
-<a href=#194 id=194 data-nosnippet>194</a>            chrome_major,
-<a href=#195 id=195 data-nosnippet>195</a>            chrome_full,
-<a href=#196 id=196 data-nosnippet>196</a>            cpu_count,
-<a href=#197 id=197 data-nosnippet>197</a>            memory_gb,
-<a href=#198 id=198 data-nosnippet>198</a>            ua_string,
-<a href=#199 id=199 data-nosnippet>199</a>            ua_metadata,
-<a href=#200 id=200 data-nosnippet>200</a>            timezone: <span class="prelude-val">None</span>,
-<a href=#201 id=201 data-nosnippet>201</a>            locale: <span class="prelude-val">None</span>,
-<a href=#202 id=202 data-nosnippet>202</a>            languages: <span class="prelude-val">None</span>,
-<a href=#203 id=203 data-nosnippet>203</a>            screen: <span class="prelude-val">None</span>,
-<a href=#204 id=204 data-nosnippet>204</a>        })
-<a href=#205 id=205 data-nosnippet>205</a>    }
-<a href=#206 id=206 data-nosnippet>206</a>
-<a href=#207 id=207 data-nosnippet>207</a>    <span class="doccomment">/// Recompose UA string + UAM after platform/version overrides.
-<a href=#208 id=208 data-nosnippet>208</a>    </span><span class="kw">pub fn </span>recompose(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-<a href=#209 id=209 data-nosnippet>209</a>        <span class="self">self</span>.ua_string = <span class="kw">crate</span>::ua::compose_ua_string(<span class="self">self</span>.platform, <span class="kw-2">&amp;</span><span class="self">self</span>.chrome_full);
-<a href=#210 id=210 data-nosnippet>210</a>        <span class="self">self</span>.ua_metadata =
-<a href=#211 id=211 data-nosnippet>211</a>            UserAgentMetadata::realistic(<span class="self">self</span>.platform, <span class="self">self</span>.chrome_major, <span class="kw-2">&amp;</span><span class="self">self</span>.chrome_full);
-<a href=#212 id=212 data-nosnippet>212</a>    }
-<a href=#213 id=213 data-nosnippet>213</a>}
-<a href=#214 id=214 data-nosnippet>214</a>
-<a href=#215 id=215 data-nosnippet>215</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>detect_platform() -&gt; Platform {
-<a href=#216 id=216 data-nosnippet>216</a>    <span class="attr">#[cfg(target_os = <span class="string">"windows"</span>)]
-<a href=#217 id=217 data-nosnippet>217</a>    </span>{
-<a href=#218 id=218 data-nosnippet>218</a>        Platform::Win32
+<a href=#166 id=166 data-nosnippet>166</a>    <span class="doccomment">/// IANA timezone driving `Emulation.setTimezoneOverride`, from
+<a href=#167 id=167 data-nosnippet>167</a>    /// [`StealthProfile::timezone`](crate::StealthProfile::timezone) or from a
+<a href=#168 id=168 data-nosnippet>168</a>    /// [`Persona`](crate::Persona), which wins and is folded in when the
+<a href=#169 id=169 data-nosnippet>169</a>    /// observer is built. `None` sends no override.
+<a href=#170 id=170 data-nosnippet>170</a>    </span><span class="kw">pub </span>timezone: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#171 id=171 data-nosnippet>171</a>    <span class="doccomment">/// Locale driving `Emulation.setLocaleOverride` when
+<a href=#172 id=172 data-nosnippet>172</a>    /// [`languages`](Self::languages) is unset. Same two sources as
+<a href=#173 id=173 data-nosnippet>173</a>    /// [`timezone`](Self::timezone).
+<a href=#174 id=174 data-nosnippet>174</a>    </span><span class="kw">pub </span>locale: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#175 id=175 data-nosnippet>175</a>    <span class="doccomment">/// Ordered language list driving `Accept-Language`, `navigator.languages`
+<a href=#176 id=176 data-nosnippet>176</a>    /// and — from its first entry — `Emulation.setLocaleOverride`, which is
+<a href=#177 id=177 data-nosnippet>177</a>    /// what keeps the JS-visible locale inside the list the header advertises.
+<a href=#178 id=178 data-nosnippet>178</a>    /// Falls back to [`locale`](Self::locale) when unset, and the header falls
+<a href=#179 id=179 data-nosnippet>179</a>    /// back further to `["en-US", "en"]` when that is unset too (the locale
+<a href=#180 id=180 data-nosnippet>180</a>    /// override is then simply not sent).
+<a href=#181 id=181 data-nosnippet>181</a>    </span><span class="kw">pub </span>languages: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
+<a href=#182 id=182 data-nosnippet>182</a>    <span class="doccomment">/// Screen / device-metrics override resolved from
+<a href=#183 id=183 data-nosnippet>183</a>    /// [`StealthProfile::screen`](crate::StealthProfile::screen), or from a
+<a href=#184 id=184 data-nosnippet>184</a>    /// [`Persona`](crate::Persona)'s own `screen`, which wins. `None` by
+<a href=#185 id=185 data-nosnippet>185</a>    /// default (`auto_detect` never probes a screen size) — the observer's
+<a href=#186 id=186 data-nosnippet>186</a>    /// fixed 1920x1080 default is untouched until this is explicitly set.
+<a href=#187 id=187 data-nosnippet>187</a>    </span><span class="kw">pub </span>screen: <span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::persona::specs::ScreenSpec&gt;,
+<a href=#188 id=188 data-nosnippet>188</a>}
+<a href=#189 id=189 data-nosnippet>189</a>
+<a href=#190 id=190 data-nosnippet>190</a><span class="kw">impl </span>Fingerprint {
+<a href=#191 id=191 data-nosnippet>191</a>    <span class="doccomment">/// Probe host system + installed Chrome to build a realistic fingerprint.
+<a href=#192 id=192 data-nosnippet>192</a>    </span><span class="comment">// `StealthError` is large because `PatchFailed` wraps `CallError` (~152B).
+<a href=#193 id=193 data-nosnippet>193</a>    // Boxing it would cross the Task 5 file scope; bypass per-fn instead.
+<a href=#194 id=194 data-nosnippet>194</a>    </span><span class="attr">#[allow(clippy::result_large_err)]
+<a href=#195 id=195 data-nosnippet>195</a>    </span><span class="kw">pub fn </span>auto_detect(chrome_executable: <span class="kw-2">&amp;</span>Path) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, StealthError&gt; {
+<a href=#196 id=196 data-nosnippet>196</a>        <span class="kw">let </span>platform = detect_platform();
+<a href=#197 id=197 data-nosnippet>197</a>        <span class="kw">let </span>(chrome_major, chrome_full) =
+<a href=#198 id=198 data-nosnippet>198</a>            probe_chrome_version(chrome_executable).unwrap_or_else(|e| {
+<a href=#199 id=199 data-nosnippet>199</a>                <span class="macro">tracing::warn!</span>(<span class="string">"chrome version probe failed: {e}; using fallback"</span>);
+<a href=#200 id=200 data-nosnippet>200</a>                (FALLBACK_CHROME_MAJOR, FALLBACK_CHROME_FULL.to_string())
+<a href=#201 id=201 data-nosnippet>201</a>            });
+<a href=#202 id=202 data-nosnippet>202</a>        <span class="kw">let </span>cpu_count = clamp_cpu_count(num_cpus::get() <span class="kw">as </span>u32);
+<a href=#203 id=203 data-nosnippet>203</a>        <span class="kw">let </span>memory_gb = detect_memory_gb()<span class="question-mark">?</span>;
+<a href=#204 id=204 data-nosnippet>204</a>        <span class="kw">let </span>ua_string = <span class="kw">crate</span>::ua::compose_ua_string(platform, <span class="kw-2">&amp;</span>chrome_full);
+<a href=#205 id=205 data-nosnippet>205</a>        <span class="kw">let </span>ua_metadata = UserAgentMetadata::realistic(platform, chrome_major, <span class="kw-2">&amp;</span>chrome_full);
+<a href=#206 id=206 data-nosnippet>206</a>        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+<a href=#207 id=207 data-nosnippet>207</a>            platform,
+<a href=#208 id=208 data-nosnippet>208</a>            chrome_major,
+<a href=#209 id=209 data-nosnippet>209</a>            chrome_full,
+<a href=#210 id=210 data-nosnippet>210</a>            cpu_count,
+<a href=#211 id=211 data-nosnippet>211</a>            memory_gb,
+<a href=#212 id=212 data-nosnippet>212</a>            ua_string,
+<a href=#213 id=213 data-nosnippet>213</a>            ua_metadata,
+<a href=#214 id=214 data-nosnippet>214</a>            timezone: <span class="prelude-val">None</span>,
+<a href=#215 id=215 data-nosnippet>215</a>            locale: <span class="prelude-val">None</span>,
+<a href=#216 id=216 data-nosnippet>216</a>            languages: <span class="prelude-val">None</span>,
+<a href=#217 id=217 data-nosnippet>217</a>            screen: <span class="prelude-val">None</span>,
+<a href=#218 id=218 data-nosnippet>218</a>        })
 <a href=#219 id=219 data-nosnippet>219</a>    }
-<a href=#220 id=220 data-nosnippet>220</a>    <span class="attr">#[cfg(target_os = <span class="string">"macos"</span>)]
-<a href=#221 id=221 data-nosnippet>221</a>    </span>{
-<a href=#222 id=222 data-nosnippet>222</a>        Platform::MacIntel
-<a href=#223 id=223 data-nosnippet>223</a>    }
-<a href=#224 id=224 data-nosnippet>224</a>    <span class="attr">#[cfg(any(target_os = <span class="string">"linux"</span>, target_os = <span class="string">"freebsd"</span>, target_os = <span class="string">"openbsd"</span>))]
-<a href=#225 id=225 data-nosnippet>225</a>    </span>{
-<a href=#226 id=226 data-nosnippet>226</a>        Platform::LinuxX86_64
-<a href=#227 id=227 data-nosnippet>227</a>    }
-<a href=#228 id=228 data-nosnippet>228</a>    <span class="attr">#[cfg(not(any(
-<a href=#229 id=229 data-nosnippet>229</a>        target_os = <span class="string">"windows"</span>,
-<a href=#230 id=230 data-nosnippet>230</a>        target_os = <span class="string">"macos"</span>,
-<a href=#231 id=231 data-nosnippet>231</a>        target_os = <span class="string">"linux"</span>,
-<a href=#232 id=232 data-nosnippet>232</a>        target_os = <span class="string">"freebsd"</span>,
-<a href=#233 id=233 data-nosnippet>233</a>        target_os = <span class="string">"openbsd"
-<a href=#234 id=234 data-nosnippet>234</a>    </span>)))]
-<a href=#235 id=235 data-nosnippet>235</a>    </span>{
-<a href=#236 id=236 data-nosnippet>236</a>        Platform::LinuxX86_64 <span class="comment">// unknown unix-likes -&gt; linux is the safest plausibility
-<a href=#237 id=237 data-nosnippet>237</a>    </span>}
-<a href=#238 id=238 data-nosnippet>238</a>}
-<a href=#239 id=239 data-nosnippet>239</a>
-<a href=#240 id=240 data-nosnippet>240</a><span class="doccomment">/// Parse `Google Chrome 120.0.6099.234` / `Chromium 120.0.6099.0` into
-<a href=#241 id=241 data-nosnippet>241</a>/// `(major, full)`. Shared by the Unix probe and its tests.
-<a href=#242 id=242 data-nosnippet>242</a></span><span class="attr">#[cfg(not(windows))]
-<a href=#243 id=243 data-nosnippet>243</a>#[allow(clippy::result_large_err)]
-<a href=#244 id=244 data-nosnippet>244</a></span><span class="kw">fn </span>parse_version_banner(stdout: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;(u32, String), StealthError&gt; {
-<a href=#245 id=245 data-nosnippet>245</a>    <span class="kw">let </span>full = stdout
-<a href=#246 id=246 data-nosnippet>246</a>        .split_whitespace()
-<a href=#247 id=247 data-nosnippet>247</a>        .find(|tok| tok.chars().next().is_some_and(|c| c.is_ascii_digit()))
-<a href=#248 id=248 data-nosnippet>248</a>        .ok_or_else(|| StealthError::ChromeVersionDetect(<span class="macro">format!</span>(<span class="string">"no version token in: {stdout}"</span>)))<span class="question-mark">?
-<a href=#249 id=249 data-nosnippet>249</a>        </span>.to_string();
-<a href=#250 id=250 data-nosnippet>250</a>    <span class="kw">let </span>major: u32 = full
-<a href=#251 id=251 data-nosnippet>251</a>        .split(<span class="string">'.'</span>)
-<a href=#252 id=252 data-nosnippet>252</a>        .next()
-<a href=#253 id=253 data-nosnippet>253</a>        .and_then(|s| s.parse().ok())
-<a href=#254 id=254 data-nosnippet>254</a>        .ok_or_else(|| StealthError::ChromeVersionDetect(<span class="macro">format!</span>(<span class="string">"bad major in: {full}"</span>)))<span class="question-mark">?</span>;
-<a href=#255 id=255 data-nosnippet>255</a>    <span class="prelude-val">Ok</span>((major, full))
-<a href=#256 id=256 data-nosnippet>256</a>}
-<a href=#257 id=257 data-nosnippet>257</a>
-<a href=#258 id=258 data-nosnippet>258</a><span class="doccomment">/// Probe the Chrome version by running `chrome --version`.
-<a href=#259 id=259 data-nosnippet>259</a>///
-<a href=#260 id=260 data-nosnippet>260</a>/// Unix-only *by design*. Chrome on Windows does not implement `--version` as a
-<a href=#261 id=261 data-nosnippet>261</a>/// print-and-exit: with no existing browser session it starts a whole browser
-<a href=#262 id=262 data-nosnippet>262</a>/// and never exits, so reading its output blocks forever. See the `cfg(windows)`
-<a href=#263 id=263 data-nosnippet>263</a>/// twin below for what Windows does instead, and why it must not exec.
-<a href=#264 id=264 data-nosnippet>264</a>///
-<a href=#265 id=265 data-nosnippet>265</a>/// Bounded even here. `--version` returns in milliseconds on a healthy Unix
-<a href=#266 id=266 data-nosnippet>266</a>/// Chrome, but this runs *synchronously inside* `Browser::launch()`'s future:
-<a href=#267 id=267 data-nosnippet>267</a>/// an unbounded wait would wedge the poll, and a future that never yields
-<a href=#268 id=268 data-nosnippet>268</a>/// starves the tokio timer driver — which silently disables every
-<a href=#269 id=269 data-nosnippet>269</a>/// `tokio::time::timeout` in the process, including the ones meant to catch
-<a href=#270 id=270 data-nosnippet>270</a>/// exactly this. A blocking call on the async path must carry its own deadline,
-<a href=#271 id=271 data-nosnippet>271</a>/// because no outer timeout can rescue it.
-<a href=#272 id=272 data-nosnippet>272</a></span><span class="attr">#[cfg(not(windows))]
-<a href=#273 id=273 data-nosnippet>273</a>#[allow(clippy::result_large_err)]
-<a href=#274 id=274 data-nosnippet>274</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>probe_chrome_version(exe: <span class="kw-2">&amp;</span>Path) -&gt; <span class="prelude-ty">Result</span>&lt;(u32, String), StealthError&gt; {
-<a href=#275 id=275 data-nosnippet>275</a>    <span class="kw">use </span>std::io::Read;
-<a href=#276 id=276 data-nosnippet>276</a>    <span class="kw">use </span>std::process::Stdio;
-<a href=#277 id=277 data-nosnippet>277</a>    <span class="kw">use </span>std::time::{Duration, Instant};
-<a href=#278 id=278 data-nosnippet>278</a>
-<a href=#279 id=279 data-nosnippet>279</a>    <span class="doccomment">/// Generous: a healthy `chrome --version` answers in ~50ms. This is a
-<a href=#280 id=280 data-nosnippet>280</a>    /// backstop against a wedged binary, not a performance budget.
-<a href=#281 id=281 data-nosnippet>281</a>    </span><span class="kw">const </span>PROBE_TIMEOUT: Duration = Duration::from_secs(<span class="number">10</span>);
-<a href=#282 id=282 data-nosnippet>282</a>    <span class="kw">const </span>POLL_INTERVAL: Duration = Duration::from_millis(<span class="number">20</span>);
-<a href=#283 id=283 data-nosnippet>283</a>
-<a href=#284 id=284 data-nosnippet>284</a>    <span class="kw">let </span><span class="kw-2">mut </span>child = Command::new(exe)
-<a href=#285 id=285 data-nosnippet>285</a>        .arg(<span class="string">"--version"</span>)
-<a href=#286 id=286 data-nosnippet>286</a>        .stdin(Stdio::null())
-<a href=#287 id=287 data-nosnippet>287</a>        .stdout(Stdio::piped())
-<a href=#288 id=288 data-nosnippet>288</a>        .stderr(Stdio::null())
-<a href=#289 id=289 data-nosnippet>289</a>        .spawn()
-<a href=#290 id=290 data-nosnippet>290</a>        .map_err(|e| StealthError::ChromeVersionDetect(<span class="macro">format!</span>(<span class="string">"spawn failed: {e}"</span>)))<span class="question-mark">?</span>;
+<a href=#220 id=220 data-nosnippet>220</a>
+<a href=#221 id=221 data-nosnippet>221</a>    <span class="doccomment">/// Fold a [`Persona`](crate::Persona)'s explicitly-set fields into this
+<a href=#222 id=222 data-nosnippet>222</a>    /// fingerprint.
+<a href=#223 id=223 data-nosnippet>223</a>    ///
+<a href=#224 id=224 data-nosnippet>224</a>    /// Four axes exist on both types — `timezone`, `locale`, `languages`,
+<a href=#225 id=225 data-nosnippet>225</a>    /// `screen` — and three separate consumers read them: the CDP
+<a href=#226 id=226 data-nosnippet>226</a>    /// `Emulation.set*Override` calls, the `Accept-Language` header, and the
+<a href=#227 id=227 data-nosnippet>227</a>    /// JS patches. Merging once, at the single point where a persona and a
+<a href=#228 id=228 data-nosnippet>228</a>    /// fingerprint meet
+<a href=#229 id=229 data-nosnippet>229</a>    /// ([`StealthObserver::with_persona`](crate::StealthObserver::with_persona)),
+<a href=#230 id=230 data-nosnippet>230</a>    /// is what keeps those consumers from disagreeing: each reads the merged
+<a href=#231 id=231 data-nosnippet>231</a>    /// value rather than re-deriving the precedence for itself.
+<a href=#232 id=232 data-nosnippet>232</a>    ///
+<a href=#233 id=233 data-nosnippet>233</a>    /// Precedence: an explicitly-set persona field wins; `None` inherits
+<a href=#234 id=234 data-nosnippet>234</a>    /// whatever the fingerprint already resolved — from
+<a href=#235 id=235 data-nosnippet>235</a>    /// [`StealthProfile`](crate::StealthProfile)'s per-field setters, or from
+<a href=#236 id=236 data-nosnippet>236</a>    /// the host probe. A [`Persona::default`](crate::Persona::default) is a
+<a href=#237 id=237 data-nosnippet>237</a>    /// no-op, and the merge is idempotent.
+<a href=#238 id=238 data-nosnippet>238</a>    ///
+<a href=#239 id=239 data-nosnippet>239</a>    /// An empty `languages` list counts as unset, matching how every consumer
+<a href=#240 id=240 data-nosnippet>240</a>    /// in [`lang`](crate::lang) already reads one: `Some(vec![])` describes a
+<a href=#241 id=241 data-nosnippet>241</a>    /// persona that pins no languages, not one that advertises none, and
+<a href=#242 id=242 data-nosnippet>242</a>    /// letting it overwrite would make an empty persona field destroy a
+<a href=#243 id=243 data-nosnippet>243</a>    /// configured [`StealthProfile::languages`](crate::StealthProfile::languages).
+<a href=#244 id=244 data-nosnippet>244</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>overlay_persona(<span class="kw-2">&amp;mut </span><span class="self">self</span>, persona: <span class="kw-2">&amp;</span><span class="kw">crate</span>::Persona) {
+<a href=#245 id=245 data-nosnippet>245</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(timezone) = <span class="kw-2">&amp;</span>persona.timezone {
+<a href=#246 id=246 data-nosnippet>246</a>            <span class="self">self</span>.timezone = <span class="prelude-val">Some</span>(timezone.clone());
+<a href=#247 id=247 data-nosnippet>247</a>        }
+<a href=#248 id=248 data-nosnippet>248</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(locale) = <span class="kw-2">&amp;</span>persona.locale {
+<a href=#249 id=249 data-nosnippet>249</a>            <span class="self">self</span>.locale = <span class="prelude-val">Some</span>(locale.clone());
+<a href=#250 id=250 data-nosnippet>250</a>        }
+<a href=#251 id=251 data-nosnippet>251</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(languages) = persona.languages.as_ref().filter(|v| !v.is_empty()) {
+<a href=#252 id=252 data-nosnippet>252</a>            <span class="self">self</span>.languages = <span class="prelude-val">Some</span>(languages.clone());
+<a href=#253 id=253 data-nosnippet>253</a>        }
+<a href=#254 id=254 data-nosnippet>254</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(screen) = persona.screen {
+<a href=#255 id=255 data-nosnippet>255</a>            <span class="self">self</span>.screen = <span class="prelude-val">Some</span>(screen);
+<a href=#256 id=256 data-nosnippet>256</a>        }
+<a href=#257 id=257 data-nosnippet>257</a>    }
+<a href=#258 id=258 data-nosnippet>258</a>
+<a href=#259 id=259 data-nosnippet>259</a>    <span class="doccomment">/// Recompose UA string + UAM after platform/version overrides.
+<a href=#260 id=260 data-nosnippet>260</a>    </span><span class="kw">pub fn </span>recompose(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+<a href=#261 id=261 data-nosnippet>261</a>        <span class="self">self</span>.ua_string = <span class="kw">crate</span>::ua::compose_ua_string(<span class="self">self</span>.platform, <span class="kw-2">&amp;</span><span class="self">self</span>.chrome_full);
+<a href=#262 id=262 data-nosnippet>262</a>        <span class="self">self</span>.ua_metadata =
+<a href=#263 id=263 data-nosnippet>263</a>            UserAgentMetadata::realistic(<span class="self">self</span>.platform, <span class="self">self</span>.chrome_major, <span class="kw-2">&amp;</span><span class="self">self</span>.chrome_full);
+<a href=#264 id=264 data-nosnippet>264</a>    }
+<a href=#265 id=265 data-nosnippet>265</a>}
+<a href=#266 id=266 data-nosnippet>266</a>
+<a href=#267 id=267 data-nosnippet>267</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>detect_platform() -&gt; Platform {
+<a href=#268 id=268 data-nosnippet>268</a>    <span class="attr">#[cfg(target_os = <span class="string">"windows"</span>)]
+<a href=#269 id=269 data-nosnippet>269</a>    </span>{
+<a href=#270 id=270 data-nosnippet>270</a>        Platform::Win32
+<a href=#271 id=271 data-nosnippet>271</a>    }
+<a href=#272 id=272 data-nosnippet>272</a>    <span class="attr">#[cfg(target_os = <span class="string">"macos"</span>)]
+<a href=#273 id=273 data-nosnippet>273</a>    </span>{
+<a href=#274 id=274 data-nosnippet>274</a>        Platform::MacIntel
+<a href=#275 id=275 data-nosnippet>275</a>    }
+<a href=#276 id=276 data-nosnippet>276</a>    <span class="attr">#[cfg(any(target_os = <span class="string">"linux"</span>, target_os = <span class="string">"freebsd"</span>, target_os = <span class="string">"openbsd"</span>))]
+<a href=#277 id=277 data-nosnippet>277</a>    </span>{
+<a href=#278 id=278 data-nosnippet>278</a>        Platform::LinuxX86_64
+<a href=#279 id=279 data-nosnippet>279</a>    }
+<a href=#280 id=280 data-nosnippet>280</a>    <span class="attr">#[cfg(not(any(
+<a href=#281 id=281 data-nosnippet>281</a>        target_os = <span class="string">"windows"</span>,
+<a href=#282 id=282 data-nosnippet>282</a>        target_os = <span class="string">"macos"</span>,
+<a href=#283 id=283 data-nosnippet>283</a>        target_os = <span class="string">"linux"</span>,
+<a href=#284 id=284 data-nosnippet>284</a>        target_os = <span class="string">"freebsd"</span>,
+<a href=#285 id=285 data-nosnippet>285</a>        target_os = <span class="string">"openbsd"
+<a href=#286 id=286 data-nosnippet>286</a>    </span>)))]
+<a href=#287 id=287 data-nosnippet>287</a>    </span>{
+<a href=#288 id=288 data-nosnippet>288</a>        Platform::LinuxX86_64 <span class="comment">// unknown unix-likes -&gt; linux is the safest plausibility
+<a href=#289 id=289 data-nosnippet>289</a>    </span>}
+<a href=#290 id=290 data-nosnippet>290</a>}
 <a href=#291 id=291 data-nosnippet>291</a>
-<a href=#292 id=292 data-nosnippet>292</a>    <span class="kw">let </span>deadline = Instant::now() + PROBE_TIMEOUT;
-<a href=#293 id=293 data-nosnippet>293</a>    <span class="kw">let </span>status = <span class="kw">loop </span>{
-<a href=#294 id=294 data-nosnippet>294</a>        <span class="kw">match </span>child.try_wait() {
-<a href=#295 id=295 data-nosnippet>295</a>            <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(status)) =&gt; <span class="kw">break </span>status,
-<a href=#296 id=296 data-nosnippet>296</a>            <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>) =&gt; {
-<a href=#297 id=297 data-nosnippet>297</a>                <span class="kw">if </span>Instant::now() &gt;= deadline {
-<a href=#298 id=298 data-nosnippet>298</a>                    <span class="comment">// Reap rather than leak: kill_on_drop is not in play here.
-<a href=#299 id=299 data-nosnippet>299</a>                    </span><span class="kw">let _ </span>= child.kill();
-<a href=#300 id=300 data-nosnippet>300</a>                    <span class="kw">let _ </span>= child.wait();
-<a href=#301 id=301 data-nosnippet>301</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(StealthError::ChromeVersionDetect(<span class="macro">format!</span>(
-<a href=#302 id=302 data-nosnippet>302</a>                        <span class="string">"`--version` did not exit within {PROBE_TIMEOUT:?}"
-<a href=#303 id=303 data-nosnippet>303</a>                    </span>)));
-<a href=#304 id=304 data-nosnippet>304</a>                }
-<a href=#305 id=305 data-nosnippet>305</a>                std::thread::sleep(POLL_INTERVAL);
-<a href=#306 id=306 data-nosnippet>306</a>            }
-<a href=#307 id=307 data-nosnippet>307</a>            <span class="prelude-val">Err</span>(e) =&gt; {
-<a href=#308 id=308 data-nosnippet>308</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(StealthError::ChromeVersionDetect(<span class="macro">format!</span>(
-<a href=#309 id=309 data-nosnippet>309</a>                    <span class="string">"wait failed: {e}"
-<a href=#310 id=310 data-nosnippet>310</a>                </span>)));
-<a href=#311 id=311 data-nosnippet>311</a>            }
-<a href=#312 id=312 data-nosnippet>312</a>        }
-<a href=#313 id=313 data-nosnippet>313</a>    };
-<a href=#314 id=314 data-nosnippet>314</a>    <span class="kw">if </span>!status.success() {
-<a href=#315 id=315 data-nosnippet>315</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(StealthError::ChromeVersionDetect(<span class="macro">format!</span>(
-<a href=#316 id=316 data-nosnippet>316</a>            <span class="string">"exit {:?}"</span>,
-<a href=#317 id=317 data-nosnippet>317</a>            status.code()
-<a href=#318 id=318 data-nosnippet>318</a>        )));
-<a href=#319 id=319 data-nosnippet>319</a>    }
-<a href=#320 id=320 data-nosnippet>320</a>
-<a href=#321 id=321 data-nosnippet>321</a>    <span class="kw">let </span><span class="kw-2">mut </span>stdout = String::new();
-<a href=#322 id=322 data-nosnippet>322</a>    child
-<a href=#323 id=323 data-nosnippet>323</a>        .stdout
-<a href=#324 id=324 data-nosnippet>324</a>        .take()
-<a href=#325 id=325 data-nosnippet>325</a>        .ok_or_else(|| StealthError::ChromeVersionDetect(<span class="string">"no stdout pipe"</span>.to_string()))<span class="question-mark">?
-<a href=#326 id=326 data-nosnippet>326</a>        </span>.read_to_string(<span class="kw-2">&amp;mut </span>stdout)
-<a href=#327 id=327 data-nosnippet>327</a>        .map_err(|e| StealthError::ChromeVersionDetect(<span class="macro">format!</span>(<span class="string">"read stdout: {e}"</span>)))<span class="question-mark">?</span>;
-<a href=#328 id=328 data-nosnippet>328</a>    parse_version_banner(<span class="kw-2">&amp;</span>stdout)
-<a href=#329 id=329 data-nosnippet>329</a>}
+<a href=#292 id=292 data-nosnippet>292</a><span class="doccomment">/// Parse `Google Chrome 120.0.6099.234` / `Chromium 120.0.6099.0` into
+<a href=#293 id=293 data-nosnippet>293</a>/// `(major, full)`. Shared by the Unix probe and its tests.
+<a href=#294 id=294 data-nosnippet>294</a></span><span class="attr">#[cfg(not(windows))]
+<a href=#295 id=295 data-nosnippet>295</a>#[allow(clippy::result_large_err)]
+<a href=#296 id=296 data-nosnippet>296</a></span><span class="kw">fn </span>parse_version_banner(stdout: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;(u32, String), StealthError&gt; {
+<a href=#297 id=297 data-nosnippet>297</a>    <span class="kw">let </span>full = stdout
+<a href=#298 id=298 data-nosnippet>298</a>        .split_whitespace()
+<a href=#299 id=299 data-nosnippet>299</a>        .find(|tok| tok.chars().next().is_some_and(|c| c.is_ascii_digit()))
+<a href=#300 id=300 data-nosnippet>300</a>        .ok_or_else(|| StealthError::ChromeVersionDetect(<span class="macro">format!</span>(<span class="string">"no version token in: {stdout}"</span>)))<span class="question-mark">?
+<a href=#301 id=301 data-nosnippet>301</a>        </span>.to_string();
+<a href=#302 id=302 data-nosnippet>302</a>    <span class="kw">let </span>major: u32 = full
+<a href=#303 id=303 data-nosnippet>303</a>        .split(<span class="string">'.'</span>)
+<a href=#304 id=304 data-nosnippet>304</a>        .next()
+<a href=#305 id=305 data-nosnippet>305</a>        .and_then(|s| s.parse().ok())
+<a href=#306 id=306 data-nosnippet>306</a>        .ok_or_else(|| StealthError::ChromeVersionDetect(<span class="macro">format!</span>(<span class="string">"bad major in: {full}"</span>)))<span class="question-mark">?</span>;
+<a href=#307 id=307 data-nosnippet>307</a>    <span class="prelude-val">Ok</span>((major, full))
+<a href=#308 id=308 data-nosnippet>308</a>}
+<a href=#309 id=309 data-nosnippet>309</a>
+<a href=#310 id=310 data-nosnippet>310</a><span class="doccomment">/// Probe the Chrome version by running `chrome --version`.
+<a href=#311 id=311 data-nosnippet>311</a>///
+<a href=#312 id=312 data-nosnippet>312</a>/// Unix-only *by design*. Chrome on Windows does not implement `--version` as a
+<a href=#313 id=313 data-nosnippet>313</a>/// print-and-exit: with no existing browser session it starts a whole browser
+<a href=#314 id=314 data-nosnippet>314</a>/// and never exits, so reading its output blocks forever. See the `cfg(windows)`
+<a href=#315 id=315 data-nosnippet>315</a>/// twin below for what Windows does instead, and why it must not exec.
+<a href=#316 id=316 data-nosnippet>316</a>///
+<a href=#317 id=317 data-nosnippet>317</a>/// Bounded even here. `--version` returns in milliseconds on a healthy Unix
+<a href=#318 id=318 data-nosnippet>318</a>/// Chrome, but this runs *synchronously inside* `Browser::launch()`'s future:
+<a href=#319 id=319 data-nosnippet>319</a>/// an unbounded wait would wedge the poll, and a future that never yields
+<a href=#320 id=320 data-nosnippet>320</a>/// starves the tokio timer driver — which silently disables every
+<a href=#321 id=321 data-nosnippet>321</a>/// `tokio::time::timeout` in the process, including the ones meant to catch
+<a href=#322 id=322 data-nosnippet>322</a>/// exactly this. A blocking call on the async path must carry its own deadline,
+<a href=#323 id=323 data-nosnippet>323</a>/// because no outer timeout can rescue it.
+<a href=#324 id=324 data-nosnippet>324</a></span><span class="attr">#[cfg(not(windows))]
+<a href=#325 id=325 data-nosnippet>325</a>#[allow(clippy::result_large_err)]
+<a href=#326 id=326 data-nosnippet>326</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>probe_chrome_version(exe: <span class="kw-2">&amp;</span>Path) -&gt; <span class="prelude-ty">Result</span>&lt;(u32, String), StealthError&gt; {
+<a href=#327 id=327 data-nosnippet>327</a>    <span class="kw">use </span>std::io::Read;
+<a href=#328 id=328 data-nosnippet>328</a>    <span class="kw">use </span>std::process::Stdio;
+<a href=#329 id=329 data-nosnippet>329</a>    <span class="kw">use </span>std::time::{Duration, Instant};
 <a href=#330 id=330 data-nosnippet>330</a>
-<a href=#331 id=331 data-nosnippet>331</a><span class="doccomment">/// Probe the Chrome version by reading the binary's own PE version resource.
-<a href=#332 id=332 data-nosnippet>332</a>///
-<a href=#333 id=333 data-nosnippet>333</a>/// **Never exec Chrome to ask its version on Windows.** `chrome.exe --version`
-<a href=#334 id=334 data-nosnippet>334</a>/// is not the Unix print-and-exit: with no existing browser session to hand off
-<a href=#335 id=335 data-nosnippet>335</a>/// to, it launches a full browser (GPU + network service + crashpad children)
-<a href=#336 id=336 data-nosnippet>336</a>/// and never exits. `Command::output()` waits for the child to exit *and* for
-<a href=#337 id=337 data-nosnippet>337</a>/// its stdout/stderr to hit EOF, so it blocks forever.
-<a href=#338 id=338 data-nosnippet>338</a>///
-<a href=#339 id=339 data-nosnippet>339</a>/// That block is what made this pathological rather than merely slow. The call
-<a href=#340 id=340 data-nosnippet>340</a>/// sits synchronously inside `Browser::launch()`'s future, so the task never
-<a href=#341 id=341 data-nosnippet>341</a>/// yields; `tokio::time::timeout` can only cancel at an await point, leaving
-<a href=#342 id=342 data-nosnippet>342</a>/// every guard in the launch path — `WS_ENDPOINT_TIMEOUT` (15s),
-<a href=#343 id=343 data-nosnippet>343</a>/// `HANDSHAKE_TIMEOUT` (30s) — structurally unable to fire. The result was an
-<a href=#344 id=344 data-nosnippet>344</a>/// infinite, *silent* hang: on windows-latest CI all three
-<a href=#345 id=345 data-nosnippet>345</a>/// `prerelease_verification` tests timed out at 360s having emitted nothing.
-<a href=#346 id=346 data-nosnippet>346</a>///
-<a href=#347 id=347 data-nosnippet>347</a>/// It hides on dev machines because a developer usually has Chrome already
-<a href=#348 id=348 data-nosnippet>348</a>/// open, and `--version` then hands off to the running instance
-<a href=#349 id=349 data-nosnippet>349</a>/// ("Opening in existing browser session.") and exits in milliseconds. It only
-<a href=#350 id=350 data-nosnippet>350</a>/// bites where no session exists — i.e. exactly on CI.
-<a href=#351 id=351 data-nosnippet>351</a>///
-<a href=#352 id=352 data-nosnippet>352</a>/// A version is a static property of the file, so read it from the file. This
-<a href=#353 id=353 data-nosnippet>353</a>/// parses the documented `VS_FIXEDFILEINFO` block, which keeps the crate's
-<a href=#354 id=354 data-nosnippet>354</a>/// `unsafe_code = "deny"` intact and adds no dependency.
-<a href=#355 id=355 data-nosnippet>355</a></span><span class="attr">#[cfg(windows)]
-<a href=#356 id=356 data-nosnippet>356</a>#[allow(clippy::result_large_err)]
-<a href=#357 id=357 data-nosnippet>357</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>probe_chrome_version(exe: <span class="kw-2">&amp;</span>Path) -&gt; <span class="prelude-ty">Result</span>&lt;(u32, String), StealthError&gt; {
-<a href=#358 id=358 data-nosnippet>358</a>    <span class="kw">let </span>bytes = std::fs::read(exe)
-<a href=#359 id=359 data-nosnippet>359</a>        .map_err(|e| StealthError::ChromeVersionDetect(<span class="macro">format!</span>(<span class="string">"read {}: {e}"</span>, exe.display())))<span class="question-mark">?</span>;
-<a href=#360 id=360 data-nosnippet>360</a>    parse_pe_file_version(<span class="kw-2">&amp;</span>bytes).ok_or_else(|| {
-<a href=#361 id=361 data-nosnippet>361</a>        StealthError::ChromeVersionDetect(<span class="macro">format!</span>(
-<a href=#362 id=362 data-nosnippet>362</a>            <span class="string">"no VS_FIXEDFILEINFO version resource in {}"</span>,
-<a href=#363 id=363 data-nosnippet>363</a>            exe.display()
-<a href=#364 id=364 data-nosnippet>364</a>        ))
-<a href=#365 id=365 data-nosnippet>365</a>    })
-<a href=#366 id=366 data-nosnippet>366</a>}
-<a href=#367 id=367 data-nosnippet>367</a>
-<a href=#368 id=368 data-nosnippet>368</a><span class="doccomment">/// Find the first occurrence of `needle` in `haystack`.
-<a href=#369 id=369 data-nosnippet>369</a></span><span class="attr">#[cfg(windows)]
-<a href=#370 id=370 data-nosnippet>370</a></span><span class="kw">fn </span>find_bytes(haystack: <span class="kw-2">&amp;</span>[u8], needle: <span class="kw-2">&amp;</span>[u8]) -&gt; <span class="prelude-ty">Option</span>&lt;usize&gt; {
-<a href=#371 id=371 data-nosnippet>371</a>    haystack.windows(needle.len()).position(|w| w == needle)
-<a href=#372 id=372 data-nosnippet>372</a>}
-<a href=#373 id=373 data-nosnippet>373</a>
-<a href=#374 id=374 data-nosnippet>374</a><span class="doccomment">/// Extract `(major, "a.b.c.d")` from a PE image's `VS_FIXEDFILEINFO`.
-<a href=#375 id=375 data-nosnippet>375</a>///
-<a href=#376 id=376 data-nosnippet>376</a>/// Anchors on the UTF-16LE `VS_VERSION_INFO` key, then reads the `0xFEEF04BD`
-<a href=#377 id=377 data-nosnippet>377</a>/// signature that opens the fixed-info block a few bytes later. Layout
-<a href=#378 id=378 data-nosnippet>378</a>/// (little-endian): `+0` signature, `+8` dwFileVersionMS, `+12` dwFileVersionLS,
-<a href=#379 id=379 data-nosnippet>379</a>/// each packing two 16-bit fields as `high.low`.
-<a href=#380 id=380 data-nosnippet>380</a>///
-<a href=#381 id=381 data-nosnippet>381</a>/// Both halves of that search are load-bearing, and real `chrome.exe` punishes
-<a href=#382 id=382 data-nosnippet>382</a>/// getting either wrong:
-<a href=#383 id=383 data-nosnippet>383</a>///
-<a href=#384 id=384 data-nosnippet>384</a>/// - **Anchor on the key, not the signature.** The signature is only four bytes
-<a href=#385 id=385 data-nosnippet>385</a>///   and does occur by chance in a multi-megabyte image: Chrome 150 carries one
-<a href=#386 id=386 data-nosnippet>386</a>///   at file offset ~2.79M, ~475KB *before* the resource, which decodes to
-<a href=#387 id=387 data-nosnippet>387</a>///   nonsense (`9340.36168.8075.18720`).
-<a href=#388 id=388 data-nosnippet>388</a>/// - **Try every key match, not just the first.** Chrome's `.rdata` contains the
-<a href=#389 id=389 data-nosnippet>389</a>///   literal text `VS_VERSION_INFO` — error strings from Chrome's *own* resource
-<a href=#390 id=390 data-nosnippet>390</a>///   parser ("unexpected VS_VERSIONINFO in ") — ~645KB before the genuine
-<a href=#391 id=391 data-nosnippet>391</a>///   resource. The first match is therefore a decoy with no signature after it;
-<a href=#392 id=392 data-nosnippet>392</a>///   only a later one is real. Scanning all matches and keeping the first that
-<a href=#393 id=393 data-nosnippet>393</a>///   is actually followed by a signature tolerates any number of such decoys.
-<a href=#394 id=394 data-nosnippet>394</a></span><span class="attr">#[cfg(windows)]
-<a href=#395 id=395 data-nosnippet>395</a></span><span class="kw">fn </span>parse_pe_file_version(bytes: <span class="kw-2">&amp;</span>[u8]) -&gt; <span class="prelude-ty">Option</span>&lt;(u32, String)&gt; {
-<a href=#396 id=396 data-nosnippet>396</a>    <span class="kw">const </span>SIGNATURE: [u8; <span class="number">4</span>] = <span class="number">0xFEEF_04BDu32</span>.to_le_bytes();
-<a href=#397 id=397 data-nosnippet>397</a>    <span class="doccomment">/// The signature sits just past the key + NUL + 32-bit alignment padding
-<a href=#398 id=398 data-nosnippet>398</a>    /// (34 bytes in practice). Bounding the search is what makes a decoy match
-<a href=#399 id=399 data-nosnippet>399</a>    /// fail fast and fall through to the next candidate.
-<a href=#400 id=400 data-nosnippet>400</a>    </span><span class="kw">const </span>SIG_SEARCH_WINDOW: usize = <span class="number">64</span>;
-<a href=#401 id=401 data-nosnippet>401</a>
-<a href=#402 id=402 data-nosnippet>402</a>    <span class="kw">let </span>key: Vec&lt;u8&gt; = <span class="string">"VS_VERSION_INFO"
-<a href=#403 id=403 data-nosnippet>403</a>        </span>.encode_utf16()
-<a href=#404 id=404 data-nosnippet>404</a>        .flat_map(u16::to_le_bytes)
-<a href=#405 id=405 data-nosnippet>405</a>        .collect();
-<a href=#406 id=406 data-nosnippet>406</a>
-<a href=#407 id=407 data-nosnippet>407</a>    <span class="kw">let </span><span class="kw-2">mut </span>search_from = <span class="number">0usize</span>;
-<a href=#408 id=408 data-nosnippet>408</a>    <span class="kw">while let </span><span class="prelude-val">Some</span>(rel) = find_bytes(bytes.get(search_from..)<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>key) {
-<a href=#409 id=409 data-nosnippet>409</a>        <span class="kw">let </span>anchor = search_from + rel + key.len();
-<a href=#410 id=410 data-nosnippet>410</a>        <span class="kw">let </span>window_end = anchor.saturating_add(SIG_SEARCH_WINDOW).min(bytes.len());
-<a href=#411 id=411 data-nosnippet>411</a>
-<a href=#412 id=412 data-nosnippet>412</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(sig) = bytes
-<a href=#413 id=413 data-nosnippet>413</a>            .get(anchor..window_end)
-<a href=#414 id=414 data-nosnippet>414</a>            .and_then(|w| find_bytes(w, <span class="kw-2">&amp;</span>SIGNATURE))
-<a href=#415 id=415 data-nosnippet>415</a>            .map(|sig_rel| anchor + sig_rel)
-<a href=#416 id=416 data-nosnippet>416</a>        {
-<a href=#417 id=417 data-nosnippet>417</a>            <span class="kw">let </span>word = |off: usize| -&gt; <span class="prelude-ty">Option</span>&lt;u32&gt; {
-<a href=#418 id=418 data-nosnippet>418</a>                <span class="prelude-val">Some</span>(u32::from_le_bytes(
-<a href=#419 id=419 data-nosnippet>419</a>                    bytes.get(sig + off..sig + off + <span class="number">4</span>)<span class="question-mark">?</span>.try_into().ok()<span class="question-mark">?</span>,
-<a href=#420 id=420 data-nosnippet>420</a>                ))
-<a href=#421 id=421 data-nosnippet>421</a>            };
-<a href=#422 id=422 data-nosnippet>422</a>            <span class="kw">let </span>ms = word(<span class="number">8</span>)<span class="question-mark">?</span>;
-<a href=#423 id=423 data-nosnippet>423</a>            <span class="kw">let </span>ls = word(<span class="number">12</span>)<span class="question-mark">?</span>;
-<a href=#424 id=424 data-nosnippet>424</a>            <span class="kw">let </span>major = ms &gt;&gt; <span class="number">16</span>;
-<a href=#425 id=425 data-nosnippet>425</a>            <span class="comment">// A zero major means we locked onto something that is not a version
-<a href=#426 id=426 data-nosnippet>426</a>            // block; keep looking rather than reporting `0.x.y.z`.
-<a href=#427 id=427 data-nosnippet>427</a>            </span><span class="kw">if </span>major != <span class="number">0 </span>{
-<a href=#428 id=428 data-nosnippet>428</a>                <span class="kw">let </span>full = <span class="macro">format!</span>(<span class="string">"{}.{}.{}.{}"</span>, major, ms &amp; <span class="number">0xFFFF</span>, ls &gt;&gt; <span class="number">16</span>, ls &amp; <span class="number">0xFFFF</span>);
-<a href=#429 id=429 data-nosnippet>429</a>                <span class="kw">return </span><span class="prelude-val">Some</span>((major, full));
-<a href=#430 id=430 data-nosnippet>430</a>            }
-<a href=#431 id=431 data-nosnippet>431</a>        }
-<a href=#432 id=432 data-nosnippet>432</a>        search_from += rel + <span class="number">1</span>;
-<a href=#433 id=433 data-nosnippet>433</a>    }
-<a href=#434 id=434 data-nosnippet>434</a>    <span class="prelude-val">None
-<a href=#435 id=435 data-nosnippet>435</a></span>}
-<a href=#436 id=436 data-nosnippet>436</a>
-<a href=#437 id=437 data-nosnippet>437</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>clamp_cpu_count(n: u32) -&gt; u32 {
-<a href=#438 id=438 data-nosnippet>438</a>    n.clamp(<span class="number">2</span>, <span class="number">32</span>)
-<a href=#439 id=439 data-nosnippet>439</a>}
-<a href=#440 id=440 data-nosnippet>440</a>
-<a href=#441 id=441 data-nosnippet>441</a><span class="doccomment">/// Detect total RAM in GB, clamped to the spec-compliant values
-<a href=#442 id=442 data-nosnippet>442</a>/// for `navigator.deviceMemory` (capped at 8 per W3C; floor at 4 for plausibility).
-<a href=#443 id=443 data-nosnippet>443</a></span><span class="attr">#[allow(clippy::result_large_err)]
-<a href=#444 id=444 data-nosnippet>444</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>detect_memory_gb() -&gt; <span class="prelude-ty">Result</span>&lt;u32, StealthError&gt; {
-<a href=#445 id=445 data-nosnippet>445</a>    <span class="kw">let </span><span class="kw-2">mut </span>sys = sysinfo::System::new();
-<a href=#446 id=446 data-nosnippet>446</a>    sys.refresh_memory();
-<a href=#447 id=447 data-nosnippet>447</a>    <span class="comment">// sysinfo 0.32: total_memory() returns BYTES, not KiB. Verified against
-<a href=#448 id=448 data-nosnippet>448</a>    // sysinfo-0.32.1/src/common/system.rs::total_memory doc comment
-<a href=#449 id=449 data-nosnippet>449</a>    // ("Returns the RAM size in bytes.").
-<a href=#450 id=450 data-nosnippet>450</a>    </span><span class="kw">let </span>total_bytes = sys.total_memory();
-<a href=#451 id=451 data-nosnippet>451</a>    <span class="kw">if </span>total_bytes == <span class="number">0 </span>{
-<a href=#452 id=452 data-nosnippet>452</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(StealthError::SystemInfo(<span class="string">"total_memory returned 0"</span>.into()));
-<a href=#453 id=453 data-nosnippet>453</a>    }
-<a href=#454 id=454 data-nosnippet>454</a>    <span class="kw">let </span>total_gb = (total_bytes / <span class="number">1_073_741_824</span>) <span class="kw">as </span>u32;
-<a href=#455 id=455 data-nosnippet>455</a>    <span class="prelude-val">Ok</span>(round_to_navigator_memory(total_gb))
-<a href=#456 id=456 data-nosnippet>456</a>}
-<a href=#457 id=457 data-nosnippet>457</a>
-<a href=#458 id=458 data-nosnippet>458</a><span class="kw">fn </span>round_to_navigator_memory(gb: u32) -&gt; u32 {
-<a href=#459 id=459 data-nosnippet>459</a>    <span class="comment">// navigator.deviceMemory spec values: 0.25, 0.5, 1, 2, 4, 8. Cap at 8.
-<a href=#460 id=460 data-nosnippet>460</a>    // We floor at 4 for plausibility (sub-4GB consumer desktops are extinct).
-<a href=#461 id=461 data-nosnippet>461</a>    </span><span class="kw">if </span>gb &gt;= <span class="number">8 </span>{ <span class="number">8 </span>} <span class="kw">else </span>{ <span class="number">4 </span>}
-<a href=#462 id=462 data-nosnippet>462</a>}
+<a href=#331 id=331 data-nosnippet>331</a>    <span class="doccomment">/// Generous: a healthy `chrome --version` answers in ~50ms. This is a
+<a href=#332 id=332 data-nosnippet>332</a>    /// backstop against a wedged binary, not a performance budget.
+<a href=#333 id=333 data-nosnippet>333</a>    </span><span class="kw">const </span>PROBE_TIMEOUT: Duration = Duration::from_secs(<span class="number">10</span>);
+<a href=#334 id=334 data-nosnippet>334</a>    <span class="kw">const </span>POLL_INTERVAL: Duration = Duration::from_millis(<span class="number">20</span>);
+<a href=#335 id=335 data-nosnippet>335</a>
+<a href=#336 id=336 data-nosnippet>336</a>    <span class="kw">let </span><span class="kw-2">mut </span>child = Command::new(exe)
+<a href=#337 id=337 data-nosnippet>337</a>        .arg(<span class="string">"--version"</span>)
+<a href=#338 id=338 data-nosnippet>338</a>        .stdin(Stdio::null())
+<a href=#339 id=339 data-nosnippet>339</a>        .stdout(Stdio::piped())
+<a href=#340 id=340 data-nosnippet>340</a>        .stderr(Stdio::null())
+<a href=#341 id=341 data-nosnippet>341</a>        .spawn()
+<a href=#342 id=342 data-nosnippet>342</a>        .map_err(|e| StealthError::ChromeVersionDetect(<span class="macro">format!</span>(<span class="string">"spawn failed: {e}"</span>)))<span class="question-mark">?</span>;
+<a href=#343 id=343 data-nosnippet>343</a>
+<a href=#344 id=344 data-nosnippet>344</a>    <span class="kw">let </span>deadline = Instant::now() + PROBE_TIMEOUT;
+<a href=#345 id=345 data-nosnippet>345</a>    <span class="kw">let </span>status = <span class="kw">loop </span>{
+<a href=#346 id=346 data-nosnippet>346</a>        <span class="kw">match </span>child.try_wait() {
+<a href=#347 id=347 data-nosnippet>347</a>            <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(status)) =&gt; <span class="kw">break </span>status,
+<a href=#348 id=348 data-nosnippet>348</a>            <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>) =&gt; {
+<a href=#349 id=349 data-nosnippet>349</a>                <span class="kw">if </span>Instant::now() &gt;= deadline {
+<a href=#350 id=350 data-nosnippet>350</a>                    <span class="comment">// Reap rather than leak: kill_on_drop is not in play here.
+<a href=#351 id=351 data-nosnippet>351</a>                    </span><span class="kw">let _ </span>= child.kill();
+<a href=#352 id=352 data-nosnippet>352</a>                    <span class="kw">let _ </span>= child.wait();
+<a href=#353 id=353 data-nosnippet>353</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(StealthError::ChromeVersionDetect(<span class="macro">format!</span>(
+<a href=#354 id=354 data-nosnippet>354</a>                        <span class="string">"`--version` did not exit within {PROBE_TIMEOUT:?}"
+<a href=#355 id=355 data-nosnippet>355</a>                    </span>)));
+<a href=#356 id=356 data-nosnippet>356</a>                }
+<a href=#357 id=357 data-nosnippet>357</a>                std::thread::sleep(POLL_INTERVAL);
+<a href=#358 id=358 data-nosnippet>358</a>            }
+<a href=#359 id=359 data-nosnippet>359</a>            <span class="prelude-val">Err</span>(e) =&gt; {
+<a href=#360 id=360 data-nosnippet>360</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(StealthError::ChromeVersionDetect(<span class="macro">format!</span>(
+<a href=#361 id=361 data-nosnippet>361</a>                    <span class="string">"wait failed: {e}"
+<a href=#362 id=362 data-nosnippet>362</a>                </span>)));
+<a href=#363 id=363 data-nosnippet>363</a>            }
+<a href=#364 id=364 data-nosnippet>364</a>        }
+<a href=#365 id=365 data-nosnippet>365</a>    };
+<a href=#366 id=366 data-nosnippet>366</a>    <span class="kw">if </span>!status.success() {
+<a href=#367 id=367 data-nosnippet>367</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(StealthError::ChromeVersionDetect(<span class="macro">format!</span>(
+<a href=#368 id=368 data-nosnippet>368</a>            <span class="string">"exit {:?}"</span>,
+<a href=#369 id=369 data-nosnippet>369</a>            status.code()
+<a href=#370 id=370 data-nosnippet>370</a>        )));
+<a href=#371 id=371 data-nosnippet>371</a>    }
+<a href=#372 id=372 data-nosnippet>372</a>
+<a href=#373 id=373 data-nosnippet>373</a>    <span class="kw">let </span><span class="kw-2">mut </span>stdout = String::new();
+<a href=#374 id=374 data-nosnippet>374</a>    child
+<a href=#375 id=375 data-nosnippet>375</a>        .stdout
+<a href=#376 id=376 data-nosnippet>376</a>        .take()
+<a href=#377 id=377 data-nosnippet>377</a>        .ok_or_else(|| StealthError::ChromeVersionDetect(<span class="string">"no stdout pipe"</span>.to_string()))<span class="question-mark">?
+<a href=#378 id=378 data-nosnippet>378</a>        </span>.read_to_string(<span class="kw-2">&amp;mut </span>stdout)
+<a href=#379 id=379 data-nosnippet>379</a>        .map_err(|e| StealthError::ChromeVersionDetect(<span class="macro">format!</span>(<span class="string">"read stdout: {e}"</span>)))<span class="question-mark">?</span>;
+<a href=#380 id=380 data-nosnippet>380</a>    parse_version_banner(<span class="kw-2">&amp;</span>stdout)
+<a href=#381 id=381 data-nosnippet>381</a>}
+<a href=#382 id=382 data-nosnippet>382</a>
+<a href=#383 id=383 data-nosnippet>383</a><span class="doccomment">/// Probe the Chrome version by reading the binary's own PE version resource.
+<a href=#384 id=384 data-nosnippet>384</a>///
+<a href=#385 id=385 data-nosnippet>385</a>/// **Never exec Chrome to ask its version on Windows.** `chrome.exe --version`
+<a href=#386 id=386 data-nosnippet>386</a>/// is not the Unix print-and-exit: with no existing browser session to hand off
+<a href=#387 id=387 data-nosnippet>387</a>/// to, it launches a full browser (GPU + network service + crashpad children)
+<a href=#388 id=388 data-nosnippet>388</a>/// and never exits. `Command::output()` waits for the child to exit *and* for
+<a href=#389 id=389 data-nosnippet>389</a>/// its stdout/stderr to hit EOF, so it blocks forever.
+<a href=#390 id=390 data-nosnippet>390</a>///
+<a href=#391 id=391 data-nosnippet>391</a>/// That block is what made this pathological rather than merely slow. The call
+<a href=#392 id=392 data-nosnippet>392</a>/// sits synchronously inside `Browser::launch()`'s future, so the task never
+<a href=#393 id=393 data-nosnippet>393</a>/// yields; `tokio::time::timeout` can only cancel at an await point, leaving
+<a href=#394 id=394 data-nosnippet>394</a>/// every guard in the launch path — `WS_ENDPOINT_TIMEOUT` (15s),
+<a href=#395 id=395 data-nosnippet>395</a>/// `HANDSHAKE_TIMEOUT` (30s) — structurally unable to fire. The result was an
+<a href=#396 id=396 data-nosnippet>396</a>/// infinite, *silent* hang: on windows-latest CI all three
+<a href=#397 id=397 data-nosnippet>397</a>/// `prerelease_verification` tests timed out at 360s having emitted nothing.
+<a href=#398 id=398 data-nosnippet>398</a>///
+<a href=#399 id=399 data-nosnippet>399</a>/// It hides on dev machines because a developer usually has Chrome already
+<a href=#400 id=400 data-nosnippet>400</a>/// open, and `--version` then hands off to the running instance
+<a href=#401 id=401 data-nosnippet>401</a>/// ("Opening in existing browser session.") and exits in milliseconds. It only
+<a href=#402 id=402 data-nosnippet>402</a>/// bites where no session exists — i.e. exactly on CI.
+<a href=#403 id=403 data-nosnippet>403</a>///
+<a href=#404 id=404 data-nosnippet>404</a>/// A version is a static property of the file, so read it from the file. This
+<a href=#405 id=405 data-nosnippet>405</a>/// parses the documented `VS_FIXEDFILEINFO` block, which keeps the crate's
+<a href=#406 id=406 data-nosnippet>406</a>/// `unsafe_code = "deny"` intact and adds no dependency.
+<a href=#407 id=407 data-nosnippet>407</a></span><span class="attr">#[cfg(windows)]
+<a href=#408 id=408 data-nosnippet>408</a>#[allow(clippy::result_large_err)]
+<a href=#409 id=409 data-nosnippet>409</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>probe_chrome_version(exe: <span class="kw-2">&amp;</span>Path) -&gt; <span class="prelude-ty">Result</span>&lt;(u32, String), StealthError&gt; {
+<a href=#410 id=410 data-nosnippet>410</a>    <span class="kw">let </span>bytes = std::fs::read(exe)
+<a href=#411 id=411 data-nosnippet>411</a>        .map_err(|e| StealthError::ChromeVersionDetect(<span class="macro">format!</span>(<span class="string">"read {}: {e}"</span>, exe.display())))<span class="question-mark">?</span>;
+<a href=#412 id=412 data-nosnippet>412</a>    parse_pe_file_version(<span class="kw-2">&amp;</span>bytes).ok_or_else(|| {
+<a href=#413 id=413 data-nosnippet>413</a>        StealthError::ChromeVersionDetect(<span class="macro">format!</span>(
+<a href=#414 id=414 data-nosnippet>414</a>            <span class="string">"no VS_FIXEDFILEINFO version resource in {}"</span>,
+<a href=#415 id=415 data-nosnippet>415</a>            exe.display()
+<a href=#416 id=416 data-nosnippet>416</a>        ))
+<a href=#417 id=417 data-nosnippet>417</a>    })
+<a href=#418 id=418 data-nosnippet>418</a>}
+<a href=#419 id=419 data-nosnippet>419</a>
+<a href=#420 id=420 data-nosnippet>420</a><span class="doccomment">/// Find the first occurrence of `needle` in `haystack`.
+<a href=#421 id=421 data-nosnippet>421</a></span><span class="attr">#[cfg(windows)]
+<a href=#422 id=422 data-nosnippet>422</a></span><span class="kw">fn </span>find_bytes(haystack: <span class="kw-2">&amp;</span>[u8], needle: <span class="kw-2">&amp;</span>[u8]) -&gt; <span class="prelude-ty">Option</span>&lt;usize&gt; {
+<a href=#423 id=423 data-nosnippet>423</a>    haystack.windows(needle.len()).position(|w| w == needle)
+<a href=#424 id=424 data-nosnippet>424</a>}
+<a href=#425 id=425 data-nosnippet>425</a>
+<a href=#426 id=426 data-nosnippet>426</a><span class="doccomment">/// Extract `(major, "a.b.c.d")` from a PE image's `VS_FIXEDFILEINFO`.
+<a href=#427 id=427 data-nosnippet>427</a>///
+<a href=#428 id=428 data-nosnippet>428</a>/// Anchors on the UTF-16LE `VS_VERSION_INFO` key, then reads the `0xFEEF04BD`
+<a href=#429 id=429 data-nosnippet>429</a>/// signature that opens the fixed-info block a few bytes later. Layout
+<a href=#430 id=430 data-nosnippet>430</a>/// (little-endian): `+0` signature, `+8` dwFileVersionMS, `+12` dwFileVersionLS,
+<a href=#431 id=431 data-nosnippet>431</a>/// each packing two 16-bit fields as `high.low`.
+<a href=#432 id=432 data-nosnippet>432</a>///
+<a href=#433 id=433 data-nosnippet>433</a>/// Both halves of that search are load-bearing, and real `chrome.exe` punishes
+<a href=#434 id=434 data-nosnippet>434</a>/// getting either wrong:
+<a href=#435 id=435 data-nosnippet>435</a>///
+<a href=#436 id=436 data-nosnippet>436</a>/// - **Anchor on the key, not the signature.** The signature is only four bytes
+<a href=#437 id=437 data-nosnippet>437</a>///   and does occur by chance in a multi-megabyte image: Chrome 150 carries one
+<a href=#438 id=438 data-nosnippet>438</a>///   at file offset ~2.79M, ~475KB *before* the resource, which decodes to
+<a href=#439 id=439 data-nosnippet>439</a>///   nonsense (`9340.36168.8075.18720`).
+<a href=#440 id=440 data-nosnippet>440</a>/// - **Try every key match, not just the first.** Chrome's `.rdata` contains the
+<a href=#441 id=441 data-nosnippet>441</a>///   literal text `VS_VERSION_INFO` — error strings from Chrome's *own* resource
+<a href=#442 id=442 data-nosnippet>442</a>///   parser ("unexpected VS_VERSIONINFO in ") — ~645KB before the genuine
+<a href=#443 id=443 data-nosnippet>443</a>///   resource. The first match is therefore a decoy with no signature after it;
+<a href=#444 id=444 data-nosnippet>444</a>///   only a later one is real. Scanning all matches and keeping the first that
+<a href=#445 id=445 data-nosnippet>445</a>///   is actually followed by a signature tolerates any number of such decoys.
+<a href=#446 id=446 data-nosnippet>446</a></span><span class="attr">#[cfg(windows)]
+<a href=#447 id=447 data-nosnippet>447</a></span><span class="kw">fn </span>parse_pe_file_version(bytes: <span class="kw-2">&amp;</span>[u8]) -&gt; <span class="prelude-ty">Option</span>&lt;(u32, String)&gt; {
+<a href=#448 id=448 data-nosnippet>448</a>    <span class="kw">const </span>SIGNATURE: [u8; <span class="number">4</span>] = <span class="number">0xFEEF_04BDu32</span>.to_le_bytes();
+<a href=#449 id=449 data-nosnippet>449</a>    <span class="doccomment">/// The signature sits just past the key + NUL + 32-bit alignment padding
+<a href=#450 id=450 data-nosnippet>450</a>    /// (34 bytes in practice). Bounding the search is what makes a decoy match
+<a href=#451 id=451 data-nosnippet>451</a>    /// fail fast and fall through to the next candidate.
+<a href=#452 id=452 data-nosnippet>452</a>    </span><span class="kw">const </span>SIG_SEARCH_WINDOW: usize = <span class="number">64</span>;
+<a href=#453 id=453 data-nosnippet>453</a>
+<a href=#454 id=454 data-nosnippet>454</a>    <span class="kw">let </span>key: Vec&lt;u8&gt; = <span class="string">"VS_VERSION_INFO"
+<a href=#455 id=455 data-nosnippet>455</a>        </span>.encode_utf16()
+<a href=#456 id=456 data-nosnippet>456</a>        .flat_map(u16::to_le_bytes)
+<a href=#457 id=457 data-nosnippet>457</a>        .collect();
+<a href=#458 id=458 data-nosnippet>458</a>
+<a href=#459 id=459 data-nosnippet>459</a>    <span class="kw">let </span><span class="kw-2">mut </span>search_from = <span class="number">0usize</span>;
+<a href=#460 id=460 data-nosnippet>460</a>    <span class="kw">while let </span><span class="prelude-val">Some</span>(rel) = find_bytes(bytes.get(search_from..)<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>key) {
+<a href=#461 id=461 data-nosnippet>461</a>        <span class="kw">let </span>anchor = search_from + rel + key.len();
+<a href=#462 id=462 data-nosnippet>462</a>        <span class="kw">let </span>window_end = anchor.saturating_add(SIG_SEARCH_WINDOW).min(bytes.len());
 <a href=#463 id=463 data-nosnippet>463</a>
-<a href=#464 id=464 data-nosnippet>464</a><span class="attr">#[cfg(test)]
-<a href=#465 id=465 data-nosnippet>465</a>#[allow(clippy::panic, clippy::unwrap_used)]
-<a href=#466 id=466 data-nosnippet>466</a></span><span class="kw">mod </span>tests {
-<a href=#467 id=467 data-nosnippet>467</a>
-<a href=#468 id=468 data-nosnippet>468</a>    <span class="doccomment">/// Real captures, not derivations: both pairs come from device fingerprints recorded off
-<a href=#469 id=469 data-nosnippet>469</a>    /// genuine Chrome installs. 146 is the anchor that proves the alphabet indexing, since its
-<a href=#470 id=470 data-nosnippet>470</a>    /// two characters differ (`-` and `.`).
-<a href=#471 id=471 data-nosnippet>471</a>    </span><span class="attr">#[test]
-<a href=#472 id=472 data-nosnippet>472</a>    </span><span class="kw">fn </span>grease_brand_matches_real_captures() {
-<a href=#473 id=473 data-nosnippet>473</a>        <span class="macro">assert_eq!</span>(grease_brand(<span class="number">146</span>), (<span class="string">"Not-A.Brand"</span>.to_string(), <span class="string">"24"</span>));
-<a href=#474 id=474 data-nosnippet>474</a>        <span class="macro">assert_eq!</span>(grease_brand(<span class="number">142</span>), (<span class="string">"Not_A Brand"</span>.to_string(), <span class="string">"99"</span>));
-<a href=#475 id=475 data-nosnippet>475</a>    }
-<a href=#476 id=476 data-nosnippet>476</a>
-<a href=#477 id=477 data-nosnippet>477</a>    <span class="doccomment">/// The value that was hardcoded before this was derived. `Not_A Brand;v=8` is precisely
-<a href=#478 id=478 data-nosnippet>478</a>    /// Chrome 120's GREASE pair, which is why the constant looked plausible for years: it was
-<a href=#479 id=479 data-nosnippet>479</a>    /// correct for exactly one major and wrong for every other.
-<a href=#480 id=480 data-nosnippet>480</a>    </span><span class="attr">#[test]
-<a href=#481 id=481 data-nosnippet>481</a>    </span><span class="kw">fn </span>the_old_hardcoded_pair_was_chrome_120s() {
-<a href=#482 id=482 data-nosnippet>482</a>        <span class="macro">assert_eq!</span>(grease_brand(<span class="number">120</span>), (<span class="string">"Not_A Brand"</span>.to_string(), <span class="string">"8"</span>));
-<a href=#483 id=483 data-nosnippet>483</a>        <span class="comment">// ...and 120 also takes the identity permutation, which is why GREASE-first looked
-<a href=#484 id=484 data-nosnippet>484</a>        // right too.
-<a href=#485 id=485 data-nosnippet>485</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#486 id=486 data-nosnippet>486</a>            permute_brands(<span class="number">120</span>, [<span class="string">"grease"</span>, <span class="string">"chromium"</span>, <span class="string">"branded"</span>]),
-<a href=#487 id=487 data-nosnippet>487</a>            <span class="macro">vec!</span>[<span class="string">"grease"</span>, <span class="string">"chromium"</span>, <span class="string">"branded"</span>]
-<a href=#488 id=488 data-nosnippet>488</a>        );
-<a href=#489 id=489 data-nosnippet>489</a>    }
-<a href=#490 id=490 data-nosnippet>490</a>
-<a href=#491 id=491 data-nosnippet>491</a>    <span class="doccomment">/// A real major-146 capture puts Chromium first, GREASE second, the branded entry last.
-<a href=#492 id=492 data-nosnippet>492</a>    </span><span class="attr">#[test]
-<a href=#493 id=493 data-nosnippet>493</a>    </span><span class="kw">fn </span>brand_order_matches_a_real_146_capture() {
-<a href=#494 id=494 data-nosnippet>494</a>        <span class="macro">assert_eq!</span>(
-<a href=#495 id=495 data-nosnippet>495</a>            permute_brands(<span class="number">146</span>, [<span class="string">"grease"</span>, <span class="string">"chromium"</span>, <span class="string">"branded"</span>]),
-<a href=#496 id=496 data-nosnippet>496</a>            <span class="macro">vec!</span>[<span class="string">"chromium"</span>, <span class="string">"grease"</span>, <span class="string">"branded"</span>]
-<a href=#497 id=497 data-nosnippet>497</a>        );
-<a href=#498 id=498 data-nosnippet>498</a>    }
-<a href=#499 id=499 data-nosnippet>499</a>
-<a href=#500 id=500 data-nosnippet>500</a>    <span class="doccomment">/// 142 is the discriminating case. `142 % 6 == 4` selects `[2, 0, 1]`, one of the two
-<a href=#501 id=501 data-nosnippet>501</a>    /// 3-cycles, so scatter and gather disagree: scatter yields
-<a href=#502 id=502 data-nosnippet>502</a>    /// `[chromium, branded, grease]`, gather would yield `[branded, grease, chromium]`.
-<a href=#503 id=503 data-nosnippet>503</a>    /// The real capture is the former, which is what fixes the direction.
-<a href=#504 id=504 data-nosnippet>504</a>    </span><span class="attr">#[test]
-<a href=#505 id=505 data-nosnippet>505</a>    </span><span class="kw">fn </span>brand_order_scatters_rather_than_gathers() {
-<a href=#506 id=506 data-nosnippet>506</a>        <span class="macro">assert_eq!</span>(
-<a href=#507 id=507 data-nosnippet>507</a>            permute_brands(<span class="number">142</span>, [<span class="string">"grease"</span>, <span class="string">"chromium"</span>, <span class="string">"branded"</span>]),
-<a href=#508 id=508 data-nosnippet>508</a>            <span class="macro">vec!</span>[<span class="string">"chromium"</span>, <span class="string">"branded"</span>, <span class="string">"grease"</span>]
-<a href=#509 id=509 data-nosnippet>509</a>        );
-<a href=#510 id=510 data-nosnippet>510</a>    }
-<a href=#511 id=511 data-nosnippet>511</a>
-<a href=#512 id=512 data-nosnippet>512</a>    <span class="doccomment">/// Whatever the major, all three brands must survive exactly once — a permutation bug that
-<a href=#513 id=513 data-nosnippet>513</a>    /// dropped or duplicated one would otherwise only show up as a weird header in the wild.
-<a href=#514 id=514 data-nosnippet>514</a>    </span><span class="attr">#[test]
-<a href=#515 id=515 data-nosnippet>515</a>    </span><span class="kw">fn </span>every_major_permutes_without_loss() {
-<a href=#516 id=516 data-nosnippet>516</a>        <span class="kw">for </span>major <span class="kw">in </span><span class="number">100u32</span>..<span class="number">200 </span>{
-<a href=#517 id=517 data-nosnippet>517</a>            <span class="kw">let </span>out = permute_brands(major, [<span class="string">"grease"</span>, <span class="string">"chromium"</span>, <span class="string">"branded"</span>]);
-<a href=#518 id=518 data-nosnippet>518</a>            <span class="macro">assert_eq!</span>(out.len(), <span class="number">3</span>, <span class="string">"major {major}"</span>);
-<a href=#519 id=519 data-nosnippet>519</a>            <span class="kw">for </span>want <span class="kw">in </span>[<span class="string">"grease"</span>, <span class="string">"chromium"</span>, <span class="string">"branded"</span>] {
-<a href=#520 id=520 data-nosnippet>520</a>                <span class="macro">assert_eq!</span>(
-<a href=#521 id=521 data-nosnippet>521</a>                    out.iter().filter(|b| <span class="kw-2">**</span>b == want).count(),
-<a href=#522 id=522 data-nosnippet>522</a>                    <span class="number">1</span>,
-<a href=#523 id=523 data-nosnippet>523</a>                    <span class="string">"major {major} lost or duplicated {want}: {out:?}"
-<a href=#524 id=524 data-nosnippet>524</a>                </span>);
-<a href=#525 id=525 data-nosnippet>525</a>            }
-<a href=#526 id=526 data-nosnippet>526</a>        }
+<a href=#464 id=464 data-nosnippet>464</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(sig) = bytes
+<a href=#465 id=465 data-nosnippet>465</a>            .get(anchor..window_end)
+<a href=#466 id=466 data-nosnippet>466</a>            .and_then(|w| find_bytes(w, <span class="kw-2">&amp;</span>SIGNATURE))
+<a href=#467 id=467 data-nosnippet>467</a>            .map(|sig_rel| anchor + sig_rel)
+<a href=#468 id=468 data-nosnippet>468</a>        {
+<a href=#469 id=469 data-nosnippet>469</a>            <span class="kw">let </span>word = |off: usize| -&gt; <span class="prelude-ty">Option</span>&lt;u32&gt; {
+<a href=#470 id=470 data-nosnippet>470</a>                <span class="prelude-val">Some</span>(u32::from_le_bytes(
+<a href=#471 id=471 data-nosnippet>471</a>                    bytes.get(sig + off..sig + off + <span class="number">4</span>)<span class="question-mark">?</span>.try_into().ok()<span class="question-mark">?</span>,
+<a href=#472 id=472 data-nosnippet>472</a>                ))
+<a href=#473 id=473 data-nosnippet>473</a>            };
+<a href=#474 id=474 data-nosnippet>474</a>            <span class="kw">let </span>ms = word(<span class="number">8</span>)<span class="question-mark">?</span>;
+<a href=#475 id=475 data-nosnippet>475</a>            <span class="kw">let </span>ls = word(<span class="number">12</span>)<span class="question-mark">?</span>;
+<a href=#476 id=476 data-nosnippet>476</a>            <span class="kw">let </span>major = ms &gt;&gt; <span class="number">16</span>;
+<a href=#477 id=477 data-nosnippet>477</a>            <span class="comment">// A zero major means we locked onto something that is not a version
+<a href=#478 id=478 data-nosnippet>478</a>            // block; keep looking rather than reporting `0.x.y.z`.
+<a href=#479 id=479 data-nosnippet>479</a>            </span><span class="kw">if </span>major != <span class="number">0 </span>{
+<a href=#480 id=480 data-nosnippet>480</a>                <span class="kw">let </span>full = <span class="macro">format!</span>(<span class="string">"{}.{}.{}.{}"</span>, major, ms &amp; <span class="number">0xFFFF</span>, ls &gt;&gt; <span class="number">16</span>, ls &amp; <span class="number">0xFFFF</span>);
+<a href=#481 id=481 data-nosnippet>481</a>                <span class="kw">return </span><span class="prelude-val">Some</span>((major, full));
+<a href=#482 id=482 data-nosnippet>482</a>            }
+<a href=#483 id=483 data-nosnippet>483</a>        }
+<a href=#484 id=484 data-nosnippet>484</a>        search_from += rel + <span class="number">1</span>;
+<a href=#485 id=485 data-nosnippet>485</a>    }
+<a href=#486 id=486 data-nosnippet>486</a>    <span class="prelude-val">None
+<a href=#487 id=487 data-nosnippet>487</a></span>}
+<a href=#488 id=488 data-nosnippet>488</a>
+<a href=#489 id=489 data-nosnippet>489</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>clamp_cpu_count(n: u32) -&gt; u32 {
+<a href=#490 id=490 data-nosnippet>490</a>    n.clamp(<span class="number">2</span>, <span class="number">32</span>)
+<a href=#491 id=491 data-nosnippet>491</a>}
+<a href=#492 id=492 data-nosnippet>492</a>
+<a href=#493 id=493 data-nosnippet>493</a><span class="doccomment">/// Detect total RAM in GB, clamped to the spec-compliant values
+<a href=#494 id=494 data-nosnippet>494</a>/// for `navigator.deviceMemory` (capped at 8 per W3C; floor at 4 for plausibility).
+<a href=#495 id=495 data-nosnippet>495</a></span><span class="attr">#[allow(clippy::result_large_err)]
+<a href=#496 id=496 data-nosnippet>496</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>detect_memory_gb() -&gt; <span class="prelude-ty">Result</span>&lt;u32, StealthError&gt; {
+<a href=#497 id=497 data-nosnippet>497</a>    <span class="kw">let </span><span class="kw-2">mut </span>sys = sysinfo::System::new();
+<a href=#498 id=498 data-nosnippet>498</a>    sys.refresh_memory();
+<a href=#499 id=499 data-nosnippet>499</a>    <span class="comment">// sysinfo 0.32: total_memory() returns BYTES, not KiB. Verified against
+<a href=#500 id=500 data-nosnippet>500</a>    // sysinfo-0.32.1/src/common/system.rs::total_memory doc comment
+<a href=#501 id=501 data-nosnippet>501</a>    // ("Returns the RAM size in bytes.").
+<a href=#502 id=502 data-nosnippet>502</a>    </span><span class="kw">let </span>total_bytes = sys.total_memory();
+<a href=#503 id=503 data-nosnippet>503</a>    <span class="kw">if </span>total_bytes == <span class="number">0 </span>{
+<a href=#504 id=504 data-nosnippet>504</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(StealthError::SystemInfo(<span class="string">"total_memory returned 0"</span>.into()));
+<a href=#505 id=505 data-nosnippet>505</a>    }
+<a href=#506 id=506 data-nosnippet>506</a>    <span class="kw">let </span>total_gb = (total_bytes / <span class="number">1_073_741_824</span>) <span class="kw">as </span>u32;
+<a href=#507 id=507 data-nosnippet>507</a>    <span class="prelude-val">Ok</span>(round_to_navigator_memory(total_gb))
+<a href=#508 id=508 data-nosnippet>508</a>}
+<a href=#509 id=509 data-nosnippet>509</a>
+<a href=#510 id=510 data-nosnippet>510</a><span class="kw">fn </span>round_to_navigator_memory(gb: u32) -&gt; u32 {
+<a href=#511 id=511 data-nosnippet>511</a>    <span class="comment">// navigator.deviceMemory spec values: 0.25, 0.5, 1, 2, 4, 8. Cap at 8.
+<a href=#512 id=512 data-nosnippet>512</a>    // We floor at 4 for plausibility (sub-4GB consumer desktops are extinct).
+<a href=#513 id=513 data-nosnippet>513</a>    </span><span class="kw">if </span>gb &gt;= <span class="number">8 </span>{ <span class="number">8 </span>} <span class="kw">else </span>{ <span class="number">4 </span>}
+<a href=#514 id=514 data-nosnippet>514</a>}
+<a href=#515 id=515 data-nosnippet>515</a>
+<a href=#516 id=516 data-nosnippet>516</a><span class="attr">#[cfg(test)]
+<a href=#517 id=517 data-nosnippet>517</a>#[allow(clippy::panic, clippy::unwrap_used)]
+<a href=#518 id=518 data-nosnippet>518</a></span><span class="kw">mod </span>tests {
+<a href=#519 id=519 data-nosnippet>519</a>
+<a href=#520 id=520 data-nosnippet>520</a>    <span class="doccomment">/// Real captures, not derivations: both pairs come from device fingerprints recorded off
+<a href=#521 id=521 data-nosnippet>521</a>    /// genuine Chrome installs. 146 is the anchor that proves the alphabet indexing, since its
+<a href=#522 id=522 data-nosnippet>522</a>    /// two characters differ (`-` and `.`).
+<a href=#523 id=523 data-nosnippet>523</a>    </span><span class="attr">#[test]
+<a href=#524 id=524 data-nosnippet>524</a>    </span><span class="kw">fn </span>grease_brand_matches_real_captures() {
+<a href=#525 id=525 data-nosnippet>525</a>        <span class="macro">assert_eq!</span>(grease_brand(<span class="number">146</span>), (<span class="string">"Not-A.Brand"</span>.to_string(), <span class="string">"24"</span>));
+<a href=#526 id=526 data-nosnippet>526</a>        <span class="macro">assert_eq!</span>(grease_brand(<span class="number">142</span>), (<span class="string">"Not_A Brand"</span>.to_string(), <span class="string">"99"</span>));
 <a href=#527 id=527 data-nosnippet>527</a>    }
 <a href=#528 id=528 data-nosnippet>528</a>
-<a href=#529 id=529 data-nosnippet>529</a>    <span class="doccomment">/// `brands` and `full_version_list` are the same three brands at two precisions, so they
-<a href=#530 id=530 data-nosnippet>530</a>    /// must agree on order — a client whose two lists disagreed would contradict itself.
-<a href=#531 id=531 data-nosnippet>531</a>    </span><span class="attr">#[test]
-<a href=#532 id=532 data-nosnippet>532</a>    </span><span class="kw">fn </span>brands_and_full_version_list_agree_on_order() {
-<a href=#533 id=533 data-nosnippet>533</a>        <span class="kw">for </span>major <span class="kw">in </span>[<span class="number">120u32</span>, <span class="number">142</span>, <span class="number">146</span>, <span class="number">149</span>, <span class="number">150</span>] {
-<a href=#534 id=534 data-nosnippet>534</a>            <span class="kw">let </span>uam = UserAgentMetadata::realistic(Platform::Win32, major, <span class="string">"146.0.7680.165"</span>);
-<a href=#535 id=535 data-nosnippet>535</a>            <span class="kw">let </span>a: Vec&lt;<span class="kw-2">&amp;</span>str&gt; = uam.brands.iter().map(|b| b.brand.as_str()).collect();
-<a href=#536 id=536 data-nosnippet>536</a>            <span class="kw">let </span>b: Vec&lt;<span class="kw-2">&amp;</span>str&gt; = uam
-<a href=#537 id=537 data-nosnippet>537</a>                .full_version_list
-<a href=#538 id=538 data-nosnippet>538</a>                .iter()
-<a href=#539 id=539 data-nosnippet>539</a>                .map(|b| b.brand.as_str())
-<a href=#540 id=540 data-nosnippet>540</a>                .collect();
-<a href=#541 id=541 data-nosnippet>541</a>            <span class="macro">assert_eq!</span>(a, b, <span class="string">"major {major}"</span>);
-<a href=#542 id=542 data-nosnippet>542</a>        }
-<a href=#543 id=543 data-nosnippet>543</a>    }
-<a href=#544 id=544 data-nosnippet>544</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
-<a href=#545 id=545 data-nosnippet>545</a>
-<a href=#546 id=546 data-nosnippet>546</a>    <span class="doccomment">/// The version probe must never *execute* Chrome on Windows: with no
-<a href=#547 id=547 data-nosnippet>547</a>    /// existing browser session `chrome.exe --version` starts a browser that
-<a href=#548 id=548 data-nosnippet>548</a>    /// never exits, and because the probe is called synchronously from inside
-<a href=#549 id=549 data-nosnippet>549</a>    /// `Browser::launch()`'s future it wedges the poll — starving the tokio
-<a href=#550 id=550 data-nosnippet>550</a>    /// timer so that no `timeout` anywhere in the launch path can fire. That
-<a href=#551 id=551 data-nosnippet>551</a>    /// shipped as a silent, infinite hang on windows-latest CI.
-<a href=#552 id=552 data-nosnippet>552</a>    ///
-<a href=#553 id=553 data-nosnippet>553</a>    /// Reading a real on-disk PE (this test binary itself) proves the parser
-<a href=#554 id=554 data-nosnippet>554</a>    /// works against a genuine version resource and needs no Chrome installed.
-<a href=#555 id=555 data-nosnippet>555</a>    </span><span class="attr">#[cfg(windows)]
-<a href=#556 id=556 data-nosnippet>556</a>    #[test]
-<a href=#557 id=557 data-nosnippet>557</a>    </span><span class="kw">fn </span>probes_windows_version_from_pe_resource_without_executing() {
-<a href=#558 id=558 data-nosnippet>558</a>        <span class="kw">let </span>exe = std::env::current_exe().unwrap();
-<a href=#559 id=559 data-nosnippet>559</a>        <span class="kw">let </span>bytes = std::fs::read(<span class="kw-2">&amp;</span>exe).unwrap();
-<a href=#560 id=560 data-nosnippet>560</a>        <span class="comment">// Rust test binaries carry a version resource only when built with one,
-<a href=#561 id=561 data-nosnippet>561</a>        // so tolerate absence; what must never happen is a *wrong* parse.
-<a href=#562 id=562 data-nosnippet>562</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>((major, full)) = parse_pe_file_version(<span class="kw-2">&amp;</span>bytes) {
-<a href=#563 id=563 data-nosnippet>563</a>            <span class="macro">assert!</span>(
-<a href=#564 id=564 data-nosnippet>564</a>                full.split(<span class="string">'.'</span>).count() == <span class="number">4</span>,
-<a href=#565 id=565 data-nosnippet>565</a>                <span class="string">"expected a 4-part version, got {full:?}"
-<a href=#566 id=566 data-nosnippet>566</a>            </span>);
-<a href=#567 id=567 data-nosnippet>567</a>            <span class="macro">assert_eq!</span>(
-<a href=#568 id=568 data-nosnippet>568</a>                major,
-<a href=#569 id=569 data-nosnippet>569</a>                full.split(<span class="string">'.'</span>).next().unwrap().parse::&lt;u32&gt;().unwrap(),
-<a href=#570 id=570 data-nosnippet>570</a>                <span class="string">"major must be the first component of {full:?}"
-<a href=#571 id=571 data-nosnippet>571</a>            </span>);
-<a href=#572 id=572 data-nosnippet>572</a>        }
-<a href=#573 id=573 data-nosnippet>573</a>    }
-<a href=#574 id=574 data-nosnippet>574</a>
-<a href=#575 id=575 data-nosnippet>575</a>    <span class="doccomment">/// Locks the `VS_FIXEDFILEINFO` field packing (`high.low` per dword) against
-<a href=#576 id=576 data-nosnippet>576</a>    /// a synthetic resource, so the bit-twiddling is verified without depending
-<a href=#577 id=577 data-nosnippet>577</a>    /// on whatever Chrome happens to be installed on the test host.
-<a href=#578 id=578 data-nosnippet>578</a>    </span><span class="attr">#[cfg(windows)]
-<a href=#579 id=579 data-nosnippet>579</a>    #[test]
-<a href=#580 id=580 data-nosnippet>580</a>    </span><span class="kw">fn </span>parses_fixed_file_info_field_packing() {
-<a href=#581 id=581 data-nosnippet>581</a>        <span class="kw">let </span><span class="kw-2">mut </span>buf: Vec&lt;u8&gt; = Vec::new();
-<a href=#582 id=582 data-nosnippet>582</a>        buf.extend_from_slice(<span class="kw-2">&amp;</span>[<span class="number">0xAA</span>; <span class="number">128</span>]); <span class="comment">// leading noise
-<a href=#583 id=583 data-nosnippet>583</a>        </span>buf.extend(<span class="string">"VS_VERSION_INFO"</span>.encode_utf16().flat_map(u16::to_le_bytes));
-<a href=#584 id=584 data-nosnippet>584</a>        buf.extend_from_slice(<span class="kw-2">&amp;</span>[<span class="number">0x00</span>, <span class="number">0x00</span>]); <span class="comment">// NUL + padding to the signature
-<a href=#585 id=585 data-nosnippet>585</a>        </span>buf.extend_from_slice(<span class="kw-2">&amp;</span><span class="number">0xFEEF_04BDu32</span>.to_le_bytes()); <span class="comment">// dwSignature
-<a href=#586 id=586 data-nosnippet>586</a>        </span>buf.extend_from_slice(<span class="kw-2">&amp;</span><span class="number">0x0001_0000u32</span>.to_le_bytes()); <span class="comment">// dwStrucVersion
-<a href=#587 id=587 data-nosnippet>587</a>        // Each dword packs `high.low`: MS = 150.0, LS = 7871.114.
-<a href=#588 id=588 data-nosnippet>588</a>        </span>buf.extend_from_slice(<span class="kw-2">&amp;</span>(<span class="number">150u32 </span>&lt;&lt; <span class="number">16</span>).to_le_bytes());
-<a href=#589 id=589 data-nosnippet>589</a>        buf.extend_from_slice(<span class="kw-2">&amp;</span>((<span class="number">7871u32 </span>&lt;&lt; <span class="number">16</span>) | <span class="number">114</span>).to_le_bytes());
-<a href=#590 id=590 data-nosnippet>590</a>
-<a href=#591 id=591 data-nosnippet>591</a>        <span class="macro">assert_eq!</span>(
-<a href=#592 id=592 data-nosnippet>592</a>            parse_pe_file_version(<span class="kw-2">&amp;</span>buf),
-<a href=#593 id=593 data-nosnippet>593</a>            <span class="prelude-val">Some</span>((<span class="number">150</span>, <span class="string">"150.0.7871.114"</span>.to_string()))
-<a href=#594 id=594 data-nosnippet>594</a>        );
+<a href=#529 id=529 data-nosnippet>529</a>    <span class="doccomment">/// The value that was hardcoded before this was derived. `Not_A Brand;v=8` is precisely
+<a href=#530 id=530 data-nosnippet>530</a>    /// Chrome 120's GREASE pair, which is why the constant looked plausible for years: it was
+<a href=#531 id=531 data-nosnippet>531</a>    /// correct for exactly one major and wrong for every other.
+<a href=#532 id=532 data-nosnippet>532</a>    </span><span class="attr">#[test]
+<a href=#533 id=533 data-nosnippet>533</a>    </span><span class="kw">fn </span>the_old_hardcoded_pair_was_chrome_120s() {
+<a href=#534 id=534 data-nosnippet>534</a>        <span class="macro">assert_eq!</span>(grease_brand(<span class="number">120</span>), (<span class="string">"Not_A Brand"</span>.to_string(), <span class="string">"8"</span>));
+<a href=#535 id=535 data-nosnippet>535</a>        <span class="comment">// ...and 120 also takes the identity permutation, which is why GREASE-first looked
+<a href=#536 id=536 data-nosnippet>536</a>        // right too.
+<a href=#537 id=537 data-nosnippet>537</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#538 id=538 data-nosnippet>538</a>            permute_brands(<span class="number">120</span>, [<span class="string">"grease"</span>, <span class="string">"chromium"</span>, <span class="string">"branded"</span>]),
+<a href=#539 id=539 data-nosnippet>539</a>            <span class="macro">vec!</span>[<span class="string">"grease"</span>, <span class="string">"chromium"</span>, <span class="string">"branded"</span>]
+<a href=#540 id=540 data-nosnippet>540</a>        );
+<a href=#541 id=541 data-nosnippet>541</a>    }
+<a href=#542 id=542 data-nosnippet>542</a>
+<a href=#543 id=543 data-nosnippet>543</a>    <span class="doccomment">/// A real major-146 capture puts Chromium first, GREASE second, the branded entry last.
+<a href=#544 id=544 data-nosnippet>544</a>    </span><span class="attr">#[test]
+<a href=#545 id=545 data-nosnippet>545</a>    </span><span class="kw">fn </span>brand_order_matches_a_real_146_capture() {
+<a href=#546 id=546 data-nosnippet>546</a>        <span class="macro">assert_eq!</span>(
+<a href=#547 id=547 data-nosnippet>547</a>            permute_brands(<span class="number">146</span>, [<span class="string">"grease"</span>, <span class="string">"chromium"</span>, <span class="string">"branded"</span>]),
+<a href=#548 id=548 data-nosnippet>548</a>            <span class="macro">vec!</span>[<span class="string">"chromium"</span>, <span class="string">"grease"</span>, <span class="string">"branded"</span>]
+<a href=#549 id=549 data-nosnippet>549</a>        );
+<a href=#550 id=550 data-nosnippet>550</a>    }
+<a href=#551 id=551 data-nosnippet>551</a>
+<a href=#552 id=552 data-nosnippet>552</a>    <span class="doccomment">/// 142 is the discriminating case. `142 % 6 == 4` selects `[2, 0, 1]`, one of the two
+<a href=#553 id=553 data-nosnippet>553</a>    /// 3-cycles, so scatter and gather disagree: scatter yields
+<a href=#554 id=554 data-nosnippet>554</a>    /// `[chromium, branded, grease]`, gather would yield `[branded, grease, chromium]`.
+<a href=#555 id=555 data-nosnippet>555</a>    /// The real capture is the former, which is what fixes the direction.
+<a href=#556 id=556 data-nosnippet>556</a>    </span><span class="attr">#[test]
+<a href=#557 id=557 data-nosnippet>557</a>    </span><span class="kw">fn </span>brand_order_scatters_rather_than_gathers() {
+<a href=#558 id=558 data-nosnippet>558</a>        <span class="macro">assert_eq!</span>(
+<a href=#559 id=559 data-nosnippet>559</a>            permute_brands(<span class="number">142</span>, [<span class="string">"grease"</span>, <span class="string">"chromium"</span>, <span class="string">"branded"</span>]),
+<a href=#560 id=560 data-nosnippet>560</a>            <span class="macro">vec!</span>[<span class="string">"chromium"</span>, <span class="string">"branded"</span>, <span class="string">"grease"</span>]
+<a href=#561 id=561 data-nosnippet>561</a>        );
+<a href=#562 id=562 data-nosnippet>562</a>    }
+<a href=#563 id=563 data-nosnippet>563</a>
+<a href=#564 id=564 data-nosnippet>564</a>    <span class="doccomment">/// Whatever the major, all three brands must survive exactly once — a permutation bug that
+<a href=#565 id=565 data-nosnippet>565</a>    /// dropped or duplicated one would otherwise only show up as a weird header in the wild.
+<a href=#566 id=566 data-nosnippet>566</a>    </span><span class="attr">#[test]
+<a href=#567 id=567 data-nosnippet>567</a>    </span><span class="kw">fn </span>every_major_permutes_without_loss() {
+<a href=#568 id=568 data-nosnippet>568</a>        <span class="kw">for </span>major <span class="kw">in </span><span class="number">100u32</span>..<span class="number">200 </span>{
+<a href=#569 id=569 data-nosnippet>569</a>            <span class="kw">let </span>out = permute_brands(major, [<span class="string">"grease"</span>, <span class="string">"chromium"</span>, <span class="string">"branded"</span>]);
+<a href=#570 id=570 data-nosnippet>570</a>            <span class="macro">assert_eq!</span>(out.len(), <span class="number">3</span>, <span class="string">"major {major}"</span>);
+<a href=#571 id=571 data-nosnippet>571</a>            <span class="kw">for </span>want <span class="kw">in </span>[<span class="string">"grease"</span>, <span class="string">"chromium"</span>, <span class="string">"branded"</span>] {
+<a href=#572 id=572 data-nosnippet>572</a>                <span class="macro">assert_eq!</span>(
+<a href=#573 id=573 data-nosnippet>573</a>                    out.iter().filter(|b| <span class="kw-2">**</span>b == want).count(),
+<a href=#574 id=574 data-nosnippet>574</a>                    <span class="number">1</span>,
+<a href=#575 id=575 data-nosnippet>575</a>                    <span class="string">"major {major} lost or duplicated {want}: {out:?}"
+<a href=#576 id=576 data-nosnippet>576</a>                </span>);
+<a href=#577 id=577 data-nosnippet>577</a>            }
+<a href=#578 id=578 data-nosnippet>578</a>        }
+<a href=#579 id=579 data-nosnippet>579</a>    }
+<a href=#580 id=580 data-nosnippet>580</a>
+<a href=#581 id=581 data-nosnippet>581</a>    <span class="doccomment">/// `brands` and `full_version_list` are the same three brands at two precisions, so they
+<a href=#582 id=582 data-nosnippet>582</a>    /// must agree on order — a client whose two lists disagreed would contradict itself.
+<a href=#583 id=583 data-nosnippet>583</a>    </span><span class="attr">#[test]
+<a href=#584 id=584 data-nosnippet>584</a>    </span><span class="kw">fn </span>brands_and_full_version_list_agree_on_order() {
+<a href=#585 id=585 data-nosnippet>585</a>        <span class="kw">for </span>major <span class="kw">in </span>[<span class="number">120u32</span>, <span class="number">142</span>, <span class="number">146</span>, <span class="number">149</span>, <span class="number">150</span>] {
+<a href=#586 id=586 data-nosnippet>586</a>            <span class="kw">let </span>uam = UserAgentMetadata::realistic(Platform::Win32, major, <span class="string">"146.0.7680.165"</span>);
+<a href=#587 id=587 data-nosnippet>587</a>            <span class="kw">let </span>a: Vec&lt;<span class="kw-2">&amp;</span>str&gt; = uam.brands.iter().map(|b| b.brand.as_str()).collect();
+<a href=#588 id=588 data-nosnippet>588</a>            <span class="kw">let </span>b: Vec&lt;<span class="kw-2">&amp;</span>str&gt; = uam
+<a href=#589 id=589 data-nosnippet>589</a>                .full_version_list
+<a href=#590 id=590 data-nosnippet>590</a>                .iter()
+<a href=#591 id=591 data-nosnippet>591</a>                .map(|b| b.brand.as_str())
+<a href=#592 id=592 data-nosnippet>592</a>                .collect();
+<a href=#593 id=593 data-nosnippet>593</a>            <span class="macro">assert_eq!</span>(a, b, <span class="string">"major {major}"</span>);
+<a href=#594 id=594 data-nosnippet>594</a>        }
 <a href=#595 id=595 data-nosnippet>595</a>    }
-<a href=#596 id=596 data-nosnippet>596</a>
-<a href=#597 id=597 data-nosnippet>597</a>    <span class="attr">#[cfg(windows)]
-<a href=#598 id=598 data-nosnippet>598</a>    #[test]
-<a href=#599 id=599 data-nosnippet>599</a>    </span><span class="kw">fn </span>pe_version_parse_rejects_image_without_version_resource() {
-<a href=#600 id=600 data-nosnippet>600</a>        <span class="macro">assert_eq!</span>(parse_pe_file_version(<span class="kw-2">&amp;</span>[<span class="number">0x00</span>; <span class="number">512</span>]), <span class="prelude-val">None</span>);
-<a href=#601 id=601 data-nosnippet>601</a>    }
-<a href=#602 id=602 data-nosnippet>602</a>
-<a href=#603 id=603 data-nosnippet>603</a>    <span class="doccomment">/// Real `chrome.exe` carries the literal `VS_VERSION_INFO` in `.rdata`
-<a href=#604 id=604 data-nosnippet>604</a>    /// (error text from Chrome's own resource parser) ~645KB before the genuine
-<a href=#605 id=605 data-nosnippet>605</a>    /// resource. Anchoring on the *first* match alone finds no signature and
-<a href=#606 id=606 data-nosnippet>606</a>    /// silently falls back to the baked-in version — which is precisely the
-<a href=#607 id=607 data-nosnippet>607</a>    /// wrong-version bug this probe exists to fix. Every match must be tried.
-<a href=#608 id=608 data-nosnippet>608</a>    </span><span class="attr">#[cfg(windows)]
-<a href=#609 id=609 data-nosnippet>609</a>    #[test]
-<a href=#610 id=610 data-nosnippet>610</a>    </span><span class="kw">fn </span>pe_version_parse_skips_decoy_key_without_signature() {
-<a href=#611 id=611 data-nosnippet>611</a>        <span class="kw">let </span>key: Vec&lt;u8&gt; = <span class="string">"VS_VERSION_INFO"
-<a href=#612 id=612 data-nosnippet>612</a>            </span>.encode_utf16()
-<a href=#613 id=613 data-nosnippet>613</a>            .flat_map(u16::to_le_bytes)
-<a href=#614 id=614 data-nosnippet>614</a>            .collect();
-<a href=#615 id=615 data-nosnippet>615</a>
-<a href=#616 id=616 data-nosnippet>616</a>        <span class="kw">let </span><span class="kw-2">mut </span>buf: Vec&lt;u8&gt; = Vec::new();
-<a href=#617 id=617 data-nosnippet>617</a>        <span class="comment">// Decoy #1: the key as plain string data, followed by prose rather than
-<a href=#618 id=618 data-nosnippet>618</a>        // a signature (mirrors Chrome's "unexpected VS_VERSIONINFO in " text).
-<a href=#619 id=619 data-nosnippet>619</a>        </span>buf.extend_from_slice(<span class="kw-2">&amp;</span>key);
-<a href=#620 id=620 data-nosnippet>620</a>        buf.extend_from_slice(<span class="string">b"\0\0unexpected VS_VERSIONINFO in \0"</span>);
-<a href=#621 id=621 data-nosnippet>621</a>        buf.extend_from_slice(<span class="kw-2">&amp;</span>[<span class="number">0xCC</span>; <span class="number">96</span>]);
-<a href=#622 id=622 data-nosnippet>622</a>        <span class="comment">// The genuine resource.
-<a href=#623 id=623 data-nosnippet>623</a>        </span>buf.extend_from_slice(<span class="kw-2">&amp;</span>key);
-<a href=#624 id=624 data-nosnippet>624</a>        buf.extend_from_slice(<span class="kw-2">&amp;</span>[<span class="number">0x00</span>, <span class="number">0x00</span>, <span class="number">0x00</span>, <span class="number">0x00</span>]); <span class="comment">// NUL + alignment padding
-<a href=#625 id=625 data-nosnippet>625</a>        </span>buf.extend_from_slice(<span class="kw-2">&amp;</span><span class="number">0xFEEF_04BDu32</span>.to_le_bytes());
-<a href=#626 id=626 data-nosnippet>626</a>        buf.extend_from_slice(<span class="kw-2">&amp;</span><span class="number">0x0001_0000u32</span>.to_le_bytes());
-<a href=#627 id=627 data-nosnippet>627</a>        buf.extend_from_slice(<span class="kw-2">&amp;</span>(<span class="number">150u32 </span>&lt;&lt; <span class="number">16</span>).to_le_bytes());
-<a href=#628 id=628 data-nosnippet>628</a>        buf.extend_from_slice(<span class="kw-2">&amp;</span>((<span class="number">7871u32 </span>&lt;&lt; <span class="number">16</span>) | <span class="number">114</span>).to_le_bytes());
-<a href=#629 id=629 data-nosnippet>629</a>
-<a href=#630 id=630 data-nosnippet>630</a>        <span class="macro">assert_eq!</span>(
-<a href=#631 id=631 data-nosnippet>631</a>            parse_pe_file_version(<span class="kw-2">&amp;</span>buf),
-<a href=#632 id=632 data-nosnippet>632</a>            <span class="prelude-val">Some</span>((<span class="number">150</span>, <span class="string">"150.0.7871.114"</span>.to_string())),
-<a href=#633 id=633 data-nosnippet>633</a>            <span class="string">"must skip the decoy key and find the real resource behind it"
-<a href=#634 id=634 data-nosnippet>634</a>        </span>);
-<a href=#635 id=635 data-nosnippet>635</a>    }
-<a href=#636 id=636 data-nosnippet>636</a>
-<a href=#637 id=637 data-nosnippet>637</a>    <span class="doccomment">/// A bare `0xFEEF04BD` occurring in code/data must never be mistaken for the
-<a href=#638 id=638 data-nosnippet>638</a>    /// version block. Chrome 150 really does contain one ~475KB before the
-<a href=#639 id=639 data-nosnippet>639</a>    /// resource, decoding to `9340.36168.8075.18720`.
-<a href=#640 id=640 data-nosnippet>640</a>    </span><span class="attr">#[cfg(windows)]
-<a href=#641 id=641 data-nosnippet>641</a>    #[test]
-<a href=#642 id=642 data-nosnippet>642</a>    </span><span class="kw">fn </span>pe_version_parse_ignores_stray_signature_without_key() {
-<a href=#643 id=643 data-nosnippet>643</a>        <span class="kw">let </span><span class="kw-2">mut </span>buf: Vec&lt;u8&gt; = Vec::new();
-<a href=#644 id=644 data-nosnippet>644</a>        buf.extend_from_slice(<span class="kw-2">&amp;</span><span class="number">0xFEEF_04BDu32</span>.to_le_bytes());
-<a href=#645 id=645 data-nosnippet>645</a>        buf.extend_from_slice(<span class="kw-2">&amp;</span>[<span class="number">0xEF</span>; <span class="number">32</span>]);
-<a href=#646 id=646 data-nosnippet>646</a>        <span class="macro">assert_eq!</span>(parse_pe_file_version(<span class="kw-2">&amp;</span>buf), <span class="prelude-val">None</span>);
+<a href=#596 id=596 data-nosnippet>596</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#597 id=597 data-nosnippet>597</a>
+<a href=#598 id=598 data-nosnippet>598</a>    <span class="doccomment">/// The version probe must never *execute* Chrome on Windows: with no
+<a href=#599 id=599 data-nosnippet>599</a>    /// existing browser session `chrome.exe --version` starts a browser that
+<a href=#600 id=600 data-nosnippet>600</a>    /// never exits, and because the probe is called synchronously from inside
+<a href=#601 id=601 data-nosnippet>601</a>    /// `Browser::launch()`'s future it wedges the poll — starving the tokio
+<a href=#602 id=602 data-nosnippet>602</a>    /// timer so that no `timeout` anywhere in the launch path can fire. That
+<a href=#603 id=603 data-nosnippet>603</a>    /// shipped as a silent, infinite hang on windows-latest CI.
+<a href=#604 id=604 data-nosnippet>604</a>    ///
+<a href=#605 id=605 data-nosnippet>605</a>    /// Reading a real on-disk PE (this test binary itself) proves the parser
+<a href=#606 id=606 data-nosnippet>606</a>    /// works against a genuine version resource and needs no Chrome installed.
+<a href=#607 id=607 data-nosnippet>607</a>    </span><span class="attr">#[cfg(windows)]
+<a href=#608 id=608 data-nosnippet>608</a>    #[test]
+<a href=#609 id=609 data-nosnippet>609</a>    </span><span class="kw">fn </span>probes_windows_version_from_pe_resource_without_executing() {
+<a href=#610 id=610 data-nosnippet>610</a>        <span class="kw">let </span>exe = std::env::current_exe().unwrap();
+<a href=#611 id=611 data-nosnippet>611</a>        <span class="kw">let </span>bytes = std::fs::read(<span class="kw-2">&amp;</span>exe).unwrap();
+<a href=#612 id=612 data-nosnippet>612</a>        <span class="comment">// Rust test binaries carry a version resource only when built with one,
+<a href=#613 id=613 data-nosnippet>613</a>        // so tolerate absence; what must never happen is a *wrong* parse.
+<a href=#614 id=614 data-nosnippet>614</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>((major, full)) = parse_pe_file_version(<span class="kw-2">&amp;</span>bytes) {
+<a href=#615 id=615 data-nosnippet>615</a>            <span class="macro">assert!</span>(
+<a href=#616 id=616 data-nosnippet>616</a>                full.split(<span class="string">'.'</span>).count() == <span class="number">4</span>,
+<a href=#617 id=617 data-nosnippet>617</a>                <span class="string">"expected a 4-part version, got {full:?}"
+<a href=#618 id=618 data-nosnippet>618</a>            </span>);
+<a href=#619 id=619 data-nosnippet>619</a>            <span class="macro">assert_eq!</span>(
+<a href=#620 id=620 data-nosnippet>620</a>                major,
+<a href=#621 id=621 data-nosnippet>621</a>                full.split(<span class="string">'.'</span>).next().unwrap().parse::&lt;u32&gt;().unwrap(),
+<a href=#622 id=622 data-nosnippet>622</a>                <span class="string">"major must be the first component of {full:?}"
+<a href=#623 id=623 data-nosnippet>623</a>            </span>);
+<a href=#624 id=624 data-nosnippet>624</a>        }
+<a href=#625 id=625 data-nosnippet>625</a>    }
+<a href=#626 id=626 data-nosnippet>626</a>
+<a href=#627 id=627 data-nosnippet>627</a>    <span class="doccomment">/// Locks the `VS_FIXEDFILEINFO` field packing (`high.low` per dword) against
+<a href=#628 id=628 data-nosnippet>628</a>    /// a synthetic resource, so the bit-twiddling is verified without depending
+<a href=#629 id=629 data-nosnippet>629</a>    /// on whatever Chrome happens to be installed on the test host.
+<a href=#630 id=630 data-nosnippet>630</a>    </span><span class="attr">#[cfg(windows)]
+<a href=#631 id=631 data-nosnippet>631</a>    #[test]
+<a href=#632 id=632 data-nosnippet>632</a>    </span><span class="kw">fn </span>parses_fixed_file_info_field_packing() {
+<a href=#633 id=633 data-nosnippet>633</a>        <span class="kw">let </span><span class="kw-2">mut </span>buf: Vec&lt;u8&gt; = Vec::new();
+<a href=#634 id=634 data-nosnippet>634</a>        buf.extend_from_slice(<span class="kw-2">&amp;</span>[<span class="number">0xAA</span>; <span class="number">128</span>]); <span class="comment">// leading noise
+<a href=#635 id=635 data-nosnippet>635</a>        </span>buf.extend(<span class="string">"VS_VERSION_INFO"</span>.encode_utf16().flat_map(u16::to_le_bytes));
+<a href=#636 id=636 data-nosnippet>636</a>        buf.extend_from_slice(<span class="kw-2">&amp;</span>[<span class="number">0x00</span>, <span class="number">0x00</span>]); <span class="comment">// NUL + padding to the signature
+<a href=#637 id=637 data-nosnippet>637</a>        </span>buf.extend_from_slice(<span class="kw-2">&amp;</span><span class="number">0xFEEF_04BDu32</span>.to_le_bytes()); <span class="comment">// dwSignature
+<a href=#638 id=638 data-nosnippet>638</a>        </span>buf.extend_from_slice(<span class="kw-2">&amp;</span><span class="number">0x0001_0000u32</span>.to_le_bytes()); <span class="comment">// dwStrucVersion
+<a href=#639 id=639 data-nosnippet>639</a>        // Each dword packs `high.low`: MS = 150.0, LS = 7871.114.
+<a href=#640 id=640 data-nosnippet>640</a>        </span>buf.extend_from_slice(<span class="kw-2">&amp;</span>(<span class="number">150u32 </span>&lt;&lt; <span class="number">16</span>).to_le_bytes());
+<a href=#641 id=641 data-nosnippet>641</a>        buf.extend_from_slice(<span class="kw-2">&amp;</span>((<span class="number">7871u32 </span>&lt;&lt; <span class="number">16</span>) | <span class="number">114</span>).to_le_bytes());
+<a href=#642 id=642 data-nosnippet>642</a>
+<a href=#643 id=643 data-nosnippet>643</a>        <span class="macro">assert_eq!</span>(
+<a href=#644 id=644 data-nosnippet>644</a>            parse_pe_file_version(<span class="kw-2">&amp;</span>buf),
+<a href=#645 id=645 data-nosnippet>645</a>            <span class="prelude-val">Some</span>((<span class="number">150</span>, <span class="string">"150.0.7871.114"</span>.to_string()))
+<a href=#646 id=646 data-nosnippet>646</a>        );
 <a href=#647 id=647 data-nosnippet>647</a>    }
 <a href=#648 id=648 data-nosnippet>648</a>
-<a href=#649 id=649 data-nosnippet>649</a>    <span class="attr">#[cfg(not(windows))]
+<a href=#649 id=649 data-nosnippet>649</a>    <span class="attr">#[cfg(windows)]
 <a href=#650 id=650 data-nosnippet>650</a>    #[test]
-<a href=#651 id=651 data-nosnippet>651</a>    </span><span class="kw">fn </span>parses_chrome_and_chromium_version_banners() {
-<a href=#652 id=652 data-nosnippet>652</a>        <span class="macro">assert_eq!</span>(
-<a href=#653 id=653 data-nosnippet>653</a>            parse_version_banner(<span class="string">"Google Chrome 120.0.6099.234\n"</span>).unwrap(),
-<a href=#654 id=654 data-nosnippet>654</a>            (<span class="number">120</span>, <span class="string">"120.0.6099.234"</span>.to_string())
-<a href=#655 id=655 data-nosnippet>655</a>        );
-<a href=#656 id=656 data-nosnippet>656</a>        <span class="macro">assert_eq!</span>(
-<a href=#657 id=657 data-nosnippet>657</a>            parse_version_banner(<span class="string">"Chromium 120.0.6099.0\n"</span>).unwrap(),
-<a href=#658 id=658 data-nosnippet>658</a>            (<span class="number">120</span>, <span class="string">"120.0.6099.0"</span>.to_string())
-<a href=#659 id=659 data-nosnippet>659</a>        );
-<a href=#660 id=660 data-nosnippet>660</a>        <span class="macro">assert!</span>(parse_version_banner(<span class="string">"Opening in existing browser session.\n"</span>).is_err());
-<a href=#661 id=661 data-nosnippet>661</a>    }
-<a href=#662 id=662 data-nosnippet>662</a>
-<a href=#663 id=663 data-nosnippet>663</a>    <span class="attr">#[test]
-<a href=#664 id=664 data-nosnippet>664</a>    </span><span class="kw">fn </span>realistic_uam_macintel_chrome_120_matches_snapshot() {
-<a href=#665 id=665 data-nosnippet>665</a>        <span class="kw">let </span>uam = UserAgentMetadata::realistic(Platform::MacIntel, <span class="number">120</span>, <span class="string">"120.0.6099.234"</span>);
-<a href=#666 id=666 data-nosnippet>666</a>        <span class="macro">insta::assert_json_snapshot!</span>(<span class="string">"uam_macintel_chrome_120"</span>, uam);
-<a href=#667 id=667 data-nosnippet>667</a>    }
-<a href=#668 id=668 data-nosnippet>668</a>
-<a href=#669 id=669 data-nosnippet>669</a>    <span class="attr">#[test]
-<a href=#670 id=670 data-nosnippet>670</a>    </span><span class="kw">fn </span>realistic_uam_win32_chrome_120_matches_snapshot() {
-<a href=#671 id=671 data-nosnippet>671</a>        <span class="kw">let </span>uam = UserAgentMetadata::realistic(Platform::Win32, <span class="number">120</span>, <span class="string">"120.0.6099.234"</span>);
-<a href=#672 id=672 data-nosnippet>672</a>        <span class="macro">insta::assert_json_snapshot!</span>(<span class="string">"uam_win32_chrome_120"</span>, uam);
-<a href=#673 id=673 data-nosnippet>673</a>    }
-<a href=#674 id=674 data-nosnippet>674</a>
-<a href=#675 id=675 data-nosnippet>675</a>    <span class="attr">#[test]
-<a href=#676 id=676 data-nosnippet>676</a>    </span><span class="kw">fn </span>realistic_uam_linux_chrome_120_matches_snapshot() {
-<a href=#677 id=677 data-nosnippet>677</a>        <span class="kw">let </span>uam = UserAgentMetadata::realistic(Platform::LinuxX86_64, <span class="number">120</span>, <span class="string">"120.0.6099.234"</span>);
-<a href=#678 id=678 data-nosnippet>678</a>        <span class="macro">insta::assert_json_snapshot!</span>(<span class="string">"uam_linux_chrome_120"</span>, uam);
-<a href=#679 id=679 data-nosnippet>679</a>    }
-<a href=#680 id=680 data-nosnippet>680</a>}
+<a href=#651 id=651 data-nosnippet>651</a>    </span><span class="kw">fn </span>pe_version_parse_rejects_image_without_version_resource() {
+<a href=#652 id=652 data-nosnippet>652</a>        <span class="macro">assert_eq!</span>(parse_pe_file_version(<span class="kw-2">&amp;</span>[<span class="number">0x00</span>; <span class="number">512</span>]), <span class="prelude-val">None</span>);
+<a href=#653 id=653 data-nosnippet>653</a>    }
+<a href=#654 id=654 data-nosnippet>654</a>
+<a href=#655 id=655 data-nosnippet>655</a>    <span class="doccomment">/// Real `chrome.exe` carries the literal `VS_VERSION_INFO` in `.rdata`
+<a href=#656 id=656 data-nosnippet>656</a>    /// (error text from Chrome's own resource parser) ~645KB before the genuine
+<a href=#657 id=657 data-nosnippet>657</a>    /// resource. Anchoring on the *first* match alone finds no signature and
+<a href=#658 id=658 data-nosnippet>658</a>    /// silently falls back to the baked-in version — which is precisely the
+<a href=#659 id=659 data-nosnippet>659</a>    /// wrong-version bug this probe exists to fix. Every match must be tried.
+<a href=#660 id=660 data-nosnippet>660</a>    </span><span class="attr">#[cfg(windows)]
+<a href=#661 id=661 data-nosnippet>661</a>    #[test]
+<a href=#662 id=662 data-nosnippet>662</a>    </span><span class="kw">fn </span>pe_version_parse_skips_decoy_key_without_signature() {
+<a href=#663 id=663 data-nosnippet>663</a>        <span class="kw">let </span>key: Vec&lt;u8&gt; = <span class="string">"VS_VERSION_INFO"
+<a href=#664 id=664 data-nosnippet>664</a>            </span>.encode_utf16()
+<a href=#665 id=665 data-nosnippet>665</a>            .flat_map(u16::to_le_bytes)
+<a href=#666 id=666 data-nosnippet>666</a>            .collect();
+<a href=#667 id=667 data-nosnippet>667</a>
+<a href=#668 id=668 data-nosnippet>668</a>        <span class="kw">let </span><span class="kw-2">mut </span>buf: Vec&lt;u8&gt; = Vec::new();
+<a href=#669 id=669 data-nosnippet>669</a>        <span class="comment">// Decoy #1: the key as plain string data, followed by prose rather than
+<a href=#670 id=670 data-nosnippet>670</a>        // a signature (mirrors Chrome's "unexpected VS_VERSIONINFO in " text).
+<a href=#671 id=671 data-nosnippet>671</a>        </span>buf.extend_from_slice(<span class="kw-2">&amp;</span>key);
+<a href=#672 id=672 data-nosnippet>672</a>        buf.extend_from_slice(<span class="string">b"\0\0unexpected VS_VERSIONINFO in \0"</span>);
+<a href=#673 id=673 data-nosnippet>673</a>        buf.extend_from_slice(<span class="kw-2">&amp;</span>[<span class="number">0xCC</span>; <span class="number">96</span>]);
+<a href=#674 id=674 data-nosnippet>674</a>        <span class="comment">// The genuine resource.
+<a href=#675 id=675 data-nosnippet>675</a>        </span>buf.extend_from_slice(<span class="kw-2">&amp;</span>key);
+<a href=#676 id=676 data-nosnippet>676</a>        buf.extend_from_slice(<span class="kw-2">&amp;</span>[<span class="number">0x00</span>, <span class="number">0x00</span>, <span class="number">0x00</span>, <span class="number">0x00</span>]); <span class="comment">// NUL + alignment padding
+<a href=#677 id=677 data-nosnippet>677</a>        </span>buf.extend_from_slice(<span class="kw-2">&amp;</span><span class="number">0xFEEF_04BDu32</span>.to_le_bytes());
+<a href=#678 id=678 data-nosnippet>678</a>        buf.extend_from_slice(<span class="kw-2">&amp;</span><span class="number">0x0001_0000u32</span>.to_le_bytes());
+<a href=#679 id=679 data-nosnippet>679</a>        buf.extend_from_slice(<span class="kw-2">&amp;</span>(<span class="number">150u32 </span>&lt;&lt; <span class="number">16</span>).to_le_bytes());
+<a href=#680 id=680 data-nosnippet>680</a>        buf.extend_from_slice(<span class="kw-2">&amp;</span>((<span class="number">7871u32 </span>&lt;&lt; <span class="number">16</span>) | <span class="number">114</span>).to_le_bytes());
 <a href=#681 id=681 data-nosnippet>681</a>
-<a href=#682 id=682 data-nosnippet>682</a><span class="attr">#[cfg(test)]
-<a href=#683 id=683 data-nosnippet>683</a>#[allow(clippy::panic, clippy::unwrap_used)]
-<a href=#684 id=684 data-nosnippet>684</a></span><span class="kw">mod </span>fingerprint_tests {
-<a href=#685 id=685 data-nosnippet>685</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
-<a href=#686 id=686 data-nosnippet>686</a>
-<a href=#687 id=687 data-nosnippet>687</a>    <span class="attr">#[test]
-<a href=#688 id=688 data-nosnippet>688</a>    </span><span class="kw">fn </span>clamp_cpu_count_floors_at_two() {
-<a href=#689 id=689 data-nosnippet>689</a>        <span class="macro">assert_eq!</span>(clamp_cpu_count(<span class="number">1</span>), <span class="number">2</span>);
-<a href=#690 id=690 data-nosnippet>690</a>        <span class="macro">assert_eq!</span>(clamp_cpu_count(<span class="number">0</span>), <span class="number">2</span>);
-<a href=#691 id=691 data-nosnippet>691</a>    }
-<a href=#692 id=692 data-nosnippet>692</a>
-<a href=#693 id=693 data-nosnippet>693</a>    <span class="attr">#[test]
-<a href=#694 id=694 data-nosnippet>694</a>    </span><span class="kw">fn </span>clamp_cpu_count_caps_at_thirty_two() {
-<a href=#695 id=695 data-nosnippet>695</a>        <span class="macro">assert_eq!</span>(clamp_cpu_count(<span class="number">64</span>), <span class="number">32</span>);
-<a href=#696 id=696 data-nosnippet>696</a>        <span class="macro">assert_eq!</span>(clamp_cpu_count(<span class="number">128</span>), <span class="number">32</span>);
-<a href=#697 id=697 data-nosnippet>697</a>    }
-<a href=#698 id=698 data-nosnippet>698</a>
-<a href=#699 id=699 data-nosnippet>699</a>    <span class="attr">#[test]
-<a href=#700 id=700 data-nosnippet>700</a>    </span><span class="kw">fn </span>clamp_cpu_count_preserves_normal_values() {
-<a href=#701 id=701 data-nosnippet>701</a>        <span class="macro">assert_eq!</span>(clamp_cpu_count(<span class="number">8</span>), <span class="number">8</span>);
-<a href=#702 id=702 data-nosnippet>702</a>        <span class="macro">assert_eq!</span>(clamp_cpu_count(<span class="number">16</span>), <span class="number">16</span>);
-<a href=#703 id=703 data-nosnippet>703</a>    }
-<a href=#704 id=704 data-nosnippet>704</a>
-<a href=#705 id=705 data-nosnippet>705</a>    <span class="attr">#[test]
-<a href=#706 id=706 data-nosnippet>706</a>    </span><span class="kw">fn </span>round_navigator_memory_caps_at_eight() {
-<a href=#707 id=707 data-nosnippet>707</a>        <span class="macro">assert_eq!</span>(round_to_navigator_memory(<span class="number">16</span>), <span class="number">8</span>);
-<a href=#708 id=708 data-nosnippet>708</a>        <span class="macro">assert_eq!</span>(round_to_navigator_memory(<span class="number">64</span>), <span class="number">8</span>);
-<a href=#709 id=709 data-nosnippet>709</a>    }
-<a href=#710 id=710 data-nosnippet>710</a>
-<a href=#711 id=711 data-nosnippet>711</a>    <span class="attr">#[test]
-<a href=#712 id=712 data-nosnippet>712</a>    </span><span class="kw">fn </span>round_navigator_memory_floors_at_four() {
-<a href=#713 id=713 data-nosnippet>713</a>        <span class="macro">assert_eq!</span>(round_to_navigator_memory(<span class="number">1</span>), <span class="number">4</span>);
-<a href=#714 id=714 data-nosnippet>714</a>        <span class="macro">assert_eq!</span>(round_to_navigator_memory(<span class="number">3</span>), <span class="number">4</span>);
-<a href=#715 id=715 data-nosnippet>715</a>    }
-<a href=#716 id=716 data-nosnippet>716</a>
-<a href=#717 id=717 data-nosnippet>717</a>    <span class="attr">#[test]
-<a href=#718 id=718 data-nosnippet>718</a>    </span><span class="kw">fn </span>round_navigator_memory_eight_stays_eight() {
-<a href=#719 id=719 data-nosnippet>719</a>        <span class="macro">assert_eq!</span>(round_to_navigator_memory(<span class="number">8</span>), <span class="number">8</span>);
-<a href=#720 id=720 data-nosnippet>720</a>    }
-<a href=#721 id=721 data-nosnippet>721</a>
-<a href=#722 id=722 data-nosnippet>722</a>    <span class="attr">#[test]
-<a href=#723 id=723 data-nosnippet>723</a>    </span><span class="kw">fn </span>detect_memory_gb_works_on_real_system() {
-<a href=#724 id=724 data-nosnippet>724</a>        <span class="kw">let </span>gb = detect_memory_gb().expect(<span class="string">"real system should have RAM"</span>);
-<a href=#725 id=725 data-nosnippet>725</a>        <span class="macro">assert!</span>(gb == <span class="number">4 </span>|| gb == <span class="number">8</span>, <span class="string">"got {gb}"</span>);
-<a href=#726 id=726 data-nosnippet>726</a>    }
-<a href=#727 id=727 data-nosnippet>727</a>
-<a href=#728 id=728 data-nosnippet>728</a>    <span class="attr">#[test]
-<a href=#729 id=729 data-nosnippet>729</a>    </span><span class="kw">fn </span>detect_platform_returns_expected_for_host() {
-<a href=#730 id=730 data-nosnippet>730</a>        <span class="kw">let </span>p = detect_platform();
-<a href=#731 id=731 data-nosnippet>731</a>        <span class="attr">#[cfg(target_os = <span class="string">"macos"</span>)]
-<a href=#732 id=732 data-nosnippet>732</a>        </span><span class="macro">assert_eq!</span>(p, Platform::MacIntel);
-<a href=#733 id=733 data-nosnippet>733</a>        <span class="attr">#[cfg(target_os = <span class="string">"linux"</span>)]
-<a href=#734 id=734 data-nosnippet>734</a>        </span><span class="macro">assert_eq!</span>(p, Platform::LinuxX86_64);
-<a href=#735 id=735 data-nosnippet>735</a>        <span class="attr">#[cfg(target_os = <span class="string">"windows"</span>)]
-<a href=#736 id=736 data-nosnippet>736</a>        </span><span class="macro">assert_eq!</span>(p, Platform::Win32);
-<a href=#737 id=737 data-nosnippet>737</a>    }
+<a href=#682 id=682 data-nosnippet>682</a>        <span class="macro">assert_eq!</span>(
+<a href=#683 id=683 data-nosnippet>683</a>            parse_pe_file_version(<span class="kw-2">&amp;</span>buf),
+<a href=#684 id=684 data-nosnippet>684</a>            <span class="prelude-val">Some</span>((<span class="number">150</span>, <span class="string">"150.0.7871.114"</span>.to_string())),
+<a href=#685 id=685 data-nosnippet>685</a>            <span class="string">"must skip the decoy key and find the real resource behind it"
+<a href=#686 id=686 data-nosnippet>686</a>        </span>);
+<a href=#687 id=687 data-nosnippet>687</a>    }
+<a href=#688 id=688 data-nosnippet>688</a>
+<a href=#689 id=689 data-nosnippet>689</a>    <span class="doccomment">/// A bare `0xFEEF04BD` occurring in code/data must never be mistaken for the
+<a href=#690 id=690 data-nosnippet>690</a>    /// version block. Chrome 150 really does contain one ~475KB before the
+<a href=#691 id=691 data-nosnippet>691</a>    /// resource, decoding to `9340.36168.8075.18720`.
+<a href=#692 id=692 data-nosnippet>692</a>    </span><span class="attr">#[cfg(windows)]
+<a href=#693 id=693 data-nosnippet>693</a>    #[test]
+<a href=#694 id=694 data-nosnippet>694</a>    </span><span class="kw">fn </span>pe_version_parse_ignores_stray_signature_without_key() {
+<a href=#695 id=695 data-nosnippet>695</a>        <span class="kw">let </span><span class="kw-2">mut </span>buf: Vec&lt;u8&gt; = Vec::new();
+<a href=#696 id=696 data-nosnippet>696</a>        buf.extend_from_slice(<span class="kw-2">&amp;</span><span class="number">0xFEEF_04BDu32</span>.to_le_bytes());
+<a href=#697 id=697 data-nosnippet>697</a>        buf.extend_from_slice(<span class="kw-2">&amp;</span>[<span class="number">0xEF</span>; <span class="number">32</span>]);
+<a href=#698 id=698 data-nosnippet>698</a>        <span class="macro">assert_eq!</span>(parse_pe_file_version(<span class="kw-2">&amp;</span>buf), <span class="prelude-val">None</span>);
+<a href=#699 id=699 data-nosnippet>699</a>    }
+<a href=#700 id=700 data-nosnippet>700</a>
+<a href=#701 id=701 data-nosnippet>701</a>    <span class="attr">#[cfg(not(windows))]
+<a href=#702 id=702 data-nosnippet>702</a>    #[test]
+<a href=#703 id=703 data-nosnippet>703</a>    </span><span class="kw">fn </span>parses_chrome_and_chromium_version_banners() {
+<a href=#704 id=704 data-nosnippet>704</a>        <span class="macro">assert_eq!</span>(
+<a href=#705 id=705 data-nosnippet>705</a>            parse_version_banner(<span class="string">"Google Chrome 120.0.6099.234\n"</span>).unwrap(),
+<a href=#706 id=706 data-nosnippet>706</a>            (<span class="number">120</span>, <span class="string">"120.0.6099.234"</span>.to_string())
+<a href=#707 id=707 data-nosnippet>707</a>        );
+<a href=#708 id=708 data-nosnippet>708</a>        <span class="macro">assert_eq!</span>(
+<a href=#709 id=709 data-nosnippet>709</a>            parse_version_banner(<span class="string">"Chromium 120.0.6099.0\n"</span>).unwrap(),
+<a href=#710 id=710 data-nosnippet>710</a>            (<span class="number">120</span>, <span class="string">"120.0.6099.0"</span>.to_string())
+<a href=#711 id=711 data-nosnippet>711</a>        );
+<a href=#712 id=712 data-nosnippet>712</a>        <span class="macro">assert!</span>(parse_version_banner(<span class="string">"Opening in existing browser session.\n"</span>).is_err());
+<a href=#713 id=713 data-nosnippet>713</a>    }
+<a href=#714 id=714 data-nosnippet>714</a>
+<a href=#715 id=715 data-nosnippet>715</a>    <span class="attr">#[test]
+<a href=#716 id=716 data-nosnippet>716</a>    </span><span class="kw">fn </span>realistic_uam_macintel_chrome_120_matches_snapshot() {
+<a href=#717 id=717 data-nosnippet>717</a>        <span class="kw">let </span>uam = UserAgentMetadata::realistic(Platform::MacIntel, <span class="number">120</span>, <span class="string">"120.0.6099.234"</span>);
+<a href=#718 id=718 data-nosnippet>718</a>        <span class="macro">insta::assert_json_snapshot!</span>(<span class="string">"uam_macintel_chrome_120"</span>, uam);
+<a href=#719 id=719 data-nosnippet>719</a>    }
+<a href=#720 id=720 data-nosnippet>720</a>
+<a href=#721 id=721 data-nosnippet>721</a>    <span class="attr">#[test]
+<a href=#722 id=722 data-nosnippet>722</a>    </span><span class="kw">fn </span>realistic_uam_win32_chrome_120_matches_snapshot() {
+<a href=#723 id=723 data-nosnippet>723</a>        <span class="kw">let </span>uam = UserAgentMetadata::realistic(Platform::Win32, <span class="number">120</span>, <span class="string">"120.0.6099.234"</span>);
+<a href=#724 id=724 data-nosnippet>724</a>        <span class="macro">insta::assert_json_snapshot!</span>(<span class="string">"uam_win32_chrome_120"</span>, uam);
+<a href=#725 id=725 data-nosnippet>725</a>    }
+<a href=#726 id=726 data-nosnippet>726</a>
+<a href=#727 id=727 data-nosnippet>727</a>    <span class="attr">#[test]
+<a href=#728 id=728 data-nosnippet>728</a>    </span><span class="kw">fn </span>realistic_uam_linux_chrome_120_matches_snapshot() {
+<a href=#729 id=729 data-nosnippet>729</a>        <span class="kw">let </span>uam = UserAgentMetadata::realistic(Platform::LinuxX86_64, <span class="number">120</span>, <span class="string">"120.0.6099.234"</span>);
+<a href=#730 id=730 data-nosnippet>730</a>        <span class="macro">insta::assert_json_snapshot!</span>(<span class="string">"uam_linux_chrome_120"</span>, uam);
+<a href=#731 id=731 data-nosnippet>731</a>    }
+<a href=#732 id=732 data-nosnippet>732</a>}
+<a href=#733 id=733 data-nosnippet>733</a>
+<a href=#734 id=734 data-nosnippet>734</a><span class="attr">#[cfg(test)]
+<a href=#735 id=735 data-nosnippet>735</a>#[allow(clippy::panic, clippy::unwrap_used)]
+<a href=#736 id=736 data-nosnippet>736</a></span><span class="kw">mod </span>fingerprint_tests {
+<a href=#737 id=737 data-nosnippet>737</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
 <a href=#738 id=738 data-nosnippet>738</a>
 <a href=#739 id=739 data-nosnippet>739</a>    <span class="attr">#[test]
-<a href=#740 id=740 data-nosnippet>740</a>    </span><span class="kw">fn </span>fingerprint_recompose_updates_ua_and_uam() {
-<a href=#741 id=741 data-nosnippet>741</a>        <span class="kw">let </span><span class="kw-2">mut </span>fp = Fingerprint {
-<a href=#742 id=742 data-nosnippet>742</a>            platform: Platform::Win32,
-<a href=#743 id=743 data-nosnippet>743</a>            chrome_major: <span class="number">120</span>,
-<a href=#744 id=744 data-nosnippet>744</a>            chrome_full: <span class="string">"120.0.6099.234"</span>.into(),
-<a href=#745 id=745 data-nosnippet>745</a>            cpu_count: <span class="number">8</span>,
-<a href=#746 id=746 data-nosnippet>746</a>            memory_gb: <span class="number">8</span>,
-<a href=#747 id=747 data-nosnippet>747</a>            ua_string: String::new(),
-<a href=#748 id=748 data-nosnippet>748</a>            ua_metadata: UserAgentMetadata::realistic(Platform::Win32, <span class="number">120</span>, <span class="string">"120.0.6099.234"</span>),
-<a href=#749 id=749 data-nosnippet>749</a>            timezone: <span class="prelude-val">None</span>,
-<a href=#750 id=750 data-nosnippet>750</a>            locale: <span class="prelude-val">None</span>,
-<a href=#751 id=751 data-nosnippet>751</a>            languages: <span class="prelude-val">None</span>,
-<a href=#752 id=752 data-nosnippet>752</a>            screen: <span class="prelude-val">None</span>,
-<a href=#753 id=753 data-nosnippet>753</a>        };
-<a href=#754 id=754 data-nosnippet>754</a>        fp.recompose();
-<a href=#755 id=755 data-nosnippet>755</a>        <span class="macro">assert!</span>(fp.ua_string.contains(<span class="string">"Windows NT 10.0"</span>));
-<a href=#756 id=756 data-nosnippet>756</a>        <span class="comment">// The UA string carries the REDUCED version and the full build number
-<a href=#757 id=757 data-nosnippet>757</a>        // never reaches it — Chrome froze the minor/build/patch at `0.0.0` in
-<a href=#758 id=758 data-nosnippet>758</a>        // v110. This assertion used to demand the opposite.
-<a href=#759 id=759 data-nosnippet>759</a>        </span><span class="macro">assert!</span>(
-<a href=#760 id=760 data-nosnippet>760</a>            fp.ua_string.contains(<span class="string">"Chrome/120.0.0.0"</span>),
-<a href=#761 id=761 data-nosnippet>761</a>            <span class="string">"recompose must reduce the UA version: {}"</span>,
-<a href=#762 id=762 data-nosnippet>762</a>            fp.ua_string
-<a href=#763 id=763 data-nosnippet>763</a>        );
-<a href=#764 id=764 data-nosnippet>764</a>        <span class="macro">assert!</span>(
-<a href=#765 id=765 data-nosnippet>765</a>            !fp.ua_string.contains(<span class="string">"120.0.6099.234"</span>),
-<a href=#766 id=766 data-nosnippet>766</a>            <span class="string">"the full build number must not reach the UA string: {}"</span>,
-<a href=#767 id=767 data-nosnippet>767</a>            fp.ua_string
-<a href=#768 id=768 data-nosnippet>768</a>        );
-<a href=#769 id=769 data-nosnippet>769</a>        <span class="comment">// ...while UA-CH keeps it, which is the asymmetry a real Chrome shows.
-<a href=#770 id=770 data-nosnippet>770</a>        </span><span class="macro">assert!</span>(
-<a href=#771 id=771 data-nosnippet>771</a>            fp.ua_metadata
-<a href=#772 id=772 data-nosnippet>772</a>                .full_version_list
-<a href=#773 id=773 data-nosnippet>773</a>                .iter()
-<a href=#774 id=774 data-nosnippet>774</a>                .any(|b| b.version == <span class="string">"120.0.6099.234"</span>),
-<a href=#775 id=775 data-nosnippet>775</a>            <span class="string">"fullVersionList must still carry the complete version"
-<a href=#776 id=776 data-nosnippet>776</a>        </span>);
-<a href=#777 id=777 data-nosnippet>777</a>    }
-<a href=#778 id=778 data-nosnippet>778</a>
-<a href=#779 id=779 data-nosnippet>779</a>    <span class="attr">#[test]
-<a href=#780 id=780 data-nosnippet>780</a>    </span><span class="kw">fn </span>fallback_chrome_is_not_ancient() {
-<a href=#781 id=781 data-nosnippet>781</a>        <span class="comment">// Tripwire: forces a conscious bump when Chrome moves well past this floor.
-<a href=#782 id=782 data-nosnippet>782</a>        // Floor is 4 majors below the probed version (148) at the time of writing.
-<a href=#783 id=783 data-nosnippet>783</a>        </span><span class="kw">const </span>{
-<a href=#784 id=784 data-nosnippet>784</a>            <span class="macro">assert!</span>(
-<a href=#785 id=785 data-nosnippet>785</a>                FALLBACK_CHROME_MAJOR &gt;= <span class="number">144</span>,
-<a href=#786 id=786 data-nosnippet>786</a>                <span class="string">"FALLBACK_CHROME_MAJOR is stale; bump it (and this floor) to current stable"
-<a href=#787 id=787 data-nosnippet>787</a>            </span>)
-<a href=#788 id=788 data-nosnippet>788</a>        };
+<a href=#740 id=740 data-nosnippet>740</a>    </span><span class="kw">fn </span>clamp_cpu_count_floors_at_two() {
+<a href=#741 id=741 data-nosnippet>741</a>        <span class="macro">assert_eq!</span>(clamp_cpu_count(<span class="number">1</span>), <span class="number">2</span>);
+<a href=#742 id=742 data-nosnippet>742</a>        <span class="macro">assert_eq!</span>(clamp_cpu_count(<span class="number">0</span>), <span class="number">2</span>);
+<a href=#743 id=743 data-nosnippet>743</a>    }
+<a href=#744 id=744 data-nosnippet>744</a>
+<a href=#745 id=745 data-nosnippet>745</a>    <span class="attr">#[test]
+<a href=#746 id=746 data-nosnippet>746</a>    </span><span class="kw">fn </span>clamp_cpu_count_caps_at_thirty_two() {
+<a href=#747 id=747 data-nosnippet>747</a>        <span class="macro">assert_eq!</span>(clamp_cpu_count(<span class="number">64</span>), <span class="number">32</span>);
+<a href=#748 id=748 data-nosnippet>748</a>        <span class="macro">assert_eq!</span>(clamp_cpu_count(<span class="number">128</span>), <span class="number">32</span>);
+<a href=#749 id=749 data-nosnippet>749</a>    }
+<a href=#750 id=750 data-nosnippet>750</a>
+<a href=#751 id=751 data-nosnippet>751</a>    <span class="attr">#[test]
+<a href=#752 id=752 data-nosnippet>752</a>    </span><span class="kw">fn </span>clamp_cpu_count_preserves_normal_values() {
+<a href=#753 id=753 data-nosnippet>753</a>        <span class="macro">assert_eq!</span>(clamp_cpu_count(<span class="number">8</span>), <span class="number">8</span>);
+<a href=#754 id=754 data-nosnippet>754</a>        <span class="macro">assert_eq!</span>(clamp_cpu_count(<span class="number">16</span>), <span class="number">16</span>);
+<a href=#755 id=755 data-nosnippet>755</a>    }
+<a href=#756 id=756 data-nosnippet>756</a>
+<a href=#757 id=757 data-nosnippet>757</a>    <span class="attr">#[test]
+<a href=#758 id=758 data-nosnippet>758</a>    </span><span class="kw">fn </span>round_navigator_memory_caps_at_eight() {
+<a href=#759 id=759 data-nosnippet>759</a>        <span class="macro">assert_eq!</span>(round_to_navigator_memory(<span class="number">16</span>), <span class="number">8</span>);
+<a href=#760 id=760 data-nosnippet>760</a>        <span class="macro">assert_eq!</span>(round_to_navigator_memory(<span class="number">64</span>), <span class="number">8</span>);
+<a href=#761 id=761 data-nosnippet>761</a>    }
+<a href=#762 id=762 data-nosnippet>762</a>
+<a href=#763 id=763 data-nosnippet>763</a>    <span class="attr">#[test]
+<a href=#764 id=764 data-nosnippet>764</a>    </span><span class="kw">fn </span>round_navigator_memory_floors_at_four() {
+<a href=#765 id=765 data-nosnippet>765</a>        <span class="macro">assert_eq!</span>(round_to_navigator_memory(<span class="number">1</span>), <span class="number">4</span>);
+<a href=#766 id=766 data-nosnippet>766</a>        <span class="macro">assert_eq!</span>(round_to_navigator_memory(<span class="number">3</span>), <span class="number">4</span>);
+<a href=#767 id=767 data-nosnippet>767</a>    }
+<a href=#768 id=768 data-nosnippet>768</a>
+<a href=#769 id=769 data-nosnippet>769</a>    <span class="attr">#[test]
+<a href=#770 id=770 data-nosnippet>770</a>    </span><span class="kw">fn </span>round_navigator_memory_eight_stays_eight() {
+<a href=#771 id=771 data-nosnippet>771</a>        <span class="macro">assert_eq!</span>(round_to_navigator_memory(<span class="number">8</span>), <span class="number">8</span>);
+<a href=#772 id=772 data-nosnippet>772</a>    }
+<a href=#773 id=773 data-nosnippet>773</a>
+<a href=#774 id=774 data-nosnippet>774</a>    <span class="attr">#[test]
+<a href=#775 id=775 data-nosnippet>775</a>    </span><span class="kw">fn </span>detect_memory_gb_works_on_real_system() {
+<a href=#776 id=776 data-nosnippet>776</a>        <span class="kw">let </span>gb = detect_memory_gb().expect(<span class="string">"real system should have RAM"</span>);
+<a href=#777 id=777 data-nosnippet>777</a>        <span class="macro">assert!</span>(gb == <span class="number">4 </span>|| gb == <span class="number">8</span>, <span class="string">"got {gb}"</span>);
+<a href=#778 id=778 data-nosnippet>778</a>    }
+<a href=#779 id=779 data-nosnippet>779</a>
+<a href=#780 id=780 data-nosnippet>780</a>    <span class="attr">#[test]
+<a href=#781 id=781 data-nosnippet>781</a>    </span><span class="kw">fn </span>detect_platform_returns_expected_for_host() {
+<a href=#782 id=782 data-nosnippet>782</a>        <span class="kw">let </span>p = detect_platform();
+<a href=#783 id=783 data-nosnippet>783</a>        <span class="attr">#[cfg(target_os = <span class="string">"macos"</span>)]
+<a href=#784 id=784 data-nosnippet>784</a>        </span><span class="macro">assert_eq!</span>(p, Platform::MacIntel);
+<a href=#785 id=785 data-nosnippet>785</a>        <span class="attr">#[cfg(target_os = <span class="string">"linux"</span>)]
+<a href=#786 id=786 data-nosnippet>786</a>        </span><span class="macro">assert_eq!</span>(p, Platform::LinuxX86_64);
+<a href=#787 id=787 data-nosnippet>787</a>        <span class="attr">#[cfg(target_os = <span class="string">"windows"</span>)]
+<a href=#788 id=788 data-nosnippet>788</a>        </span><span class="macro">assert_eq!</span>(p, Platform::Win32);
 <a href=#789 id=789 data-nosnippet>789</a>    }
-<a href=#790 id=790 data-nosnippet>790</a>}
+<a href=#790 id=790 data-nosnippet>790</a>
+<a href=#791 id=791 data-nosnippet>791</a>    <span class="attr">#[test]
+<a href=#792 id=792 data-nosnippet>792</a>    </span><span class="kw">fn </span>fingerprint_recompose_updates_ua_and_uam() {
+<a href=#793 id=793 data-nosnippet>793</a>        <span class="kw">let </span><span class="kw-2">mut </span>fp = Fingerprint {
+<a href=#794 id=794 data-nosnippet>794</a>            platform: Platform::Win32,
+<a href=#795 id=795 data-nosnippet>795</a>            chrome_major: <span class="number">120</span>,
+<a href=#796 id=796 data-nosnippet>796</a>            chrome_full: <span class="string">"120.0.6099.234"</span>.into(),
+<a href=#797 id=797 data-nosnippet>797</a>            cpu_count: <span class="number">8</span>,
+<a href=#798 id=798 data-nosnippet>798</a>            memory_gb: <span class="number">8</span>,
+<a href=#799 id=799 data-nosnippet>799</a>            ua_string: String::new(),
+<a href=#800 id=800 data-nosnippet>800</a>            ua_metadata: UserAgentMetadata::realistic(Platform::Win32, <span class="number">120</span>, <span class="string">"120.0.6099.234"</span>),
+<a href=#801 id=801 data-nosnippet>801</a>            timezone: <span class="prelude-val">None</span>,
+<a href=#802 id=802 data-nosnippet>802</a>            locale: <span class="prelude-val">None</span>,
+<a href=#803 id=803 data-nosnippet>803</a>            languages: <span class="prelude-val">None</span>,
+<a href=#804 id=804 data-nosnippet>804</a>            screen: <span class="prelude-val">None</span>,
+<a href=#805 id=805 data-nosnippet>805</a>        };
+<a href=#806 id=806 data-nosnippet>806</a>        fp.recompose();
+<a href=#807 id=807 data-nosnippet>807</a>        <span class="macro">assert!</span>(fp.ua_string.contains(<span class="string">"Windows NT 10.0"</span>));
+<a href=#808 id=808 data-nosnippet>808</a>        <span class="comment">// The UA string carries the REDUCED version and the full build number
+<a href=#809 id=809 data-nosnippet>809</a>        // never reaches it — Chrome froze the minor/build/patch at `0.0.0` in
+<a href=#810 id=810 data-nosnippet>810</a>        // v110. This assertion used to demand the opposite.
+<a href=#811 id=811 data-nosnippet>811</a>        </span><span class="macro">assert!</span>(
+<a href=#812 id=812 data-nosnippet>812</a>            fp.ua_string.contains(<span class="string">"Chrome/120.0.0.0"</span>),
+<a href=#813 id=813 data-nosnippet>813</a>            <span class="string">"recompose must reduce the UA version: {}"</span>,
+<a href=#814 id=814 data-nosnippet>814</a>            fp.ua_string
+<a href=#815 id=815 data-nosnippet>815</a>        );
+<a href=#816 id=816 data-nosnippet>816</a>        <span class="macro">assert!</span>(
+<a href=#817 id=817 data-nosnippet>817</a>            !fp.ua_string.contains(<span class="string">"120.0.6099.234"</span>),
+<a href=#818 id=818 data-nosnippet>818</a>            <span class="string">"the full build number must not reach the UA string: {}"</span>,
+<a href=#819 id=819 data-nosnippet>819</a>            fp.ua_string
+<a href=#820 id=820 data-nosnippet>820</a>        );
+<a href=#821 id=821 data-nosnippet>821</a>        <span class="comment">// ...while UA-CH keeps it, which is the asymmetry a real Chrome shows.
+<a href=#822 id=822 data-nosnippet>822</a>        </span><span class="macro">assert!</span>(
+<a href=#823 id=823 data-nosnippet>823</a>            fp.ua_metadata
+<a href=#824 id=824 data-nosnippet>824</a>                .full_version_list
+<a href=#825 id=825 data-nosnippet>825</a>                .iter()
+<a href=#826 id=826 data-nosnippet>826</a>                .any(|b| b.version == <span class="string">"120.0.6099.234"</span>),
+<a href=#827 id=827 data-nosnippet>827</a>            <span class="string">"fullVersionList must still carry the complete version"
+<a href=#828 id=828 data-nosnippet>828</a>        </span>);
+<a href=#829 id=829 data-nosnippet>829</a>    }
+<a href=#830 id=830 data-nosnippet>830</a>
+<a href=#831 id=831 data-nosnippet>831</a>    <span class="attr">#[test]
+<a href=#832 id=832 data-nosnippet>832</a>    </span><span class="kw">fn </span>fallback_chrome_is_not_ancient() {
+<a href=#833 id=833 data-nosnippet>833</a>        <span class="comment">// Tripwire: forces a conscious bump when Chrome moves well past this floor.
+<a href=#834 id=834 data-nosnippet>834</a>        // Floor is 4 majors below the probed version (148) at the time of writing.
+<a href=#835 id=835 data-nosnippet>835</a>        </span><span class="kw">const </span>{
+<a href=#836 id=836 data-nosnippet>836</a>            <span class="macro">assert!</span>(
+<a href=#837 id=837 data-nosnippet>837</a>                FALLBACK_CHROME_MAJOR &gt;= <span class="number">144</span>,
+<a href=#838 id=838 data-nosnippet>838</a>                <span class="string">"FALLBACK_CHROME_MAJOR is stale; bump it (and this floor) to current stable"
+<a href=#839 id=839 data-nosnippet>839</a>            </span>)
+<a href=#840 id=840 data-nosnippet>840</a>        };
+<a href=#841 id=841 data-nosnippet>841</a>    }
+<a href=#842 id=842 data-nosnippet>842</a>}
 </code></pre></div></section></main></body></html>

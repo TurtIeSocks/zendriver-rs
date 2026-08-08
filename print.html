@@ -623,7 +623,7 @@ use zendriver::stealth::Platform;
     .cpu_count(8)               // navigator.hardwareConcurrency
     .chrome_version(126)        // Chrome major in UA + Sec-CH-UA
     .platform(Platform::Win32)  // navigator.platform + OS in UA
-    .locale("en-US")            // navigator.language + --lang flag
+    .locale("en-US")            // navigator.language + Accept-Language + --lang
     .timezone("America/New_York");
 
 let browser = Browser::builder()
@@ -632,6 +632,19 @@ let browser = Browser::builder()
     .await?;
 <span class="boring">Ok(()) }
 </span><span class="boring">}</span></code></pre></pre>
+<p><code>locale</code> alone is usually enough. It sets the <code>--lang</code> launch flag, the
+JS-visible locale that <code>navigator.language</code> and <code>Intl</code> read, and an
+<code>Accept-Language</code> derived from it (<code>en-US</code> gives <code>en-US,en;q=0.9</code>). Reach
+for <code>.languages([...])</code> when you need the header to advertise a longer or
+differently-weighted list. Its first entry then becomes
+<code>navigator.language</code> as well, because Chrome always reports that as
+<code>navigator.languages[0]</code>, and a locale sitting outside the advertised
+list is a mismatch no real browser produces.</p>
+<p>A <a href="https://docs.rs/zendriver-stealth/latest/zendriver_stealth/struct.Persona.html"><code>Persona</code></a>
+carries the same <code>timezone</code> / <code>locale</code> / <code>languages</code> / <code>screen</code> fields,
+and whichever ones it sets take precedence over the profile's. Anything
+it leaves unset falls through to the values above, so a persona can pin
+one axis without restating the rest.</p>
 <p>You can also override the User-Agent string verbatim — useful when
 you need an exact UA that doesn't match the auto-composed one:</p>
 <pre><pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]

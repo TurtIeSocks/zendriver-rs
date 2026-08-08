@@ -2,8 +2,8 @@
 <p>Ports the canonical conditional-probability-table form: each node’s
 distribution is conditioned on its parents’ sampled values, walked through a
 nested <code>conditionalProbabilities</code> <code>deeper</code>/<code>skip</code> tree. Sampling is
-<strong>deterministic</strong> in the <a href="../../zendriver_stealth/persona/seed/struct.Seed.html" title="struct zendriver_stealth::persona::seed::Seed"><code>Seed</code></a> (a seeded Mulberry32 stream) and yields an
-internally <strong>coherent</strong>, <strong>desktop</strong> <a href="../../zendriver_stealth/persona/struct.Persona.html" title="struct zendriver_stealth::persona::Persona"><code>Persona</code></a>: the single root <code>userAgent</code>
+<strong>deterministic</strong> in the [<code>Seed</code>] (a seeded Mulberry32 stream) and yields an
+internally <strong>coherent</strong>, <strong>desktop</strong> [<code>Persona</code>]: the single root <code>userAgent</code>
 node is restricted to non-mobile UAs, and every other attribute is sampled
 conditioned on it.</p>
 <p>The network is fetched on first use and cached (see <a href="struct.Generator.html#method.load_or_download" title="associated function zendriver_fingerprints::generative::Generator::load_or_download"><code>Generator::load_or_download</code></a>).
