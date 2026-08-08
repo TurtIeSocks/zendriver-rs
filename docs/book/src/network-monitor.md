@@ -98,11 +98,19 @@ already buffered before the enable call landed are emitted as the first
 chunk, so nothing from that window is lost.
 
 **Chrome version / graceful fallback:** `Network.streamResourceContent`
-needs roughly Chrome 124+. On an older Chrome the enable call errors — the
-monitor logs one `tracing::warn!` (not once per request) and simply never
-emits `HttpData` for that session; [`NetworkExchange::body`] keeps working as
-the whole-body fallback the entire time. The monitor never fails or ends over
-this.
+needs roughly Chrome 124+. On an older Chrome the enable call comes back
+"method not found" — the monitor logs one `tracing::warn!` (not once per
+request), stops issuing the call, and simply never emits `HttpData` for that
+session.
+
+Other enable errors are treated as being about that one request rather than
+about the browser, and streaming stays on for the next one. The common case is
+a response that finished loading before the enable call landed, which a fast
+(especially loopback) resource can lose without saying anything about anything
+else; that one is logged at debug. Anything else warns once.
+
+Either way [`NetworkExchange::body`] keeps working as the whole-body fallback
+the entire time, and the monitor never fails or ends over this.
 
 Off by default — streaming every response is wasted CDP round-trips when
 bodies are small; opt in only when you need bytes as they arrive rather than

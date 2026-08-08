@@ -167,42 +167,68 @@ struct RequestPayload {
 /// the `tx`, and exits. Subscription registers synchronously before the
 /// returned [`RequestExpectation`] is constructed so events fired
 /// immediately after a trigger action cannot slip past us.
+///
+/// The task also exits as soon as the receiver goes away — dropping the
+/// [`RequestExpectation`] (including on timeout) closes the channel, and the
+/// subscribe loop selects on that. Otherwise a caller who gave up would leave
+/// a task decoding every request on the session for as long as it lives.
 pub(crate) fn register(session: &SessionHandle, matcher: UrlMatcher) -> RequestExpectation {
-    let (tx, rx) = oneshot::channel();
+    // Dropping the handle detaches the task, which is exactly what this used
+    // to do; `register_with_handle` exists so the tests can join it.
+    register_with_handle(session, matcher).0
+}
+
+/// [`register`], plus the subscriber task's handle.
+///
+/// Split out for the tests: proving the task exits on drop needs a join point,
+/// and the alternative — watching the runtime's alive-task count — is a claim
+/// about what else happens to be running, which silently stops holding.
+fn register_with_handle(
+    session: &SessionHandle,
+    matcher: UrlMatcher,
+) -> (RequestExpectation, tokio::task::JoinHandle<()>) {
+    let (mut tx, rx) = oneshot::channel();
     let mut stream =
         crate::expect::watch::<RequestWillBeSentEvent>(session, "Network.requestWillBeSent");
-    tokio::spawn(async move {
-        while let Some(res) = stream.next().await {
-            match res {
-                Ok(ev) => {
-                    if matcher.matches(&ev.request.url) {
-                        let matched = MatchedRequest {
-                            url: ev.request.url,
-                            method: ev.request.method,
-                            headers: ev.request.headers,
-                            post_data: ev.request.post_data.map(String::into_bytes),
-                            request_id: ev.request_id,
-                        };
-                        // Send is fallible only if the receiver was
-                        // dropped; in that case the caller no longer
-                        // cares and we just exit.
-                        let _ = tx.send(Ok(matched));
-                        return;
+    let task = tokio::spawn(async move {
+        let outcome = loop {
+            tokio::select! {
+                // The caller dropped the expectation, so nobody is waiting
+                // for a result. Exit instead of consuming events for the
+                // rest of the session.
+                () = tx.closed() => return,
+                next = stream.next() => match next {
+                    Some(Ok(ev)) => {
+                        if matcher.matches(&ev.request.url) {
+                            break Ok(MatchedRequest {
+                                url: ev.request.url,
+                                method: ev.request.method,
+                                headers: ev.request.headers,
+                                post_data: ev.request.post_data.map(String::into_bytes),
+                                request_id: ev.request_id,
+                            });
+                        }
+                        // Non-matching request — keep waiting.
                     }
-                    // Non-matching request — keep waiting.
-                }
-                Err(e) => {
-                    let _ = tx.send(Err(e));
-                    return;
-                }
+                    Some(Err(e)) => break Err(e),
+                    // Stream ended without a match; drop `tx` so the
+                    // expectation resolves via its `Poll::Ready(Err(_))` arm.
+                    None => return,
+                },
             }
-        }
+        };
+        // Send is fallible only if the receiver was dropped between the last
+        // poll and here; in that case the caller no longer cares.
+        let _ = tx.send(outcome);
     });
-    RequestExpectation {
-        rx,
-        timeout: DEFAULT_EXPECT_TIMEOUT,
-        sleep: None,
-    }
+    (
+        RequestExpectation {
+            rx,
+            timeout: DEFAULT_EXPECT_TIMEOUT,
+            sleep: None,
+        },
+        task,
+    )
 }
 
 #[cfg(test)]
@@ -350,6 +376,36 @@ mod tests {
             matches!(res, Err(ZendriverError::EventStreamIncomplete)),
             "expected EventStreamIncomplete after a Lagged boundary, got {res:?}",
         );
+
+        conn.shutdown();
+    }
+
+    /// Dropping the expectation must stop the subscriber task. Otherwise every
+    /// abandoned (or timed-out) `expect_request` leaves a task decoding every
+    /// request on the session for as long as the session lives.
+    ///
+    /// Joined through the task's own handle rather than watched through the
+    /// runtime's alive-task count — that count depends on what else happens to
+    /// be running, and the day it stops holding this test reads its answer
+    /// early and passes.
+    #[tokio::test]
+    async fn subscriber_task_exits_when_expectation_is_dropped() {
+        let (_mock, conn) = MockConnection::pair();
+        let session = SessionHandle::new(conn.clone(), "S1");
+
+        let (expectation, task) = register_with_handle(&session, UrlMatcher::from("/api/"));
+        tokio::task::yield_now().await;
+        assert!(
+            !task.is_finished(),
+            "subscriber task should be running while the expectation is alive"
+        );
+
+        drop(expectation);
+
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("subscriber task still alive 2s after the expectation was dropped")
+            .expect("subscriber task panicked");
 
         conn.shutdown();
     }

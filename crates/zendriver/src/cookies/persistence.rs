@@ -27,19 +27,38 @@ use tokio::fs;
 
 use crate::cookies::CookieJar;
 use crate::error::Result;
+use crate::io::write_atomic;
 
 impl CookieJar {
     /// Snapshot the cookie store to a JSON file at `path`.
     ///
     /// Issues a single `Storage.getCookies` round-trip, then writes the
-    /// pretty-printed array via [`tokio::fs::write`]. The file is
-    /// overwritten if it already exists. Parent directories must already
-    /// exist — `save_to_file` does not create them.
+    /// pretty-printed array. The write is atomic — a sibling temp file is
+    /// filled and renamed over the destination — so an interrupted save
+    /// leaves the previous file intact instead of a truncated one that no
+    /// longer parses. The file is overwritten if it already exists. Parent
+    /// directories must already exist — `save_to_file` does not create them.
+    ///
+    /// On Unix an existing file keeps its permissions across saves, and a file
+    /// created by this call is `0600`: it holds live session cookies, so the
+    /// default is owner-only rather than whatever the process umask allows.
+    /// Because the write finishes with a `rename`, a `path` that is a *symlink*
+    /// is replaced by a regular file — the link target stops receiving saves.
+    /// Pass the real path if you were relying on that indirection.
     ///
     /// # Errors
     ///
     /// Returns [`crate::ZendriverError::Io`] if the path is unwritable;
     /// [`crate::ZendriverError::Transport`] / `Cdp` on CDP failures.
+    ///
+    /// Because the save fills a sibling temp file and renames it over the
+    /// destination, it needs more than a writable destination: the *parent
+    /// directory* must be writable and executable, and the rename must be able
+    /// to replace what is at `path`. A destination that cannot be replaced by a
+    /// rename therefore fails even though it is perfectly writable — a
+    /// bind-mounted single file (`docker run -v $PWD/cookies.json:/app/cookies.json`)
+    /// is the common case, and a file held open by another process is the
+    /// Windows one.
     ///
     /// # Examples
     ///
@@ -52,7 +71,7 @@ impl CookieJar {
     pub async fn save_to_file(&self, path: impl AsRef<Path>) -> Result<()> {
         let cookies = self.all().await?;
         let bytes = serde_json::to_vec_pretty(&cookies)?;
-        fs::write(path, bytes).await?;
+        write_atomic(path.as_ref(), &bytes).await?;
         Ok(())
     }
 
@@ -84,16 +103,20 @@ impl CookieJar {
 
     /// Snapshot only the cookies matching `filter` to a JSON file at `path`.
     ///
-    /// Like [`Self::save_to_file`], but applies the `filter` predicate to
-    /// the result of [`CookieJar::all`] before writing — handy for
-    /// persisting just one site's cookies out of a shared store. The
-    /// predicate receives each [`crate::cookies::Cookie`] by reference and
-    /// returns `true` to keep it.
+    /// Like [`Self::save_to_file`] — including the atomic temp-file-then-
+    /// rename write and its permission/symlink behavior — but applies the
+    /// `filter` predicate to the result of
+    /// [`CookieJar::all`] before writing, handy for persisting just one
+    /// site's cookies out of a shared store. The predicate receives each
+    /// [`crate::cookies::Cookie`] by reference and returns `true` to keep it.
     ///
     /// # Errors
     ///
     /// Returns [`crate::ZendriverError::Io`] if the path is unwritable;
-    /// [`crate::ZendriverError::Transport`] / `Cdp` on CDP failures.
+    /// [`crate::ZendriverError::Transport`] / `Cdp` on CDP failures. The
+    /// temp-file-and-rename requirements are [`Self::save_to_file`]'s, in
+    /// full: a writable, executable parent directory, and a destination a
+    /// rename can replace.
     ///
     /// # Examples
     ///
@@ -118,7 +141,7 @@ impl CookieJar {
             .filter(|c| filter(c))
             .collect();
         let bytes = serde_json::to_vec_pretty(&cookies)?;
-        fs::write(path, bytes).await?;
+        write_atomic(path.as_ref(), &bytes).await?;
         Ok(())
     }
 
@@ -160,13 +183,109 @@ impl CookieJar {
 }
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use serde_json::json;
     use zendriver_transport::testing::MockConnection;
 
     use crate::cookies::{CookieJar, SameSite};
     use crate::error::ZendriverError;
+
+    /// Count the entries in a directory — the cheap proxy for "the temp file
+    /// was renamed, not left behind".
+    fn dir_entry_count(dir: &std::path::Path) -> usize {
+        std::fs::read_dir(dir).unwrap().count()
+    }
+
+    /// Mode of `path`, permission bits only. Unix-only helper for the
+    /// permission tests below. (The helper's exhaustive coverage — the
+    /// setuid/setgid carry-over, the mid-write window, the exclusive create —
+    /// lives with the helper itself in [`crate::io`]; what is left here is the
+    /// jar's own end-to-end behavior.)
+    #[cfg(unix)]
+    fn mode_of(path: &std::path::Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    /// Drive one save through the chosen public entry point, answering the
+    /// `Storage.getCookies` round-trip with a single cookie, and return once
+    /// the file is on disk.
+    ///
+    /// `matching` picks `save_to_file_matching` (with a keep-everything
+    /// predicate) over `save_to_file`, so a caller that loops over both values
+    /// asserts its property against *both* save paths — which is the whole
+    /// point of the tests below, since the two call the write helper
+    /// independently and only one of them might be changed.
+    async fn save_one_cookie(path: &std::path::Path, matching: bool) {
+        let (mut mock, conn) = MockConnection::pair();
+        let jar = CookieJar::new(conn.clone());
+
+        let save = tokio::spawn({
+            let j = jar.clone();
+            let p = path.to_path_buf();
+            async move {
+                if matching {
+                    j.save_to_file_matching(p, |_| true).await
+                } else {
+                    j.save_to_file(p).await
+                }
+            }
+        });
+
+        let id = mock.expect_cmd("Storage.getCookies").await;
+        mock.reply(
+            id,
+            json!({
+                "cookies": [
+                    { "name": "a", "value": "1", "domain": ".x.test", "path": "/",
+                      "httpOnly": false, "secure": false },
+                ]
+            }),
+        )
+        .await;
+        save.await.unwrap().unwrap();
+
+        conn.shutdown();
+    }
+
+    /// Read back what [`save_one_cookie`] wrote.
+    fn saved_cookies(path: &std::path::Path) -> Vec<crate::cookies::Cookie> {
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+    }
+
+    /// A mode the user chose on the jar survives a save.
+    ///
+    /// `0640` rather than `0600` on purpose: it is both narrower than the
+    /// `0644` a default umask produces *and* different from the `0600` the temp
+    /// file is created with, so this is the fixture that notices if the
+    /// destination-mode carry-over inside [`crate::io::write_atomic`] is
+    /// dropped. A `0600` jar would come back `0600` either way and assert
+    /// nothing.
+    ///
+    /// It says nothing about *which* write the jar used — `fs::write` on an
+    /// existing inode preserves its mode too. The two tests that can tell the
+    /// writes apart are [`both_save_paths_write_atomically`] and
+    /// [`both_save_paths_replace_a_symlinked_destination`].
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn save_to_file_preserves_the_destination_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cookies.json");
+        std::fs::write(&path, b"stale").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+
+        save_one_cookie(&path, false).await;
+
+        let mode = mode_of(&path);
+        assert_eq!(
+            mode, 0o640,
+            "a save must carry the destination's own mode over, got {mode:o}"
+        );
+        assert_eq!(dir_entry_count(dir.path()), 1, "no temp file may be left");
+    }
 
     /// End-to-end round-trip: dump the cookie store to disk, then load it back
     /// into a fresh jar. The mock receives `Storage.getCookies` on save,
@@ -373,5 +492,102 @@ mod tests {
         load.await.unwrap().unwrap();
 
         conn.shutdown();
+    }
+
+    /// Both save paths must reach the destination through
+    /// [`crate::io::write_atomic`] rather than a plain `fs::write`, and the
+    /// assertion that separates the two is the mode of a **jar that did not
+    /// exist yet**: the helper creates its temp file `0600` whatever the
+    /// ambient umask is, while `fs::write` creates at `0666 & ~umask`.
+    ///
+    /// Asserting on an *existing* destination cannot make that distinction —
+    /// `O_WRONLY|O_CREAT|O_TRUNC` on a live inode ignores its mode argument, so
+    /// both writes leave the previous permissions in place. That is why this
+    /// test starts from an empty directory.
+    ///
+    /// One environment caveat on the discriminating power, the same one
+    /// [`crate::io`]'s own mid-write test carries: under a `0077` umask or
+    /// tighter `fs::write` also lands on `0600` and this proves nothing.
+    /// [`both_save_paths_replace_a_symlinked_destination`] is the half that
+    /// holds regardless of umask.
+    ///
+    /// The second save, over a longer stale file, then shows the rename
+    /// replacing the content rather than overwriting a prefix of it, and the
+    /// directory count shows the temp file was renamed rather than abandoned.
+    #[tokio::test]
+    async fn both_save_paths_write_atomically() {
+        for matching in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("cookies.json");
+            assert!(
+                !path.exists(),
+                "matching={matching}: the mode assertion below only means something \
+                 for a destination this save creates"
+            );
+
+            save_one_cookie(&path, matching).await;
+
+            #[cfg(unix)]
+            {
+                let mode = mode_of(&path);
+                assert_eq!(
+                    mode, 0o600,
+                    "matching={matching}: a jar created by a save holds live session \
+                     cookies and must be owner-only, got {mode:o}"
+                );
+            }
+            assert_eq!(saved_cookies(&path).len(), 1, "matching={matching}");
+            assert_eq!(
+                dir_entry_count(dir.path()),
+                1,
+                "matching={matching}: save must leave no temp file behind"
+            );
+
+            std::fs::write(&path, b"stale-and-longer-than-the-new-content").unwrap();
+            save_one_cookie(&path, matching).await;
+
+            let parsed = saved_cookies(&path);
+            assert_eq!(parsed.len(), 1, "matching={matching}");
+            assert_eq!(parsed[0].name, "a", "matching={matching}");
+            assert_eq!(
+                dir_entry_count(dir.path()),
+                1,
+                "matching={matching}: the second save must leave no temp file either"
+            );
+        }
+    }
+
+    /// The umask-independent half: `fs::write` follows a symlinked destination
+    /// and writes through to its target, while the atomic write finishes with a
+    /// `rename` that unlinks the symlink and leaves a regular file in its
+    /// place. No ambient setting changes that, so this separates the two writes
+    /// on every box.
+    ///
+    /// It doubles as the pin for the behavior change `save_to_file`'s rustdoc
+    /// warns about: a caller who symlinked their jar at some canonical store
+    /// stops feeding that store.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn both_save_paths_replace_a_symlinked_destination() {
+        for matching in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let real = dir.path().join("real.json");
+            let link = dir.path().join("cookies.json");
+            std::fs::write(&real, b"original").unwrap();
+            std::os::unix::fs::symlink(&real, &link).unwrap();
+
+            save_one_cookie(&link, matching).await;
+
+            assert!(
+                !std::fs::symlink_metadata(&link).unwrap().is_symlink(),
+                "matching={matching}: the rename must leave a regular file where the link was"
+            );
+            assert_eq!(saved_cookies(&link).len(), 1, "matching={matching}");
+            assert_eq!(
+                std::fs::read(&real).unwrap(),
+                b"original",
+                "matching={matching}: the link target must stop receiving saves"
+            );
+        }
     }
 }
