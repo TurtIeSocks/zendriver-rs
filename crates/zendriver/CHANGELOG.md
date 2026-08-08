@@ -5,6 +5,36 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+### Fixed
+
+- Clipped screenshots no longer come back blank when the rect reaches past the
+  area Chrome has rendered. `captureBeyondViewport` now goes out on every
+  clipped capture rather than only on full-page ones. A clip that was already
+  on screen is unaffected: measured on Chrome 151, it comes back byte-identical
+  with and without the flag.
+- `Element::screenshot` now sends `captureBeyondViewport`, so an element taller
+  than the viewport is captured whole instead of part-blank.
+- Text needles containing a quote no longer build a malformed XPath.
+  `text_exact("it's")` used to raise a `JsException` rather than match, because
+  the needle was quoted by swapping double quotes for single ones; needles are
+  now rendered as proper XPath literals, falling back to `concat()` when both
+  quote kinds are present.
+- `text_equals` no longer disagrees with `text_exact` on `&nbsp;` markup. The
+  page-side whitespace fold used `trim()`, which strips U+00A0, U+FEFF and the
+  Unicode space separators that XPath `normalize-space()` leaves alone. Both
+  operands now fold the XPath way, which moves matching in both directions:
+  interior runs collapse, so `text_equals("Hello world")` matches
+  `<b>Hello   world</b>` where it previously could not; edge U+00A0 and U+FEFF
+  survive instead of being trimmed, so `text_equals("OK")` no longer matches
+  `<b>&nbsp;OK</b>` — use `text("OK")` or put the character in the needle.
+- Element-scoped `text_exact` searched the whole document. The XPath it built
+  was anchored at the document root, so
+  `card.find().text_exact("Cancel").one()` could return an element from a
+  different card; the expression is now relative to the element the query is
+  scoped to. `text` (substring) was already scoped correctly.
+
+## [0.5.5] - 2026-08-07
+
 ## [0.5.10] - 2026-08-08
 
 ### Fixed

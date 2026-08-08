@@ -1,16 +1,22 @@
 //! Selector kinds + CDP/JS resolution. Covers CSS, XPath, Text,
 //! TextRegex, and Role selectors.
 //!
-//! The live `FindBuilder` / `FindAllBuilder` entry points resolve
-//! through `SelectorKind::resolve_many_inner` (`.one()` takes the
-//! best-match head; `.many()` returns the whole vec); `Element::refresh`
-//! also drives `resolve_many`. The single-match `resolve_one` /
-//! `resolve_*_one` family is exercised only by this file's tests — its
-//! `#[allow(dead_code)]` is scoped to the wrapper so the lib-target
-//! (cfg-test-off) build still stays warning-clean.
+//! Every entry point resolves through `SelectorKind::resolve_many_inner`:
+//! `FindBuilder`'s `.one()` takes the best-match head, `FindAllBuilder`'s
+//! `.many()` returns the whole vec, and `Element::refresh` drives
+//! `resolve_many`. There is deliberately **no** single-match resolver
+//! family. One existed until it was deleted: a parallel `resolve_one` /
+//! `resolve_*_one` set that production never called, kept alive by
+//! `#[allow(dead_code)]` and pointed at by six tests. It silently drifted
+//! from the shipping path — a needle-normalization fix landed in both
+//! copies, and only the dead one was covered, so deleting the fix from the
+//! live path left the whole suite green. Resolver tests must therefore
+//! drive `resolve_many` / `resolve_many_inner`; if a single-match
+//! specialization is ever wanted for its cheaper wire shape, it belongs
+//! behind `resolve_many_inner` rather than beside it.
 //!
 //! Role resolution: role-only queries compile to a `[role="..."]`
-//! CSS attribute selector and reuse `resolve_css_one`/`resolve_css_many`
+//! CSS attribute selector and reuse `resolve_css_many`
 //! directly. Role + accessible-name queries do the same CSS pass first
 //! to get all candidates, then post-filter via
 //! `Accessibility.getPartialAXTree { backendNodeId, fetchRelatives: false }`
@@ -126,50 +132,23 @@ pub(crate) enum SelectorKind {
 }
 
 impl SelectorKind {
-    /// Resolve this selector against `scope` and return the first match
-    /// (or `None` if nothing matched). Element-scoped queries traverse
-    /// only the scope element's subtree; tab-scoped queries traverse
-    /// the whole document.
-    #[allow(dead_code)] // Exercised only by this file's #[cfg(test)] tests; the
-    // live `.one()` path resolves via `resolve_many_inner` (best-match ordering),
-    // not this wrapper. Kept as the single-match analogue that the resolver tests
-    // drive directly.
-    pub(crate) async fn resolve_one(&self, scope: &QueryScope<'_>) -> Result<Option<RemoteRef>> {
-        self.resolve_one_inner(scope, false).await
-    }
-
-    /// `resolve_one` with the cross-cutting `best_match` flag.
-    /// `best_match` only affects text selectors (`Text` / `TextRegex`),
-    /// where the JS collector re-sorts candidates by closest text length
-    /// before `[0]` is taken; it is a no-op for css/xpath/role.
-    pub(crate) async fn resolve_one_inner(
-        &self,
-        scope: &QueryScope<'_>,
-        best_match: bool,
-    ) -> Result<Option<RemoteRef>> {
-        match self {
-            SelectorKind::Css(sel) => resolve_css_one(scope, sel).await,
-            SelectorKind::Xpath(expr) => resolve_xpath_one(scope, expr).await,
-            SelectorKind::Text { needle, exact } => {
-                resolve_text_one(scope, needle, *exact, best_match).await
-            }
-            SelectorKind::TextRegex { pattern, flags } => {
-                resolve_text_regex_one(scope, pattern, flags, best_match).await
-            }
-            SelectorKind::Role(role, name) => resolve_role_one(scope, *role, name.as_deref()).await,
-        }
-    }
-
     /// Resolve this selector against `scope` and return every match in
     /// document order. Empty `Vec` for no matches (not an error).
+    ///
+    /// This is the only resolution entry point. `.one()` is
+    /// [`Self::resolve_many_inner`] plus a take-first, so there is no
+    /// separate single-match implementation that could drift from it —
+    /// see the module header.
     pub(crate) async fn resolve_many(&self, scope: &QueryScope<'_>) -> Result<Vec<RemoteRef>> {
         self.resolve_many_inner(scope, false).await
     }
 
-    /// `resolve_many` with the cross-cutting `best_match` flag (see
-    /// [`Self::resolve_one_inner`]). When set on a text selector the
-    /// returned Vec is ordered closest-length first, so `.one()` taking
-    /// `[0]` lands on the nearest match.
+    /// `resolve_many` with the cross-cutting `best_match` flag. It only
+    /// affects text selectors (`Text` / `TextRegex`), where the JS
+    /// collector re-sorts candidates by closest text length; it is a
+    /// no-op for css/xpath/role. When set, the returned Vec is ordered
+    /// closest-length first, so `.one()` taking `[0]` lands on the
+    /// nearest match.
     pub(crate) async fn resolve_many_inner(
         &self,
         scope: &QueryScope<'_>,
@@ -208,8 +187,8 @@ impl SelectorKind {
 /// (main-frame main-world) context, matching prior behavior exactly.
 ///
 /// Every `Tab`/`Frame` match arm below (css/xpath/text/text_regex/
-/// predicate, both `_one` and `_many`) routes through this one function
-/// instead of hand-rolling the `contextId` dance per resolver.
+/// predicate) routes through this one function instead of hand-rolling the
+/// `contextId` dance per resolver.
 async fn eval_expr_in_scope(scope: &QueryScope<'_>, expression: String) -> Result<Value> {
     let session = scope.session();
     let ctx = scope.execution_context_id().await?;
@@ -226,37 +205,6 @@ async fn eval_expr_in_scope(scope: &QueryScope<'_>, expression: String) -> Resul
 // ---------------------------------------------------------------------
 // CSS
 // ---------------------------------------------------------------------
-
-// test-only: production `.one()` resolves via `resolve_many_inner` + take-first;
-// this single-match resolver is exercised only by this file's #[cfg(test)] tests.
-#[allow(dead_code)]
-async fn resolve_css_one(scope: &QueryScope<'_>, selector: &str) -> Result<Option<RemoteRef>> {
-    let session = scope.session();
-    let result = match scope {
-        QueryScope::Tab(_) | QueryScope::Frame(_) => {
-            eval_expr_in_scope(
-                scope,
-                format!("document.querySelector({})", json!(selector)),
-            )
-            .await?
-        }
-        QueryScope::Element(el) => {
-            let object_id = el.remote_object_id_cloned().await?;
-            session
-                .call(
-                    "Runtime.callFunctionOn",
-                    json!({
-                        "objectId": object_id,
-                        "functionDeclaration": "function(s){return this.querySelector(s);}",
-                        "arguments": [{ "value": selector }],
-                        "returnByValue": false,
-                    }),
-                )
-                .await?
-        }
-    };
-    extract_node_ref(session, &result["result"]).await
-}
 
 async fn resolve_css_many(scope: &QueryScope<'_>, selector: &str) -> Result<Vec<RemoteRef>> {
     let session = scope.session();
@@ -346,41 +294,6 @@ pub(crate) async fn resolve_predicate_many(
 // XPath
 // ---------------------------------------------------------------------
 
-// test-only: production `.one()` resolves via `resolve_many_inner` + take-first;
-// this single-match resolver is exercised only by this file's #[cfg(test)] tests.
-#[allow(dead_code)]
-async fn resolve_xpath_one(scope: &QueryScope<'_>, expr: &str) -> Result<Option<RemoteRef>> {
-    let session = scope.session();
-    let result = match scope {
-        QueryScope::Tab(_) | QueryScope::Frame(_) => {
-            eval_expr_in_scope(
-                scope,
-                format!(
-                    "document.evaluate({}, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue",
-                    json!(expr)
-                ),
-            )
-            .await?
-        }
-        QueryScope::Element(el) => {
-            let object_id = el.remote_object_id_cloned().await?;
-            session
-                .call(
-                    "Runtime.callFunctionOn",
-                    json!({
-                        "objectId": object_id,
-                        "functionDeclaration":
-                            "function(e){return document.evaluate(e, this, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;}",
-                        "arguments": [{ "value": expr }],
-                        "returnByValue": false,
-                    }),
-                )
-                .await?
-        }
-    };
-    extract_node_ref(session, &result["result"]).await
-}
-
 async fn resolve_xpath_many(scope: &QueryScope<'_>, expr: &str) -> Result<Vec<RemoteRef>> {
     // Build an Array of nodes from an ORDERED_NODE_SNAPSHOT_TYPE result so
     // `extract_array_refs` can enumerate it via `Runtime.getProperties`.
@@ -420,14 +333,16 @@ async fn resolve_xpath_many(scope: &QueryScope<'_>, expr: &str) -> Result<Vec<Re
 // ---------------------------------------------------------------------
 //
 // Two paths:
-//   - exact=true  -> XPath `//*[normalize-space(.)=<needle>]` with
-//     `singleNodeValue` for `_one` / `ORDERED_NODE_SNAPSHOT_TYPE` for
-//     `_many`. The XPath string is constructed *in JS* via
-//     `JSON.stringify(needle)` (then `"`->`'`) so multi-quote needles
-//     don't break XPath literal escaping.
+//   - exact=true  -> an XPath built in Rust by `text_exact_xpath` and
+//     evaluated with `ORDERED_NODE_SNAPSHOT_TYPE`. The needle is rendered as
+//     an XPath literal by `xpath_string_literal` (which has the escaping
+//     rule and the `concat()` fallback — do not restate it here). Tab and
+//     frame scope emit `//*` against `document`; element scope emits the
+//     relative `.//*` against `this`, or the walk leaves the element's
+//     subtree.
 //   - exact=false -> JS tree walk:
 //     `Array.from(ctx.querySelectorAll('*')).filter(el => (el.innerText||el.textContent).toLowerCase().includes(needle.toLowerCase()))`.
-//     `_one` slices `[0] || null`; `_many` returns the array.
+//     Both paths return an array; `.one()` takes its first element.
 //
 // `innerText||textContent` matches Playwright's `getByText` and is
 // resilient to hidden elements (which have `innerText === ""` but
@@ -518,154 +433,119 @@ fn build_text_substring_fn_body(needle: &str, best_match: bool) -> String {
     )
 }
 
-fn build_text_exact_xpath_js_tab(needle: &str, snapshot: bool, best_match: bool) -> String {
-    // Construct the XPath in JS so the needle literal is escaped by
-    // JSON.stringify -> single-quoted XPath string. snapshot=true
-    // returns an Array of all matches; snapshot=false returns the
-    // first match or null. When `best_match` is set on the snapshot
-    // path, the array is re-sorted by closest text length (see
-    // `best_match_sort_js`). `best_match` is ignored for the single-node
-    // (`snapshot=false`) form since there is no array to sort.
-    let sort = if snapshot && best_match {
-        format!(";{}", best_match_sort_js("a", needle.chars().count()))
-    } else {
-        String::new()
-    };
-    if snapshot {
-        format!(
-            "(function(){{var n={n};var xp=\"//*[normalize-space(.)=\"+JSON.stringify(n).replace(/\"/g,\"'\")+\"]\";var r=document.evaluate(xp,document,null,XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,null);var a=[];for(var i=0;i<r.snapshotLength;i++)a.push(r.snapshotItem(i));{sort};return a;}})()",
-            n = json!(needle),
-            sort = sort,
-        )
-    } else {
-        format!(
-            "(function(){{var n={n};var xp=\"//*[normalize-space(.)=\"+JSON.stringify(n).replace(/\"/g,\"'\")+\"]\";return document.evaluate(xp,document,null,XPathResult.FIRST_ORDERED_NODE_TYPE,null).singleNodeValue;}})()",
-            n = json!(needle),
-        )
+/// Render `s` as an XPath 1.0 string literal, quotes and all.
+///
+/// XPath 1.0 has no escape mechanism inside a string literal, so a needle
+/// containing both quote kinds cannot be written as one literal at all;
+/// `concat()` over alternating pieces is the standard workaround.
+///
+/// Reaching the `concat()` branch means `s` carries both quote kinds, so
+/// splitting on `"` yields at least two chunks and the loop pushes at least
+/// one `'"'` separator alongside the chunk holding the apostrophe:
+/// `concat()`'s two-argument minimum is satisfied by construction, not by a
+/// guard.
+///
+/// This replaced `JSON.stringify(n).replace(/"/g,"'")`, which was not an
+/// escaping strategy but a quote swap — it only moved which character
+/// broke the expression. `text_exact("it's")` built
+/// `//*[normalize-space(.)='it's']`, whose literal ends at the third
+/// quote, so `document.evaluate` threw a `SyntaxError` and the caller got
+/// a `JsException` instead of a match or an empty result. Double quotes
+/// fared no better: `JSON.stringify` escaped an embedded `"` as `\"` and
+/// the swap turned that into `\'`, which XPath 1.0 does not recognize.
+fn xpath_string_literal(s: &str) -> String {
+    if !s.contains('"') {
+        return format!("\"{s}\"");
     }
-}
-
-fn build_text_exact_xpath_fn_body(needle: &str, snapshot: bool, best_match: bool) -> String {
-    // Element scope: `this` is the context node. Needle passed as arg.
-    let sort = if snapshot && best_match {
-        format!(";{}", best_match_sort_js("a", needle.chars().count()))
-    } else {
-        String::new()
-    };
-    if snapshot {
-        format!(
-            "function(n){{var xp=\"//*[normalize-space(.)=\"+JSON.stringify(n).replace(/\"/g,\"'\")+\"]\";var r=document.evaluate(xp,this,null,XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,null);var a=[];for(var i=0;i<r.snapshotLength;i++)a.push(r.snapshotItem(i));{sort};return a;}}",
-            sort = sort,
-        )
-    } else {
-        "function(n){var xp=\"//*[normalize-space(.)=\"+JSON.stringify(n).replace(/\"/g,\"'\")+\"]\";return document.evaluate(xp,this,null,XPathResult.FIRST_ORDERED_NODE_TYPE,null).singleNodeValue;}".to_string()
+    if !s.contains('\'') {
+        return format!("'{s}'");
     }
-}
-
-// test-only: production `.one()` resolves via `resolve_many_inner` + take-first;
-// this single-match resolver is exercised only by this file's #[cfg(test)] tests.
-#[allow(dead_code)]
-async fn resolve_text_one(
-    scope: &QueryScope<'_>,
-    needle: &str,
-    exact: bool,
-    best_match: bool,
-) -> Result<Option<RemoteRef>> {
-    let session = scope.session();
-    if exact {
-        // XPath path. For best_match we need the full snapshot array
-        // (sorted by closest length) and take `[0]`; otherwise the cheap
-        // single-node form suffices.
-        if best_match {
-            let result = match scope {
-                QueryScope::Tab(_) | QueryScope::Frame(_) => {
-                    eval_expr_in_scope(
-                        scope,
-                        format!(
-                            "({})[0] || null",
-                            build_text_exact_xpath_js_tab(needle, true, true)
-                        ),
-                    )
-                    .await?
-                }
-                QueryScope::Element(el) => {
-                    let object_id = el.remote_object_id_cloned().await?;
-                    session
-                        .call(
-                            "Runtime.callFunctionOn",
-                            json!({
-                                "objectId": object_id,
-                                "functionDeclaration": format!(
-                                    "function(n){{return ({})[0] || null;}}",
-                                    format!("({}).call(this,n)", build_text_exact_xpath_fn_body(needle, true, true)),
-                                ),
-                                "arguments": [{ "value": needle }],
-                                "returnByValue": false,
-                            }),
-                        )
-                        .await?
-                }
-            };
-            return extract_node_ref(session, &result["result"]).await;
+    // Both kinds present. Splitting on `"` leaves pieces that contain
+    // none, so each is safe inside double quotes; the separators are
+    // re-introduced as single-quoted `"` characters.
+    let chunks: Vec<&str> = s.split('"').collect();
+    let mut parts: Vec<String> = Vec::new();
+    for (i, chunk) in chunks.iter().enumerate() {
+        if !chunk.is_empty() {
+            parts.push(format!("\"{chunk}\""));
         }
-        // Single-node form (no best_match): returns a single node or null.
-        let result = match scope {
-            QueryScope::Tab(_) | QueryScope::Frame(_) => {
-                eval_expr_in_scope(scope, build_text_exact_xpath_js_tab(needle, false, false))
-                    .await?
-            }
-            QueryScope::Element(el) => {
-                let object_id = el.remote_object_id_cloned().await?;
-                session
-                    .call(
-                        "Runtime.callFunctionOn",
-                        json!({
-                            "objectId": object_id,
-                            "functionDeclaration": build_text_exact_xpath_fn_body(needle, false, false),
-                            "arguments": [{ "value": needle }],
-                            "returnByValue": false,
-                        }),
-                    )
-                    .await?
-            }
-        };
-        extract_node_ref(session, &result["result"]).await
-    } else {
-        // Substring path returns an Array (best_match re-sorts it); pick
-        // first match.
-        let result = match scope {
-            QueryScope::Tab(_) | QueryScope::Frame(_) => {
-                eval_expr_in_scope(
-                    scope,
-                    format!(
-                        "({})[0] || null",
-                        build_text_substring_js_tab(needle, best_match)
-                    ),
-                )
-                .await?
-            }
-            QueryScope::Element(el) => {
-                let object_id = el.remote_object_id_cloned().await?;
-                session
-                    .call(
-                        "Runtime.callFunctionOn",
-                        json!({
-                            "objectId": object_id,
-                            "functionDeclaration": format!(
-                                "function(n){{return ({}.call(this,n))[0] || null;}}",
-                                // Reuse the narrowing + best_match body so
-                                // `this` resolves to the scope element.
-                                build_text_substring_fn_body(needle, best_match)
-                            ),
-                            "arguments": [{ "value": needle }],
-                            "returnByValue": false,
-                        }),
-                    )
-                    .await?
-            }
-        };
-        extract_node_ref(session, &result["result"]).await
+        if i + 1 < chunks.len() {
+            parts.push("'\"'".to_string());
+        }
     }
+    debug_assert!(parts.len() >= 2, "concat() needs two arguments: {parts:?}");
+    format!("concat({})", parts.join(","))
+}
+
+/// Which node a text-exact expression walks down from.
+///
+/// `//` abbreviates `/descendant-or-self::node()/`, and that leading `/` is
+/// the root of the document containing the context node — so `//*` ignores
+/// whatever node `document.evaluate` was handed and enumerates the whole
+/// page. `.//` starts the same walk at the context node. The distinction is
+/// invisible until an element-scoped query returns a match from somewhere
+/// else on the page.
+#[derive(Clone, Copy)]
+enum TextExactAnchor {
+    /// Whole document. Tab and frame scope, evaluated against `document`.
+    Document,
+    /// The context node's own subtree. Element scope, evaluated against
+    /// `this`.
+    ContextNode,
+}
+
+impl TextExactAnchor {
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Document => "//",
+            Self::ContextNode => ".//",
+        }
+    }
+}
+
+/// The `//*[normalize-space(.)=<literal>]` expression for `needle`, or its
+/// relative `.//*` form (see [`TextExactAnchor`]), with the needle rendered
+/// by [`xpath_string_literal`]. Built here in Rust rather than assembled on
+/// the page so the quoting is unit-testable without a browser.
+fn text_exact_xpath(needle: &str, anchor: TextExactAnchor) -> String {
+    format!(
+        "{}*[normalize-space(.)={}]",
+        anchor.prefix(),
+        xpath_string_literal(needle)
+    )
+}
+
+fn build_text_exact_xpath_js_tab(needle: &str, best_match: bool) -> String {
+    // Snapshot form: returns an Array of every match. When `best_match` is
+    // set the array is re-sorted by closest text length (see
+    // `best_match_sort_js`).
+    let sort = if best_match {
+        format!(";{}", best_match_sort_js("a", needle.chars().count()))
+    } else {
+        String::new()
+    };
+    format!(
+        "(function(){{var xp={xp};var r=document.evaluate(xp,document,null,XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,null);var a=[];for(var i=0;i<r.snapshotLength;i++)a.push(r.snapshotItem(i));{sort};return a;}})()",
+        xp = json!(text_exact_xpath(needle, TextExactAnchor::Document)),
+        sort = sort,
+    )
+}
+
+fn build_text_exact_xpath_fn_body(needle: &str, best_match: bool) -> String {
+    // Element scope: `this` is the context node, so the expression has to be
+    // relative or the walk runs over the whole document and the scope means
+    // nothing. Declares no parameters — the needle is baked into the
+    // expression, so the caller sends no `arguments` either.
+    let sort = if best_match {
+        format!(";{}", best_match_sort_js("a", needle.chars().count()))
+    } else {
+        String::new()
+    };
+    format!(
+        "function(){{var xp={xp};var r=document.evaluate(xp,this,null,XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,null);var a=[];for(var i=0;i<r.snapshotLength;i++)a.push(r.snapshotItem(i));{sort};return a;}}",
+        xp = json!(text_exact_xpath(needle, TextExactAnchor::ContextNode)),
+        sort = sort,
+    )
 }
 
 async fn resolve_text_many(
@@ -674,15 +554,23 @@ async fn resolve_text_many(
     exact: bool,
     best_match: bool,
 ) -> Result<Vec<RemoteRef>> {
+    // XPath compares `normalize-space(.)` against the needle, so the page side
+    // was folded but the needle was not: `text_exact("Hello   world")` could
+    // never match anything. Fold it the same way, using the one rule
+    // `TextPred::Equals` uses so the two stay in agreement. Substring and regex
+    // needles keep their raw text — interior whitespace can be meaningful there.
+    let normalized;
+    let needle = if exact {
+        normalized = crate::query::predicate::normalize_space(needle);
+        normalized.as_str()
+    } else {
+        needle
+    };
     let session = scope.session();
     let result = if exact {
         match scope {
             QueryScope::Tab(_) | QueryScope::Frame(_) => {
-                eval_expr_in_scope(
-                    scope,
-                    build_text_exact_xpath_js_tab(needle, true, best_match),
-                )
-                .await?
+                eval_expr_in_scope(scope, build_text_exact_xpath_js_tab(needle, best_match)).await?
             }
             QueryScope::Element(el) => {
                 let object_id = el.remote_object_id_cloned().await?;
@@ -691,8 +579,7 @@ async fn resolve_text_many(
                         "Runtime.callFunctionOn",
                         json!({
                             "objectId": object_id,
-                            "functionDeclaration": build_text_exact_xpath_fn_body(needle, true, best_match),
-                            "arguments": [{ "value": needle }],
+                            "functionDeclaration": build_text_exact_xpath_fn_body(needle, best_match),
                             "returnByValue": false,
                         }),
                     )
@@ -824,48 +711,6 @@ fn build_text_regex_fn_body(pattern: &str, best_match: bool) -> String {
     )
 }
 
-// test-only: production `.one()` resolves via `resolve_many_inner` + take-first;
-// this single-match resolver is exercised only by this file's #[cfg(test)] tests.
-#[allow(dead_code)]
-async fn resolve_text_regex_one(
-    scope: &QueryScope<'_>,
-    pattern: &str,
-    flags: &str,
-    best_match: bool,
-) -> Result<Option<RemoteRef>> {
-    let session = scope.session();
-    let result = match scope {
-        QueryScope::Tab(_) | QueryScope::Frame(_) => {
-            eval_expr_in_scope(
-                scope,
-                format!(
-                    "({})[0] || null",
-                    build_text_regex_js_tab(pattern, flags, best_match)
-                ),
-            )
-            .await?
-        }
-        QueryScope::Element(el) => {
-            let object_id = el.remote_object_id_cloned().await?;
-            session
-                .call(
-                    "Runtime.callFunctionOn",
-                    json!({
-                        "objectId": object_id,
-                        "functionDeclaration": format!(
-                            "function(p,f){{return (({}).call(this,p,f))[0] || null;}}",
-                            build_text_regex_fn_body(pattern, best_match)
-                        ),
-                        "arguments": [{ "value": pattern }, { "value": flags }],
-                        "returnByValue": false,
-                    }),
-                )
-                .await?
-        }
-    };
-    extract_node_ref(session, &result["result"]).await
-}
-
 async fn resolve_text_regex_many(
     scope: &QueryScope<'_>,
     pattern: &str,
@@ -899,40 +744,16 @@ async fn resolve_text_regex_many(
 // Role (`[role="..."]` CSS + optional accessible-name post-filter)
 // ---------------------------------------------------------------------
 
-// test-only: production `.one()` resolves via `resolve_many_inner` + take-first;
-// this single-match resolver is exercised only by this file's #[cfg(test)] tests.
-#[allow(dead_code)]
-async fn resolve_role_one(
-    scope: &QueryScope<'_>,
-    role: AriaRole,
-    name: Option<&str>,
-) -> Result<Option<RemoteRef>> {
-    // Always go through `resolve_css_many` (rather than `resolve_css_one`)
-    // so that name-filter and no-filter paths share the same candidate
-    // enumeration. With no name filter we just return the first match.
-    // This delegation also means role queries already inherit
-    // `resolve_css_many`'s `contextId` pinning for free — a Frame-scoped
-    // role query correctly enumerates candidates from the frame's own
-    // document, not the parent tab's.
-    let css = role.to_css();
-    let candidates = resolve_css_many(scope, &css).await?;
-    let Some(needle) = name else {
-        return Ok(candidates.into_iter().next());
-    };
-    let session = scope.session();
-    for candidate in candidates {
-        if accessible_name_matches(session, &candidate, needle).await? {
-            return Ok(Some(candidate));
-        }
-    }
-    Ok(None)
-}
-
 async fn resolve_role_many(
     scope: &QueryScope<'_>,
     role: AriaRole,
     name: Option<&str>,
 ) -> Result<Vec<RemoteRef>> {
+    // Both the name-filter and the no-filter path share this one candidate
+    // enumeration. Delegating to `resolve_css_many` also means role queries
+    // inherit its `contextId` pinning for free — a Frame-scoped role query
+    // correctly enumerates from the frame's own document, not the parent
+    // tab's.
     let css = role.to_css();
     let candidates = resolve_css_many(scope, &css).await?;
     let Some(needle) = name else {
@@ -1109,11 +930,19 @@ async fn describe_backend_id(session: &SessionHandle, object_id: &str) -> Result
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::test_support::expect;
     use zendriver_transport::SessionHandle;
     use zendriver_transport::testing::MockConnection;
 
-    #[tokio::test]
-    async fn css_one_sends_query_selector_with_selector() {
+    /// Drive the selector the way production does and hand back the JS that
+    /// went out on the wire.
+    ///
+    /// Every resolver test goes through `resolve_many`, which is the only
+    /// resolution entry point there is (`.one()` is this plus a take-first).
+    /// The reply is a null subtype, which `extract_array_refs` short-circuits
+    /// to an empty vec, so no `Runtime.getProperties` / `DOM.describeNode`
+    /// dance is needed to inspect the dispatched expression.
+    async fn dispatched_expression(kind: SelectorKind) -> String {
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
         let tab = Tab::new_for_test(sess);
@@ -1122,201 +951,318 @@ mod tests {
             let t = tab.clone();
             async move {
                 let scope = QueryScope::Tab(&t);
-                SelectorKind::Css("#btn".into()).resolve_one(&scope).await
+                kind.resolve_many(&scope).await
             }
         });
 
-        let id_q = mock.expect_cmd("Runtime.evaluate").await;
+        let id = expect(&mut mock, "Runtime.evaluate").await;
+        let expr = mock.last_sent()["params"]["expression"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        mock.reply(
+            id,
+            json!({ "result": { "type": "object", "subtype": "null" } }),
+        )
+        .await;
+        let hits = fut.await.unwrap().unwrap();
+        assert!(hits.is_empty(), "null subtype must yield no matches");
+        conn.shutdown();
+        expr
+    }
+
+    /// A query that matches nothing resolves to an empty vec, through the
+    /// real decode path.
+    ///
+    /// `dispatched_expression` above short-circuits with a `null` subtype,
+    /// which `extract_array_refs` early-returns on before it ever calls
+    /// `Runtime.getProperties`. That is the right shortcut for tests whose
+    /// job is the dispatched expression, but it leaves the ordinary
+    /// empty-result path — a genuine array object, enumerated and found to
+    /// hold nothing but `length` — unexercised. This covers it.
+    #[tokio::test]
+    async fn an_empty_result_array_resolves_to_no_matches() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                let scope = QueryScope::Tab(&t);
+                SelectorKind::Css("#absent".into())
+                    .resolve_many(&scope)
+                    .await
+            }
+        });
+
+        let id_q = expect(&mut mock, "Runtime.evaluate").await;
+        mock.reply(
+            id_q,
+            json!({ "result": { "objectId": "REmpty", "type": "object", "subtype": "array" } }),
+        )
+        .await;
+
+        // A real (empty) array: `length` only, no numeric entries. The
+        // resolver must enumerate it and stop, without a `DOM.describeNode`.
+        let id_p = expect(&mut mock, "Runtime.getProperties").await;
+        assert_eq!(mock.last_sent()["params"]["objectId"], "REmpty");
+        mock.reply(
+            id_p,
+            json!({ "result": [{ "name": "length", "value": { "value": 0, "type": "number" } }] }),
+        )
+        .await;
+
+        let hits = fut.await.unwrap().unwrap();
+        assert!(hits.is_empty(), "an empty array must yield no matches");
+        conn.shutdown();
+    }
+
+    /// The XPath folds the page side with `normalize-space(.)`, so an
+    /// author-written run of spaces in the needle could never match. Both
+    /// sides must be folded by the same rule `TextPred::Equals` uses.
+    ///
+    /// This drives `resolve_many`, the path `.one()` and `.many()` both
+    /// take. An earlier version of this test drove a single-match resolver
+    /// that production never called, so deleting the fold from the shipping
+    /// path left it green; that resolver is gone (see the module header).
+    #[tokio::test]
+    async fn text_exact_folds_whitespace_in_the_needle_before_building_the_xpath() {
+        let expr = dispatched_expression(SelectorKind::Text {
+            needle: "  Hello \t\n  world  ".into(),
+            exact: true,
+        })
+        .await;
+
+        // The whole expression the builder should emit, not a substring of
+        // it: asserting the exact fragment pins the folding *and* the
+        // quoting, and subsumes a negative check for surviving raw tabs.
+        assert!(
+            expr.contains(r#"var xp="//*[normalize-space(.)=\"Hello world\"]";"#),
+            "needle should be normalize-space folded before embedding, got: {expr}"
+        );
+    }
+
+    /// XPath 1.0 string literals have no escape mechanism, so a needle
+    /// carrying a quote has to change how the literal is built rather than
+    /// be escaped inside it. Quote-swapping used to produce
+    /// `//*[normalize-space(.)='it's']`, which `document.evaluate` rejects
+    /// with a `SyntaxError` — the caller saw a `JsException` instead of a
+    /// match or an empty result, and apostrophes are ordinary in button and
+    /// link text.
+    #[tokio::test]
+    async fn text_exact_needle_with_an_apostrophe_builds_a_valid_xpath_literal() {
+        let expr = dispatched_expression(SelectorKind::Text {
+            needle: "it's".into(),
+            exact: true,
+        })
+        .await;
+
+        assert!(
+            expr.contains(r#"var xp="//*[normalize-space(.)=\"it's\"]";"#),
+            "an apostrophe needle must switch the literal to double quotes, got: {expr}"
+        );
+    }
+
+    /// The double-quote case was broken by the same swap for a different
+    /// reason: `JSON.stringify` escaped the embedded `"` as `\"` and the
+    /// replace turned that into `\'`, which XPath 1.0 does not recognize as
+    /// an escape at all.
+    #[tokio::test]
+    async fn text_exact_needle_with_a_double_quote_builds_a_valid_xpath_literal() {
+        let expr = dispatched_expression(SelectorKind::Text {
+            needle: r#"say "hi""#.into(),
+            exact: true,
+        })
+        .await;
+
+        assert!(
+            expr.contains(r#"var xp="//*[normalize-space(.)='say \"hi\"']";"#),
+            "a double-quote needle must switch the literal to single quotes, got: {expr}"
+        );
+    }
+
+    /// A needle carrying both quote kinds cannot be written as a single
+    /// XPath literal, so the builder has to fall back to `concat()`.
+    #[tokio::test]
+    async fn text_exact_needle_with_both_quote_kinds_falls_back_to_concat() {
+        let expr = dispatched_expression(SelectorKind::Text {
+            needle: r#"it's a "quote""#.into(),
+            exact: true,
+        })
+        .await;
+
+        assert!(
+            expr.contains(
+                r#"var xp="//*[normalize-space(.)=concat(\"it's a \",'\"',\"quote\",'\"')]";"#
+            ),
+            "a needle with both quote kinds must compile to concat(), got: {expr}"
+        );
+    }
+
+    /// The two text-exact builders must not share an anchor.
+    ///
+    /// `//*` resolves against the document root whatever context node
+    /// `document.evaluate` is handed, so the element-scoped builder has to
+    /// emit `.//*` or its scoping is decorative. Pinned here as well as in
+    /// `tests/element_world_regressions.rs` so a mis-wired anchor fails
+    /// without a browser; only that test proves the anchors reach the nodes
+    /// this one assumes they do.
+    #[test]
+    fn only_the_element_scoped_expression_is_relative_to_its_context_node() {
+        let tab_scope = build_text_exact_xpath_js_tab("Cancel", false);
+        assert!(
+            tab_scope.contains(r#"var xp="//*[normalize-space(.)=\"Cancel\"]""#),
+            "tab scope evaluates against `document` and stays document-anchored, got: {tab_scope}"
+        );
+
+        let element_scope = build_text_exact_xpath_fn_body("Cancel", false);
+        assert!(
+            element_scope.contains(r#"var xp=".//*[normalize-space(.)=\"Cancel\"]""#),
+            "element scope evaluates against `this` and must be relative, got: {element_scope}"
+        );
+    }
+
+    #[tokio::test]
+    async fn css_sends_query_selector_all_and_resolves_each_hit() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let tab = Tab::new_for_test(sess);
+
+        let fut = tokio::spawn({
+            let t = tab.clone();
+            async move {
+                let scope = QueryScope::Tab(&t);
+                SelectorKind::Css("#btn".into()).resolve_many(&scope).await
+            }
+        });
+
+        let id_q = expect(&mut mock, "Runtime.evaluate").await;
         let sent = mock.last_sent()["params"]["expression"]
             .as_str()
             .unwrap()
             .to_string();
         assert!(
-            sent.contains("document.querySelector") && sent.contains("#btn"),
-            "expression should call document.querySelector with the selector, got: {sent}"
+            sent.contains("document.querySelectorAll") && sent.contains("#btn"),
+            "expression should call document.querySelectorAll with the selector, got: {sent}"
         );
         mock.reply(
             id_q,
-            json!({ "result": { "objectId": "R7", "type": "object", "subtype": "node" } }),
+            json!({ "result": { "objectId": "RArr", "type": "object", "subtype": "array" } }),
         )
         .await;
 
-        let id_d = mock.expect_cmd("DOM.describeNode").await;
+        let id_p = expect(&mut mock, "Runtime.getProperties").await;
+        assert_eq!(mock.last_sent()["params"]["objectId"], "RArr");
+        mock.reply(
+            id_p,
+            json!({
+                "result": [
+                    { "name": "0", "value": { "objectId": "R7", "type": "object", "subtype": "node" } },
+                    { "name": "length", "value": { "value": 1, "type": "number" } }
+                ]
+            }),
+        )
+        .await;
+
+        let id_d = expect(&mut mock, "DOM.describeNode").await;
         assert_eq!(mock.last_sent()["params"]["objectId"], "R7");
         mock.reply(id_d, json!({ "node": { "backendNodeId": 99 } }))
             .await;
 
-        let r = fut.await.unwrap().unwrap().unwrap();
-        assert_eq!(r.remote_object_id, "R7");
-        assert_eq!(r.backend_node_id, 99);
+        let hits = fut.await.unwrap().unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].remote_object_id, "R7");
+        assert_eq!(hits[0].backend_node_id, 99);
         conn.shutdown();
     }
 
+    /// Non-exact text selector: the dispatched JS must carry the
+    /// lowercase-fold and the needle verbatim, so the case-insensitive
+    /// substring contract survives. Unlike the exact path, the needle is
+    /// *not* whitespace-folded — interior runs can be meaningful in a
+    /// substring.
     #[tokio::test]
     async fn text_substring_eval_lowercases_and_includes_needle() {
-        // Non-exact text selector: confirm the dispatched JS expression
-        // contains the lowercase-fold (`.toLowerCase()`) + the needle
-        // verbatim so the case-insensitive substring contract is
-        // preserved. We respond with `null` so the future completes
-        // immediately without needing the full describeNode dance.
-        let (mut mock, conn) = MockConnection::pair();
-        let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new_for_test(sess);
-
-        let fut = tokio::spawn({
-            let t = tab.clone();
-            async move {
-                let scope = QueryScope::Tab(&t);
-                SelectorKind::Text {
-                    needle: "Sign In".into(),
-                    exact: false,
-                }
-                .resolve_one(&scope)
-                .await
-            }
-        });
-
-        let id_q = mock.expect_cmd("Runtime.evaluate").await;
-        let sent = mock.last_sent()["params"]["expression"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        assert!(
-            sent.contains(".toLowerCase()"),
-            "substring path must lowercase-fold both sides; got: {sent}"
-        );
-        assert!(
-            sent.contains("Sign In"),
-            "substring path must embed the needle verbatim; got: {sent}"
-        );
-        assert!(
-            sent.contains(".includes("),
-            "substring path must call .includes; got: {sent}"
-        );
-
-        // null-out the result so resolve_one short-circuits to Ok(None).
-        mock.reply(
-            id_q,
-            json!({ "result": { "type": "object", "subtype": "null" } }),
-        )
+        let expr = dispatched_expression(SelectorKind::Text {
+            needle: "Sign In".into(),
+            exact: false,
+        })
         .await;
 
-        let r = fut.await.unwrap().unwrap();
-        assert!(r.is_none(), "null subtype must yield Ok(None)");
-        conn.shutdown();
+        assert!(
+            expr.contains(".toLowerCase()"),
+            "substring path must lowercase-fold both sides; got: {expr}"
+        );
+        assert!(
+            expr.contains("Sign In"),
+            "substring path must embed the needle verbatim; got: {expr}"
+        );
+        assert!(
+            expr.contains(".includes("),
+            "substring path must call .includes; got: {expr}"
+        );
     }
 
+    /// TextRegex selector: the dispatched JS builds `new RegExp(<pat>,
+    /// <flags>)` with both strings present.
     #[tokio::test]
     async fn text_regex_eval_constructs_new_regexp_with_pattern_and_flags() {
-        // TextRegex selector: confirm the dispatched JS expression
-        // builds `new RegExp(<pat>, <flags>)` with both strings present.
-        let (mut mock, conn) = MockConnection::pair();
-        let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new_for_test(sess);
-
-        let fut = tokio::spawn({
-            let t = tab.clone();
-            async move {
-                let scope = QueryScope::Tab(&t);
-                SelectorKind::TextRegex {
-                    pattern: "hello.*world".into(),
-                    flags: "im".into(),
-                }
-                .resolve_one(&scope)
-                .await
-            }
-        });
-
-        let id_q = mock.expect_cmd("Runtime.evaluate").await;
-        let sent = mock.last_sent()["params"]["expression"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        assert!(
-            sent.contains("new RegExp"),
-            "regex path must instantiate `new RegExp`; got: {sent}"
-        );
-        assert!(
-            sent.contains("hello.*world"),
-            "regex path must embed the pattern; got: {sent}"
-        );
-        assert!(
-            sent.contains("im"),
-            "regex path must embed the flags string; got: {sent}"
-        );
-
-        mock.reply(
-            id_q,
-            json!({ "result": { "type": "object", "subtype": "null" } }),
-        )
+        let expr = dispatched_expression(SelectorKind::TextRegex {
+            pattern: "hello.*world".into(),
+            flags: "im".into(),
+        })
         .await;
 
-        let r = fut.await.unwrap().unwrap();
-        assert!(r.is_none(), "null subtype must yield Ok(None)");
-        conn.shutdown();
+        assert!(
+            expr.contains("new RegExp"),
+            "regex path must instantiate `new RegExp`; got: {expr}"
+        );
+        assert!(
+            expr.contains("hello.*world"),
+            "regex path must embed the pattern; got: {expr}"
+        );
+        assert!(
+            expr.contains("im"),
+            "regex path must embed the flags string; got: {expr}"
+        );
     }
 
+    /// Regression test: `.text_regex()` used to have no "narrowest match"
+    /// step (unlike `.text()` / `.text_exact()`), so an ancestor
+    /// (`<html>` / `<body>`) whose only text-bearing descendant is the real
+    /// match ends up with an identical `innerText`, also passes the regex
+    /// filter, ranks first in document order, and wins `.one()`'s `[0]`
+    /// instead of the intended leaf. The dispatched expression must
+    /// subtract any element that has a matching descendant (mirroring
+    /// `build_text_substring_js_tab`'s narrowing), reusing the same
+    /// `RegExp` object as the predicate.
     #[tokio::test]
     async fn text_regex_eval_narrows_to_innermost_matching_element() {
-        // Regression test: `.text_regex()` used to have no "narrowest
-        // match" step (unlike `.text()`/`.text_exact()`), so an ancestor
-        // (`<html>`/`<body>`) whose only text-bearing descendant is the
-        // real match ends up with an identical `innerText` and also
-        // passes the regex filter — ranking first in document order and
-        // winning `.one()`'s `[0]` instead of the intended leaf. Assert
-        // the dispatched expression now subtracts any element that has a
-        // matching descendant (mirroring `build_text_substring_js_tab`'s
-        // narrowing), reusing the same `RegExp` object as the predicate.
-        let (mut mock, conn) = MockConnection::pair();
-        let sess = SessionHandle::new(conn.clone(), "S1");
-        let tab = Tab::new_for_test(sess);
-
-        let fut = tokio::spawn({
-            let t = tab.clone();
-            async move {
-                let scope = QueryScope::Tab(&t);
-                SelectorKind::TextRegex {
-                    pattern: "unique-frame-text".into(),
-                    flags: "".into(),
-                }
-                .resolve_one(&scope)
-                .await
-            }
-        });
-
-        let id_q = mock.expect_cmd("Runtime.evaluate").await;
-        let sent = mock.last_sent()["params"]["expression"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        assert!(
-            sent.contains(".querySelectorAll('*')).some("),
-            "regex path must narrow via descendant-subtraction (some()); got: {sent}"
-        );
-        assert!(
-            sent.matches("r.test(").count() >= 2,
-            "narrowing predicate must reuse the same RegExp object `r` (once for the initial \
-             filter, once for the descendant check); got: {sent}"
-        );
-
-        mock.reply(
-            id_q,
-            json!({ "result": { "type": "object", "subtype": "null" } }),
-        )
+        let expr = dispatched_expression(SelectorKind::TextRegex {
+            pattern: "unique-frame-text".into(),
+            flags: "".into(),
+        })
         .await;
 
-        let r = fut.await.unwrap().unwrap();
-        assert!(r.is_none(), "null subtype must yield Ok(None)");
-        conn.shutdown();
+        assert!(
+            expr.contains(".querySelectorAll('*')).some("),
+            "regex path must narrow via descendant-subtraction (some()); got: {expr}"
+        );
+        assert!(
+            expr.matches("r.test(").count() >= 2,
+            "narrowing predicate must reuse the same RegExp object `r` (once for the initial \
+             filter, once for the descendant check); got: {expr}"
+        );
     }
 
     #[tokio::test]
-    async fn role_button_without_name_dispatches_attribute_selector_and_resolves_first_match() {
+    async fn role_button_without_name_dispatches_attribute_selector_and_resolves_hits() {
         // Role(Button, None) should:
         //   1. Runtime.evaluate `Array.from(document.querySelectorAll('[role="button"]'))`
         //   2. Runtime.getProperties on the returned Array
-        //   3. DOM.describeNode on the first array element to fetch backendNodeId
-        // and return a RemoteRef with the resolved id.
+        //   3. DOM.describeNode on each array element to fetch backendNodeId
+        // and return a RemoteRef per hit.
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
         let tab = Tab::new_for_test(sess);
@@ -1326,12 +1272,12 @@ mod tests {
             async move {
                 let scope = QueryScope::Tab(&t);
                 SelectorKind::Role(AriaRole::Button, None)
-                    .resolve_one(&scope)
+                    .resolve_many(&scope)
                     .await
             }
         });
 
-        let id_q = mock.expect_cmd("Runtime.evaluate").await;
+        let id_q = expect(&mut mock, "Runtime.evaluate").await;
         let sent = mock.last_sent()["params"]["expression"]
             .as_str()
             .unwrap()
@@ -1350,7 +1296,7 @@ mod tests {
         )
         .await;
 
-        let id_p = mock.expect_cmd("Runtime.getProperties").await;
+        let id_p = expect(&mut mock, "Runtime.getProperties").await;
         assert_eq!(mock.last_sent()["params"]["objectId"], "RArr");
         mock.reply(
             id_p,
@@ -1369,14 +1315,15 @@ mod tests {
         )
         .await;
 
-        let id_d = mock.expect_cmd("DOM.describeNode").await;
+        let id_d = expect(&mut mock, "DOM.describeNode").await;
         assert_eq!(mock.last_sent()["params"]["objectId"], "RN0");
         mock.reply(id_d, json!({ "node": { "backendNodeId": 42 } }))
             .await;
 
-        let r = fut.await.unwrap().unwrap().unwrap();
-        assert_eq!(r.remote_object_id, "RN0");
-        assert_eq!(r.backend_node_id, 42);
+        let hits = fut.await.unwrap().unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].remote_object_id, "RN0");
+        assert_eq!(hits[0].backend_node_id, 42);
         conn.shutdown();
     }
 
