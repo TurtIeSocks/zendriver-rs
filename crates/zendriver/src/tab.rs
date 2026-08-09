@@ -2996,13 +2996,22 @@ impl Tab {
     /// [`poll_interval`](zendriver_cloudflare::CloudflareBypass::poll_interval)
     /// to tune the polling cadence, then call
     /// [`wait_for_clearance`](zendriver_cloudflare::CloudflareBypass::wait_for_clearance)
-    /// to detect the Turnstile checkbox, click it at the canonical 15%
-    /// offset, and poll until either the `cf-turnstile-response` token
-    /// appears, the challenge stops being actionable (see
+    /// to detect the Turnstile checkbox, click it at the default 15%
+    /// offset, and poll until either a configured token input picks up a
+    /// value, the challenge stops being actionable (see
     /// [`ClearanceOutcome::ChallengeGone`](zendriver_cloudflare::ClearanceOutcome::ChallengeGone),
     /// which is weaker than it reads), or the supplied timeout elapses. Use
     /// [`is_challenge_present`](zendriver_cloudflare::CloudflareBypass::is_challenge_present)
     /// for a one-shot probe without driving a click.
+    ///
+    /// Cloudflare owns the markup and the click, and changes both without
+    /// notice, so neither is baked in:
+    /// [`selectors`](zendriver_cloudflare::CloudflareBypass::selectors)
+    /// takes the markers to look for,
+    /// [`click_policy`](zendriver_cloudflare::CloudflareBypass::click_policy)
+    /// takes whether / how often / where to click, and
+    /// [`on_click`](zendriver_cloudflare::CloudflareBypass::on_click)
+    /// replaces the built-in click outright.
     ///
     /// **Stealth recommended.** Cloudflare Turnstile is somewhat forgiving
     /// of non-stealth Chrome, but `BrowserBuilder::stealth` significantly

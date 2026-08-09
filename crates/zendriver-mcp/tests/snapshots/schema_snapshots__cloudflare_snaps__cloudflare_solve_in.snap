@@ -7,6 +7,11 @@ title: SolveInput
 description: "Input for `browser_solve_turnstile`."
 type: object
 properties:
+  click_policy:
+    description: "Override whether, how often and where the widget is clicked. Omit for\nthe lib's defaults."
+    anyOf:
+      - $ref: "#/$defs/ClickPolicyInput"
+      - type: "null"
   poll_interval_ms:
     description: "Override the bypass driver's internal poll cadence, in milliseconds.\nDefaults to the lib's own default (500ms). Lowering speeds up\ndetection at the cost of more CDP `Runtime.evaluate` round-trips;\nraising is a safe knob for slow / sandboxed environments."
     type:
@@ -14,6 +19,11 @@ properties:
       - "null"
     format: uint64
     minimum: 0
+  selectors:
+    description: "Override the page markers that identify the Turnstile widget. Omit to\nuse the lib's defaults, which track Cloudflare's current markup.\nCloudflare owns this markup and changes it without notice, so an\nagent that finds the defaults no longer matching a page can point the\nsolver at the new markers here instead of waiting on a release."
+    anyOf:
+      - $ref: "#/$defs/SelectorsInput"
+      - type: "null"
   timeout_ms:
     description: "Maximum total wait for a terminal outcome, in milliseconds. Default\n30_000 (30s) — the lib's documented sane default for a real Turnstile\nflow. Lower values can be used in tests or when the agent wants to\nfail fast and fall back to another strategy."
     type: integer
@@ -21,3 +31,57 @@ properties:
     default: 30000
     minimum: 0
 additionalProperties: false
+$defs:
+  ClickPolicyInput:
+    description: "Click behaviour — the request-side mirror of the lib's `ClickPolicy`.\nSame per-field fallback rule as [`SelectorsInput`]."
+    type: object
+    properties:
+      max_attempts:
+        description: "How many clicks one solve may spend on the widget. `0` watches\nwithout ever clicking, for pages whose own script drives the widget.\nDefaults to `3`."
+        type:
+          - integer
+          - "null"
+        format: uint32
+        minimum: 0
+      retry_ticks:
+        description: "Poll ticks to wait after a click before spending another attempt.\nDefaults to `4`."
+        type:
+          - integer
+          - "null"
+        format: uint32
+        minimum: 0
+      x_fraction:
+        description: "Horizontal click point inside the widget's box, as a fraction of its\nwidth. Defaults to `0.15`."
+        type:
+          - number
+          - "null"
+        format: double
+      y_fraction:
+        description: "Vertical click point inside the widget's box, as a fraction of its\nheight. Defaults to `0.5`."
+        type:
+          - number
+          - "null"
+        format: double
+    additionalProperties: false
+  SelectorsInput:
+    description: "Page markers identifying the Turnstile widget — the request-side mirror\nof the lib's `TurnstileSelectors`.\n\nEvery field is optional and falls back to the lib default *individually*,\nso overriding one marker does not silently blank the others."
+    type: object
+    properties:
+      container:
+        description: "CSS selector for the challenge container, used as a presence signal.\nDefaults to `\".cf-turnstile, .turnstile, [data-sitekey]\"`."
+        type:
+          - string
+          - "null"
+      iframe_src_contains:
+        description: "Substring an `<iframe>`'s `src` must contain for it to be the\nchallenge widget. Defaults to `\"challenges.cloudflare.com\"`. An empty\nstring disables the iframe signal rather than matching every iframe."
+        type:
+          - string
+          - "null"
+      token_inputs:
+        description: "CSS selectors for the hidden input carrying the clearance token, in\npreference order. Defaults to\n`[\"[name=\\\"cf-turnstile-response\\\"]\", \"[name=\\\"cf_challenge_response\\\"]\"]`."
+        type:
+          - array
+          - "null"
+        items:
+          type: string
+    additionalProperties: false

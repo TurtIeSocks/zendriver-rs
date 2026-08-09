@@ -130,7 +130,7 @@ No manual MCP config — the plugin bundles the server plus scraping skills, the
 - **Three ways to "see" the page** — `browser_html` (trimmed DOM), `browser_screenshot` (PNG / JPEG / WebP as inline image content), `browser_element_state` (visibility / geometry / attrs)
 - **Stateful primitives** agents need for real work — `browser_cookies_persist` for save/load auth, full `browser_storage_*`, multi-tab management, frame traversal; `browser_monitor_*` passive network monitor (HTTP / WS / SSE); `browser_request` for HTTP from the page's own session
 - **Anti-bot superpowers** (gated cargo features, on by default for the published binary):
-  - `browser_solve_turnstile` — Cloudflare Turnstile bypass without a CAPTCHA-solving service
+  - `browser_solve_turnstile` — Cloudflare Turnstile bypass without a CAPTCHA-solving service, with the widget's `selectors` and `click_policy` as request fields so an agent can follow Cloudflare's markup changes without waiting on a release
   - `browser_open` `block_trackers` / `tracker_blocklist` — opt-in third-party tracker & fingerprinter host blocking (curated bundled list + bring-your-own file / URL)
   - `browser_solve_datadome` — DataDome device-check / CAPTCHA / block bypass (with `Surface::Webgpu` coherence)
   - `browser_intercept_*` — block/redirect/respond/modify requests via CDP `Fetch.*`

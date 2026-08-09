@@ -85,9 +85,9 @@ The tick then resolves in this order:
 2. **Scroll, re-measure, click.** Raw mouse events carry viewport
    coordinates, so a widget below the fold has to be scrolled in and
    re-measured before a click can land on it. The click goes to
-   `(bbox.x + bbox.width * 0.15, bbox.y + bbox.height * 0.5)` — the
-   canonical 15%-from-left, 50%-from-top position of the checkbox inside
-   the iframe. No Bezier-path motion; Cloudflare wants a real click on a
+   `(bbox.x + bbox.width * 0.15, bbox.y + bbox.height * 0.5)` — by
+   default the 15%-from-left, 50%-from-top position of the checkbox
+   inside the iframe. No Bezier-path motion; Cloudflare wants a real click on a
    real checkbox. A widget that is mounted but hidden or zero-sized is
    never clicked, since there is no meaningful point to click.
 3. **Retry, up to a cap.** Cloudflare drops clicks that land while the
@@ -101,7 +101,103 @@ The tick then resolves in this order:
 
 After ten consecutive ticks with no progress the driver logs a warning
 asking whether `BrowserBuilder::stealth` is on, which is the answer most
-of the time. See [Pairing with stealth](#pairing-with-stealth) below.
+of the time. See [Pairing with stealth](#pairing-with-stealth) below. A
+run configured never to click (`max_attempts: 0`, below) is exempt —
+nothing is stalled there, and stealth would be the wrong thing to go
+change.
+
+Every number and every selector in that description is a default, not a
+constant — the next section is how to change them.
+
+## Markers and clicks are yours
+
+Cloudflare owns the class names, the hidden input's `name`, the iframe
+host and where the checkbox sits inside the widget. They change all of it
+on their own schedule and with no notice. A crate that writes those into
+its source needs a release every time they move, and everyone using it is
+stuck on the old literals until that release lands.
+
+So they aren't in the source. [`TurnstileSelectors`] is what the injected
+evaluators are built from, and [`ClickPolicy`] decides whether and where
+to click:
+
+```rust,ignore
+use zendriver::{ClickPolicy, TurnstileSelectors};
+
+tab.cloudflare()
+    .selectors(TurnstileSelectors {
+        // Cloudflare moved the widget behind a new host.
+        iframe_src_contains: "challenges.example-cdn.com".into(),
+        ..TurnstileSelectors::default()
+    })
+    .click_policy(ClickPolicy {
+        max_attempts: 5,
+        ..ClickPolicy::default()
+    })
+    .wait_for_clearance(Duration::from_secs(30))
+    .await?;
+```
+
+Both are plain structs with public fields and no closures in them, which
+is what lets `browser_solve_turnstile` take them over MCP too — an agent
+that finds the defaults no longer matching a page can hand the solver the
+new markers itself.
+
+The defaults:
+
+| Field | Default |
+|---|---|
+| `TurnstileSelectors::iframe_src_contains` | `"challenges.cloudflare.com"` |
+| `TurnstileSelectors::container` | `".cf-turnstile, .turnstile, [data-sitekey]"` |
+| `TurnstileSelectors::token_inputs` | `["[name=\"cf-turnstile-response\"]", "[name=\"cf_challenge_response\"]"]` |
+| `ClickPolicy::max_attempts` | `3` (`0` watches without ever clicking) |
+| `ClickPolicy::retry_ticks` | `4` |
+| `ClickPolicy::x_fraction` | `0.15` |
+| `ClickPolicy::y_fraction` | `0.5` |
+
+`token_inputs` is tried in order, so a page carrying both the modern and
+the legacy input is read the modern way. An empty value turns a marker
+off rather than widening it: an empty `container` drops the container
+signal, an empty `iframe_src_contains` matches no iframe (rather than
+every iframe, which is what a bare substring test would otherwise do),
+and an empty `token_inputs` leaves only the marker-vanished and deadline
+terminals.
+
+Two things stay fixed, because they are the library's judgement rather
+than Cloudflare's markup. **What counts as clickable** — a widget needs
+non-zero size and must not be hidden by `visibility`, `display` or
+`opacity` — and **how it is brought into view**, a centred instant
+scroll.
+
+### Replacing the click entirely
+
+The click is the part most likely to stop working, and a policy struct
+can only describe clicks that look like the built-in one. [`on_click`]
+hands the whole step over: it is called once per attempt with the session
+and the widget's post-scroll box, and what happens next is up to you —
+a human-ish pointer path, a solver service, a click through a higher
+level of the library.
+
+```rust,ignore
+tab.cloudflare()
+    .on_click(|session, target| async move {
+        my_humanized_click(&session, target.x, target.y).await
+    })
+    .wait_for_clearance(Duration::from_secs(30))
+    .await?;
+```
+
+A handler counts against `max_attempts` exactly as the built-in click
+does, and an error from it fails the run rather than being retried.
+
+It replaces the click, not the decision to click. The driver still
+applies its own clickability rule first, so a handler installed
+specifically to reach a hidden or zero-size widget never runs — that
+widget needs a different approach entirely.
+
+[`TurnstileSelectors`]: https://docs.rs/zendriver/latest/zendriver/struct.TurnstileSelectors.html
+[`ClickPolicy`]: https://docs.rs/zendriver/latest/zendriver/struct.ClickPolicy.html
+[`on_click`]: https://docs.rs/zendriver/latest/zendriver/struct.CloudflareBypass.html#method.on_click
 
 ## Limitations
 
@@ -198,6 +294,9 @@ could not pass" want opposite handling.
 - `.poll_interval(Duration::from_millis(200))` — tighter polling burns
   more CPU but reacts faster to clearance. Defaults to 500 ms which
   balances responsiveness against load.
+- `.selectors(..)` / `.click_policy(..)` / `.on_click(..)` — the markers
+  and the click, covered in [Markers and clicks are
+  yours](#markers-and-clicks-are-yours).
 - Pass a generous `wait_for_clearance` timeout (30-60 s) for the first
   challenge; subsequent navigations on the same `user_data_dir` are
   usually cookie-shortcut clears and resolve in &lt;1 s via

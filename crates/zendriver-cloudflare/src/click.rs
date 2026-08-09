@@ -63,6 +63,7 @@ pub(crate) async fn click_at(
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::testutil::expect_cmd;
     use zendriver_transport::testing::MockConnection;
 
     #[tokio::test]
@@ -75,14 +76,14 @@ mod tests {
             async move { click_at(&s, 12.5, 34.0).await }
         });
 
-        let id_move = mock.expect_cmd("Input.dispatchMouseEvent").await;
+        let id_move = expect_cmd(&mut mock, "Input.dispatchMouseEvent").await;
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["type"], "mouseMoved");
         assert_eq!(sent["params"]["x"], 12.5);
         assert_eq!(sent["params"]["y"], 34.0);
         mock.reply(id_move, serde_json::json!({})).await;
 
-        let id_press = mock.expect_cmd("Input.dispatchMouseEvent").await;
+        let id_press = expect_cmd(&mut mock, "Input.dispatchMouseEvent").await;
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["type"], "mousePressed");
         assert_eq!(sent["params"]["button"], "left");
@@ -91,7 +92,7 @@ mod tests {
         assert_eq!(sent["params"]["y"], 34.0);
         mock.reply(id_press, serde_json::json!({})).await;
 
-        let id_rel = mock.expect_cmd("Input.dispatchMouseEvent").await;
+        let id_rel = expect_cmd(&mut mock, "Input.dispatchMouseEvent").await;
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["type"], "mouseReleased");
         assert_eq!(sent["params"]["button"], "left");

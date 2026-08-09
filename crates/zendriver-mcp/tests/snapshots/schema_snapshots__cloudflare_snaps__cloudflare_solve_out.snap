@@ -21,7 +21,7 @@ $defs:
   Outcome:
     description: "Terminal outcome of a turnstile bypass attempt.\n\n`Solved` and `ChallengeGone` mirror the lib's `ClearanceOutcome`\nvariants. `Timeout` mirrors the lib's `ClearanceOutcome::TimedOut` — a\ndeadline in a turnstile flow is a normal outcome, not an error —\nsurfacing it on the success channel so agents can branch on `outcome`\nwithout try/catch around a timeout."
     oneOf:
-      - description: "Turnstile produced a token (value of `cf-turnstile-response`). The\ntoken is available in [`SolveOutput::token`]."
+      - description: "Turnstile produced a token — the value held by the first matching\n`selectors.token_inputs` entry, `cf-turnstile-response` by default.\nThe token is available in [`SolveOutput::token`]."
         type: string
         const: solved
       - description: "The challenge stopped being actionable without yielding a token\n(e.g. a clearance cookie shortcut). `token` will be `None`.\n\nNot proof the gate was passed: this also fires when the widget is\nstill mounted but hidden or zero-size, so verify the page before\ntreating what you read next as post-challenge content."
