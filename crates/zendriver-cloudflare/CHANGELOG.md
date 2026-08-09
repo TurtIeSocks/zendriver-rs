@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.2.15] - 2026-08-09
+
+### Added
+
+- Make the Turnstile markers and click policy caller data ([#224](https://github.com/TurtIeSocks/zendriver-rs/pull/224))
+
+
 ## [0.2.14] - 2026-08-08
 
 ### Fixed
