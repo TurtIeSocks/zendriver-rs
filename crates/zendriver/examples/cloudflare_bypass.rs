@@ -7,14 +7,21 @@
 //!      to the tab's session.
 //!   3. Call [`CloudflareBypass::wait_for_clearance`] with a 30s budget.
 //!      The driver runs a single CDP poll loop that, per tick, looks for
-//!      the `cf-turnstile-response` token, the Turnstile challenge
-//!      iframe's bounding box (shadow-DOM aware), and any challenge marker
-//!      on the page. When the interactive iframe is present and we have
-//!      not yet clicked it, the driver dispatches a single raw left-click
-//!      at the canonical (15% x, 50% y) offset (Turnstile checkbox).
-//!      Resolves the first tick a token is observed, or the iframe stops
-//!      being a valid click target after a click.
+//!      the clearance token, the Turnstile challenge iframe's bounding box
+//!      (shadow-DOM aware), and any challenge marker on the page. When the
+//!      interactive iframe is present, the driver scrolls it into view,
+//!      re-measures it, and dispatches a raw left-click at the canonical
+//!      (15% x, 50% y) offset (Turnstile checkbox), retrying up to three
+//!      times in case the widget swallowed the first one. Resolves the
+//!      first tick a token is observed, or the challenge stops being
+//!      actionable.
 //!   4. Print the [`ClearanceOutcome`] enum variant + the page title.
+//!
+//! Which markers to look for and how to click are caller data —
+//! `.selectors(TurnstileSelectors { .. })`,
+//! `.click_policy(ClickPolicy { .. })` and `.on_click(..)` — so a change on
+//! Cloudflare's side is a change here, not a release of the crate. This
+//! example takes the defaults.
 //!
 //! Outcomes:
 //!   - `TokenAcquired(_)` — Turnstile yielded a `cf-turnstile-response`

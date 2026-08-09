@@ -5,24 +5,26 @@
 //! single CDP poll loop that, per tick:
 //!
 //! 1. Re-evaluates a unified shadow-DOM walker in the page's main world
-//!    (private `POLL_JS`) returning, in one round-trip:
-//!    - the `cf-turnstile-response` (or legacy `cf_challenge_response`) token
-//!      if present,
+//!    (`js::poll_expr`) returning, in one round-trip:
+//!    - the clearance token if one of the
+//!      [`token_inputs`](TurnstileSelectors::token_inputs) holds a value,
 //!    - the Turnstile challenge iframe's bounding box if mounted,
 //!    - whether *any* challenge marker exists on the page
-//!      (container, hidden input, or live iframe).
+//!      (container, token input, or live iframe).
 //! 2. Resolves to [`ClearanceOutcome::TokenAcquired`] the first tick a
 //!    non-empty token is observed — including the **invisible Turnstile**
 //!    path where the iframe never mounts and the token is populated
 //!    directly.
 //! 3. If a *clickable* challenge iframe is mounted (non-zero size and
-//!    visible), scrolls it into view, re-reads its box, and dispatches a raw
-//!    left-click at the canonical
-//!    `bbox.x + bbox.width * 0.15, bbox.y + bbox.height * 0.50` offset
-//!    (15% from left, 50% from top — Python's `cloudflare.py` convention).
-//!    Up to `MAX_CLICK_ATTEMPTS` clicks are spent, spaced
-//!    `CLICK_RETRY_TICKS` ticks apart, so a swallowed first click is not
-//!    the end of the run.
+//!    visible), scrolls it into view, re-reads its box, and clicks the point
+//!    the [`ClickPolicy`] chose inside it — by default
+//!    `bbox.x + bbox.width * 0.15, bbox.y + bbox.height * 0.50`, the 15%
+//!    from left / 50% from top position of the checkbox. Up to
+//!    [`ClickPolicy::max_attempts`] clicks are spent, spaced
+//!    [`ClickPolicy::retry_ticks`] ticks apart, so a swallowed first click
+//!    is not the end of the run. A caller-supplied
+//!    [`on_click`](CloudflareBypass::on_click) handler replaces the built-in
+//!    raw mouse dispatch.
 //! 4. Resolves to [`ClearanceOutcome::ChallengeGone`] when the challenge
 //!    stops being actionable without yielding a token — either the iframe we
 //!    clicked is no longer a valid click target, or every challenge marker
@@ -34,7 +36,12 @@
 //!    resolved, `false` when the entire timeout window elapsed without
 //!    observing any challenge markers (the caller likely invoked the bypass
 //!    on a page that has no Cloudflare gate at all).
+//!
+//! Every marker the evaluators look for is caller data — see
+//! [`TurnstileSelectors`] for why none of it is a literal in this crate.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -44,11 +51,15 @@ use zendriver_transport::SessionHandle;
 use crate::click::click_at;
 use crate::detection::{BoundingBox, eval_main_world};
 use crate::error::CloudflareError;
+use crate::js;
+use crate::options::{ClickPolicy, ClickTarget, TurnstileSelectors};
 
 /// Result of a clearance attempt.
 #[derive(Debug, Clone)]
 pub enum ClearanceOutcome {
-    /// Turnstile produced a token (value of `cf-turnstile-response`).
+    /// Turnstile produced a token — the value held by the first of the
+    /// configured [`token_inputs`](TurnstileSelectors::token_inputs) to
+    /// match, `[name="cf-turnstile-response"]` by default.
     TokenAcquired(String),
     /// The challenge stopped being actionable without yielding a token — the
     /// iframe we clicked is no longer a valid click target, or all challenge
@@ -75,31 +86,58 @@ pub enum ClearanceOutcome {
 /// Default poll interval for `wait_for_clearance`.
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-/// How many clicks a single `wait_for_clearance` run may spend on the
-/// interactive widget. Cloudflare drops clicks that land while the widget is
-/// still booting, so one latched attempt strands the run until the deadline.
-const MAX_CLICK_ATTEMPTS: u32 = 3;
-
-/// Poll ticks to wait after a click before spending another attempt. At the
-/// default 500ms interval this leaves the widget ~2s to answer a click.
-const CLICK_RETRY_TICKS: u32 = 4;
+/// A caller-supplied click implementation, as stored on the driver.
+///
+/// The public entry is [`CloudflareBypass::on_click`], which is generic over
+/// an ordinary async closure and does the boxing. The session is handed over
+/// by value — it is `Arc`-backed and cheap to clone — so the returned future
+/// borrows nothing and needs no lifetime of its own.
+type ClickHandler = Box<
+    dyn Fn(
+            SessionHandle,
+            ClickTarget,
+        ) -> Pin<Box<dyn Future<Output = Result<(), CloudflareError>> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// Drives a Cloudflare Turnstile clearance flow against a single tab's session.
 ///
 /// Constructed via `Tab::cloudflare()`.
-#[derive(Debug)]
 pub struct CloudflareBypass<'a> {
     pub(crate) session: &'a SessionHandle,
     pub(crate) poll_interval: Duration,
+    pub(crate) selectors: TurnstileSelectors,
+    pub(crate) click_policy: ClickPolicy,
+    pub(crate) on_click: Option<ClickHandler>,
+}
+
+/// Hand-written because `ClickHandler` is a boxed closure and closures are
+/// not `Debug`. Reports whether a handler is installed, which is the only
+/// thing about it worth printing.
+impl std::fmt::Debug for CloudflareBypass<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CloudflareBypass")
+            .field("session", &self.session)
+            .field("poll_interval", &self.poll_interval)
+            .field("selectors", &self.selectors)
+            .field("click_policy", &self.click_policy)
+            .field("on_click", &self.on_click.is_some())
+            .finish()
+    }
 }
 
 impl<'a> CloudflareBypass<'a> {
     /// Create a new bypass driver bound to `session` with a default 500ms
-    /// poll interval.
+    /// poll interval, the default [`TurnstileSelectors`] and the default
+    /// [`ClickPolicy`].
     pub fn new(session: &'a SessionHandle) -> Self {
         Self {
             session,
             poll_interval: DEFAULT_POLL_INTERVAL,
+            selectors: TurnstileSelectors::default(),
+            click_policy: ClickPolicy::default(),
+            on_click: None,
         }
     }
 
@@ -108,6 +146,85 @@ impl<'a> CloudflareBypass<'a> {
     #[must_use]
     pub fn poll_interval(mut self, dur: Duration) -> Self {
         self.poll_interval = dur;
+        self
+    }
+
+    /// Override the page markers that identify the widget. Defaults to
+    /// [`TurnstileSelectors::default`].
+    ///
+    /// The same set feeds the detector, the poll loop and the
+    /// scroll-and-measure step, so Cloudflare renaming something is one
+    /// change here rather than a release of this crate.
+    #[must_use]
+    pub fn selectors(mut self, selectors: TurnstileSelectors) -> Self {
+        self.selectors = selectors;
+        self
+    }
+
+    /// Override whether, how often and where the widget is clicked. Defaults
+    /// to [`ClickPolicy::default`].
+    #[must_use]
+    pub fn click_policy(mut self, policy: ClickPolicy) -> Self {
+        self.click_policy = policy;
+        self
+    }
+
+    /// Replace the built-in click with `handler`.
+    ///
+    /// The built-in click is three raw `Input.dispatchMouseEvent` calls at
+    /// the point [`ClickPolicy`] chose. That is the volatile half of this
+    /// flow — the half that has to change when Cloudflare changes what a
+    /// convincing click looks like — so it is handed over whole rather than
+    /// grown a knob at a time. A handler might move the pointer along a
+    /// human-ish path, drive a solver service, or click through a higher
+    /// level of `zendriver` instead.
+    ///
+    /// The handler is called once per attempt, with the session and the
+    /// widget's post-scroll [`ClickTarget`]. It counts against
+    /// [`ClickPolicy::max_attempts`] exactly as the built-in click does, and
+    /// an `Err` from it fails the whole run rather than being retried.
+    ///
+    /// It replaces the click, not the decision to click. The driver still
+    /// owns what counts as clickable, and only invokes the handler for a
+    /// widget that cleared that bar twice — once when the poll evaluator
+    /// measured it, once after the scroll — where the bar is non-zero size
+    /// and not hidden by `visibility` / `display` / `opacity`. A handler
+    /// installed specifically to reach a hidden or zero-size widget never
+    /// runs; that widget needs a different approach entirely.
+    ///
+    /// ```no_run
+    /// # async fn ex(tab: &zendriver_transport::SessionHandle)
+    /// #   -> Result<(), zendriver_cloudflare::CloudflareError> {
+    /// use std::time::Duration;
+    /// use zendriver_cloudflare::CloudflareBypass;
+    ///
+    /// let outcome = CloudflareBypass::new(tab)
+    ///     .on_click(|session, target| async move {
+    ///         tracing::info!(x = target.x, y = target.y, "clicking turnstile");
+    ///         session
+    ///             .call(
+    ///                 "Input.dispatchMouseEvent",
+    ///                 serde_json::json!({
+    ///                     "type": "mouseMoved", "x": target.x, "y": target.y,
+    ///                 }),
+    ///             )
+    ///             .await?;
+    ///         Ok(())
+    ///     })
+    ///     .wait_for_clearance(Duration::from_secs(30))
+    ///     .await?;
+    /// # let _ = outcome;
+    /// # Ok(()) }
+    /// ```
+    #[must_use]
+    pub fn on_click<F, Fut>(mut self, handler: F) -> Self
+    where
+        F: Fn(SessionHandle, ClickTarget) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<(), CloudflareError>> + Send + 'static,
+    {
+        self.on_click = Some(Box::new(move |session, target| {
+            Box::pin(handler(session, target))
+        }));
         self
     }
 
@@ -120,10 +237,9 @@ impl<'a> CloudflareBypass<'a> {
     /// rules per tick are documented at module level.
     ///
     /// # Returns
-    /// - `Ok(ClearanceOutcome::TokenAcquired(token))` — the
-    ///   `cf-turnstile-response` input picked up a non-empty value, either
-    ///   after we clicked the interactive iframe or because the page uses
-    ///   invisible Turnstile.
+    /// - `Ok(ClearanceOutcome::TokenAcquired(token))` — a configured token
+    ///   input picked up a non-empty value, either after we clicked the
+    ///   interactive iframe or because the page uses invisible Turnstile.
     /// - `Ok(ClearanceOutcome::ChallengeGone)` — the challenge stopped being
     ///   actionable without yielding a token (e.g. a clearance-cookie
     ///   shortcut): either an iframe we clicked is no longer a valid click
@@ -166,7 +282,7 @@ impl<'a> CloudflareBypass<'a> {
         let mut warned_stall = false;
 
         loop {
-            let state = poll_state(self.session).await?;
+            let state = poll_state(self.session, &self.selectors).await?;
             // Snapshot the latch *before* folding in this tick: the
             // markers-vanished terminal below needs "seen on an earlier
             // tick", not "seen including right now".
@@ -180,12 +296,14 @@ impl<'a> CloudflareBypass<'a> {
             }
 
             // Click cadence: the first clickable tick clicks straight away,
-            // every later attempt waits `CLICK_RETRY_TICKS` ticks after the
-            // click that landed, and a run spends at most
-            // `MAX_CLICK_ATTEMPTS` clicks. So at the default interval the
-            // second click lands on tick 5, not tick 4.
-            let may_click = clicks < MAX_CLICK_ATTEMPTS
-                && (clicks == 0 || ticks_since_click >= CLICK_RETRY_TICKS);
+            // every later attempt waits `ClickPolicy::retry_ticks` ticks
+            // after the click that landed, and a run spends at most
+            // `ClickPolicy::max_attempts` clicks. So at the defaults the
+            // second click lands on tick 5, not tick 4. `max_attempts: 0`
+            // never clicks at all, which also keeps the scroll evaluator
+            // from running.
+            let may_click = clicks < self.click_policy.max_attempts
+                && (clicks == 0 || ticks_since_click >= self.click_policy.retry_ticks);
 
             let mut clicked = false;
             match state.bbox {
@@ -193,10 +311,16 @@ impl<'a> CloudflareBypass<'a> {
                     // Raw `Input.dispatchMouseEvent` coordinates are viewport
                     // relative, so a below-the-fold widget must be scrolled in
                     // and re-measured before the click can land on it.
-                    if let Some(target) = scroll_into_view(self.session).await? {
-                        let click_x = target.x + target.width * 0.15;
-                        let click_y = target.y + target.height * 0.50;
-                        click_at(self.session, click_x, click_y).await?;
+                    if let Some(bbox) = scroll_into_view(self.session, &self.selectors).await? {
+                        let target = ClickTarget {
+                            bbox,
+                            x: bbox.x + bbox.width * self.click_policy.x_fraction,
+                            y: bbox.y + bbox.height * self.click_policy.y_fraction,
+                        };
+                        match &self.on_click {
+                            Some(handler) => handler(self.session.clone(), target).await?,
+                            None => click_at(self.session, target.x, target.y).await?,
+                        }
                         clicks += 1;
                         ticks_since_click = 0;
                         clicked = true;
@@ -208,13 +332,15 @@ impl<'a> CloudflareBypass<'a> {
                 // JS-only interstitial clearing itself). Both are usually the
                 // clearance-cookie shortcut.
                 //
-                // OPEN QUESTION: `bbox` is `None` for a widget that is merely
+                // OPEN QUESTION (decisions.md #6, deferred pending live
+                // observation): `bbox` is `None` for a widget that is merely
                 // hidden or zero-size, so after the first landed click any
                 // unclickable tick hits this *success* terminal. Prescribed
-                // fix: return `iframePresent` alongside `bbox` from `POLL_JS`
-                // and key the `clicks > 0` disjunct off presence, not
-                // clickability. Not applied here — changing which runs report
-                // clearance is a call for a human, not a doc fix.
+                // fix: return `iframePresent` alongside `bbox` from the poll
+                // evaluator and key the `clicks > 0` disjunct off presence,
+                // not clickability. Still not applied — changing which runs
+                // report clearance needs a human, and this PR only moved the
+                // markers and the click into caller data.
                 None if clicks > 0 || (seen_markers_before && !state.has_markers) => {
                     return Ok(ClearanceOutcome::ChallengeGone);
                 }
@@ -226,9 +352,15 @@ impl<'a> CloudflareBypass<'a> {
             // the counter, so a widget that stayed mounted but stopped being
             // measurable — the run this hint exists to explain — was the one
             // run that could never produce it.
+            //
+            // Except when the caller set `max_attempts: 0`. The hint reads
+            // "clicks are going nowhere, check stealth", and a run configured
+            // never to click has no clicks to go nowhere: `stall_ticks` only
+            // resets on a landed click, so it would fire on every watch-only
+            // run and blame stealth for behaviour the caller asked for.
             if clicked {
                 stall_ticks = 0;
-            } else {
+            } else if self.click_policy.max_attempts > 0 {
                 stall_ticks += 1;
                 if stall_ticks == 10 && !warned_stall {
                     tracing::warn!(
@@ -268,172 +400,43 @@ impl<'a> CloudflareBypass<'a> {
 /// tick is a single CDP round-trip.
 #[derive(Debug, Deserialize)]
 struct PollState {
-    /// Non-empty `cf-turnstile-response` / `cf_challenge_response` value, if
-    /// any.
+    /// Non-empty value held by the first matching
+    /// [`token_inputs`](TurnstileSelectors::token_inputs) selector, if any.
     #[serde(default)]
     token: Option<String>,
-    /// Bounding box of the Turnstile challenge iframe when it is a valid
-    /// click target — mounted, non-zero size, and visible. Walks shadow roots
-    /// so shadow-hosted widgets still surface. `None` for a hidden or 0×0
+    /// Bounding box of the challenge iframe when it is a valid click target —
+    /// mounted, non-zero size, and visible. Walks shadow roots so
+    /// shadow-hosted widgets still surface. `None` for a hidden or 0×0
     /// iframe, which must never be clicked.
     #[serde(default)]
     bbox: Option<BoundingBox>,
-    /// `true` when the page has any of: a `.cf-turnstile` / `.turnstile`
-    /// container, a `cf-turnstile-response` hidden input, or a live
-    /// challenge iframe. Used to distinguish "wrong page" (no markers ever
-    /// seen) from "real challenge that timed out".
+    /// `true` when the page has any of the configured markers: a
+    /// [`container`](TurnstileSelectors::container), a matching token input,
+    /// or a live challenge iframe. Used to distinguish "wrong page" (no
+    /// markers ever seen) from "real challenge that timed out".
     #[serde(default, rename = "hasMarkers")]
     has_markers: bool,
 }
 
-/// Shared in-page prelude for the two evaluators below. Declares:
-///
-/// - `findChallengeIframe(root)` — the first `challenges.cloudflare.com`
-///   iframe reachable from `root`, descending into open shadow roots
-///   (Cloudflare sometimes hosts the widget inside a shadow root), else null.
-/// - `clickableRect(el)` — `el`'s viewport rect *only if it is a real click
-///   target*: non-zero size and not hidden by `visibility` / `display` /
-///   `opacity`. A zero-size or hidden iframe is not a target — invisible
-///   Turnstile mounts a 0×0 iframe whose token is populated with no click,
-///   and clicking it would dispatch mouse events at a meaningless point.
-///
-/// Never evaluated on its own — [`main_world_expr`] wraps it, so nothing here
-/// reaches the page's global object. See that function for why.
-///
-/// # JavaScript style
-/// Injected scripts in this crate declare with `var` and iterate with
-/// indexed loops, never `for...of` — `detect.js` included. `for...of` over a
-/// `NodeList` enters through `NodeList.prototype[Symbol.iterator]`, a
-/// writable, configurable property the page can redefine to watch someone
-/// walk its DOM. That one is worth declining: it is a single chokepoint,
-/// entered once per loop and then driven by one `next()` per element, and a
-/// handler installed there can read `new Error().stack` and filter the
-/// page's own iteration out of what it collects. An indexed loop never
-/// reaches it.
-///
-/// It buys that one signal and no more. Indexed access is *not*
-/// unobservable: `NodeList.prototype.length` is a WebIDL accessor with
-/// `configurable: true`, so a page can wrap the getter, delegate to the
-/// original, and count every read with nothing of its own broken. The rest
-/// of the walk is louder. Each tick calls `root.querySelectorAll("iframe")`
-/// and then `root.querySelectorAll("*")`, both ordinary writable methods on
-/// `Document` / `Element` / `DocumentFragment`, and the iframe test below
-/// calls `String.prototype.includes` — equally patchable — with the literal
-/// `"challenges.cloudflare.com"`. A hook there is handed the hostname the
-/// walker is hunting for, which is a sharper tell than the iterator hook
-/// this convention avoids.
-///
-/// Measured on Chrome 151 with all four wrapped: the walk still returns the
-/// right iframe, while the page observes both `querySelectorAll` selectors,
-/// every `length` read and that hostname, against zero `Symbol.iterator`
-/// calls. So the convention removes one signal from a loop that stays
-/// observable to a page that looks for it; it is not cover. This is a rule
-/// about declarations and iteration only — modern methods are used freely,
-/// since declining them would buy nothing either.
-const WALKER_JS: &str = r#"
-function findChallengeIframe(root) {
-    var iframes = root.querySelectorAll ? root.querySelectorAll("iframe") : [];
-    for (var i = 0; i < iframes.length; i++) {
-        var f = iframes[i];
-        if (f.src && f.src.includes("challenges.cloudflare.com")) return f;
-    }
-    var all = root.querySelectorAll ? root.querySelectorAll("*") : [];
-    for (var j = 0; j < all.length; j++) {
-        if (all[j].shadowRoot) {
-            var sub = findChallengeIframe(all[j].shadowRoot);
-            if (sub) return sub;
-        }
-    }
-    return null;
-}
-function clickableRect(el) {
-    if (!el) return null;
-    var r = el.getBoundingClientRect();
-    if (!(r.width > 0 && r.height > 0)) return null;
-    var view = el.ownerDocument && el.ownerDocument.defaultView;
-    var style = view && view.getComputedStyle ? view.getComputedStyle(el) : null;
-    if (style && (style.visibility === "hidden" || style.display === "none" || style.opacity === "0")) {
-        return null;
-    }
-    return { x: r.left, y: r.top, width: r.width, height: r.height };
-}
-"#;
-
-/// Body of the unified poll evaluator — statements only, run inside
-/// [`main_world_expr`]'s wrapper alongside [`WALKER_JS`]. Returns:
-/// - `token` — non-empty `cf-turnstile-response` (or legacy
-///   `cf_challenge_response`) input value, else null.
-/// - `bbox` — the challenge iframe's rect when it is a valid click target,
-///   else null.
-/// - `hasMarkers` — true when *any* Cloudflare challenge marker is present
-///   (container, hidden input, or challenge iframe — visible or not).
-///
-/// The token input is in light DOM by design (page JS reads it to submit
-/// forms), so `document.querySelector` is sufficient there.
-const POLL_JS: &str = r#"
-    var iframe = findChallengeIframe(document);
-    var bbox = clickableRect(iframe);
-    var input =
-        document.querySelector('[name="cf-turnstile-response"]') ||
-        document.querySelector('[name="cf_challenge_response"]');
-    var token = (input && input.value) ? input.value : null;
-    var hasContainer = !!document.querySelector('.cf-turnstile, .turnstile, [data-sitekey]');
-    var hasMarkers = hasContainer || !!input || !!iframe;
-    return { token: token, bbox: bbox, hasMarkers: hasMarkers };
-"#;
-
-/// Body of the scroll-into-view evaluator — statements only, run inside
-/// [`main_world_expr`]'s wrapper alongside [`WALKER_JS`]. Brings the
-/// challenge iframe fully into the viewport when it isn't already, then
-/// returns its *post-scroll* rect — or null if the widget vanished or is not
-/// a valid click target.
-///
-/// `behavior: "instant"` is load-bearing: the default `"auto"` resolves to
-/// the element's computed `scroll-behavior`, so on a page setting
-/// `html { scroll-behavior: smooth }` the scroll animates and the
-/// `clickableRect` call on the next synchronous line reads the *pre*-scroll
-/// rect — the one thing this round-trip exists to avoid.
-const SCROLL_JS: &str = r#"
-    var iframe = findChallengeIframe(document);
-    if (!iframe) return null;
-    var r = iframe.getBoundingClientRect();
-    var vw = window.innerWidth || document.documentElement.clientWidth;
-    var vh = window.innerHeight || document.documentElement.clientHeight;
-    var fullyVisible = r.top >= 0 && r.left >= 0 && r.bottom <= vh && r.right <= vw;
-    if (!fullyVisible && iframe.scrollIntoView) {
-        iframe.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
-    }
-    return clickableRect(iframe);
-"#;
-
-/// Compose the in-page source for `body`: [`WALKER_JS`] and `body` together
-/// inside a single IIFE, whose completion value is whatever `body` returns.
-///
-/// The wrapper is a stealth requirement, not formatting. `Runtime.evaluate`
-/// with no `contextId` runs a *classic script* in the page's main world,
-/// where a top-level `function foo() {}` becomes a property of the global
-/// object. Evaluating `WALKER_JS` unwrapped therefore published
-/// `window.findChallengeIframe` and `window.clickableRect` to the page on
-/// every poll tick — names belonging to an automation library, sitting in
-/// the same realm as the challenge script, for anything enumerating `window`
-/// to find. Inside the IIFE they are ordinary locals and the page's globals
-/// are untouched.
-fn main_world_expr(body: &str) -> String {
-    format!("(function(){{{WALKER_JS}{body}}})()")
-}
-
-/// Run [`POLL_JS`] against `session`'s main world and decode the result.
-async fn poll_state(session: &SessionHandle) -> Result<PollState, CloudflareError> {
-    let value = eval_main_world(session, &main_world_expr(POLL_JS)).await?;
+/// Run the poll evaluator against `session`'s main world and decode the
+/// result.
+async fn poll_state(
+    session: &SessionHandle,
+    selectors: &TurnstileSelectors,
+) -> Result<PollState, CloudflareError> {
+    let value = eval_main_world(session, &js::poll_expr(selectors)).await?;
     serde_json::from_value(value)
         .map_err(|e| CloudflareError::JsError(format!("invalid poll payload: {e}")))
 }
 
-/// Run [`SCROLL_JS`] against `session`'s main world: scroll the challenge
-/// iframe into view if needed and return the rect to click, or `None` when
-/// the widget is gone or not clickable.
-async fn scroll_into_view(session: &SessionHandle) -> Result<Option<BoundingBox>, CloudflareError> {
-    let value = eval_main_world(session, &main_world_expr(SCROLL_JS)).await?;
+/// Run the scroll evaluator against `session`'s main world: scroll the
+/// challenge iframe into view if needed and return the rect to click, or
+/// `None` when the widget is gone or not clickable.
+async fn scroll_into_view(
+    session: &SessionHandle,
+    selectors: &TurnstileSelectors,
+) -> Result<Option<BoundingBox>, CloudflareError> {
+    let value = eval_main_world(session, &js::scroll_expr(selectors)).await?;
     if value.is_null() {
         return Ok(None);
     }
@@ -445,16 +448,35 @@ async fn scroll_into_view(session: &SessionHandle) -> Result<Option<BoundingBox>
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use serde_json::{Value, json};
 
     use super::*;
+    use crate::testutil::{CMD_BUDGET, expect_cmd};
     use zendriver_transport::testing::{LogCapture, MockConnection};
 
-    /// How long a drain loop waits for the driver's next command before
+    /// How long a serving loop waits for the driver's next command before
     /// deciding the run is over. Long enough to cover a poll interval plus
     /// scheduling jitter, short enough that a finished driver ends the loop
     /// promptly instead of hanging the test.
     const DRAIN_BUDGET: Duration = Duration::from_millis(300);
+
+    /// Bounded `JoinHandle` await for a driver task.
+    ///
+    /// `wait_for_clearance` polls until a terminal or its own deadline, so a
+    /// regression that makes a terminal unreachable leaves the handle
+    /// pending forever. Unbounded, the test then hangs instead of failing —
+    /// which is exactly what happened when the `ChallengeGone` gate was
+    /// reverted to prove the marker-vanished test discriminates.
+    async fn outcome_of(
+        fut: tokio::task::JoinHandle<Result<ClearanceOutcome, CloudflareError>>,
+    ) -> Result<ClearanceOutcome, CloudflareError> {
+        match tokio::time::timeout(CMD_BUDGET, fut).await {
+            Ok(joined) => joined.expect("driver task panicked"),
+            Err(_) => panic!("driver never reached a terminal"),
+        }
+    }
 
     /// Wrap an evaluator result value in the CDP `Runtime.evaluate` envelope.
     fn eval_reply(value: Value) -> Value {
@@ -479,7 +501,7 @@ mod tests {
     /// carries: the scroll helper gets `scroll`, the poll evaluator gets
     /// `poll`. Returns `true` when the answered call was the scroll helper.
     async fn answer_eval(mock: &mut MockConnection, poll: &Value, scroll: &Value) -> bool {
-        let id = mock.expect_cmd("Runtime.evaluate").await;
+        let id = expect_cmd(mock, "Runtime.evaluate").await;
         let expr = mock.last_sent()["params"]["expression"]
             .as_str()
             .unwrap()
@@ -499,7 +521,7 @@ mod tests {
     async fn answer_click(mock: &mut MockConnection) -> (f64, f64) {
         let mut coords = (f64::NAN, f64::NAN);
         for expected in ["mouseMoved", "mousePressed", "mouseReleased"] {
-            let id = mock.expect_cmd("Input.dispatchMouseEvent").await;
+            let id = expect_cmd(mock, "Input.dispatchMouseEvent").await;
             let sent = mock.last_sent().clone();
             assert_eq!(sent["params"]["type"], expected);
             coords = (
@@ -509,151 +531,6 @@ mod tests {
             mock.reply(id, json!({})).await;
         }
         coords
-    }
-
-    /// Names every declaration in `src` at `{}` depth 0 that a classic
-    /// script publishes on the page's global object: `var` and *named*
-    /// `function`. Both become enumerable `window` properties (verified on
-    /// Chrome 151); `let` / `const` / `class` are script-scoped and never
-    /// do, so they are not leaks and are not counted. An anonymous
-    /// `function (` — the IIFE wrapper itself — is an expression and binds
-    /// nothing.
-    ///
-    /// Brace counting is only sound because no injected source puts a brace
-    /// inside a string literal. Keep it that way; the alternative is a JS
-    /// parser for a cookie-name-sized job. Comment text is scanned like any
-    /// other, which can only ever produce a loud false positive, never a
-    /// silent pass.
-    fn top_level_page_globals(src: &str) -> Vec<String> {
-        let is_ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
-        let mut found = Vec::new();
-        let mut depth = 0i32;
-        for (i, ch) in src.char_indices() {
-            match ch {
-                '{' => depth += 1,
-                '}' => depth -= 1,
-                _ => {}
-            }
-            if depth != 0 {
-                continue;
-            }
-            // A keyword that is really the tail of a longer identifier
-            // declares nothing: `myvar`, `refunction`.
-            if src[..i].chars().next_back().is_some_and(is_ident) {
-                continue;
-            }
-            for keyword in ["function", "var"] {
-                let Some(rest) = src[i..].strip_prefix(keyword) else {
-                    continue;
-                };
-                // `var` needs a separator to be a declaration. `function`
-                // does not: `function(` is an expression, and the empty-name
-                // check below is what rejects it.
-                if keyword == "var" && !rest.starts_with(char::is_whitespace) {
-                    break;
-                }
-                let name: String = rest
-                    .trim_start()
-                    .chars()
-                    .take_while(|c| is_ident(*c))
-                    .collect();
-                if !name.is_empty() {
-                    found.push(name);
-                }
-                break;
-            }
-        }
-        found
-    }
-
-    /// The leak guard has to be able to fail. Fed the pre-fix shape — the
-    /// walker evaluated beside the IIFE rather than inside it — it must name
-    /// the declaration; fed the shipped shape it must stay quiet. The `var`
-    /// case is here because the scan is named for page globals, and a
-    /// top-level `var` is one just as much as a `function` is.
-    #[test]
-    fn top_level_scan_catches_every_leaked_page_global() {
-        assert_eq!(
-            top_level_page_globals(
-                "function findChallengeIframe(root) { return null; }\n(function(){ return 1; })()"
-            ),
-            vec!["findChallengeIframe".to_string()],
-        );
-        assert_eq!(
-            top_level_page_globals("var iframes = document.querySelectorAll('iframe');"),
-            vec!["iframes".to_string()],
-            "a top-level `var` is a `window` property too"
-        );
-        assert!(
-            top_level_page_globals("(function(){ function nested(){} var local = 1; })()")
-                .is_empty(),
-            "a declaration inside the wrapper is a local, not a global"
-        );
-        // Script-scoped forms never reach `window`, so flagging them would
-        // be a false positive, and a keyword inside a longer identifier is
-        // not a keyword at all.
-        assert!(
-            top_level_page_globals("let a = 1; const b = 2; class C {}\nvarnish.myvar = 3;")
-                .is_empty(),
-        );
-    }
-
-    /// `Runtime.evaluate` with no `contextId` runs a classic script in the
-    /// page's main world, where a top-level `function foo() {}` or `var bar`
-    /// becomes `window.foo` / `window.bar`. Publishing `findChallengeIframe`
-    /// / `clickableRect` there hands the challenge script — same realm,
-    /// actively looking — a pair of names belonging to an automation
-    /// library, on every poll tick. Every source this crate injects keeps
-    /// its helpers and its locals inside a function scope.
-    #[test]
-    fn injected_sources_declare_no_page_globals() {
-        for (name, src) in [
-            ("poll evaluator", main_world_expr(POLL_JS)),
-            ("scroll evaluator", main_world_expr(SCROLL_JS)),
-            ("detect.js", include_str!("detect.js").to_string()),
-        ] {
-            let leaked = top_level_page_globals(&src);
-            assert!(
-                leaked.is_empty(),
-                "{name} publishes {leaked:?} onto the page's global object"
-            );
-        }
-
-        // The two composed sources must still *contain* the helpers, so this
-        // cannot pass by the walker having quietly gone missing.
-        for body in [POLL_JS, SCROLL_JS] {
-            let expr = main_world_expr(body);
-            assert!(expr.contains("function findChallengeIframe("));
-            assert!(expr.contains("function clickableRect("));
-            assert!(
-                expr.starts_with("(function(){") && expr.ends_with("})()"),
-                "the composed source must be exactly one IIFE"
-            );
-        }
-    }
-
-    /// `scrollIntoView`'s default `behavior: "auto"` resolves to the
-    /// element's computed `scroll-behavior`, so on a page setting
-    /// `html { scroll-behavior: smooth }` the scroll animates and the
-    /// `clickableRect` call on the next synchronous line reads the
-    /// *pre*-scroll rect — the one thing this extra round-trip exists to
-    /// avoid, leaving the click aimed outside the viewport.
-    #[test]
-    fn scroll_evaluator_pins_instant_scroll_behavior() {
-        const CALL: &str = "scrollIntoView(";
-        let src = main_world_expr(SCROLL_JS);
-        let mut calls = 0;
-        for (idx, _) in src.match_indices(CALL) {
-            let after = &src[idx + CALL.len()..];
-            let end = after.find(')').expect("unterminated scrollIntoView call");
-            let args = &after[..end];
-            assert!(
-                args.contains(r#"behavior: "instant""#),
-                "scrollIntoView({args}) leaves behavior to the page's computed scroll-behavior"
-            );
-            calls += 1;
-        }
-        assert_eq!(calls, 1, "expected one scrollIntoView call to guard");
     }
 
     /// The stall hint must fire for the run it is most needed on: a widget
@@ -728,6 +605,57 @@ mod tests {
         conn.shutdown();
     }
 
+    /// The same hint must **not** fire for a caller who set
+    /// `max_attempts: 0`.
+    ///
+    /// It reads "clearance stalled — is stealth enabled?", and stealth is
+    /// not the problem: `stall_ticks` only resets on a landed click, so a
+    /// run explicitly configured never to click accumulates them from tick
+    /// one and trips the hint every time. That advice is wrong twice over —
+    /// nothing is stalled, and the caller is told to go change an unrelated
+    /// browser setting. `max_attempts: 0` is new in this PR, so the false
+    /// positive would have been new with it.
+    #[tokio::test]
+    async fn a_watch_only_run_is_never_blamed_on_stealth() {
+        /// Past the tenth tick, which is where the hint fires.
+        const MOUNTED_TICKS: usize = 12;
+
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let capture = LogCapture::new();
+
+        // Not spawned: `LogCapture` follows the future it wraps, not a task
+        // spawned out of it, so the driver and the mock server share a task.
+        let driver = capture.capture(async {
+            CloudflareBypass::new(&sess)
+                .poll_interval(Duration::from_millis(1))
+                .click_policy(ClickPolicy {
+                    max_attempts: 0,
+                    ..ClickPolicy::default()
+                })
+                .wait_for_clearance(Duration::from_secs(30))
+                .await
+        });
+
+        let widget = widget_rect();
+        let (outcome, calls) = tokio::join!(driver, serve(&mut mock, &widget, Some(MOUNTED_TICKS)));
+
+        // The token only lands after MOUNTED_TICKS polls, so reaching it is
+        // proof the run went well past the tick the hint fires on — this
+        // cannot pass by the run having ended early.
+        match outcome.unwrap() {
+            ClearanceOutcome::TokenAcquired(t) => assert_eq!(t, END_TOKEN),
+            other => panic!("expected TokenAcquired, got {other:?}"),
+        }
+        assert!(!saw(&calls, MOUSE), "the policy said do not click");
+        assert!(
+            !capture.contains("clearance stalled"),
+            "a run told not to click is not a stalled run; captured {:?}",
+            capture.events()
+        );
+        conn.shutdown();
+    }
+
     /// Interactive happy path: poll #1 yields a bbox → the widget is scrolled
     /// into view → click_at fires the three mouse events at (15% × width,
     /// 50% × height) of the **post-scroll** rect → poll #2 observes the token
@@ -757,7 +685,7 @@ mod tests {
         });
 
         // Poll #1: unified evaluator returns an off-screen bbox, no token.
-        let id_poll1 = mock.expect_cmd("Runtime.evaluate").await;
+        let id_poll1 = expect_cmd(&mut mock, "Runtime.evaluate").await;
         let expr = mock.last_sent()["params"]["expression"]
             .as_str()
             .unwrap()
@@ -781,7 +709,7 @@ mod tests {
         .await;
 
         // Scroll helper runs before the click and re-measures the widget.
-        let id_scroll = mock.expect_cmd("Runtime.evaluate").await;
+        let id_scroll = expect_cmd(&mut mock, "Runtime.evaluate").await;
         assert!(
             mock.last_sent()["params"]["expression"]
                 .as_str()
@@ -801,15 +729,93 @@ mod tests {
         assert_eq!(y, EXPECTED_CLICK_Y);
 
         // Poll #2: token appears → TokenAcquired terminates the loop.
-        let id_poll2 = mock.expect_cmd("Runtime.evaluate").await;
+        let id_poll2 = expect_cmd(&mut mock, "Runtime.evaluate").await;
         mock.reply(
             id_poll2,
             eval_reply(poll_value(Some("TOKEN_XYZ"), None, true)),
         )
         .await;
 
-        match fut.await.unwrap().unwrap() {
+        match outcome_of(fut).await.unwrap() {
             ClearanceOutcome::TokenAcquired(t) => assert_eq!(t, "TOKEN_XYZ"),
+            other => panic!("expected TokenAcquired, got {other:?}"),
+        }
+        conn.shutdown();
+    }
+
+    /// A widget that mounts *late* and *below the fold* still gets clicked,
+    /// at its post-scroll position.
+    ///
+    /// This is the run the click-once latch used to lose. Every other click
+    /// test here hands the driver a bbox on poll #1, so all of them pass
+    /// against a driver that only ever considers clicking on its first tick;
+    /// this one does not. It is also the only test where the pre-scroll rect
+    /// is far enough off-screen that clicking it would land nowhere, so it
+    /// is what the scroll-and-re-measure step has to earn its round-trip
+    /// against.
+    #[tokio::test]
+    async fn wait_for_clearance_clicks_a_widget_that_mounts_late_and_below_the_fold() {
+        /// Polls that report markers but nothing clickable yet.
+        const EMPTY_TICKS: usize = 3;
+        // Mounts 3000px down, scrolls to (100, 200) at 80×40 → the click
+        // belongs at (100 + 80*0.15, 200 + 40*0.50) = (112, 220). Clicking
+        // the pre-scroll rect would give y = 3020 instead.
+        const EXPECTED_CLICK: (f64, f64) = (112.0, 220.0);
+
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move {
+                let b = CloudflareBypass::new(&s).poll_interval(Duration::from_millis(1));
+                b.wait_for_clearance(Duration::from_secs(5)).await
+            }
+        });
+
+        // Nothing to click for the first few ticks — the widget has not
+        // mounted yet.
+        for _ in 0..EMPTY_TICKS {
+            let id = expect_cmd(&mut mock, "Runtime.evaluate").await;
+            mock.reply(id, eval_reply(poll_value(None, None, true)))
+                .await;
+        }
+
+        // It mounts, far below the fold.
+        let id = expect_cmd(&mut mock, "Runtime.evaluate").await;
+        mock.reply(
+            id,
+            eval_reply(poll_value(
+                None,
+                Some(rect(100.0, 3000.0, 80.0, 40.0)),
+                true,
+            )),
+        )
+        .await;
+
+        // The scroll evaluator brings it into view and re-measures it.
+        let id = expect_cmd(&mut mock, "Runtime.evaluate").await;
+        assert!(
+            mock.last_sent()["params"]["expression"]
+                .as_str()
+                .unwrap()
+                .contains("scrollIntoView"),
+            "a widget below the fold must be scrolled in before the click"
+        );
+        mock.reply(id, eval_reply(widget_rect())).await;
+
+        assert_eq!(
+            answer_click(&mut mock).await,
+            EXPECTED_CLICK,
+            "the click must use the post-scroll rect, not the off-screen one"
+        );
+
+        let id = expect_cmd(&mut mock, "Runtime.evaluate").await;
+        mock.reply(id, eval_reply(poll_value(Some(END_TOKEN), None, true)))
+            .await;
+
+        match outcome_of(fut).await.unwrap() {
+            ClearanceOutcome::TokenAcquired(t) => assert_eq!(t, END_TOKEN),
             other => panic!("expected TokenAcquired, got {other:?}"),
         }
         conn.shutdown();
@@ -831,14 +837,14 @@ mod tests {
             }
         });
 
-        let id_poll = mock.expect_cmd("Runtime.evaluate").await;
+        let id_poll = expect_cmd(&mut mock, "Runtime.evaluate").await;
         mock.reply(
             id_poll,
             eval_reply(poll_value(Some("INVISIBLE_TOKEN"), None, true)),
         )
         .await;
 
-        match fut.await.unwrap().unwrap() {
+        match outcome_of(fut).await.unwrap() {
             ClearanceOutcome::TokenAcquired(t) => assert_eq!(t, "INVISIBLE_TOKEN"),
             other => panic!("expected TokenAcquired, got {other:?}"),
         }
@@ -866,17 +872,17 @@ mod tests {
 
         // Two ticks with markers but no bbox and no token.
         for _ in 0..2 {
-            let id = mock.expect_cmd("Runtime.evaluate").await;
+            let id = expect_cmd(&mut mock, "Runtime.evaluate").await;
             mock.reply(id, eval_reply(poll_value(None, None, true)))
                 .await;
         }
 
         // Third tick: the token finally lands.
-        let id = mock.expect_cmd("Runtime.evaluate").await;
+        let id = expect_cmd(&mut mock, "Runtime.evaluate").await;
         mock.reply(id, eval_reply(poll_value(Some("LATE_TOKEN"), None, true)))
             .await;
 
-        match fut.await.unwrap().unwrap() {
+        match outcome_of(fut).await.unwrap() {
             ClearanceOutcome::TokenAcquired(t) => assert_eq!(t, "LATE_TOKEN"),
             other => panic!("expected TokenAcquired, got {other:?}"),
         }
@@ -901,16 +907,16 @@ mod tests {
         });
 
         // Tick #1: interstitial markers, no clickable widget.
-        let id1 = mock.expect_cmd("Runtime.evaluate").await;
+        let id1 = expect_cmd(&mut mock, "Runtime.evaluate").await;
         mock.reply(id1, eval_reply(poll_value(None, None, true)))
             .await;
 
         // Tick #2: the interstitial cleared itself — every marker is gone.
-        let id2 = mock.expect_cmd("Runtime.evaluate").await;
+        let id2 = expect_cmd(&mut mock, "Runtime.evaluate").await;
         mock.reply(id2, eval_reply(poll_value(None, None, false)))
             .await;
 
-        let outcome = fut.await.unwrap().unwrap();
+        let outcome = outcome_of(fut).await.unwrap();
         assert!(
             matches!(outcome, ClearanceOutcome::ChallengeGone),
             "expected ChallengeGone, got {outcome:?}"
@@ -947,7 +953,7 @@ mod tests {
                 .await;
         }
 
-        match fut.await.unwrap().unwrap() {
+        match outcome_of(fut).await.unwrap() {
             ClearanceOutcome::TimedOut { saw_challenge } => assert!(!saw_challenge),
             other => panic!("expected TimedOut, got {other:?}"),
         }
@@ -984,20 +990,34 @@ mod tests {
         answer_click(&mut mock).await;
 
         // Poll #2: iframe gone, no token — markers linger in the DOM.
-        let id_poll2 = mock.expect_cmd("Runtime.evaluate").await;
+        let id_poll2 = expect_cmd(&mut mock, "Runtime.evaluate").await;
         mock.reply(id_poll2, eval_reply(poll_value(None, None, true)))
             .await;
 
-        let outcome = fut.await.unwrap().unwrap();
+        let outcome = outcome_of(fut).await.unwrap();
         assert!(matches!(outcome, ClearanceOutcome::ChallengeGone));
         conn.shutdown();
     }
 
     /// A widget that stays mounted and unanswered gets clicked again after
-    /// [`CLICK_RETRY_TICKS`] ticks — but never more than
-    /// [`MAX_CLICK_ATTEMPTS`] times in one run.
+    /// [`ClickPolicy::retry_ticks`] ticks — but never more than
+    /// [`ClickPolicy::max_attempts`] times in one run.
+    ///
+    /// The assertion is the *tick indices*, not the count. A count pins only
+    /// the cap: it is satisfied whatever the spacing, so `retry_ticks` could
+    /// be read as any constant — or dropped, clicking on every tick until
+    /// the cap ran out — and three clicks would still be three clicks.
+    ///
+    /// Both numbers are literals rather than reads of `ClickPolicy::default`.
+    /// An expectation computed from the value the driver reads is satisfied
+    /// by any change to that value, including one that breaks retrying;
+    /// `options::tests` is the one place that holds the defaults to 3 and 4.
     #[tokio::test]
-    async fn wait_for_clearance_retries_click_up_to_max_attempts() {
+    async fn wait_for_clearance_retries_click_at_the_default_cadence() {
+        /// Ticks the widget stays mounted for. Comfortably past the third
+        /// click, so a fourth would have room to show up and fail this.
+        const MOUNTED_TICKS: usize = 14;
+
         let (mut mock, conn) = MockConnection::pair();
         let sess = SessionHandle::new(conn.clone(), "S1");
 
@@ -1005,46 +1025,395 @@ mod tests {
             let s = sess.clone();
             async move {
                 let b = CloudflareBypass::new(&s).poll_interval(Duration::from_millis(1));
-                b.wait_for_clearance(Duration::from_millis(200)).await
+                b.wait_for_clearance(Duration::from_secs(5)).await
             }
         });
 
-        let widget = rect(10.0, 20.0, 40.0, 40.0);
-        let poll = poll_value(None, Some(widget.clone()), true);
+        let widget = widget_rect();
+        let calls = serve(&mut mock, &widget, Some(MOUNTED_TICKS)).await;
 
-        let mut clicks: u32 = 0;
+        assert_eq!(
+            click_ticks(&calls),
+            vec![0, 4, 8],
+            "three clicks, four ticks apart, then nothing for the six ticks after"
+        );
+        match outcome_of(fut).await.unwrap() {
+            ClearanceOutcome::TokenAcquired(t) => assert_eq!(t, END_TOKEN),
+            other => panic!("expected TokenAcquired, got {other:?}"),
+        }
+        conn.shutdown();
+    }
+
+    /// The token the serving loop below ends a run with.
+    const END_TOKEN: &str = "END";
+
+    /// One CDP command the driver sent, tagged with the poll tick it belongs
+    /// to. Mouse events carry their `type` so a test can count *clicks*
+    /// rather than the three events each click is made of.
+    type TickedCall = (usize, String);
+
+    // Labels, not raw CDP method names: both evaluators arrive as
+    // `Runtime.evaluate` and all three events of a click arrive as
+    // `Input.dispatchMouseEvent`, so the method alone cannot tell a poll
+    // from a scroll or a click from a pointer move. Kept mutually
+    // non-prefixing so that [`saw`], which matches on a prefix, cannot
+    // answer a question about one of them with a hit on another.
+    const POLL_EVAL: &str = "Runtime.evaluate(poll)";
+    const SCROLL_EVAL: &str = "Runtime.evaluate(scroll)";
+    const MOUSE: &str = "Input.dispatchMouseEvent";
+    const PRESS: &str = "Input.dispatchMouseEvent(mousePressed)";
+
+    /// Serve a mounted, unanswered widget until the driver goes quiet,
+    /// replying to the scroll evaluator with `widget` and to mouse events
+    /// with `{}`.
+    ///
+    /// `bbox_ticks: Some(n)` switches the poll payload to a token on tick
+    /// `n`, ending the run on a state the *test* chose. That matters more
+    /// than it looks: the alternative is letting the driver's wall-clock
+    /// deadline end it, which makes "exactly three clicks" an assertion
+    /// about how many poll ticks fit in 200ms on the machine running CI.
+    /// `None` keeps the widget mounted forever and lets the deadline decide,
+    /// for the tests whose subject *is* the timeout.
+    ///
+    /// Returns every CDP command observed, in order, each tagged with the
+    /// index of the poll tick it arrived on — so a test can assert not only
+    /// how many clicks landed but *when*, and can assert on what was
+    /// **absent**, which `expect_cmd` structurally cannot do since it
+    /// discards non-matching frames.
+    async fn serve(
+        mock: &mut MockConnection,
+        widget: &Value,
+        bbox_ticks: Option<usize>,
+    ) -> Vec<TickedCall> {
+        let mut calls: Vec<TickedCall> = Vec::new();
+        let mut polls = 0usize;
+        let mut tick = 0usize;
+
         while let Some((method, id)) = mock.recv_cmd_timeout(DRAIN_BUDGET).await {
-            match method.as_str() {
+            let (label, reply) = match method.as_str() {
                 "Runtime.evaluate" => {
                     let is_scroll = mock.last_sent()["params"]["expression"]
                         .as_str()
                         .unwrap()
                         .contains("scrollIntoView");
-                    let value = if is_scroll {
-                        widget.clone()
+                    if is_scroll {
+                        (SCROLL_EVAL.to_string(), eval_reply(widget.clone()))
                     } else {
-                        poll.clone()
-                    };
-                    mock.reply(id, eval_reply(value)).await;
+                        // A poll evaluator opens a new tick; the scroll and
+                        // the mouse events that follow belong to it.
+                        tick = polls;
+                        polls += 1;
+                        let spent = bbox_ticks.is_some_and(|n| tick >= n);
+                        let value = if spent {
+                            poll_value(Some(END_TOKEN), None, true)
+                        } else {
+                            poll_value(None, Some(widget.clone()), true)
+                        };
+                        (POLL_EVAL.to_string(), eval_reply(value))
+                    }
                 }
                 "Input.dispatchMouseEvent" => {
-                    if mock.last_sent()["params"]["type"] == "mousePressed" {
-                        clicks += 1;
-                    }
-                    mock.reply(id, json!({})).await;
+                    let kind = mock.last_sent()["params"]["type"].as_str().unwrap();
+                    (format!("{method}({kind})"), json!({}))
                 }
-                other => panic!("unexpected CDP method {other}"),
-            }
+                other => (other.to_string(), json!({})),
+            };
+            calls.push((tick, label));
+            mock.reply(id, reply).await;
         }
+        calls
+    }
 
-        match fut.await.unwrap().unwrap() {
+    /// Index of the poll tick each click landed on, one entry per click.
+    fn click_ticks(calls: &[TickedCall]) -> Vec<usize> {
+        calls
+            .iter()
+            .filter(|(_, label)| label == PRESS)
+            .map(|(tick, _)| *tick)
+            .collect()
+    }
+
+    /// True if any command matching `prefix` was ever observed.
+    fn saw(calls: &[TickedCall], prefix: &str) -> bool {
+        calls.iter().any(|(_, label)| label.starts_with(prefix))
+    }
+
+    /// A widget rect the default policy and the custom policies below all
+    /// map to *different* click points, so no assertion here can be
+    /// satisfied by the wrong policy having been applied.
+    fn widget_rect() -> Value {
+        rect(100.0, 200.0, 80.0, 40.0)
+    }
+
+    /// `max_attempts: 0` is the caller saying "watch, do not touch" — the
+    /// page's own script drives the widget and a synthetic click would only
+    /// interfere. The driver must then never dispatch a mouse event, and
+    /// never even run the scroll evaluator: scrolling a page the caller
+    /// asked us not to touch is itself a change they did not ask for.
+    ///
+    /// Deadline-terminated rather than token-terminated, because this is
+    /// also the crate's coverage of `TimedOut { saw_challenge: true }`. That
+    /// outcome is what keeps the two absence assertions honest: it can only
+    /// be reached by ticks that ran and saw markers, so they cannot pass by
+    /// the run having done nothing at all.
+    #[tokio::test]
+    async fn click_policy_zero_attempts_never_dispatches_a_click() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move {
+                CloudflareBypass::new(&s)
+                    .poll_interval(Duration::from_millis(1))
+                    .click_policy(ClickPolicy {
+                        max_attempts: 0,
+                        ..ClickPolicy::default()
+                    })
+                    .wait_for_clearance(Duration::from_millis(60))
+                    .await
+            }
+        });
+
+        let widget = widget_rect();
+        let calls = serve(&mut mock, &widget, None).await;
+
+        assert!(
+            !saw(&calls, MOUSE),
+            "max_attempts: 0 must not click; observed {calls:?}"
+        );
+        assert!(
+            !saw(&calls, SCROLL_EVAL),
+            "a run that will never click must not scroll the page either; observed {calls:?}"
+        );
+        match outcome_of(fut).await.unwrap() {
             ClearanceOutcome::TimedOut { saw_challenge } => assert!(saw_challenge),
             other => panic!("expected TimedOut, got {other:?}"),
         }
+        conn.shutdown();
+    }
+
+    /// The attempt cap and the retry cadence are both the caller's to set,
+    /// and both are moved here at once: five attempts where the built-in cap
+    /// is three, one tick apart where the built-in cadence is four. So a
+    /// driver still reading either constant produces different tick indices
+    /// and fails, and this test plus the default-cadence one above pin
+    /// `retry_ticks` at two separate values rather than at none.
+    #[tokio::test]
+    async fn click_policy_sets_the_attempt_cap_and_the_retry_cadence() {
+        const ATTEMPTS: u32 = 5;
+        const RETRY_TICKS: u32 = 1;
+        /// Four ticks past the last expected click, so a sixth attempt has
+        /// somewhere to appear.
+        const MOUNTED_TICKS: usize = 9;
+
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move {
+                CloudflareBypass::new(&s)
+                    .poll_interval(Duration::from_millis(1))
+                    .click_policy(ClickPolicy {
+                        max_attempts: ATTEMPTS,
+                        retry_ticks: RETRY_TICKS,
+                        ..ClickPolicy::default()
+                    })
+                    .wait_for_clearance(Duration::from_secs(5))
+                    .await
+            }
+        });
+
+        let widget = widget_rect();
+        let calls = serve(&mut mock, &widget, Some(MOUNTED_TICKS)).await;
+
         assert_eq!(
-            clicks, MAX_CLICK_ATTEMPTS,
-            "a mounted, unanswered widget should be retried up to the cap"
+            click_ticks(&calls),
+            vec![0, 1, 2, 3, 4],
+            "five clicks on consecutive ticks, then four quiet ticks"
         );
+        match outcome_of(fut).await.unwrap() {
+            ClearanceOutcome::TokenAcquired(t) => assert_eq!(t, END_TOKEN),
+            other => panic!("expected TokenAcquired, got {other:?}"),
+        }
+        conn.shutdown();
+    }
+
+    /// Where inside the widget to click is a volatile detail of Cloudflare's
+    /// own layout, so it is caller data. The fractions here land the click
+    /// somewhere the built-in 15% / 50% never would.
+    #[tokio::test]
+    async fn click_policy_moves_the_click_point() {
+        // 100 + 80 * 0.5 = 140, 200 + 40 * 0.25 = 210.
+        // The built-in policy would give (112, 220) — neither coordinate
+        // matches, so this cannot pass against the hardcoded offsets.
+        const EXPECTED_X: f64 = 140.0;
+        const EXPECTED_Y: f64 = 210.0;
+
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move {
+                CloudflareBypass::new(&s)
+                    .poll_interval(Duration::from_millis(1))
+                    .click_policy(ClickPolicy {
+                        x_fraction: 0.5,
+                        y_fraction: 0.25,
+                        ..ClickPolicy::default()
+                    })
+                    .wait_for_clearance(Duration::from_secs(5))
+                    .await
+            }
+        });
+
+        let widget = widget_rect();
+        let id_poll = expect_cmd(&mut mock, "Runtime.evaluate").await;
+        mock.reply(
+            id_poll,
+            eval_reply(poll_value(None, Some(widget.clone()), true)),
+        )
+        .await;
+
+        let id_scroll = expect_cmd(&mut mock, "Runtime.evaluate").await;
+        mock.reply(id_scroll, eval_reply(widget)).await;
+
+        let (x, y) = answer_click(&mut mock).await;
+        assert_eq!((x, y), (EXPECTED_X, EXPECTED_Y));
+
+        let id_poll2 = expect_cmd(&mut mock, "Runtime.evaluate").await;
+        mock.reply(id_poll2, eval_reply(poll_value(Some("T"), None, true)))
+            .await;
+
+        match outcome_of(fut).await.unwrap() {
+            ClearanceOutcome::TokenAcquired(t) => assert_eq!(t, "T"),
+            other => panic!("expected TokenAcquired, got {other:?}"),
+        }
+        conn.shutdown();
+    }
+
+    /// The click is the volatile half of this flow — the half that has to
+    /// change when Cloudflare changes. `on_click` hands it to the caller
+    /// wholesale: the built-in raw mouse dispatch must not also run, so the
+    /// decisive assertion is the *absence* of `Input.dispatchMouseEvent`.
+    #[tokio::test]
+    async fn on_click_replaces_the_built_in_mouse_dispatch() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+        let seen: Arc<Mutex<Vec<ClickTarget>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            let seen = Arc::clone(&seen);
+            async move {
+                CloudflareBypass::new(&s)
+                    .poll_interval(Duration::from_millis(1))
+                    .on_click(move |_session, target| {
+                        let seen = Arc::clone(&seen);
+                        async move {
+                            seen.lock().expect("poisoned").push(target);
+                            Ok(())
+                        }
+                    })
+                    .wait_for_clearance(Duration::from_secs(5))
+                    .await
+            }
+        });
+
+        let widget = widget_rect();
+        let calls = serve(&mut mock, &widget, Some(6)).await;
+
+        assert!(
+            !saw(&calls, MOUSE),
+            "on_click owns the click; the built-in dispatch must not fire too — saw {calls:?}"
+        );
+        let targets = seen.lock().expect("poisoned").clone();
+        assert!(!targets.is_empty(), "on_click was never invoked");
+        // The handler is handed the post-scroll rect and the point the
+        // policy chose inside it, so a caller can click it their own way.
+        assert_eq!(targets[0].bbox.width, 80.0);
+        assert_eq!((targets[0].x, targets[0].y), (112.0, 220.0));
+
+        match outcome_of(fut).await.unwrap() {
+            ClearanceOutcome::TokenAcquired(t) => assert_eq!(t, END_TOKEN),
+            other => panic!("expected TokenAcquired, got {other:?}"),
+        }
+        conn.shutdown();
+    }
+
+    /// A failing caller click is a failing run — swallowing it would leave
+    /// the loop burning its budget on a click that never happens.
+    #[tokio::test]
+    async fn on_click_error_aborts_the_run() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move {
+                CloudflareBypass::new(&s)
+                    .poll_interval(Duration::from_millis(1))
+                    .on_click(|_session, _target| async {
+                        Err(CloudflareError::JsError("solver exploded".into()))
+                    })
+                    .wait_for_clearance(Duration::from_secs(5))
+                    .await
+            }
+        });
+
+        // The handler errors on the very first attempt, so the driver is
+        // gone long before tick 6; `serve` ends on the mock going quiet.
+        let widget = widget_rect();
+        serve(&mut mock, &widget, Some(6)).await;
+
+        let err = outcome_of(fut)
+            .await
+            .expect_err("handler error must propagate");
+        assert!(err.to_string().contains("solver exploded"), "got {err}");
+        conn.shutdown();
+    }
+
+    /// The markers are caller data all the way down: a custom marker must
+    /// reach the evaluator the loop actually dispatches, not just the
+    /// template that builds it.
+    #[tokio::test]
+    async fn configured_markers_reach_the_poll_evaluator() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+
+        let fut = tokio::spawn({
+            let s = sess.clone();
+            async move {
+                CloudflareBypass::new(&s)
+                    .poll_interval(Duration::from_millis(1))
+                    .selectors(TurnstileSelectors {
+                        iframe_src_contains: "gate.alien.invalid".into(),
+                        ..TurnstileSelectors::default()
+                    })
+                    .wait_for_clearance(Duration::from_secs(5))
+                    .await
+            }
+        });
+
+        let id = expect_cmd(&mut mock, "Runtime.evaluate").await;
+        let expr = mock.last_sent()["params"]["expression"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(expr.contains("gate.alien.invalid"), "custom marker ignored");
+        assert!(
+            !expr.contains("challenges.cloudflare.com"),
+            "the default marker is still baked into the dispatched evaluator"
+        );
+        mock.reply(id, eval_reply(poll_value(Some("T"), None, true)))
+            .await;
+
+        match outcome_of(fut).await.unwrap() {
+            ClearanceOutcome::TokenAcquired(t) => assert_eq!(t, "T"),
+            other => panic!("expected TokenAcquired, got {other:?}"),
+        }
         conn.shutdown();
     }
 }

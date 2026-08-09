@@ -6,6 +6,8 @@ pub use zendriver::CaptchaChallenge
 pub use zendriver::CaptchaKind
 pub use zendriver::CaptchaSolution
 pub use zendriver::ClearanceOutcome
+pub use zendriver::ClickPolicy
+pub use zendriver::ClickTarget
 pub use zendriver::CloudflareBypass
 pub use zendriver::CloudflareError
 pub use zendriver::Connection
@@ -17,7 +19,9 @@ pub use zendriver::DataDomeError
 pub use zendriver::DataDomeSolution
 pub use zendriver::DataDomeSurface
 pub use zendriver::DetectionSnapshot
+pub use zendriver::Distribution
 pub use zendriver::Fetcher
+pub use zendriver::FetcherBuild
 pub use zendriver::FetcherChannel
 pub use zendriver::FetcherError
 pub use zendriver::FetcherPhase
@@ -55,10 +59,13 @@ pub use zendriver::Surface
 pub use zendriver::TargetInfo
 pub use zendriver::TargetObserver
 pub use zendriver::TransportError
+pub use zendriver::TurnstileBoundingBox
+pub use zendriver::TurnstileSelectors
 pub use zendriver::VersionSpec
 pub use zendriver::WebgpuSpec
 pub use zendriver::datadome_detect_surface
 pub use zendriver::detect_surface
+pub use zendriver::list_builds
 pub mod zendriver::browser
 pub enum zendriver::browser::Channel
 pub zendriver::browser::Channel::Auto

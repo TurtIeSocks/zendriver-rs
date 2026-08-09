@@ -78,6 +78,12 @@ rmcp       = { workspace = true, features = ["client", "transport-child-process"
 # publish` strips this dev-dep from the published manifest — avoids
 # requiring the `test-support` feature on crates.io's `zendriver-interception`.
 zendriver-interception = { path = "../zendriver-interception", features = ["test-support"] }
+# `testing` exposes `MockConnection`, the in-memory duplex the cloudflare
+# request-wiring test drives a real bypass driver over — no browser, no
+# network, just the production Connection actor fed by hand. Path-only for the
+# same reason as the dev-dep above: `cargo publish` strips it, so crates.io's
+# `zendriver-transport` is not asked for an extra feature.
+zendriver-transport = { path = "../zendriver-transport", features = ["testing"] }
 
 [lints]
 workspace = true

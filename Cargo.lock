@@ -3598,6 +3598,7 @@ dependencies = [
  "zendriver-fingerprints",
  "zendriver-interception",
  "zendriver-stealth",
+ "zendriver-transport",
 ]
 
 [[package]]

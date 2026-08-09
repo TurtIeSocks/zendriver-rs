@@ -1027,3 +1027,35 @@ excluded = "one row of a build listing (selector + label); a menu type for CLI/l
 [[entry]]
 api = "zendriver::list_builds"
 excluded = "enumerates downloadable builds for a platform; a discovery helper for pickers, and browser_fetch_chrome takes a version directly"
+
+# ── Cloudflare markers + click policy as caller data (PR 6a) ───────────────
+# The crate used to bake Cloudflare's selectors and click offsets in as
+# literals. They are Cloudflare's to change without notice, so they are now
+# plain-data inputs — which is exactly what makes them expressible over the
+# wire, and `browser_solve_turnstile` takes both.
+[[entry]]
+api = "zendriver::TurnstileSelectors"
+covered = "browser_solve_turnstile.selectors"
+
+[[entry]]
+api = "zendriver::ClickPolicy"
+covered = "browser_solve_turnstile.click_policy"
+
+# `ClickTarget` and its `bbox` exist only as arguments to the `on_click`
+# callback, which is deliberately not a tool: a request/response tool cannot
+# hand a closure back into the middle of a poll loop. Nothing in a solve
+# request or response carries either type.
+[[entry]]
+api = "zendriver::ClickTarget"
+excluded = "argument to the on_click callback; callback API, no request/response tool shape"
+
+[[entry]]
+api = "zendriver::TurnstileBoundingBox"
+excluded = "geometry carried by ClickTarget into the on_click callback; callback API, no request/response tool shape"
+
+# Not baseline-visible (an inherent method on a type re-exported from
+# zendriver-cloudflare, which cargo-public-api reports only as the re-export),
+# recorded so the decision is written down where the others are.
+[[entry]]
+api = "zendriver::CloudflareBypass::on_click"
+excluded = "callback API; no request/response tool shape"

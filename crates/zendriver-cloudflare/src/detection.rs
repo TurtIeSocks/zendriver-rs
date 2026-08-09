@@ -1,9 +1,10 @@
 //! Shadow-DOM Turnstile challenge detection.
 //!
-//! Dispatches a `Runtime.evaluate` carrying [`detect.js`](./detect.js), which
+//! Dispatches a `Runtime.evaluate` carrying `js::detect_expr`, which
 //! recursively walks the document plus every shadow root looking for an
-//! iframe whose `src` includes `challenges.cloudflare.com`. Returns the
-//! iframe's bounding box (in viewport coordinates) or `None`.
+//! iframe whose `src` contains the caller's
+//! [`iframe_src_contains`](TurnstileSelectors::iframe_src_contains) marker.
+//! Returns the iframe's bounding box (in viewport coordinates) or `None`.
 //!
 //! Run against the page main world: Turnstile lives inside the page's own
 //! frame graph, so an isolated-world context is unnecessary and the lookup
@@ -15,13 +16,25 @@ use zendriver_transport::SessionHandle;
 
 use crate::CloudflareBypass;
 use crate::error::CloudflareError;
+use crate::js;
+use crate::options::TurnstileSelectors;
 
 /// Bounding box of the Turnstile iframe, in viewport CSS pixels.
+///
+/// Public because it is what a caller-supplied
+/// [`on_click`](CloudflareBypass::on_click) handler is measured against, as
+/// [`ClickTarget::bbox`](crate::ClickTarget::bbox). The `zendriver` facade
+/// re-exports it as `TurnstileBoundingBox`, since that crate already has a
+/// `BoundingBox` of its own for element geometry.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
-pub(crate) struct BoundingBox {
+pub struct BoundingBox {
+    /// Viewport-relative left edge, in CSS pixels.
     pub x: f64,
+    /// Viewport-relative top edge, in CSS pixels.
     pub y: f64,
+    /// Width in CSS pixels.
     pub width: f64,
+    /// Height in CSS pixels.
     pub height: f64,
 }
 
@@ -76,8 +89,9 @@ pub(crate) async fn eval_main_world(
 /// A 0×0 invisible-Turnstile iframe is mounted but must never be clicked.
 pub(crate) async fn detect_challenge(
     session: &SessionHandle,
+    selectors: &TurnstileSelectors,
 ) -> Result<Option<BoundingBox>, CloudflareError> {
-    let value = eval_main_world(session, include_str!("detect.js")).await?;
+    let value = eval_main_world(session, &js::detect_expr(selectors)).await?;
 
     if value.is_null() {
         return Ok(None);
@@ -89,10 +103,17 @@ pub(crate) async fn detect_challenge(
 }
 
 impl CloudflareBypass<'_> {
-    /// Returns `true` if a Cloudflare Turnstile challenge iframe is currently
-    /// mounted anywhere in the page (including shadow roots).
+    /// Returns `true` if a Turnstile challenge iframe is currently mounted
+    /// anywhere in the page (including shadow roots), matched against this
+    /// driver's [`selectors`](CloudflareBypass::selectors).
+    ///
+    /// # Errors
+    /// - [`CloudflareError::Call`] / [`CloudflareError::JsError`] — CDP or
+    ///   in-page evaluator failure.
     pub async fn is_challenge_present(&self) -> Result<bool, CloudflareError> {
-        Ok(detect_challenge(self.session).await?.is_some())
+        Ok(detect_challenge(self.session, &self.selectors)
+            .await?
+            .is_some())
     }
 }
 
@@ -100,6 +121,7 @@ impl CloudflareBypass<'_> {
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::testutil::expect_cmd;
     use zendriver_transport::testing::MockConnection;
 
     #[tokio::test]
@@ -115,14 +137,14 @@ mod tests {
             }
         });
 
-        let id = mock.expect_cmd("Runtime.evaluate").await;
+        let id = expect_cmd(&mut mock, "Runtime.evaluate").await;
         let sent = mock.last_sent();
         assert!(
             sent["params"]["expression"]
                 .as_str()
                 .unwrap()
                 .contains("challenges.cloudflare.com"),
-            "detect.js script should be inlined as the expression"
+            "the detect evaluator should be inlined as the expression"
         );
         assert_eq!(sent["params"]["returnByValue"], true);
 
@@ -143,6 +165,43 @@ mod tests {
             "challenge bbox returned → is_challenge_present == true"
         );
 
+        conn.shutdown();
+    }
+
+    /// The detector used to inject a standalone script file carrying its own
+    /// copy of the Cloudflare hostname, so configuring the marker on the
+    /// bypass changed the poll loop and left the detector answering about a
+    /// different widget.
+    #[tokio::test]
+    async fn is_challenge_present_uses_the_configured_marker() {
+        let (mut mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn.clone(), "S1");
+
+        let fut = tokio::spawn({
+            let bypass_sess = sess.clone();
+            async move {
+                let b = CloudflareBypass::new(&bypass_sess).selectors(TurnstileSelectors {
+                    iframe_src_contains: "gate.alien.invalid".into(),
+                    ..TurnstileSelectors::default()
+                });
+                b.is_challenge_present().await
+            }
+        });
+
+        let id = expect_cmd(&mut mock, "Runtime.evaluate").await;
+        let expr = mock.last_sent()["params"]["expression"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(expr.contains("gate.alien.invalid"), "custom marker ignored");
+        assert!(
+            !expr.contains("challenges.cloudflare.com"),
+            "the detector still carries its own copy of the default marker"
+        );
+        mock.reply(id, json!({ "result": { "type": "object" } }))
+            .await;
+
+        assert!(!fut.await.unwrap().unwrap());
         conn.shutdown();
     }
 }

@@ -180,7 +180,15 @@ pub use zendriver_interception::{
 /// the types without depending on the sub-crate directly. Drive via
 /// [`Tab::cloudflare`].
 #[cfg(feature = "cloudflare")]
-pub use zendriver_cloudflare::{ClearanceOutcome, CloudflareBypass, CloudflareError};
+pub use zendriver_cloudflare::{
+    ClearanceOutcome, ClickPolicy, ClickTarget, CloudflareBypass, CloudflareError,
+    TurnstileSelectors,
+};
+
+/// Geometry of the Turnstile widget (aliased to avoid colliding with the
+/// element-geometry [`BoundingBox`] above). Carried by [`ClickTarget`].
+#[cfg(feature = "cloudflare")]
+pub use zendriver_cloudflare::BoundingBox as TurnstileBoundingBox;
 
 /// Imperva WAF / Incapsula bypass surface re-exports.
 ///
