@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["bypass","click","detection","error"]};
+window.SIDEBAR_ITEMS = {"mod":["bypass","click","detection","error","options"]};

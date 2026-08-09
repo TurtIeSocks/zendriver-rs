@@ -252,10 +252,12 @@ match tab.cloudflare()
     Err(CloudflareError::NoChallenge) =&gt; { /* already clear */ }
     Err(e) =&gt; return Err(e.into()),
 }</code></pre>
-<p>The driver uses the same shadow-DOM walk approach as nodriver, runs
-the canonical 15%-from-left / 50%-from-top click at the iframe offset,
-and polls the <code>cf-turnstile-response</code> input for a non-empty value.
-Pair with <code>StealthProfile::spoofed()</code> for the best bypass rate. See
+<p>The driver uses the same shadow-DOM walk approach as nodriver, runs a
+15%-from-left / 50%-from-top click at the iframe offset, and polls the
+<code>cf-turnstile-response</code> input for a non-empty value. Unlike nodriver,
+none of those are baked in — the markers and the click are caller data,
+and the click itself can be replaced outright. Pair with
+<code>StealthProfile::spoofed()</code> for the best bypass rate. See
 <a href="./cloudflare.html">Cloudflare</a>.</p>
 <h3 id="no-magic-methods--explicit-await-and-nth"><a class="header" href="#no-magic-methods--explicit-await-and-nth">No magic methods — explicit <code>.await</code> and <code>.nth()</code></a></h3>
 <p>nodriver leans on Python dunders to make the API feel imperative:</p>

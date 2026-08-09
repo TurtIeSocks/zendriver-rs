@@ -205,14 +205,21 @@ flow.</p>
 //!      to the tab's session.
 //!   3. Call [`CloudflareBypass::wait_for_clearance`] with a 30s budget.
 //!      The driver runs a single CDP poll loop that, per tick, looks for
-//!      the `cf-turnstile-response` token, the Turnstile challenge
-//!      iframe's bounding box (shadow-DOM aware), and any challenge marker
-//!      on the page. When the interactive iframe is present and we have
-//!      not yet clicked it, the driver dispatches a single raw left-click
-//!      at the canonical (15% x, 50% y) offset (Turnstile checkbox).
-//!      Resolves the first tick a token is observed, or the iframe stops
-//!      being a valid click target after a click.
+//!      the clearance token, the Turnstile challenge iframe's bounding box
+//!      (shadow-DOM aware), and any challenge marker on the page. When the
+//!      interactive iframe is present, the driver scrolls it into view,
+//!      re-measures it, and dispatches a raw left-click at the canonical
+//!      (15% x, 50% y) offset (Turnstile checkbox), retrying up to three
+//!      times in case the widget swallowed the first one. Resolves the
+//!      first tick a token is observed, or the challenge stops being
+//!      actionable.
 //!   4. Print the [`ClearanceOutcome`] enum variant + the page title.
+//!
+//! Which markers to look for and how to click are caller data —
+//! `.selectors(TurnstileSelectors { .. })`,
+//! `.click_policy(ClickPolicy { .. })` and `.on_click(..)` — so a change on
+//! Cloudflare's side is a change here, not a release of the crate. This
+//! example takes the defaults.
 //!
 //! Outcomes:
 //!   - `TokenAcquired(_)` — Turnstile yielded a `cf-turnstile-response`
@@ -324,9 +331,9 @@ without anything to click.</li>
 <li><strong>Scroll, re-measure, click.</strong> Raw mouse events carry viewport
 coordinates, so a widget below the fold has to be scrolled in and
 re-measured before a click can land on it. The click goes to
-<code>(bbox.x + bbox.width * 0.15, bbox.y + bbox.height * 0.5)</code> — the
-canonical 15%-from-left, 50%-from-top position of the checkbox inside
-the iframe. No Bezier-path motion; Cloudflare wants a real click on a
+<code>(bbox.x + bbox.width * 0.15, bbox.y + bbox.height * 0.5)</code> — by
+default the 15%-from-left, 50%-from-top position of the checkbox
+inside the iframe. No Bezier-path motion; Cloudflare wants a real click on a
 real checkbox. A widget that is mounted but hidden or zero-sized is
 never clicked, since there is no meaningful point to click.</li>
 <li><strong>Retry, up to a cap.</strong> Cloudflare drops clicks that land while the
@@ -340,7 +347,81 @@ until the deadline.</li>
 </ol>
 <p>After ten consecutive ticks with no progress the driver logs a warning
 asking whether <code>BrowserBuilder::stealth</code> is on, which is the answer most
-of the time. See <a href="#pairing-with-stealth">Pairing with stealth</a> below.</p>
+of the time. See <a href="#pairing-with-stealth">Pairing with stealth</a> below. A
+run configured never to click (<code>max_attempts: 0</code>, below) is exempt —
+nothing is stalled there, and stealth would be the wrong thing to go
+change.</p>
+<p>Every number and every selector in that description is a default, not a
+constant — the next section is how to change them.</p>
+<h2 id="markers-and-clicks-are-yours"><a class="header" href="#markers-and-clicks-are-yours">Markers and clicks are yours</a></h2>
+<p>Cloudflare owns the class names, the hidden input's <code>name</code>, the iframe
+host and where the checkbox sits inside the widget. They change all of it
+on their own schedule and with no notice. A crate that writes those into
+its source needs a release every time they move, and everyone using it is
+stuck on the old literals until that release lands.</p>
+<p>So they aren't in the source. <a href="https://docs.rs/zendriver/latest/zendriver/struct.TurnstileSelectors.html"><code>TurnstileSelectors</code></a> is what the injected
+evaluators are built from, and <a href="https://docs.rs/zendriver/latest/zendriver/struct.ClickPolicy.html"><code>ClickPolicy</code></a> decides whether and where
+to click:</p>
+<pre><code class="language-rust ignore">use zendriver::{ClickPolicy, TurnstileSelectors};
+
+tab.cloudflare()
+    .selectors(TurnstileSelectors {
+        // Cloudflare moved the widget behind a new host.
+        iframe_src_contains: "challenges.example-cdn.com".into(),
+        ..TurnstileSelectors::default()
+    })
+    .click_policy(ClickPolicy {
+        max_attempts: 5,
+        ..ClickPolicy::default()
+    })
+    .wait_for_clearance(Duration::from_secs(30))
+    .await?;</code></pre>
+<p>Both are plain structs with public fields and no closures in them, which
+is what lets <code>browser_solve_turnstile</code> take them over MCP too — an agent
+that finds the defaults no longer matching a page can hand the solver the
+new markers itself.</p>
+<p>The defaults:</p>
+<div class="table-wrapper"><table><thead><tr><th>Field</th><th>Default</th></tr></thead><tbody>
+<tr><td><code>TurnstileSelectors::iframe_src_contains</code></td><td><code>"challenges.cloudflare.com"</code></td></tr>
+<tr><td><code>TurnstileSelectors::container</code></td><td><code>".cf-turnstile, .turnstile, [data-sitekey]"</code></td></tr>
+<tr><td><code>TurnstileSelectors::token_inputs</code></td><td><code>["[name=\"cf-turnstile-response\"]", "[name=\"cf_challenge_response\"]"]</code></td></tr>
+<tr><td><code>ClickPolicy::max_attempts</code></td><td><code>3</code> (<code>0</code> watches without ever clicking)</td></tr>
+<tr><td><code>ClickPolicy::retry_ticks</code></td><td><code>4</code></td></tr>
+<tr><td><code>ClickPolicy::x_fraction</code></td><td><code>0.15</code></td></tr>
+<tr><td><code>ClickPolicy::y_fraction</code></td><td><code>0.5</code></td></tr>
+</tbody></table>
+</div>
+<p><code>token_inputs</code> is tried in order, so a page carrying both the modern and
+the legacy input is read the modern way. An empty value turns a marker
+off rather than widening it: an empty <code>container</code> drops the container
+signal, an empty <code>iframe_src_contains</code> matches no iframe (rather than
+every iframe, which is what a bare substring test would otherwise do),
+and an empty <code>token_inputs</code> leaves only the marker-vanished and deadline
+terminals.</p>
+<p>Two things stay fixed, because they are the library's judgement rather
+than Cloudflare's markup. <strong>What counts as clickable</strong> — a widget needs
+non-zero size and must not be hidden by <code>visibility</code>, <code>display</code> or
+<code>opacity</code> — and <strong>how it is brought into view</strong>, a centred instant
+scroll.</p>
+<h3 id="replacing-the-click-entirely"><a class="header" href="#replacing-the-click-entirely">Replacing the click entirely</a></h3>
+<p>The click is the part most likely to stop working, and a policy struct
+can only describe clicks that look like the built-in one. <a href="https://docs.rs/zendriver/latest/zendriver/struct.CloudflareBypass.html#method.on_click"><code>on_click</code></a>
+hands the whole step over: it is called once per attempt with the session
+and the widget's post-scroll box, and what happens next is up to you —
+a human-ish pointer path, a solver service, a click through a higher
+level of the library.</p>
+<pre><code class="language-rust ignore">tab.cloudflare()
+    .on_click(|session, target| async move {
+        my_humanized_click(&amp;session, target.x, target.y).await
+    })
+    .wait_for_clearance(Duration::from_secs(30))
+    .await?;</code></pre>
+<p>A handler counts against <code>max_attempts</code> exactly as the built-in click
+does, and an error from it fails the run rather than being retried.</p>
+<p>It replaces the click, not the decision to click. The driver still
+applies its own clickability rule first, so a handler installed
+specifically to reach a hidden or zero-size widget never runs — that
+widget needs a different approach entirely.</p>
 <h2 id="limitations"><a class="header" href="#limitations">Limitations</a></h2>
 <p>The driver <strong>clicks the visible interactive Turnstile checkbox</strong>, and
 picks up the token on the invisible path when Cloudflare's own script
@@ -421,6 +502,9 @@ could not pass" want opposite handling.</p>
 <li><code>.poll_interval(Duration::from_millis(200))</code> — tighter polling burns
 more CPU but reacts faster to clearance. Defaults to 500 ms which
 balances responsiveness against load.</li>
+<li><code>.selectors(..)</code> / <code>.click_policy(..)</code> / <code>.on_click(..)</code> — the markers
+and the click, covered in <a href="#markers-and-clicks-are-yours">Markers and clicks are
+yours</a>.</li>
 <li>Pass a generous <code>wait_for_clearance</code> timeout (30-60 s) for the first
 challenge; subsequent navigations on the same <code>user_data_dir</code> are
 usually cookie-shortcut clears and resolve in &lt;1 s via

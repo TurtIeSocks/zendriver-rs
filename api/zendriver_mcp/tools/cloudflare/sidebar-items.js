@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["Outcome"],"fn":["solve_turnstile"],"struct":["SolveInput","SolveOutput"]};
+window.SIDEBAR_ITEMS = {"enum":["Outcome"],"fn":["solve_turnstile"],"struct":["ClickPolicyInput","SelectorsInput","SolveInput","SolveOutput"]};
