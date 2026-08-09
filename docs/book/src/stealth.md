@@ -119,9 +119,11 @@ document).
 ## Customizing the fingerprint
 
 All three profiles return a builder that lets you override individual
-fingerprint fields. The values are validated and clamped at resolve
-time (e.g. `memory_gb` is clamped to a plausible W3C-rounded value;
-`cpu_count` is clamped to `2..=32`).
+fingerprint fields. **What you set is what gets reported.** Values that
+real browsers don't produce — a `memory_gb` outside `{1, 2, 4, 8}`, a
+`cpu_count` outside `2..=32` — are logged as warnings naming the field,
+and then used as given. The host probe behind the *defaults* still rounds,
+because there the input is a measurement rather than something you stated.
 
 ```rust,no_run
 use zendriver::{Browser, StealthProfile};
@@ -151,6 +153,22 @@ differently-weighted list. Its first entry then becomes
 `navigator.language` as well, because Chrome always reports that as
 `navigator.languages[0]`, and a locale sitting outside the advertised
 list is a mismatch no real browser produces.
+
+`chrome_version(126)` pins only the major, and a UA needs four digits — so
+the other three get invented, and the resolver logs a warning telling you
+it did. When the exact build matters, state it:
+
+```rust,no_run
+use zendriver::StealthProfile;
+
+let profile = StealthProfile::spoofed().chrome_full_version("125.0.6422.113");
+```
+
+That drives the UA-CH `fullVersionList` (the UA string itself only ever
+carries Chrome's reduced `125.0.0.0` form), and its leading component
+becomes the reported major, so it wins over `chrome_version` when both are
+set. Take the value from a real Chrome release; a build number nobody
+shipped is its own tell.
 
 A [`Persona`](https://docs.rs/zendriver-stealth/latest/zendriver_stealth/struct.Persona.html)
 carries the same `timezone` / `locale` / `languages` / `screen` fields,

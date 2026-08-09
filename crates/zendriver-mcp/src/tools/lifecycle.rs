@@ -30,6 +30,22 @@ pub struct OpenInput {
     /// Run Chrome with `--headless=new` (default: `true`).
     #[serde(default = "default_true")]
     pub headless: bool,
+    /// Add the container launch defaults `--no-sandbox` and
+    /// `--disable-dev-shm-usage`.
+    ///
+    /// Both exist for one environment: a container running as root, where
+    /// Chrome's sandbox refuses to start and the small `/dev/shm` starves the
+    /// renderer. Left unset this follows the `CI` environment variable, which
+    /// is what the server has always done. Pass `true` to get them in a
+    /// container that sets no `CI`, or `false` to keep them out of an
+    /// environment that does. `--no-sandbox` drops Chrome's process
+    /// isolation, so only use it on a throwaway browser.
+    ///
+    /// `false` reliably controls the `--no-sandbox` half only: the `native`
+    /// and `spoofed` stealth profiles emit `--disable-dev-shm-usage`
+    /// themselves, and that one weakens nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ci_defaults: Option<bool>,
     /// GPU backend Chrome renders WebGL / WebGPU with (default: `disabled`).
     ///
     /// `disabled` keeps zendriver's historical flags. `swift_shader` forces a
@@ -216,6 +232,9 @@ pub async fn open(
         .headless(input.headless)
         .gpu_backend(input.gpu_backend)
         .stealth(stealth);
+    if let Some(on) = input.ci_defaults {
+        builder = builder.ci_defaults(on);
+    }
     if let Some(choice) = input.input_profile {
         builder = builder.input_profile(input_profile_for(choice));
     }
@@ -449,6 +468,9 @@ fn apply_overrides(mut profile: StealthProfile, overrides: &StealthOverrides) ->
     }
     if let Some(chrome_version) = overrides.chrome_version {
         profile = profile.chrome_version(chrome_version);
+    }
+    if let Some(ref chrome_full_version) = overrides.chrome_full_version {
+        profile = profile.chrome_full_version(chrome_full_version);
     }
     if let Some(ref user_agent) = overrides.user_agent {
         profile = profile.user_agent(user_agent);

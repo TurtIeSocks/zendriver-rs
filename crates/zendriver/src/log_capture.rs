@@ -71,6 +71,26 @@ pub(crate) async fn with_captured_logs<T>(fut: impl Future<Output = T>) -> (T, V
     (out, logs)
 }
 
+/// Synchronous sibling of [`with_captured_logs`], for code under test that
+/// is not a future. Installed as the thread-local default subscriber for the
+/// duration of `f`.
+pub(crate) fn capture_logs<T>(f: impl FnOnce() -> T) -> (T, Vec<CapturedLog>) {
+    use tracing_subscriber::layer::SubscriberExt;
+
+    let capture = LogCapture::default();
+    let subscriber = tracing_subscriber::registry().with(capture.clone());
+    let out = tracing::subscriber::with_default(subscriber, || {
+        // `tracing` caches each callsite's interest globally the first time it
+        // is evaluated, and a site first reached with no subscriber installed
+        // caches "never" — which is every other test in this binary. Without
+        // this rebuild a capture test passes alone and fails in a full run.
+        tracing::callsite::rebuild_interest_cache();
+        f()
+    });
+    let logs = capture.0.lock().expect("log buffer poisoned").clone();
+    (out, logs)
+}
+
 /// Just the `WARN` messages.
 ///
 /// Capture is deliberately unfiltered — a caller may want to assert on any

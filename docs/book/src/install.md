@@ -102,9 +102,52 @@ platform — not that a binary merely compiles for it.
 | Windows          | yes       | Real-Chrome integration tests run in CI on `windows-latest`; fmt/clippy/unit/doc jobs are Linux-only. Path semantics differ slightly.         |
 
 Chrome (or Chromium / Edge / any Chromium-derived browser) must be on
-`$PATH`, or you must pass an explicit `chrome_path` to the builder, or
-you must enable the `fetcher` feature and let zendriver download Chrome
+`$PATH`, or you must pass an explicit `.executable(path)` to the builder,
+or you must enable the `fetcher` feature and let zendriver download Chrome
 for Testing at startup.
+
+### Picking the binary
+
+Three things can decide it, in order:
+
+1. `.executable(path)` — always wins.
+2. The `CHROME_BIN` environment variable, **only** under the default
+   `Channel::Auto`. It answers "which Chrome, when nobody said", so naming
+   `.channel(Channel::Brave)` or `.channel(Channel::Edge)` sends discovery
+   to that browser instead and the variable is ignored (with a log line
+   saying so). An inherited shell variable should not silently swap the
+   browser you asked for — in a stealth library the binary's identity is
+   half the fingerprint.
+3. Per-channel discovery of the conventional install locations.
+
+Whichever wins, `launch()` logs the path it is spawning.
+
+### Running in a container
+
+Chrome's user-namespace sandbox refuses to start as root, and a container's
+small `/dev/shm` starves the renderer on real pages. Both are fixed by
+`--no-sandbox` and `--disable-dev-shm-usage`, which
+[`BrowserBuilder::ci_defaults`] adds:
+
+```rust,no_run
+let builder = zendriver::Browser::builder().ci_defaults(true);
+```
+
+Left unset, it follows the `CI` environment variable — historical
+behaviour, and now announced in the log when it fires. Pass `false` to keep
+them out of a launch whose environment happens to set `CI`. An explicit
+`.sandbox(true)` also keeps the `--no-sandbox` half out. Only disable the
+sandbox on a throwaway browser: it removes Chrome's process isolation, so a
+compromised renderer is a compromised host process.
+
+`false` reliably controls the `--no-sandbox` half only. The `native` and
+`spoofed` stealth profiles emit `--disable-dev-shm-usage` themselves, so
+with either attached — `native` is the default — that flag is in the argv
+either way; only `StealthProfile::off()` leaves `ci_defaults(false)` in
+sole control of both. The `/dev/shm` flag trades shared memory for disk and
+weakens nothing, so it gets no second knob.
+
+[`BrowserBuilder::ci_defaults`]: https://docs.rs/zendriver/latest/zendriver/struct.BrowserBuilder.html#method.ci_defaults
 
 ## Verifying the install
 
