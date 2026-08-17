@@ -23,10 +23,16 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
   remaining warning is a hard failure).
 - Re-stage / amend after the fixes so the pushed commit is already clean.
 
-CI clippy runs on **default features**; if you touched feature-gated code
-(`interception` / `expect` / `monitor` / `cloudflare` / `imperva` / `datadome` /
-`fetcher` / `geo` / `tracker-blocking` / `fingerprints`), also run
-`cargo clippy -p zendriver-mcp --all-features --all-targets -- -D warnings`.
+CI clippy runs on **default features**; if you touched any of the
+feature-gated crates listed under Workspace layout, also run the all-features
+pass in its own target dir:
+
+`CARGO_TARGET_DIR=target/all-features cargo clippy -p zendriver-mcp --all-features --all-targets -- -D warnings`
+
+A dedicated `CARGO_TARGET_DIR` keeps the default-feature and all-feature
+clippy caches from invalidating each other — without it they share `target/`
+and `--all-features` changing the feature set forces a full rebuild on every
+feature-gated push. Costs extra disk, saves that rebuild.
 
 ## Schema snapshots (zendriver-mcp)
 
@@ -102,21 +108,22 @@ The published MCP tool count = tools compiled with the default features
 README / rustdoc / book as an incomplete PR — same bar as the MCP coverage
 check above.
 
+## PR scope
+
+Default to one PR for related fixes rather than splitting on review-hygiene
+grounds alone. Caught 2026-08-06 on #161: the macOS symlink fix went onto its
+own branch off `main` because the PR body argued the work "deserves its own
+review rather than a footnote in a feature PR." That reasoning ignored the
+deciding fact: the CLI that reproduces the bug exists only on the PR branch,
+so a fix on `main` was unreachable. Rin's reasons for keeping it one PR: the
+diff is small next to the PR, the two are genuinely related, and this repo
+carries heavy CI ceremony while she was already carrying PRs from another
+session.
+
 ## Workspace layout
 
-9-crate workspace (`edition = 2024`, MSRV 1.85). Roles:
-
-| Crate | Role |
-|-------|------|
-| `zendriver` | Core: async browser automation over the Chrome DevTools Protocol. The public API everything extends. |
-| `zendriver-transport` | Internal WebSocket + CDP routing actor (plumbing). |
-| `zendriver-stealth` | Anti-detection patches + personas. |
-| `zendriver-fingerprints` | Real-device persona sources (pool + generative). |
-| `zendriver-interception` | Network interception via the `Fetch.*` CDP domain. |
-| `zendriver-cloudflare` | Cloudflare Turnstile bypass. |
-| `zendriver-imperva` | Imperva WAF / Incapsula bypass. |
-| `zendriver-fetcher` | Chromium binary downloader (Chrome for Testing / ungoogled-chromium / snapshots), plus the `zendriver-fetch` CLI behind the non-default `cli` feature. |
-| `zendriver-mcp` | MCP server exposing the `zendriver` surface as agent tools (see MCP coverage above). |
+9-crate workspace (`edition = 2024`, MSRV 1.85) — each crate's Cargo.toml
+`description` states its role.
 
 Capability crates are wired into `zendriver` behind features (`interception` /
 `cloudflare` / `imperva` / `datadome` / `fetcher` / `expect` / `monitor` /
