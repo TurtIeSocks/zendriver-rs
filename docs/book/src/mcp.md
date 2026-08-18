@@ -143,7 +143,17 @@ present in the schema but only takes effect when the `geo` feature is enabled.
 - `proxy: string` — route the browser through an upstream proxy
   (`scheme://[user:pass@]host:port`); userinfo is auto-split into proxy-auth
   credentials (requires the default `interception` feature to actually answer
-  the `Fetch.authRequired` challenge). Always present in the schema.
+  the `Fetch.authRequired` challenge). Always present in the schema. A URL
+  that can't be parsed **fails** `browser_open` rather than opening a browser
+  that goes direct; the error redacts any userinfo the URL carried.
+- `ci_defaults: bool` — add the container launch flags `--no-sandbox` and
+  `--disable-dev-shm-usage`. Unset follows the `CI` environment variable
+  (what the server has always done); pass `true` for a root container that
+  sets no `CI`, or `false` to keep them out of one that does. `--no-sandbox`
+  drops Chrome's process isolation, so only use it on a throwaway browser.
+  `false` reliably controls that half only — the `native` and `spoofed`
+  stealth profiles emit `--disable-dev-shm-usage` themselves, and it
+  weakens nothing.
 - `geo_auto: bool` — auto-derive `locale`/`languages` from the exit IP's
   country via a proxied probe to `ip-api.com` (mirrors `proxy` above), instead
   of naming a country explicitly via `geo_country`. Makes at most one outbound

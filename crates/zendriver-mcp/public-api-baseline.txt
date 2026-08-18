@@ -285,6 +285,7 @@ pub fn zendriver::browser::BrowserBuilder::arg(self, impl core::convert::Into<al
 pub fn zendriver::browser::BrowserBuilder::args(self, impl core::iter::traits::collect::IntoIterator<Item = alloc::string::String>) -> Self
 pub fn zendriver::browser::BrowserBuilder::block_trackers(self, bool) -> Self
 pub fn zendriver::browser::BrowserBuilder::channel(self, zendriver::browser::Channel) -> Self
+pub fn zendriver::browser::BrowserBuilder::ci_defaults(self, bool) -> Self
 pub fn zendriver::browser::BrowserBuilder::downloads_dir(self, impl core::convert::Into<std::path::PathBuf>) -> Self
 pub fn zendriver::browser::BrowserBuilder::executable(self, impl core::convert::Into<std::path::PathBuf>) -> Self
 pub fn zendriver::browser::BrowserBuilder::expert(self, bool) -> Self
@@ -6326,6 +6327,7 @@ pub fn zendriver::browser::BrowserBuilder::arg(self, impl core::convert::Into<al
 pub fn zendriver::browser::BrowserBuilder::args(self, impl core::iter::traits::collect::IntoIterator<Item = alloc::string::String>) -> Self
 pub fn zendriver::browser::BrowserBuilder::block_trackers(self, bool) -> Self
 pub fn zendriver::browser::BrowserBuilder::channel(self, zendriver::browser::Channel) -> Self
+pub fn zendriver::browser::BrowserBuilder::ci_defaults(self, bool) -> Self
 pub fn zendriver::browser::BrowserBuilder::downloads_dir(self, impl core::convert::Into<std::path::PathBuf>) -> Self
 pub fn zendriver::browser::BrowserBuilder::executable(self, impl core::convert::Into<std::path::PathBuf>) -> Self
 pub fn zendriver::browser::BrowserBuilder::expert(self, bool) -> Self

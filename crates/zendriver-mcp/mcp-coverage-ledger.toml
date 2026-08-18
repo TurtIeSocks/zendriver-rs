@@ -1059,3 +1059,18 @@ excluded = "geometry carried by ClickTarget into the on_click callback; callback
 [[entry]]
 api = "zendriver::CloudflareBypass::on_click"
 excluded = "callback API; no request/response tool shape"
+
+# ── PR 2b launch-path validation: ci_defaults ──────────────────────────────
+# The container launch defaults (`--no-sandbox`, `--disable-dev-shm-usage`)
+# stop being decided solely by sniffing the `CI` environment variable. That
+# matters over the wire too: an MCP server in a root container needs them
+# without `CI` being set, and one on a CI runner may want them off.
+[[entry]]
+api = "zendriver::browser::BrowserBuilder::ci_defaults"
+covered = "browser_open.ci_defaults"
+
+# `StealthProfile::chrome_full_version` is not listed here as its own entry:
+# `cargo-public-api -p zendriver` reports re-exported *types* from
+# `zendriver-stealth` but not their inherent methods, so it never reaches the
+# baseline diff. It is nonetheless reachable, via
+# `browser_stealth_set.overrides.chrome_full_version`.

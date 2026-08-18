@@ -67,6 +67,9 @@ pub enum Channel {
     Edge,
     /// First Chromium-family browser found — the historical default (Chrome,
     /// then Chromium). Use a specific channel to force Brave / Edge.
+    ///
+    /// The only variant under which the `CHROME_BIN` environment variable is
+    /// honored; see [`BrowserBuilder::channel`].
     #[default]
     Auto,
 }
@@ -114,6 +117,17 @@ pub fn find_chrome_executable_for_channel(channel: Channel) -> Result<PathBuf, B
     Err(BrowserError::ExecutableNotFound {
         searched: candidates,
     })
+}
+
+/// The `CHROME_BIN` environment override, if set to a non-empty value.
+///
+/// The one place the variable is read; [`BrowserBuilder::resolve_executable`]
+/// takes the result as an argument so its precedence rules are testable
+/// without mutating process-wide state.
+fn chrome_bin_from_env() -> Option<PathBuf> {
+    std::env::var_os("CHROME_BIN")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
 }
 
 /// Build the ordered candidate-path list for `channel`.
@@ -635,6 +649,10 @@ pub struct BrowserBuilder {
     /// Sandbox toggle. `None`/`Some(true)` = sandbox on (no flag);
     /// `Some(false)` = emit `--no-sandbox`. See [`BrowserBuilder::sandbox`].
     pub(crate) sandbox: Option<bool>,
+    /// Container-friendly launch defaults. `Some` decides outright; `None`
+    /// falls back to the presence of the `CI` environment variable. See
+    /// [`BrowserBuilder::ci_defaults`].
+    pub(crate) ci_defaults: Option<bool>,
     /// Which browser [`Channel`] to discover when no explicit `executable` is
     /// set. Defaults to [`Channel::Auto`].
     pub(crate) channel: Channel,
@@ -675,10 +693,13 @@ pub struct BrowserBuilder {
     /// profile's `Default/Preferences` at launch. User entries override the
     /// default suppression set. See [`BrowserBuilder::preference`].
     pub(crate) preferences: Vec<(String, serde_json::Value)>,
-    /// Structured browser-wide proxy (userinfo-stripped server + optional
-    /// credentials), set via [`BrowserBuilder::proxy`]. Emitted as
-    /// `--proxy-server=` at launch and mirrored by `geo_auto`'s probe.
-    pub(crate) proxy: Option<crate::proxy::ParsedProxy>,
+    /// Browser-wide proxy URL exactly as the caller passed it to
+    /// [`BrowserBuilder::proxy`], stored raw and parsed at launch by
+    /// [`BrowserBuilder::resolved_proxy`] — the deferred-work shape the
+    /// tracker-blocklist sources use, and the only one available to a setter
+    /// that cannot return an error. The resolved form is emitted as
+    /// `--proxy-server=` and mirrored by `geo_auto`'s probe.
+    pub(crate) proxy: Option<String>,
     /// Optional `(username, password)` for proxy / HTTP basic-auth handling.
     /// Only honored when the `interception` feature is enabled; when present
     /// at launch, an interception actor is spawned on the main tab session
@@ -739,17 +760,13 @@ impl std::fmt::Debug for BrowserBuilder {
             .field("preferences", &self.preferences)
             .field(
                 "proxy",
-                &self.proxy.as_ref().map(|p| {
-                    format!(
-                        "ParsedProxy {{ server: {:?}, credentials: {} }}",
-                        p.server,
-                        if p.credentials.is_some() {
-                            "Some(<redacted>)"
-                        } else {
-                            "None"
-                        }
-                    )
-                }),
+                // Raw, so any userinfo it carries has to be redacted here —
+                // a `Debug` print of a builder must never expose a password.
+                &self
+                    .proxy
+                    .as_deref()
+                    .map(crate::proxy::redact_userinfo)
+                    .unwrap_or_else(|| "None".into()),
             );
         #[cfg(feature = "interception")]
         s.field(
@@ -863,7 +880,10 @@ impl BrowserBuilder {
 
     /// Override the Chrome executable path.
     ///
-    /// When unset, [`find_chrome_executable`] discovers one at launch time.
+    /// Outranks everything else: the `CHROME_BIN` environment variable and
+    /// [`channel`](Self::channel) discovery are both skipped when this is set.
+    /// Unset, the binary comes from `CHROME_BIN` or from discovery — see
+    /// [`channel`](Self::channel) for which wins when.
     ///
     /// # Examples
     ///
@@ -930,35 +950,68 @@ impl BrowserBuilder {
 
     /// Route the browser through `proxy` (`scheme://[user:pass@]host:port`).
     /// Emits `--proxy-server=<host:port>` (Chrome ignores userinfo there) and,
-    /// when the URL carries credentials and `proxy_auth` is unset, auto-wires
-    /// them. The structured form lets `geo_auto()` probe the exit IP through
-    /// the same proxy.
+    /// when the URL carries credentials and [`proxy_auth`](Self::proxy_auth)
+    /// is unset, auto-wires them. The structured form also lets
+    /// [`geo_auto`](Self::geo_auto) probe the exit IP through the same proxy.
     ///
-    /// # Errors
-    /// Silently ignores an unparseable URL (logs a warning) to keep the
-    /// builder chainable; the bad value simply isn't applied.
+    /// The URL is not parsed here — it is parsed by [`launch`](Self::launch) /
+    /// [`connect`](Self::connect), which **fail** on one they cannot parse.
+    /// A caller who asked to be behind a proxy and silently got a direct
+    /// connection has a privacy failure, not a convenience one, so the bad
+    /// value stops the launch instead of being dropped.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// let browser = zendriver::Browser::builder()
+    ///     .proxy("http://user:pass@my-proxy.example:3128")
+    ///     .launch().await?;   // errors here if the URL is unparseable
+    /// # browser.close().await?;
+    /// # Ok(()) }
+    /// ```
     #[must_use]
     pub fn proxy(mut self, proxy: impl Into<String>) -> Self {
-        let raw = proxy.into();
-        match crate::proxy::split_proxy_url(&raw) {
-            Ok(parsed) => {
-                // Auto-wiring `proxy_auth` from the URL's userinfo only makes
-                // sense when that field exists at all, which requires the
-                // `interception` feature (it drives the `Fetch.authRequired`
-                // auto-reply actor at launch).
-                #[cfg(feature = "interception")]
-                {
-                    if self.proxy_auth.is_none() {
-                        if let Some((u, p)) = parsed.credentials.clone() {
-                            self.proxy_auth = Some((u, p));
-                        }
-                    }
-                }
-                self.proxy = Some(parsed);
-            }
-            Err(e) => tracing::warn!(error = %e, "proxy: ignoring invalid proxy URL"),
-        }
+        self.proxy = Some(proxy.into());
         self
+    }
+
+    /// Parse the configured [`proxy`](Self::proxy) URL.
+    ///
+    /// Called at the very top of [`launch`](Self::launch) / [`connect`](Self::connect),
+    /// before a process is spawned or an endpoint dialled, so that an
+    /// unparseable URL can never leave a live Chrome issuing requests
+    /// directly. Errors carry the URL with any userinfo redacted.
+    pub(crate) fn resolved_proxy(
+        &self,
+    ) -> Result<Option<crate::proxy::ParsedProxy>, ZendriverError> {
+        self.proxy
+            .as_deref()
+            .map(crate::proxy::split_proxy_url)
+            .transpose()
+    }
+
+    /// The credentials the `Fetch.authRequired` auto-reply actor should
+    /// answer with: an explicit [`proxy_auth`](Self::proxy_auth) if there is
+    /// one, else the userinfo embedded in the proxy URL.
+    ///
+    /// Read by the actor's own `if let` in [`launch`](Self::launch) rather
+    /// than written into the builder beforehand: a separate statement that
+    /// fills the field is a statement that can go missing, and a launch that
+    /// silently stopped answering `Fetch.authRequired` 407s every request
+    /// through a credentialed proxy forever. The fallback belongs where it is
+    /// consumed.
+    ///
+    /// Only ever fills a hole, so an explicit `.proxy_auth(..)` wins
+    /// regardless of the order the two were called in.
+    #[cfg(feature = "interception")]
+    fn resolved_proxy_auth(
+        &self,
+        proxy: Option<&crate::proxy::ParsedProxy>,
+    ) -> Option<(String, String)> {
+        self.proxy_auth
+            .clone()
+            .or_else(|| proxy.and_then(|p| p.credentials.clone()))
     }
 
     /// Enable the bundled curated tracker/fingerprinter blocklist for this
@@ -1106,11 +1159,10 @@ impl BrowserBuilder {
     /// Passing `false` appends `--no-sandbox`. Leaving it unset (or `true`)
     /// keeps the sandbox enabled and emits no flag.
     ///
-    /// Independent of the CI auto-disable: when the `CI` env var is set,
-    /// `launch` still auto-adds `--no-sandbox` + `--disable-dev-shm-usage`
-    /// (the GitHub-Actions / Docker containers run as root, where the
-    /// user-namespace sandbox refuses to start). Calling `sandbox(false)`
-    /// just opts in explicitly outside CI.
+    /// `sandbox(true)` also outranks the container defaults described in
+    /// [`ci_defaults`](Self::ci_defaults): those may still add
+    /// `--disable-dev-shm-usage`, but they will not take away a sandbox you
+    /// asked for.
     ///
     /// Disabling the sandbox weakens Chrome's process isolation — only do so
     /// in trusted, throwaway environments (containers, ephemeral VMs).
@@ -1126,6 +1178,49 @@ impl BrowserBuilder {
         self
     }
 
+    /// Add the container-friendly launch defaults `--no-sandbox` and
+    /// `--disable-dev-shm-usage` (default: **unset**, see below).
+    ///
+    /// Both exist for one environment: a container running as root, where
+    /// Chrome's user-namespace sandbox refuses to start and the small
+    /// `/dev/shm` starves the renderer on real workloads. They are wrong
+    /// everywhere else — `--no-sandbox` drops Chrome's process isolation.
+    ///
+    /// Left unset, this follows the presence of the `CI` environment
+    /// variable, which is what zendriver has always done; the launch now says
+    /// so in the log when that fallback fires. Pass `true` to get the same
+    /// defaults off a CI runner (a Dockerfile, a systemd unit), or `false` to
+    /// keep them out of a launch whose environment happens to set `CI`.
+    /// Either way, an explicit [`sandbox(true)`](Self::sandbox) still wins the
+    /// `--no-sandbox` half.
+    ///
+    /// `false` reliably controls only that half. The
+    /// [`native`](zendriver_stealth::StealthProfile::native) and
+    /// [`spoofed`](zendriver_stealth::StealthProfile::spoofed) profiles emit
+    /// `--disable-dev-shm-usage` of their own accord, so with either attached
+    /// — `native` is the default — the flag stays in the argv regardless.
+    /// Only [`off`](zendriver_stealth::StealthProfile::off), which contributes
+    /// no flags at all, leaves `ci_defaults(false)` in sole control of both.
+    /// The `/dev/shm` flag trades shared memory for disk and weakens no
+    /// isolation, which is why it gets no second knob.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn ex() -> zendriver::Result<()> {
+    /// // Running as root inside a container that sets no `CI` variable:
+    /// let browser = zendriver::Browser::builder()
+    ///     .ci_defaults(true)
+    ///     .launch().await?;
+    /// # browser.close().await?;
+    /// # Ok(()) }
+    /// ```
+    #[must_use]
+    pub fn ci_defaults(mut self, on: bool) -> Self {
+        self.ci_defaults = Some(on);
+        self
+    }
+
     /// Pick which browser [`Channel`] to discover at launch (default:
     /// [`Channel::Auto`]).
     ///
@@ -1135,10 +1230,22 @@ impl BrowserBuilder {
     /// channel discovery entirely; when an explicit executable is set the
     /// channel is ignored.
     ///
+    /// # `CHROME_BIN`
+    ///
+    /// The `CHROME_BIN` environment variable is consulted **only** under
+    /// [`Channel::Auto`], where it answers "which Chrome, when nobody said".
+    /// Naming a channel *is* saying, so a variable inherited from a shell
+    /// cannot swap the browser you asked for — it is ignored, with an `info!`
+    /// line naming the path it skipped. Under `Auto` it wins over discovery,
+    /// also with an `info!` naming it, so which binary launched is never a
+    /// guess. Full precedence: [`executable`](Self::executable) > `CHROME_BIN`
+    /// (Auto only) > per-channel discovery.
+    ///
     /// # Examples
     ///
     /// ```no_run
     /// use zendriver::Channel;
+    /// // Brave, whatever `CHROME_BIN` happens to say in this shell.
     /// let builder = zendriver::Browser::builder().channel(Channel::Brave);
     /// ```
     #[must_use]
@@ -1434,11 +1541,24 @@ impl BrowserBuilder {
     /// timezone is the EXACT IANA zone ip-api reports for the exit IP, not
     /// the country-representative zone — multi-timezone countries (US, RU,
     /// CA, AU, BR, ...) get the visitor's real local zone.
+    ///
+    /// **Call this after [`proxy`](Self::proxy).** The proxy to mirror is read
+    /// here, when this method runs, so `.geo_auto().proxy(..)` builds a probe
+    /// that has nothing to mirror and goes out over the real connection —
+    /// disclosing the host's own IP to `ip-api.com` and deriving a locale for
+    /// the wrong country. `.proxy(..).geo_auto()` is the correct order.
     #[cfg(feature = "geo")]
     #[must_use]
     pub fn geo_auto(mut self) -> Self {
-        let server = self.proxy.as_ref().map(|p| p.server.clone());
-        let auth = self.proxy.as_ref().and_then(|p| p.credentials.clone());
+        // Reads whatever proxy is configured *at this point* — see the
+        // ordering note above; a proxy set later is not mirrored.
+        //
+        // The `.ok()` covers only a URL that doesn't parse, and that case is
+        // unreachable as a direct probe: `launch` / `connect` reject such a
+        // URL before this resolver is ever asked to probe.
+        let parsed = self.resolved_proxy().ok().flatten();
+        let server = parsed.as_ref().map(|p| p.server.clone());
+        let auth = parsed.as_ref().and_then(|p| p.credentials.clone());
         self.geo_resolver = Some(Arc::new(
             crate::IpApiResolver::new().with_proxy(server, auth),
         ));
@@ -1648,7 +1768,15 @@ impl BrowserBuilder {
 
     /// Compute the full argv that would be passed to Chrome. Exposed to
     /// tests + snapshots; called internally by `launch`.
-    pub(crate) fn build_flags(&self, user_data_dir: &Path) -> Vec<String> {
+    ///
+    /// `proxy` is the already-resolved [`resolved_proxy`](Self::resolved_proxy)
+    /// value rather than a re-parse of the raw string, so the only place a
+    /// malformed URL can be handled is the one that fails the launch.
+    pub(crate) fn build_flags(
+        &self,
+        user_data_dir: &Path,
+        proxy: Option<&crate::proxy::ParsedProxy>,
+    ) -> Vec<String> {
         let mut v = Vec::with_capacity(10 + self.extra_args.len());
         v.push("--remote-debugging-port=0".to_string());
         v.push(format!("--user-data-dir={}", user_data_dir.display()));
@@ -1734,7 +1862,7 @@ impl BrowserBuilder {
         // Emits the userinfo-stripped `--proxy-server=` flag unless the
         // caller already supplied their own via `.arg`/`.args` — an explicit
         // flag wins over the structured form.
-        if let Some(parsed) = self.proxy.as_ref() {
+        if let Some(parsed) = proxy {
             let explicit = self
                 .extra_args
                 .iter()
@@ -1764,6 +1892,69 @@ impl BrowserBuilder {
             v.push("about:blank".to_string());
         }
         v
+    }
+
+    /// Resolve the Chrome binary to spawn.
+    ///
+    /// Precedence: explicit [`executable`](Self::executable) > `CHROME_BIN`
+    /// (only under [`Channel::Auto`]) > per-channel platform discovery.
+    /// `chrome_bin` is the environment value, read by the caller and passed
+    /// in so this is testable without mutating process-wide state.
+    ///
+    /// The channel gate is the whole point of the middle step: `CHROME_BIN`
+    /// answers "which Chrome, when nobody said", so it fills the gap
+    /// [`Channel::Auto`] leaves and stays out of the way of a caller who
+    /// named [`Channel::Brave`] or [`Channel::Edge`].
+    fn resolve_executable(&self, chrome_bin: Option<PathBuf>) -> Result<PathBuf, ZendriverError> {
+        if let Some(p) = self.executable.clone() {
+            return Ok(p);
+        }
+        if let Some(p) = chrome_bin {
+            if self.channel == Channel::Auto {
+                info!(path = %p.display(), "using the CHROME_BIN executable override");
+                return Ok(p);
+            }
+            info!(
+                channel = ?self.channel,
+                ignored = %p.display(),
+                "CHROME_BIN ignored: an explicit channel was selected",
+            );
+        }
+        Ok(find_chrome_executable_for_channel(self.channel)?)
+    }
+
+    /// Append the container-friendly launch defaults to `flags`
+    /// (see [`ci_defaults`](Self::ci_defaults)).
+    ///
+    /// `ci_env` is the presence of the `CI` environment variable, read by the
+    /// caller and passed in — both so this is testable without mutating
+    /// process-wide state, and so the environment is consulted in exactly one
+    /// place.
+    fn apply_ci_defaults(&self, flags: &mut Vec<String>, ci_env: bool) {
+        match self.ci_defaults {
+            Some(false) => return,
+            // Detecting an environment and adjusting the argv for it is the
+            // kind of thing that should at least be audible, so the fallback
+            // announces itself and names the switch that turns it off.
+            None if ci_env => info!(
+                "CI env var set: adding --no-sandbox + --disable-dev-shm-usage; \
+                 pass .ci_defaults(false) to keep them out"
+            ),
+            None => return,
+            Some(true) => {}
+        }
+        for needed in ["--no-sandbox", "--disable-dev-shm-usage"] {
+            // A caller who explicitly asked for the sandbox keeps it. These
+            // defaults are here to make a container work, not to overrule
+            // someone who said what they wanted.
+            if needed == "--no-sandbox" && self.sandbox == Some(true) {
+                info!("sandbox(true) is set: leaving --no-sandbox out of the CI defaults");
+                continue;
+            }
+            if !flags.iter().any(|f| f == needed) {
+                flags.push(needed.into());
+            }
+        }
     }
 
     /// Build the combined [`HostMatcher`] from all configured sources, or
@@ -3207,6 +3398,9 @@ impl BrowserBuilder {
     /// fails, [`ZendriverError::Transport`] when the WebSocket attach times
     /// out.
     ///
+    /// A [`proxy`](Self::proxy) URL that cannot be parsed fails here too,
+    /// before anything is spawned — see that method.
+    ///
     /// # Examples
     ///
     /// ```no_run
@@ -3216,19 +3410,16 @@ impl BrowserBuilder {
     /// # Ok(()) }
     /// ```
     pub async fn launch(mut self) -> Result<Browser, ZendriverError> {
+        // 0. Resolve the proxy URL FIRST, before anything is spawned.
+        // `proxy()` keeps the caller's string verbatim because a builder
+        // setter has no way to report an error, which makes this the point
+        // where a bad one is caught — and it has to be caught here: a Chrome
+        // that is already running would issue its first requests DIRECT while
+        // its operator believed they were proxied.
+        let proxy = self.resolved_proxy()?;
+
         // 1. Resolve Chrome executable.
-        // Precedence: explicit `.executable(...)` > `CHROME_BIN` env var >
-        // per-channel platform discovery. The env-var hop lets CI (and local
-        // devs pointing at Canary / a downloaded Chrome-for-Testing build)
-        // override the discovery path without code changes. The configured
-        // `channel` (default `Auto`) only steers the final discovery step.
-        let exe = match self.executable.clone() {
-            Some(p) => p,
-            None => match std::env::var("CHROME_BIN").ok().filter(|s| !s.is_empty()) {
-                Some(p) => PathBuf::from(p),
-                None => find_chrome_executable_for_channel(self.channel)?,
-            },
-        };
+        let exe = self.resolve_executable(chrome_bin_from_env())?;
 
         // 1b. Resolve extensions: unzip any `.crx` into a tempdir and rewrite
         // `self.extensions` to the resolved unpacked-directory paths so
@@ -3319,24 +3510,11 @@ impl BrowserBuilder {
         // stealth profile shares with `build_flags`, like `--no-first-run`)
         // appended unconditionally, matching today's behavior.
         let mut flags = merge_launch_flags(
-            self.build_flags(&user_data_path),
+            self.build_flags(&user_data_path, proxy.as_ref()),
             extra_flags,
             self.effective_gpu_backend(),
         );
-        // CI-friendly defaults: when running under CI (the runner sets
-        // `CI=true`), Chrome's user-namespace sandbox refuses to start
-        // because the GitHub-Actions / Docker container runs as root,
-        // and the small /dev/shm in the container OOMs the renderer on
-        // real workloads. Auto-add `--no-sandbox` and
-        // `--disable-dev-shm-usage` unless the caller already supplied
-        // them (so explicit user opt-in still wins).
-        if std::env::var("CI").is_ok() {
-            for needed in ["--no-sandbox", "--disable-dev-shm-usage"] {
-                if !flags.iter().any(|f| f == needed) {
-                    flags.push(needed.into());
-                }
-            }
-        }
+        self.apply_ci_defaults(&mut flags, std::env::var_os("CI").is_some());
         info!(executable = %exe.display(), "launching chrome");
 
         // Drop any `DevToolsActivePort` left behind by a previous run before we
@@ -3524,7 +3702,7 @@ impl BrowserBuilder {
             let main_session = inner.main_tab.session().clone();
             let mut builder = zendriver_interception::InterceptBuilder::new(&main_session);
             let mut needs_actor = false;
-            if let Some((user, pass)) = self.proxy_auth.clone() {
+            if let Some((user, pass)) = self.resolved_proxy_auth(proxy.as_ref()) {
                 builder = builder.handle_auth(user, pass);
                 needs_actor = true;
             }
@@ -3568,14 +3746,18 @@ impl BrowserBuilder {
     /// The spawn-only builder fields — [`BrowserBuilder::executable`],
     /// [`BrowserBuilder::user_data_dir`], [`BrowserBuilder::downloads_dir`],
     /// and any launch flags ([`BrowserBuilder::arg`] / headless / sandbox /
-    /// channel / lang / user-agent) — are **ignored** on the connect path,
-    /// since no process is launched.
+    /// channel / lang / user-agent / [`ci_defaults`](Self::ci_defaults)) —
+    /// are **ignored** on the connect path, since no process is launched.
     ///
     /// # Errors
     ///
     /// Returns [`ZendriverError::Browser`] when an `http(s)://` endpoint
     /// cannot be resolved to a `webSocketDebuggerUrl`, and
     /// [`ZendriverError::Transport`] when the WebSocket attach fails.
+    ///
+    /// A [`proxy`](Self::proxy) URL that cannot be parsed also fails here,
+    /// before the endpoint is dialled. The proxy itself is spawn-only, but a
+    /// URL that was never going to work is worth saying so about.
     ///
     /// # Examples
     ///
@@ -3595,6 +3777,13 @@ impl BrowserBuilder {
     #[cfg_attr(not(feature = "geo"), allow(unused_mut))]
     pub async fn connect(mut self, endpoint: impl Into<String>) -> Result<Browser, ZendriverError> {
         let endpoint = endpoint.into();
+
+        // `connect` ignores the spawn-only fields, but an unparseable proxy
+        // URL is not a spawn-only field — it is a mistake in what the caller
+        // asked for, and telling them here beats letting them find out from a
+        // session that was never proxied. Checked before the dial so the
+        // answer doesn't depend on the endpoint being reachable.
+        let _ = self.resolved_proxy()?;
 
         // Resolve the browser WebSocket URL from the endpoint scheme.
         let ws_url = if endpoint.starts_with("ws://") || endpoint.starts_with("wss://") {
@@ -5473,7 +5662,7 @@ mod tests {
     #[test]
     fn build_flags_default_is_headless() {
         let b = BrowserBuilder::new();
-        let flags = b.build_flags(Path::new("/tmp/x"));
+        let flags = b.build_flags(Path::new("/tmp/x"), None);
         assert!(flags.contains(&"--headless=new".to_string()));
         assert!(flags.contains(&"--disable-gpu".to_string()));
         assert!(flags.contains(&"--user-data-dir=/tmp/x".to_string()));
@@ -5483,14 +5672,14 @@ mod tests {
     #[test]
     fn build_flags_default_still_emits_disable_gpu() {
         let b = Browser::builder();
-        let flags = b.build_flags(Path::new("/tmp/zd-test"));
+        let flags = b.build_flags(Path::new("/tmp/zd-test"), None);
         assert!(flags.contains(&"--disable-gpu".to_string()));
     }
 
     #[test]
     fn build_flags_native_gpu_backend_omits_disable_gpu() {
         let b = Browser::builder().gpu_backend(GpuBackend::Native);
-        let flags = b.build_flags(Path::new("/tmp/zd-test"));
+        let flags = b.build_flags(Path::new("/tmp/zd-test"), None);
         assert!(
             !flags.contains(&"--disable-gpu".to_string()),
             "Native backend must not disable the GPU, got: {flags:?}"
@@ -5504,7 +5693,7 @@ mod tests {
     #[test]
     fn build_flags_native_gpu_backend_emits_angle_flags() {
         let b = Browser::builder().gpu_backend(GpuBackend::Native);
-        let flags = b.build_flags(Path::new("/tmp/zd-test"));
+        let flags = b.build_flags(Path::new("/tmp/zd-test"), None);
         assert!(
             flags.iter().any(|f| f == "--use-gl=angle"),
             "got: {flags:?}"
@@ -5518,7 +5707,7 @@ mod tests {
     #[test]
     fn build_flags_swiftshader_backend_keeps_disable_gpu() {
         let b = Browser::builder().gpu_backend(GpuBackend::SwiftShader);
-        let flags = b.build_flags(Path::new("/tmp/zd-test"));
+        let flags = b.build_flags(Path::new("/tmp/zd-test"), None);
         assert!(flags.contains(&"--disable-gpu".to_string()));
     }
 
@@ -5531,7 +5720,7 @@ mod tests {
         // profile's own `--use-angle=` flags.
         let b =
             Browser::builder().stealth(StealthProfile::native().gpu_backend(GpuBackend::Native));
-        let flags = b.build_flags(Path::new("/tmp/zd-test"));
+        let flags = b.build_flags(Path::new("/tmp/zd-test"), None);
         assert!(
             !flags.contains(&"--disable-gpu".to_string()),
             "profile-only Native backend must not disable the GPU, got: {flags:?}"
@@ -5547,7 +5736,7 @@ mod tests {
         let b = Browser::builder()
             .stealth(StealthProfile::native().gpu_backend(GpuBackend::Native))
             .gpu_backend(GpuBackend::SwiftShader);
-        let flags = b.build_flags(Path::new("/tmp/zd-test"));
+        let flags = b.build_flags(Path::new("/tmp/zd-test"), None);
         assert!(
             flags.contains(&"--disable-gpu".to_string()),
             "builder's SwiftShader must win and keep --disable-gpu, got: {flags:?}"
@@ -5569,7 +5758,7 @@ mod tests {
         // Profile carries the default `GpuBackend::Disabled` — today's argv
         // must be byte-for-byte identical.
         let b = Browser::builder().stealth(StealthProfile::native());
-        let flags = b.build_flags(Path::new("/tmp/zd-test"));
+        let flags = b.build_flags(Path::new("/tmp/zd-test"), None);
         assert!(flags.contains(&"--disable-gpu".to_string()));
     }
 
@@ -5585,7 +5774,7 @@ mod tests {
         // "byte-for-byte today's behavior" guarantee for `Disabled` holds.
         let base = Browser::builder()
             .stealth(StealthProfile::native())
-            .build_flags(Path::new("/tmp/zd-test"));
+            .build_flags(Path::new("/tmp/zd-test"), None);
         let extra = StealthProfile::native().build_flags();
         let merged = super::merge_launch_flags(base, extra, GpuBackend::Disabled);
 
@@ -5611,7 +5800,7 @@ mod tests {
             GpuBackend::Native,
         ] {
             let b = Browser::builder().headless(false).gpu_backend(backend);
-            let flags = b.build_flags(Path::new("/tmp/zd-test"));
+            let flags = b.build_flags(Path::new("/tmp/zd-test"), None);
             assert!(
                 !flags.contains(&"--disable-gpu".to_string()),
                 "headful must never disable the GPU, backend={backend:?}"
@@ -5701,7 +5890,7 @@ mod tests {
     #[test]
     fn build_flags_suppresses_password_popups() {
         let b = BrowserBuilder::new();
-        let flags = b.build_flags(Path::new("/tmp/x"));
+        let flags = b.build_flags(Path::new("/tmp/x"), None);
         assert!(flags.contains(&"--password-store=basic".to_string()));
         assert!(flags.contains(&"--disable-save-password-bubble".to_string()));
         assert!(
@@ -5714,7 +5903,7 @@ mod tests {
     #[test]
     fn build_flags_no_headless_when_disabled() {
         let b = BrowserBuilder::new().headless(false);
-        let flags = b.build_flags(Path::new("/tmp/x"));
+        let flags = b.build_flags(Path::new("/tmp/x"), None);
         assert!(!flags.iter().any(|f| f.starts_with("--headless")));
         assert!(!flags.contains(&"--disable-gpu".to_string()));
     }
@@ -5724,7 +5913,7 @@ mod tests {
         let b = BrowserBuilder::new()
             .arg("--proxy-server=http://x")
             .arg("--lang=en-US");
-        let flags = b.build_flags(Path::new("/tmp/x"));
+        let flags = b.build_flags(Path::new("/tmp/x"), None);
         let proxy = flags
             .iter()
             .position(|f| f == "--proxy-server=http://x")
@@ -5734,19 +5923,398 @@ mod tests {
     }
 
     #[test]
-    fn proxy_stores_parsed_and_strips_userinfo_arg() {
+    fn proxy_resolves_to_a_userinfo_stripped_server_and_arg() {
         let b = Browser::builder().proxy("http://bob:pw@host:3128");
-        let p = b.proxy.as_ref().unwrap();
+        let p = b.resolved_proxy().unwrap().unwrap();
         assert_eq!(p.server, "http://host:3128");
         assert_eq!(p.credentials, Some(("bob".into(), "pw".into())));
-        // proxy_auth auto-wired from userinfo (field only exists under the
-        // `interception` feature, which drives the auth-reply actor).
-        #[cfg(feature = "interception")]
-        assert_eq!(b.proxy_auth, Some(("bob".into(), "pw".into())));
 
         // At launch, the userinfo-stripped `--proxy-server=` flag is emitted.
-        let flags = b.build_flags(Path::new("/tmp/x"));
+        let flags = b.build_flags(Path::new("/tmp/x"), Some(&p));
         assert!(flags.contains(&"--proxy-server=http://host:3128".to_string()));
+    }
+
+    /// Userinfo still reaches the `Fetch.authRequired` auto-reply actor now
+    /// that the parse happens at launch instead of in the setter — and an
+    /// explicit `.proxy_auth(..)` still wins in EITHER call order, which is
+    /// the property the old setter-side wiring had and this must not lose.
+    #[cfg(feature = "interception")]
+    #[test]
+    fn proxy_userinfo_fills_proxy_auth_but_never_overwrites_it() {
+        let b = Browser::builder().proxy("http://bob:pw@host:3128");
+        let p = b.resolved_proxy().unwrap();
+        assert_eq!(
+            b.resolved_proxy_auth(p.as_ref()),
+            Some(("bob".into(), "pw".into()))
+        );
+
+        for b in [
+            Browser::builder()
+                .proxy("http://bob:pw@host:3128")
+                .proxy_auth("alice", "s3cret"),
+            Browser::builder()
+                .proxy_auth("alice", "s3cret")
+                .proxy("http://bob:pw@host:3128"),
+        ] {
+            let p = b.resolved_proxy().unwrap();
+            assert_eq!(
+                b.resolved_proxy_auth(p.as_ref()),
+                Some(("alice".into(), "s3cret".into())),
+                "an explicit proxy_auth must outrank the URL's userinfo"
+            );
+        }
+    }
+
+    // ----- 2b: CHROME_BIN vs an explicit channel --------------------------
+
+    /// `CHROME_BIN` is a convenience for the *unspecified* case. Naming a
+    /// channel is a caller stating which browser they want, and an
+    /// environment variable inherited from a shell must not quietly swap it
+    /// for another binary — least of all in a stealth library, where the
+    /// browser's identity is half the fingerprint.
+    #[test]
+    fn chrome_bin_loses_to_an_explicitly_chosen_channel() {
+        let env_chrome = PathBuf::from("/nonexistent/zendriver-env-chrome");
+        let picked = Browser::builder()
+            .channel(Channel::Brave)
+            .resolve_executable(Some(env_chrome.clone()));
+        match picked {
+            Ok(p) => assert_ne!(
+                p, env_chrome,
+                "an explicit channel must send discovery to Brave, not to CHROME_BIN"
+            ),
+            // No Brave on this host: discovery failing is itself proof that
+            // CHROME_BIN did not stand in for the channel that was asked for.
+            Err(e) => assert!(
+                e.to_string().contains("chrome executable not found"),
+                "unexpected error: {e}"
+            ),
+        }
+    }
+
+    /// The historical behaviour survives where it was always meant to apply:
+    /// no channel named, so the environment picks the binary — and says so,
+    /// because "which Chrome did this actually launch" should not require
+    /// guessing.
+    #[test]
+    fn chrome_bin_wins_under_channel_auto_and_is_logged() {
+        let env_chrome = PathBuf::from("/nonexistent/zendriver-env-chrome");
+        let (picked, logs) = crate::log_capture::capture_logs(|| {
+            Browser::builder().resolve_executable(Some(env_chrome.clone()))
+        });
+        assert_eq!(picked.unwrap(), env_chrome);
+        assert!(
+            logs.iter().any(|(_, m)| m.contains("CHROME_BIN")),
+            "the env override must name itself in the log: {logs:?}"
+        );
+    }
+
+    /// An explicit `.executable(..)` outranks everything, unchanged.
+    #[test]
+    fn explicit_executable_outranks_chrome_bin() {
+        let explicit = PathBuf::from("/nonexistent/zendriver-explicit-chrome");
+        let picked = Browser::builder()
+            .executable(explicit.clone())
+            .channel(Channel::Brave)
+            .resolve_executable(Some(PathBuf::from("/nonexistent/zendriver-env-chrome")))
+            .unwrap();
+        assert_eq!(picked, explicit);
+    }
+
+    // ----- 2b: CI launch defaults ----------------------------------------
+
+    /// Asking for the sandbox and getting `--no-sandbox` anyway is the bug:
+    /// the CI defaults exist to make a container work, not to overrule a
+    /// caller who said what they wanted. `--disable-dev-shm-usage` is
+    /// untouched by that — it weakens nothing and `sandbox` says nothing
+    /// about it.
+    #[test]
+    fn an_explicit_sandbox_survives_the_ci_defaults() {
+        let mut flags = Vec::new();
+        Browser::builder()
+            .sandbox(true)
+            .apply_ci_defaults(&mut flags, true);
+        assert!(
+            !flags.contains(&"--no-sandbox".to_string()),
+            "sandbox(true) must suppress the --no-sandbox half: {flags:?}"
+        );
+        assert!(
+            flags.contains(&"--disable-dev-shm-usage".to_string()),
+            "the /dev/shm half is unrelated to the sandbox: {flags:?}"
+        );
+    }
+
+    /// `ci_defaults(true)` is the way to get container defaults off a CI
+    /// runner — in a Docker image, a systemd unit, anywhere the `CI` variable
+    /// is not set but the constraint is identical.
+    #[test]
+    fn ci_defaults_true_applies_them_without_the_env_var() {
+        let mut flags = Vec::new();
+        Browser::builder()
+            .ci_defaults(true)
+            .apply_ci_defaults(&mut flags, false);
+        assert_eq!(
+            flags,
+            vec!["--no-sandbox".to_string(), "--disable-dev-shm-usage".into()],
+            "ci_defaults(true) must apply both flags with no CI env var"
+        );
+    }
+
+    /// And the other direction: an environment that happens to set `CI` must
+    /// not silently re-flag a launch the caller opted out of. This is the
+    /// half that could not be expressed at all before.
+    #[test]
+    fn ci_defaults_false_beats_the_env_var() {
+        let mut flags = Vec::new();
+        Browser::builder()
+            .ci_defaults(false)
+            .apply_ci_defaults(&mut flags, true);
+        assert!(
+            flags.is_empty(),
+            "ci_defaults(false) must suppress the env-driven defaults: {flags:?}"
+        );
+    }
+
+    /// Unset keeps the historical `CI` fallback, so nothing that works today
+    /// stops working — but it is now announced, because a launch quietly
+    /// dropping Chrome's sandbox is worth a line in the log.
+    #[test]
+    fn unset_ci_defaults_still_follow_the_env_and_say_so() {
+        let mut flags = Vec::new();
+        let ((), logs) = crate::log_capture::capture_logs(|| {
+            Browser::builder().apply_ci_defaults(&mut flags, true);
+        });
+        assert!(
+            flags.contains(&"--no-sandbox".to_string())
+                && flags.contains(&"--disable-dev-shm-usage".to_string()),
+            "the CI env var still drives the defaults when unset: {flags:?}"
+        );
+        assert!(
+            logs.iter().any(|(_, m)| m.contains("ci_defaults")),
+            "the env-driven case must name the opt-out: {logs:?}"
+        );
+    }
+
+    /// The raw URL is what the builder now holds, so `Debug` is the one place
+    /// a password could escape. It must not — including for the URLs that
+    /// *fail* to parse, which is where a mistyped proxy string ends up and the
+    /// only reason the raw form is retained at all. A well-formed fixture
+    /// alone would pass against redaction that gives up without a `://`.
+    #[test]
+    fn debug_redacts_the_proxy_password() {
+        for url in [
+            "http://bob:hunter2@host:3128",
+            // Scheme-less `user:pass@host:port` — the other shape proxy
+            // vendors hand out, and unparseable, so it stays raw in the field.
+            "bob:hunter2@host:3128",
+        ] {
+            let dbg = format!("{:?}", Browser::builder().proxy(url));
+            assert!(
+                !dbg.contains("hunter2"),
+                "password leaked into Debug for {url:?}: {dbg}"
+            );
+            assert!(
+                dbg.contains("host:3128"),
+                "host should stay visible for {url:?}: {dbg}"
+            );
+        }
+    }
+
+    /// A caller who asked to be behind a proxy and is not has a privacy
+    /// failure, not a convenience one. An unparseable URL must therefore abort
+    /// the launch rather than log a warning and go DIRECT.
+    ///
+    /// The executable is deliberately bogus: the proxy has to be rejected
+    /// *before* anything is spawned, so the error names the proxy and not the
+    /// missing binary. That ordering is the assertion — a fix that validated
+    /// after the spawn would still leak a request through a live Chrome.
+    #[tokio::test]
+    async fn launch_fails_closed_on_an_unparseable_proxy_url() {
+        let err = Browser::builder()
+            .executable("/nonexistent/zendriver-no-such-chrome")
+            .proxy("http://:3128") // no host
+            .launch()
+            .await
+            .expect_err("an unparseable proxy URL must fail the launch");
+        let msg = err.to_string();
+        assert!(msg.contains("proxy"), "error must name the proxy: {msg}");
+        assert!(
+            !msg.contains("chrome failed to start"),
+            "the proxy must be rejected before Chrome is spawned: {msg}"
+        );
+    }
+
+    /// Failing closed must not turn a bad proxy URL into a credential leak:
+    /// the error is logged, printed and often reported upward, so the password
+    /// stays redacted.
+    #[tokio::test]
+    async fn launch_proxy_failure_redacts_the_password() {
+        for url in [
+            "http://bob:hunter2@", // credentials, no host
+            // No scheme at all: the shape a vendor's `user:pass@host:port`
+            // takes when the caller forgets the `http://`, and the one that
+            // reaches the error path *because* it cannot be parsed.
+            "bob:hunter2@host:3128",
+        ] {
+            let err = Browser::builder()
+                .executable("/nonexistent/zendriver-no-such-chrome")
+                .proxy(url)
+                .launch()
+                .await
+                .expect_err("an unparseable proxy URL must fail the launch");
+            let msg = err.to_string();
+            assert!(msg.contains("proxy"), "error must name the proxy: {msg}");
+            assert!(
+                !msg.contains("hunter2"),
+                "password must be redacted for {url:?}: {msg}"
+            );
+        }
+    }
+
+    /// Drive a real [`BrowserBuilder::launch`] against a shim that records the
+    /// argv it was spawned with, and return those arguments.
+    ///
+    /// `launch` reaches Chrome's command line through a chain of ordinary call
+    /// sites — `build_flags(.., proxy)`, `merge_launch_flags`,
+    /// `apply_ci_defaults`. Calling those helpers directly proves what each
+    /// one computes and nothing at all about whether `launch` still asks them:
+    /// passing `None` for the proxy at the call site launches a perfectly
+    /// direct Chrome while every helper-level test stays green. The real argv
+    /// is the only thing that closes that gap.
+    ///
+    /// Unix-only: the shim is a shell script. The wiring under test is
+    /// platform-independent, so a POSIX-only witness still covers it.
+    #[cfg(unix)]
+    async fn recorded_launch_argv(
+        configure: impl FnOnce(BrowserBuilder) -> BrowserBuilder,
+    ) -> Vec<String> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let record = dir.path().join("argv");
+        let shim = dir.path().join("chrome-shim");
+        // Appends, because the stealth fingerprint probe runs the same binary
+        // with `--version` before the launch does; the caller filters on the
+        // launch's own flags.
+        std::fs::write(
+            &shim,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{}'\nexit 1\n",
+                record.display()
+            ),
+        )
+        .expect("write shim");
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        configure(Browser::builder().executable(&shim))
+            .launch()
+            .await
+            .expect_err("a shell script is not a browser; the launch cannot succeed");
+
+        let argv: Vec<String> = std::fs::read_to_string(&record)
+            .expect("the shim records every invocation")
+            .lines()
+            .map(str::to_string)
+            .collect();
+        assert!(
+            argv.iter().any(|a| a.starts_with("--user-data-dir=")),
+            "recorded the launch, not just the --version probe: {argv:?}"
+        );
+        argv
+    }
+
+    /// The proxy has to survive all the way to Chrome's command line. It is
+    /// now resolved in `launch` and handed to `build_flags` as an argument,
+    /// which is a wire that can be left unconnected — and an unconnected one
+    /// produces a Chrome browsing DIRECT with a valid proxy configured and
+    /// nothing anywhere saying so.
+    ///
+    /// The no-proxy launch is the control: it proves the recorder reports what
+    /// was actually passed rather than always containing the flag.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_launch_carries_the_resolved_proxy_into_chromes_argv() {
+        let argv = recorded_launch_argv(|b| b.proxy("http://bob:pw@recorded.example:3128")).await;
+        assert!(
+            argv.contains(&"--proxy-server=http://recorded.example:3128".to_string()),
+            "the launch must actually spawn Chrome behind the proxy: {argv:?}"
+        );
+
+        let direct = recorded_launch_argv(|b| b).await;
+        assert!(
+            !direct.iter().any(|a| a.starts_with("--proxy-server=")),
+            "no proxy was configured, so none may appear: {direct:?}"
+        );
+    }
+
+    /// Same wire, the CI-defaults end: `apply_ci_defaults` is another call
+    /// site in `launch`, running *after* `merge_launch_flags` has folded in
+    /// the stealth profile's own flags. Both directions are asserted, because
+    /// only the first kills a deleted call site — a launch that never applies
+    /// the defaults also never emits `--no-sandbox`, so the suppression case
+    /// alone would stay green against a `launch` that dropped the call.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_launch_applies_the_ci_defaults_but_not_over_an_explicit_sandbox() {
+        let argv = recorded_launch_argv(|b| b.ci_defaults(true)).await;
+        assert!(
+            argv.contains(&"--no-sandbox".to_string()),
+            "ci_defaults(true) must reach the real argv: {argv:?}"
+        );
+
+        let kept = recorded_launch_argv(|b| b.sandbox(true).ci_defaults(true)).await;
+        assert!(
+            !kept.contains(&"--no-sandbox".to_string()),
+            "sandbox(true) must survive the CI defaults in the real argv: {kept:?}"
+        );
+    }
+
+    /// The limit of `ci_defaults(false)`, pinned because the docs now state
+    /// it: the default `native` profile emits `--disable-dev-shm-usage` of its
+    /// own accord, so opting out removes the `--no-sandbox` half and leaves
+    /// the `/dev/shm` half in place. Harmless — it weakens nothing — but a
+    /// promise to "keep them out" would be false.
+    ///
+    /// `StealthProfile::off()` contributes no flags at all, and is the case
+    /// that proves the limit is the profile's doing rather than
+    /// `ci_defaults(false)` failing to work.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ci_defaults_false_cannot_remove_the_stealth_profiles_own_dev_shm_flag() {
+        let argv = recorded_launch_argv(|b| b.ci_defaults(false)).await;
+        assert!(
+            !argv.contains(&"--no-sandbox".to_string()),
+            "ci_defaults(false) must keep --no-sandbox out: {argv:?}"
+        );
+        assert!(
+            argv.contains(&"--disable-dev-shm-usage".to_string()),
+            "the native profile emits this one regardless: {argv:?}"
+        );
+
+        let stock = recorded_launch_argv(|b| {
+            b.ci_defaults(false)
+                .stealth(zendriver_stealth::StealthProfile::off())
+        })
+        .await;
+        assert!(
+            !stock.contains(&"--disable-dev-shm-usage".to_string()),
+            "with no profile flags, ci_defaults(false) controls both: {stock:?}"
+        );
+    }
+
+    /// `connect` ignores the spawn-only launch flags, but it must not ignore a
+    /// proxy URL it cannot parse: the endpoint is never dialled.
+    #[tokio::test]
+    async fn connect_fails_closed_on_an_unparseable_proxy_url() {
+        let err = Browser::builder()
+            .proxy("http://:3128")
+            // Nothing listens on port 1; reaching the dial at all is a failure
+            // of the ordering this test exists to pin.
+            .connect("ws://127.0.0.1:1")
+            .await
+            .expect_err("an unparseable proxy URL must fail the connect");
+        let msg = err.to_string();
+        assert!(msg.contains("proxy"), "error must name the proxy: {msg}");
     }
 
     #[test]
@@ -5754,7 +6322,7 @@ mod tests {
         // Default launch must open the initial tab on about:blank (the final
         // positional argument), not Chrome's New Tab Page — the NTP's own
         // requests would otherwise pollute `wait_for_idle`'s in-flight set.
-        let flags = BrowserBuilder::new().build_flags(Path::new("/tmp/x"));
+        let flags = BrowserBuilder::new().build_flags(Path::new("/tmp/x"), None);
         assert_eq!(
             flags.last().map(String::as_str),
             Some("about:blank"),
@@ -5773,7 +6341,7 @@ mod tests {
         // about:blank (which would open a second, blank tab).
         let flags = BrowserBuilder::new()
             .arg("https://example.com")
-            .build_flags(Path::new("/tmp/x"));
+            .build_flags(Path::new("/tmp/x"), None);
         assert!(
             !flags.contains(&"about:blank".to_string()),
             "explicit positional URL should suppress about:blank in {flags:?}"
@@ -5790,21 +6358,21 @@ mod tests {
     #[test]
     fn lang_flag_present() {
         let b = BrowserBuilder::new().lang("en-US");
-        let flags = b.build_flags(Path::new("/tmp/x"));
+        let flags = b.build_flags(Path::new("/tmp/x"), None);
         assert!(flags.contains(&"--lang=en-US".to_string()));
     }
 
     #[test]
     fn user_agent_flag_present() {
         let b = BrowserBuilder::new().user_agent("MyAgent/1.0");
-        let flags = b.build_flags(Path::new("/tmp/x"));
+        let flags = b.build_flags(Path::new("/tmp/x"), None);
         assert!(flags.contains(&"--user-agent=MyAgent/1.0".to_string()));
     }
 
     #[test]
     fn sandbox_false_adds_no_sandbox() {
         let b = BrowserBuilder::new().sandbox(false);
-        let flags = b.build_flags(Path::new("/tmp/x"));
+        let flags = b.build_flags(Path::new("/tmp/x"), None);
         assert!(flags.contains(&"--no-sandbox".to_string()));
     }
 
@@ -5814,7 +6382,7 @@ mod tests {
         // build_flags. The CI auto-add lives in `launch`, not build_flags,
         // so this is unaffected by the CI env var.
         let b = BrowserBuilder::new();
-        let flags = b.build_flags(Path::new("/tmp/x"));
+        let flags = b.build_flags(Path::new("/tmp/x"), None);
         assert!(!flags.contains(&"--no-sandbox".to_string()));
     }
 
@@ -5823,7 +6391,7 @@ mod tests {
     #[test]
     fn expert_adds_web_security_and_site_isolation_flags() {
         let b = BrowserBuilder::new().expert(true);
-        let flags = b.build_flags(Path::new("/tmp/x"));
+        let flags = b.build_flags(Path::new("/tmp/x"), None);
         assert!(
             flags.contains(&"--disable-web-security".to_string()),
             "expected --disable-web-security in {flags:?}"
@@ -5836,7 +6404,7 @@ mod tests {
 
     #[test]
     fn expert_off_omits_expert_flags() {
-        let flags = BrowserBuilder::new().build_flags(Path::new("/tmp/x"));
+        let flags = BrowserBuilder::new().build_flags(Path::new("/tmp/x"), None);
         assert!(!flags.contains(&"--disable-web-security".to_string()));
         assert!(!flags.contains(&"--disable-site-isolation-trials".to_string()));
     }
@@ -5846,7 +6414,7 @@ mod tests {
     #[test]
     fn extensions_add_load_and_disable_except_flags() {
         let b = BrowserBuilder::new().add_extension("a").add_extension("b");
-        let flags = b.build_flags(Path::new("/tmp/x"));
+        let flags = b.build_flags(Path::new("/tmp/x"), None);
         assert!(
             flags.contains(&"--load-extension=a,b".to_string()),
             "expected --load-extension=a,b in {flags:?}"
@@ -5870,7 +6438,7 @@ mod tests {
         let b = BrowserBuilder::new()
             .stealth(StealthProfile::off())
             .add_extension("ext");
-        let flags = b.build_flags(Path::new("/tmp/x"));
+        let flags = b.build_flags(Path::new("/tmp/x"), None);
         assert!(
             flags.iter().any(|f| f.starts_with("--disable-features=")
                 && f.contains("DisableLoadExtensionCommandLineSwitch")),
@@ -5882,7 +6450,7 @@ mod tests {
     fn no_extensions_omits_extension_flags() {
         // Default builder must not emit any extension flags (keeps the default
         // argv + snapshots unchanged).
-        let flags = BrowserBuilder::new().build_flags(Path::new("/tmp/x"));
+        let flags = BrowserBuilder::new().build_flags(Path::new("/tmp/x"), None);
         assert!(!flags.iter().any(|f| f.starts_with("--load-extension")));
         assert!(
             !flags
@@ -6052,7 +6620,7 @@ mod tests {
     #[test]
     fn default_launch_flags_snapshot() {
         let b = BrowserBuilder::new();
-        let flags = b.build_flags(std::path::Path::new("/tmp/test-user-data"));
+        let flags = b.build_flags(std::path::Path::new("/tmp/test-user-data"), None);
         insta::assert_yaml_snapshot!("default_launch_flags", flags);
     }
 
@@ -6075,7 +6643,7 @@ mod tests {
     #[test]
     fn non_headless_launch_flags_snapshot() {
         let b = BrowserBuilder::new().headless(false);
-        let flags = b.build_flags(std::path::Path::new("/tmp/test-user-data"));
+        let flags = b.build_flags(std::path::Path::new("/tmp/test-user-data"), None);
         insta::assert_yaml_snapshot!("non_headless_launch_flags", flags);
     }
 
