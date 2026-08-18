@@ -250,7 +250,14 @@ pub(crate) async fn run_actor<S>(
                         break;
                     }
                     Some(Err(e)) => {
-                        error!("ws read failed: {e}");
+                        // After a requested shutdown this is the expected teardown:
+                        // closing a target resets its socket, and with one socket
+                        // per tab that reset races the shutdown signal.
+                        if shutdown.is_cancelled() {
+                            debug!("ws read failed during shutdown (expected): {e}");
+                        } else {
+                            error!("ws read failed: {e}");
+                        }
                         drain_code = crate::connection::DISCONNECTED_CODE;
                         break;
                     }

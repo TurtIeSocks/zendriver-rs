@@ -1,5 +1,10 @@
-//! `SessionHandle`: a [`Connection`] bound to a particular CDP `sessionId`.
-//! All commands sent through the handle are routed to that target.
+//! `SessionHandle`: a [`Connection`] bound to a particular CDP session.
+//!
+//! - A *flat* handle ([`SessionHandle::new`]) rides a shared, flattened browser
+//!   socket and tags every frame with its `sessionId`.
+//! - A *root* handle ([`SessionHandle::new_root`]) owns a connection dialed
+//!   straight at one target (e.g. `/devtools/page/<targetId>`), so it is that
+//!   target's session and carries no `sessionId` — the one-socket-per-tab model.
 
 use std::sync::Arc;
 
@@ -25,24 +30,42 @@ pub struct SessionHandle {
 #[derive(Debug)]
 struct Inner {
     conn: Connection,
-    session_id: String,
+    /// `Some(id)` for a flat session; `None` for a root (per-target) session.
+    session_id: Option<String>,
 }
 
 impl SessionHandle {
-    /// Construct a handle around `conn` scoped to `session_id`. Used by
-    /// `zendriver` core when wiring a `Tab` to a newly attached page target.
+    /// Construct a flat handle around `conn` scoped to `session_id` (a session
+    /// multiplexed over a shared, flattened browser socket).
     pub fn new(conn: Connection, session_id: impl Into<String>) -> Self {
         Self {
             inner: Arc::new(Inner {
                 conn,
-                session_id: session_id.into(),
+                session_id: Some(session_id.into()),
             }),
         }
     }
 
-    /// The CDP `sessionId` this handle is scoped to.
+    /// Construct a root handle around a connection dialed directly at one target
+    /// (e.g. `/devtools/page/<targetId>`): commands carry no `sessionId` and
+    /// event filtering matches frames that likewise carry none.
+    pub fn new_root(conn: Connection) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                conn,
+                session_id: None,
+            }),
+        }
+    }
+
+    /// The CDP `sessionId` this handle is scoped to, or `""` for a root session.
     pub fn session_id(&self) -> &str {
-        &self.inner.session_id
+        self.inner.session_id.as_deref().unwrap_or("")
+    }
+
+    /// Whether this is a root (per-target connection) handle.
+    pub fn is_root(&self) -> bool {
+        self.inner.session_id.is_none()
     }
 
     /// Borrow the underlying [`Connection`].
@@ -50,19 +73,17 @@ impl SessionHandle {
         &self.inner.conn
     }
 
-    /// Send a CDP command routed to this session.
-    ///
-    /// Forwards to [`Connection::call_raw`] with this handle's `sessionId`
-    /// — the surface most layers above this crate go through.
+    /// Send a CDP command routed to this session. A flat session tags the frame
+    /// with its `sessionId`; a root session sends none.
     pub async fn call(&self, method: impl Into<String>, params: Value) -> Result<Value, CallError> {
         self.inner
             .conn
-            .call_raw(method, params, Some(self.inner.session_id.clone()))
+            .call_raw(method, params, self.inner.session_id.clone())
             .await
     }
 
-    /// Subscribe to events of type `T` on this session, filtering out events
-    /// for every other target.
+    /// Subscribe to events of type `T` on this session. Matches a flat session's
+    /// `sessionId`, or (for a root session) frames that carry none.
     pub fn subscribe<T>(
         &self,
         method: &'static str,
@@ -73,13 +94,11 @@ impl SessionHandle {
         let sid = self.inner.session_id.clone();
         let raw = self.inner.conn.subscribe_raw();
         Box::pin(raw.filter_map(move |ev: RawEvent| {
-            let sid = sid.clone();
+            let matches = ev.session_id == sid && ev.method == method;
             async move {
-                if ev.session_id.as_deref() == Some(sid.as_str()) && ev.method == method {
-                    serde_json::from_value(ev.params).ok()
-                } else {
-                    None
-                }
+                matches
+                    .then(|| serde_json::from_value(ev.params).ok())
+                    .flatten()
             }
         }))
     }
@@ -117,6 +136,35 @@ mod tests {
         assert_eq!(v["sessionId"], "S1");
 
         // Cancel via dropping
+        drop(call);
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn root_session_omits_session_id() {
+        let (ws, _test_tx, mut test_rx) = duplex_pair();
+        let conn = spawn_actor(ws);
+        let sess = SessionHandle::new_root(conn.clone());
+        assert!(sess.is_root());
+        assert_eq!(sess.session_id(), "");
+
+        let call = tokio::spawn({
+            let s = sess.clone();
+            async move {
+                s.call("Page.navigate", json!({ "url": "https://x.test" }))
+                    .await
+            }
+        });
+
+        let sent = test_rx.recv().await.unwrap();
+        let v: Value = serde_json::from_str(match &sent {
+            Message::Text(t) => t,
+            _ => panic!("expected text frame"),
+        })
+        .unwrap();
+        // A direct per-target connection carries no sessionId on the wire.
+        assert!(v.get("sessionId").is_none());
+
         drop(call);
         conn.shutdown();
     }
