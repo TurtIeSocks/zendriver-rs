@@ -2050,6 +2050,35 @@ pub(crate) fn test_only_inner_from_conn(conn: Connection) -> Arc<BrowserInner> {
 /// registrar — see `handle_target_attached` in `zendriver_transport::actor`.
 /// So "skip the registrar" happens only on detach, never on a bare
 /// `BestEffort` timeout.
+/// Build the [`SessionHandle`] a [`Tab`] will drive.
+///
+/// When the browser's DevTools `host:port` is known (any real launch), dial a
+/// dedicated per-target WebSocket (`/devtools/page/<targetId>`) and return a
+/// [root](SessionHandle::new_root) session on it, so each tab's traffic rides
+/// its own socket + reader task instead of the single flattened browser socket
+/// shared by every tab. This matches the one-connection-per-tab model of the
+/// upstream Python zendriver / nodriver. Falls back to the flat `session` for
+/// test-constructed browsers (no `host:port`) or if the dial fails. Stealth is
+/// unaffected: it is installed by the observer chain on the flat attach session
+/// before the debugger resumes, and its overrides carry over to the target.
+async fn per_tab_session(
+    browser: &BrowserInner,
+    flat: SessionHandle,
+    target_id: &str,
+) -> SessionHandle {
+    let Some(host_port) = browser.debug_host_port.as_deref() else {
+        return flat;
+    };
+    let ws_url = format!("ws://{host_port}/devtools/page/{target_id}");
+    match zendriver_transport::connect(&ws_url).await {
+        Ok(conn) => SessionHandle::new_root(conn),
+        Err(err) => {
+            warn!(%err, target_id, "per-tab socket dial failed; using the shared session");
+            flat
+        }
+    }
+}
+
 pub(crate) struct TabRegistrar {
     browser: OnceLock<Weak<BrowserInner>>,
     input_profile: zendriver_stealth::InputProfile,
@@ -2161,8 +2190,13 @@ impl TargetObserver for TabRegistrar {
                 let new_session_for_intercept = new_session.clone();
                 let input = InputController::new(self.input_profile.clone());
                 let weak_inner = Arc::downgrade(&browser);
+                // Give this tab its own CDP socket for its traffic (falls back to
+                // the flat attach session — see `per_tab_session`). Stealth and
+                // any per-context interception stay on the flat session.
+                let tab_session =
+                    per_tab_session(&browser, new_session, &session.target_info.target_id).await;
                 let tab = Tab::new(
-                    new_session,
+                    tab_session,
                     weak_inner,
                     input,
                     session.target_info.target_id.clone(),
