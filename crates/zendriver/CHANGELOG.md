@@ -5,6 +5,15 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.5.25] - 2026-08-18
+
+### Fixed
+
+- Publishing works again. 0.5.24 was yanked while it was also the version this
+  crate declared, so `zendriver-mcp` could not be packaged against it and no
+  bump could clear that -- the version it would have bumped from was the yanked
+  one. 0.5.25 carries no source change from 0.5.24 beyond the version string.
+
 ## [0.5.24] - 2026-08-08
 
 Nothing changed in 0.5.12 through 0.5.24. A release-automation loop cut them and
