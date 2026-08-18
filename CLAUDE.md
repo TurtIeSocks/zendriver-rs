@@ -72,10 +72,14 @@ Treat a public API with no MCP tool and no ledger entry as a coverage gap to
 close. The `mcp-coverage` CI job (`.github/workflows/mcp-coverage.yml`) enforces
 this: `tests/public_api.rs` diffs the current `zendriver` public API against
 `public-api-baseline.txt` and fails if any new item is missing from the ledger.
-Run it locally (needs nightly + `cargo-public-api` v0.52.0):
+Run it locally (needs `cargo-public-api` v0.52.0). **Pass
+`PUBLIC_API_TOOLCHAIN`** — the test defaults to bare `nightly`, and any nightly
+newer than the pin renders some types differently (`std::io::error::Error`
+became `core::io::error::Error`), which surfaces as half a dozen phantom
+"missing ledger entries" that do not reproduce in CI:
 
 ```bash
-cargo +nightly test -p zendriver-mcp --features public-api-check --test public_api --locked
+PUBLIC_API_TOOLCHAIN=nightly-2026-06-10 cargo test -p zendriver-mcp --features public-api-check --test public_api --locked
 ```
 
 If you intentionally changed the public API, regenerate the baseline:
