@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.5.26] - 2026-08-18
+
+### Fixed
+
+- Block the no-op merge without closing the PR ([#229](https://github.com/TurtIeSocks/zendriver-rs/pull/229))
+
+
 ## [0.5.25] - 2026-08-18
 
 ### Fixed
