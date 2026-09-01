@@ -4,9 +4,9 @@
 // tier tables in `tiers.rs`; nothing here can fabricate one.
 //
 // Model names, device ids and population weights: fingerprint corpus
-// pinned at 358002c33e6e0b1cec4eb167be29ba9b3f854216.
+// pinned at 2e0a2a2e81cbb3ffbcc507796f2fb932992a14a4.
 // Device ids the corpus never reports: pciutils/pciids pinned at
-// 7a900ad2ad4b91c3a9d4f4da60e247864e6a73aa.
+// 27f67c9af4a6bc9653c084bfbfa3cda12d8a66c2.
 //
 // 482 entries.
 // 2 models were dropped for having no device id in either source,
