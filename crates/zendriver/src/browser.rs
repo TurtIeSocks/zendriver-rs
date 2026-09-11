@@ -2067,6 +2067,33 @@ async fn per_tab_session(
     }
 }
 
+/// Params for the browser-scoped `Target.setAutoAttach`. Shared by the launch
+/// handshake and the reconnect re-arm so the two can't drift apart.
+///
+/// The `filter` restricts auto-attach to `page` and `iframe` targets and
+/// excludes everything else — crucially `service_worker`, `worker` and
+/// `shared_worker`. Attaching a debugger session to a service worker keeps
+/// Chrome from terminating it when idle ("keep-alive while inspected"): under a
+/// long-lived browser context the workers then accumulate without bound, one
+/// renderer process each. The [`TabRegistrar`] only ever handles `page`/`iframe`
+/// (its `_ => {}` arm ignores workers), so excluding them loses no functionality
+/// and lets Chrome reclaim idle service workers on its own.
+///
+/// `TargetFilter` is evaluated in order, first match wins: `page` and `iframe`
+/// are attached, everything else falls through to the catch-all `exclude`.
+fn auto_attach_params() -> serde_json::Value {
+    json!({
+        "autoAttach": true,
+        "waitForDebuggerOnStart": true,
+        "flatten": true,
+        "filter": [
+            { "type": "page" },
+            { "type": "iframe" },
+            { "exclude": true },
+        ],
+    })
+}
+
 /// [`TargetObserver`] that maintains [`BrowserInner::tabs`] in step with
 /// CDP target lifecycle events.
 ///
@@ -2838,16 +2865,8 @@ pub(crate) async fn finish_connect(
     // Enable auto-attach with debugger-pause BEFORE attaching to the initial
     // target. Sent at browser scope (no session_id) so it covers both the
     // initial target and any subsequently-opened pages/iframes.
-    conn.call_raw(
-        "Target.setAutoAttach",
-        json!({
-            "autoAttach": true,
-            "waitForDebuggerOnStart": true,
-            "flatten": true,
-        }),
-        None,
-    )
-    .await?;
+    conn.call_raw("Target.setAutoAttach", auto_attach_params(), None)
+        .await?;
 
     // Discover the initial target via Target.getTargets (prefer a page).
     //
@@ -4401,15 +4420,7 @@ impl Browser {
         // page. `flatten: true` re-applies the single-socket flat session model.
         self.inner
             .conn
-            .call_raw(
-                "Target.setAutoAttach",
-                json!({
-                    "autoAttach": true,
-                    "waitForDebuggerOnStart": true,
-                    "flatten": true,
-                }),
-                None,
-            )
+            .call_raw("Target.setAutoAttach", auto_attach_params(), None)
             .await?;
 
         // Wake any `new_tab_at` waiters now that the registry has been reset
@@ -7415,6 +7426,13 @@ mod tests {
         let id = mock.expect_cmd("Target.setAutoAttach").await;
         let sent = mock.last_sent();
         assert_eq!(sent["params"]["flatten"], true);
+        // Workers must NOT be auto-attached: a debugger session on a service
+        // worker keeps Chrome from ever terminating it, leaking one renderer per
+        // worker under a long-lived context.
+        assert_eq!(
+            sent["params"]["filter"],
+            json!([{ "type": "page" }, { "type": "iframe" }, { "exclude": true }]),
+        );
         assert!(
             sent.get("sessionId").is_none(),
             "auto-attach is browser-scope"
