@@ -185,7 +185,7 @@
 <a href=#185 id=185 data-nosnippet>185</a>        // `requestWillBeSent` — the REMOVE then runs against an empty
 <a href=#186 id=186 data-nosnippet>186</a>        // set, the later INSERT installs the id, and the request leaks
 <a href=#187 id=187 data-nosnippet>187</a>        // forever. One stream means CDP's wire order is preserved.
-<a href=#188 id=188 data-nosnippet>188</a>        </span><span class="kw">let </span>session_id = session.session_id().to_string();
+<a href=#188 id=188 data-nosnippet>188</a>        </span><span class="kw">let </span>session_id = session.session_id().map(str::to_string);
 <a href=#189 id=189 data-nosnippet>189</a>        <span class="kw">let </span><span class="kw-2">mut </span>events = session.connection().subscribe_raw();
 <a href=#190 id=190 data-nosnippet>190</a>
 <a href=#191 id=191 data-nosnippet>191</a>        <span class="comment">// Fire-and-forget `Network.enable`. We don't await the response
@@ -217,7 +217,7 @@
 <a href=#217 id=217 data-nosnippet>217</a>                        </span><span class="macro">trace!</span>(<span class="string">"InFlightTracker: event stream closed, exiting"</span>);
 <a href=#218 id=218 data-nosnippet>218</a>                        <span class="kw">return</span>;
 <a href=#219 id=219 data-nosnippet>219</a>                    };
-<a href=#220 id=220 data-nosnippet>220</a>                    <span class="kw">if </span>ev.session_id.as_deref() != <span class="prelude-val">Some</span>(session_id.as_str()) {
+<a href=#220 id=220 data-nosnippet>220</a>                    <span class="kw">if </span>ev.session_id.as_deref() != session_id.as_deref() {
 <a href=#221 id=221 data-nosnippet>221</a>                        <span class="kw">continue</span>;
 <a href=#222 id=222 data-nosnippet>222</a>                    }
 <a href=#223 id=223 data-nosnippet>223</a>                    <span class="kw">let </span>changed = <span class="kw">match </span>ev.method.as_str() {

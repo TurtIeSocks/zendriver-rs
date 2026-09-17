@@ -67,14 +67,14 @@
 <a href=#67 id=67 data-nosnippet>67</a><span class="kw">where
 <a href=#68 id=68 data-nosnippet>68</a>    </span>T: serde::de::DeserializeOwned + Send + <span class="lifetime">'static</span>,
 <a href=#69 id=69 data-nosnippet>69</a>{
-<a href=#70 id=70 data-nosnippet>70</a>    <span class="kw">let </span>sid = session.session_id().to_string();
+<a href=#70 id=70 data-nosnippet>70</a>    <span class="kw">let </span>sid = session.session_id().map(str::to_string);
 <a href=#71 id=71 data-nosnippet>71</a>    <span class="kw">let </span>raw = session.connection().subscribe_raw_accounted();
 <a href=#72 id=72 data-nosnippet>72</a>    Box::pin(raw.filter_map(<span class="kw">move </span>|acc| {
 <a href=#73 id=73 data-nosnippet>73</a>        <span class="kw">let </span>sid = sid.clone();
 <a href=#74 id=74 data-nosnippet>74</a>        <span class="kw">async move </span>{
 <a href=#75 id=75 data-nosnippet>75</a>            <span class="kw">match </span>acc {
 <a href=#76 id=76 data-nosnippet>76</a>                AccountedRawEvent::Event { event, .. } =&gt; {
-<a href=#77 id=77 data-nosnippet>77</a>                    <span class="kw">if </span>event.session_id.as_deref() == <span class="prelude-val">Some</span>(sid.as_str()) &amp;&amp; event.method == method {
+<a href=#77 id=77 data-nosnippet>77</a>                    <span class="kw">if </span>event.session_id.as_deref() == sid.as_deref() &amp;&amp; event.method == method {
 <a href=#78 id=78 data-nosnippet>78</a>                        <span class="kw">match </span>serde_json::from_value::&lt;T&gt;(event.params) {
 <a href=#79 id=79 data-nosnippet>79</a>                            <span class="prelude-val">Ok</span>(v) =&gt; <span class="prelude-val">Some</span>(<span class="prelude-val">Ok</span>(v)),
 <a href=#80 id=80 data-nosnippet>80</a>                            <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; <span class="prelude-val">Some</span>(<span class="prelude-val">Err</span>(ZendriverError::EventStreamIncomplete)),
@@ -98,4 +98,53 @@
 <a href=#98 id=98 data-nosnippet>98</a>        }
 <a href=#99 id=99 data-nosnippet>99</a>    }))
 <a href=#100 id=100 data-nosnippet>100</a>}
+<a href=#101 id=101 data-nosnippet>101</a>
+<a href=#102 id=102 data-nosnippet>102</a><span class="attr">#[cfg(test)]
+<a href=#103 id=103 data-nosnippet>103</a>#[allow(clippy::unwrap_used)]
+<a href=#104 id=104 data-nosnippet>104</a></span><span class="kw">mod </span>tests {
+<a href=#105 id=105 data-nosnippet>105</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#106 id=106 data-nosnippet>106</a>    <span class="kw">use </span>serde_json::{Value, json};
+<a href=#107 id=107 data-nosnippet>107</a>    <span class="kw">use </span>std::time::Duration;
+<a href=#108 id=108 data-nosnippet>108</a>    <span class="kw">use </span>tokio::time::timeout;
+<a href=#109 id=109 data-nosnippet>109</a>    <span class="kw">use </span>zendriver_transport::testing::MockConnection;
+<a href=#110 id=110 data-nosnippet>110</a>
+<a href=#111 id=111 data-nosnippet>111</a>    <span class="comment">// A flat session filters events by its `sessionId`: an event tagged with
+<a href=#112 id=112 data-nosnippet>112</a>    // the same id is delivered. This is the control for the root case below —
+<a href=#113 id=113 data-nosnippet>113</a>    // if it broke, the harness (not the model) would be at fault.
+<a href=#114 id=114 data-nosnippet>114</a>    </span><span class="attr">#[tokio::test]
+<a href=#115 id=115 data-nosnippet>115</a>    </span><span class="kw">async fn </span>flat_session_watch_still_receives_its_events() {
+<a href=#116 id=116 data-nosnippet>116</a>        <span class="kw">let </span>(mock, conn) = MockConnection::pair();
+<a href=#117 id=117 data-nosnippet>117</a>        <span class="kw">let </span>sess = SessionHandle::new(conn, <span class="string">"S1"</span>);
+<a href=#118 id=118 data-nosnippet>118</a>        <span class="kw">let </span><span class="kw-2">mut </span>stream = watch::&lt;Value&gt;(<span class="kw-2">&amp;</span>sess, <span class="string">"Page.javascriptDialogOpening"</span>);
+<a href=#119 id=119 data-nosnippet>119</a>        mock.emit_event_for_session(
+<a href=#120 id=120 data-nosnippet>120</a>            <span class="string">"Page.javascriptDialogOpening"</span>,
+<a href=#121 id=121 data-nosnippet>121</a>            <span class="macro">json!</span>({ <span class="string">"message"</span>: <span class="string">"hi" </span>}),
+<a href=#122 id=122 data-nosnippet>122</a>            <span class="string">"S1"</span>,
+<a href=#123 id=123 data-nosnippet>123</a>        )
+<a href=#124 id=124 data-nosnippet>124</a>        .<span class="kw">await</span>;
+<a href=#125 id=125 data-nosnippet>125</a>        <span class="kw">let </span>got = timeout(Duration::from_millis(<span class="number">500</span>), stream.next()).<span class="kw">await</span>;
+<a href=#126 id=126 data-nosnippet>126</a>        <span class="macro">assert!</span>(
+<a href=#127 id=127 data-nosnippet>127</a>            <span class="macro">matches!</span>(got, <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(<span class="prelude-val">Ok</span>(<span class="kw">_</span>)))),
+<a href=#128 id=128 data-nosnippet>128</a>            <span class="string">"flat session dropped its own event: {got:?}"
+<a href=#129 id=129 data-nosnippet>129</a>        </span>);
+<a href=#130 id=130 data-nosnippet>130</a>    }
+<a href=#131 id=131 data-nosnippet>131</a>
+<a href=#132 id=132 data-nosnippet>132</a>    <span class="comment">// A root (per-tab socket) session carries no `sessionId`, and neither do
+<a href=#133 id=133 data-nosnippet>133</a>    // the events on its own socket. `session_id()` must therefore be `None`
+<a href=#134 id=134 data-nosnippet>134</a>    // here so the filter matches sessionless frames — a `""` sentinel would
+<a href=#135 id=135 data-nosnippet>135</a>    // make `None != Some("")` and drop every event the tab ever sees.
+<a href=#136 id=136 data-nosnippet>136</a>    </span><span class="attr">#[tokio::test]
+<a href=#137 id=137 data-nosnippet>137</a>    </span><span class="kw">async fn </span>root_session_watch_receives_sessionless_events() {
+<a href=#138 id=138 data-nosnippet>138</a>        <span class="kw">let </span>(mock, conn) = MockConnection::pair();
+<a href=#139 id=139 data-nosnippet>139</a>        <span class="kw">let </span>sess = SessionHandle::new_root(conn);
+<a href=#140 id=140 data-nosnippet>140</a>        <span class="kw">let </span><span class="kw-2">mut </span>stream = watch::&lt;Value&gt;(<span class="kw-2">&amp;</span>sess, <span class="string">"Page.javascriptDialogOpening"</span>);
+<a href=#141 id=141 data-nosnippet>141</a>        mock.emit_event(<span class="string">"Page.javascriptDialogOpening"</span>, <span class="macro">json!</span>({ <span class="string">"message"</span>: <span class="string">"hi" </span>}))
+<a href=#142 id=142 data-nosnippet>142</a>            .<span class="kw">await</span>;
+<a href=#143 id=143 data-nosnippet>143</a>        <span class="kw">let </span>got = timeout(Duration::from_millis(<span class="number">500</span>), stream.next()).<span class="kw">await</span>;
+<a href=#144 id=144 data-nosnippet>144</a>        <span class="macro">assert!</span>(
+<a href=#145 id=145 data-nosnippet>145</a>            <span class="macro">matches!</span>(got, <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(<span class="prelude-val">Ok</span>(<span class="kw">_</span>)))),
+<a href=#146 id=146 data-nosnippet>146</a>            <span class="string">"root session dropped its own event: {got:?}"
+<a href=#147 id=147 data-nosnippet>147</a>        </span>);
+<a href=#148 id=148 data-nosnippet>148</a>    }
+<a href=#149 id=149 data-nosnippet>149</a>}
 </code></pre></div></section></main></body></html>

@@ -547,7 +547,7 @@
 <a href=#547 id=547 data-nosnippet>547</a>    tx: mpsc::Sender&lt;NetworkEvent&gt;,
 <a href=#548 id=548 data-nosnippet>548</a>    cancel: CancellationToken,
 <a href=#549 id=549 data-nosnippet>549</a>) {
-<a href=#550 id=550 data-nosnippet>550</a>    <span class="kw">let </span>session_id = session.session_id().to_string();
+<a href=#550 id=550 data-nosnippet>550</a>    <span class="kw">let </span>session_id = session.session_id().map(str::to_string);
 <a href=#551 id=551 data-nosnippet>551</a>    <span class="comment">// Shared across every spawned `streamResourceContent` enable task so an
 <a href=#552 id=552 data-nosnippet>552</a>    // unsupported-Chrome error is logged once for the whole monitor, not once
 <a href=#553 id=553 data-nosnippet>553</a>    // per streamed request (every subsequent call would fail identically).
@@ -608,7 +608,7 @@
 <a href=#608 id=608 data-nosnippet>608</a>                <span class="kw">let </span><span class="prelude-val">Some</span>(acc) = next <span class="kw">else </span>{ <span class="kw">return </span>};
 <a href=#609 id=609 data-nosnippet>609</a>                <span class="kw">match </span>acc {
 <a href=#610 id=610 data-nosnippet>610</a>                    AccountedRawEvent::Event { event: ev, .. } =&gt; {
-<a href=#611 id=611 data-nosnippet>611</a>                        <span class="kw">if </span>ev.session_id.as_deref() != <span class="prelude-val">Some</span>(session_id.as_str()) {
+<a href=#611 id=611 data-nosnippet>611</a>                        <span class="kw">if </span>ev.session_id.as_deref() != session_id.as_deref() {
 <a href=#612 id=612 data-nosnippet>612</a>                            <span class="kw">continue</span>;
 <a href=#613 id=613 data-nosnippet>613</a>                        }
 <a href=#614 id=614 data-nosnippet>614</a>                        <span class="kw">match </span>ev.method.as_str() {

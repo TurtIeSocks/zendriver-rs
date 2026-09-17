@@ -125,7 +125,7 @@
 <a href=#125 id=125 data-nosnippet>125</a>            <span class="kw">let </span>frames = tab.inner.frames.read().<span class="kw">await</span>;
 <a href=#126 id=126 data-nosnippet>126</a>            frames
 <a href=#127 id=127 data-nosnippet>127</a>                .iter()
-<a href=#128 id=128 data-nosnippet>128</a>                .filter(|(<span class="kw">_</span>, frame)| frame.session().session_id() == session_id)
+<a href=#128 id=128 data-nosnippet>128</a>                .filter(|(<span class="kw">_</span>, frame)| frame.session().session_id() == <span class="prelude-val">Some</span>(session_id))
 <a href=#129 id=129 data-nosnippet>129</a>                .map(|(frame_id, <span class="kw">_</span>)| frame_id.clone())
 <a href=#130 id=130 data-nosnippet>130</a>                .collect()
 <a href=#131 id=131 data-nosnippet>131</a>        };

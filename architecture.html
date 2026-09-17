@@ -204,7 +204,7 @@ performance ("is interception serializing my requests?").</p>
                                             │
                                             ▼
                             ┌─────────────────────────────────┐
-                            │   CDP Actor (single Tokio task) │
+                            │   CDP Actor (one per socket)    │
                             │   – cmd/response routing        │
                             │   – event fan-out + observers   │
                             └────────────────┬────────────────┘
@@ -219,8 +219,8 @@ performance ("is interception serializing my requests?").</p>
 session-id) — the actor is the single source of truth for outbound
 commands and inbound events.</p>
 <h2 id="the-cdp-transport-actor"><a class="header" href="#the-cdp-transport-actor">The CDP transport actor</a></h2>
-<p><code>zendriver-transport</code> runs a single Tokio task that owns the WebSocket
-connection to Chrome. All command sends go through a
+<p><code>zendriver-transport</code> runs one Tokio task per WebSocket connection to
+Chrome. All command sends go through a
 <code>mpsc::UnboundedSender</code>; every public handle holds a <code>Connection</code>
 clone that wraps that sender. The actor task:</p>
 <ol>
@@ -240,6 +240,11 @@ releasing the debugger pause, so observers run during the gap.</li>
 explicit locking, while keeping the public surface cloneable (<code>Tab</code>,
 <code>Element</code> are <code>Clone + Send + Sync</code>). All concurrency happens in
 user-space Futures handed back from <code>connection.call(...)</code>.</p>
+<p>There is one browser socket, which carries browser-level commands and
+the observer chain. Each page tab also dials its own socket at
+<code>/devtools/page/&lt;targetId&gt;</code> with its own actor. If that dial fails or
+takes longer than 2s, the tab uses a session on the browser socket
+instead.</p>
 <h2 id="observer-pattern"><a class="header" href="#observer-pattern">Observer pattern</a></h2>
 <p>Most CDP usage thinks of events as "fire and forget — subscribe if you
 care". zendriver-rs has two layers:</p>
@@ -321,8 +326,8 @@ protocol surface (interception, fetch, target tree, etc).
 Anti-detection also requires protocol-level control:
 <code>chromedriver</code> injects its own automation tells that we'd then have
 to scrub back out.</li>
-<li><strong>Single actor task.</strong> Easier reasoning than a connection pool; no
-command-ordering ambiguity. The actor does no parsing past JSON-RPC
+<li><strong>One actor task per socket.</strong> Easier reasoning than a connection pool;
+no command-ordering ambiguity within a socket. The actor does no parsing past JSON-RPC
 framing, so it's not a CPU bottleneck even under interception load.</li>
 <li><strong>Tokio runtime.</strong> Browser automation is I/O-heavy (every action
 costs at least one round-trip to Chrome); pinning ourselves to Tokio
