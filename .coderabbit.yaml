@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
+#
+# CodeRabbit review settings. A key that is absent here keeps the default.
+
+reviews:
+  auto_review:
+    # Off by default, and a pull request opts in by carrying the marker below
+    # in its description. That is as close as this file can get to "review our
+    # own branches, not a stranger's fork": CodeRabbit's schema has nine keys
+    # under auto_review and not one of them knows what a fork is.
+    #
+    # What it buys, on a plan that includes one review an hour: a drive-by
+    # pull request no longer spends the slot the branch behind it was waiting
+    # for.
+    #
+    # What it costs: nothing opened from a fork is reviewed until someone asks.
+    # `@coderabbitai review` works on any pull request and is unaffected by
+    # this flag, so asking is one comment. It also stops any pull request whose
+    # description is written by a bot rather than typed, release pull requests
+    # included, since a generated description carries no marker.
+    #
+    # The marker is an HTML comment, so it renders as nothing. It is spelled
+    # `coderabbit-review` rather than `coderabbit` because CodeRabbit edits a
+    # release-note block INTO the description after a review and that block
+    # contains `coderabbit.ai`. A shorter keyword would match text the tool
+    # itself had just added.
+    enabled: false
+    description_keyword: "<!-- coderabbit-review -->"
