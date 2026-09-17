@@ -12,7 +12,7 @@ which CDP <code>Fetch.RequestPattern</code> entries are sent on <code>Fetch.enab
 <code>Stream&lt;Item = PausedRequest&gt;</code> for the manual escape-hatch path —
 callers drive Chrome’s interception loop themselves.</li>
 </ul>
-<p>The <code>tab</code> field is a borrow of [<code>SessionHandle</code>] (not the full <code>Tab</code> from
+<p>The <code>tab</code> field is a borrow of <a href="../../zendriver_transport/session/struct.SessionHandle.html" title="struct zendriver_transport::session::SessionHandle"><code>SessionHandle</code></a> (not the full <code>Tab</code> from
 <code>zendriver</code> core) — this crate must not depend on <code>zendriver</code> (cycle).
 <code>Tab::intercept()</code> in <code>zendriver</code> constructs the builder via
 <code>InterceptBuilder::new(self.session())</code>.</p>
