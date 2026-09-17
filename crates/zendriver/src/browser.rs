@@ -1982,6 +1982,15 @@ pub(crate) fn test_only_browser_from_conn(conn: Connection) -> Browser {
 /// (per-context proxy support) reuse the same helper.
 #[cfg(test)]
 pub(crate) fn test_only_inner_from_conn(conn: Connection) -> Arc<BrowserInner> {
+    test_only_inner_with_host_port(conn, None)
+}
+
+/// [`test_only_inner_from_conn`] with a DevTools `host:port` for per-tab dials.
+#[cfg(test)]
+pub(crate) fn test_only_inner_with_host_port(
+    conn: Connection,
+    debug_host_port: Option<String>,
+) -> Arc<BrowserInner> {
     let input_profile = zendriver_stealth::InputProfile::native();
     Arc::new_cyclic(|weak: &std::sync::Weak<BrowserInner>| {
         let main_session = SessionHandle::new(conn.clone(), "S1");
@@ -1998,7 +2007,7 @@ pub(crate) fn test_only_inner_from_conn(conn: Connection) -> Arc<BrowserInner> {
             _extension_dirs: Vec::new(),
             owns_process: false,
             tabs: tokio::sync::RwLock::new(map),
-            debug_host_port: None,
+            debug_host_port,
             ws_url: None,
             tabs_changed: tokio::sync::Notify::new(),
             #[cfg(feature = "interception")]
@@ -2039,10 +2048,20 @@ async fn per_tab_session(
         "ws"
     };
     let ws_url = format!("{scheme}://{host_port}/devtools/page/{target_id}");
-    match zendriver_transport::connect(&ws_url).await {
-        Ok(conn) => SessionHandle::new_root(conn),
-        Err(err) => {
+    // Must stay under the 5s observer timeout, or a stalled dial detaches the target.
+    const DIAL_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
+    match tokio::time::timeout(DIAL_BUDGET, zendriver_transport::connect(&ws_url)).await {
+        Ok(Ok(conn)) => SessionHandle::new_root(conn),
+        Ok(Err(err)) => {
             warn!(%err, target_id, "per-tab socket dial failed; using the shared session");
+            flat
+        }
+        Err(_) => {
+            warn!(
+                target_id,
+                budget = ?DIAL_BUDGET,
+                "per-tab socket dial timed out; using the shared session"
+            );
             flat
         }
     }
@@ -8071,6 +8090,60 @@ mod tests {
         assert_eq!(closes, 0, "no close beyond the single extra page");
 
         inner.conn.shutdown();
+    }
+
+    /// A stalled per-tab dial must fall back to the flat session, not lose the tab.
+    #[tokio::test(start_paused = true)]
+    async fn tab_registrar_falls_back_when_the_per_tab_dial_stalls() {
+        use zendriver_transport::testing::MockConnection;
+
+        // Bound but never accepted: TCP connects, the upgrade never gets a reply.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let host_port = listener.local_addr().unwrap().to_string();
+
+        let registrar = Arc::new(TabRegistrar::new(zendriver_stealth::InputProfile::native()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+        let inner = test_only_inner_with_host_port(conn.clone(), Some(host_port));
+        registrar.set_browser(Arc::downgrade(&inner));
+
+        mock.emit_event(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": "S2",
+                "targetInfo": {
+                    "targetId": "T2",
+                    "type": "page",
+                    "url": "about:blank",
+                    "attached": true,
+                },
+                "waitingForDebugger": true,
+            }),
+        )
+        .await;
+
+        // Release means the registrar returned, detach means it timed out.
+        let outcome = loop {
+            let (method, id) = mock
+                .recv_cmd_timeout(std::time::Duration::from_secs(60))
+                .await
+                .expect("registrar never finished the attach");
+            if method == "Runtime.runIfWaitingForDebugger" || method == "Target.detachFromTarget" {
+                break (method, id);
+            }
+        };
+        assert_eq!(outcome.0, "Runtime.runIfWaitingForDebugger");
+        mock.reply(outcome.1, json!({})).await;
+
+        let tabs = inner.tabs.read().await;
+        let tab = tabs
+            .get("S2")
+            .expect("tab registered despite the stalled dial");
+        assert_eq!(tab.session().session_id(), Some("S2"));
+
+        drop(tabs);
+        drop(listener);
+        conn.shutdown();
     }
 
     /// The registrar skips the initial attach, so `finish_connect` must dial
