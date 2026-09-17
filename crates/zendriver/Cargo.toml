@@ -127,6 +127,10 @@ name = "hello"
 required-features = []
 
 [[example]]
+name = "tab_concurrency"
+required-features = []
+
+[[example]]
 name = "set_user_agent"
 required-features = []
 
