@@ -2013,43 +2013,6 @@ pub(crate) fn test_only_inner_from_conn(conn: Connection) -> Arc<BrowserInner> {
     })
 }
 
-/// [`TargetObserver`] that maintains [`BrowserInner::tabs`] in step with
-/// CDP target lifecycle events.
-///
-/// On `Target.attachedToTarget` with `target_info.kind == "page"`, it builds
-/// a fresh [`Tab`] for the new session (with its own [`InputController`]
-/// seeded from the cached [`zendriver_stealth::InputProfile`]) and inserts
-/// it into the registry. On `Target.detachedFromTarget`, the matching entry
-/// is removed.
-///
-/// The observer holds a [`Weak`] reference to [`BrowserInner`] so the
-/// observer chain does not extend the browser's lifetime — if the browser is
-/// dropped before a target event arrives, the upgrade fails silently and
-/// the event is ignored. The weak ref is wired in via [`OnceLock::set`]
-/// after the surrounding [`Arc::new_cyclic`] resolves; before that point
-/// the registrar is constructed empty.
-///
-/// Registered LAST in the observer chain — after [`StealthObserver`], every
-/// user-supplied [`BrowserBuilder::observer`], and the opt-in
-/// force-open-shadow-roots observer — so it acts as a **ready barrier**: a
-/// `Tab` is inserted into [`BrowserInner::tabs`] (and therefore becomes
-/// visible to [`Browser::tabs`] / is handed back from
-/// [`Browser::new_tab`]) only after every other observer has finished
-/// running against that target. Callers never see a page before its
-/// stealth/user/shadow-root setup has applied — the transport actor runs
-/// observers serially in registration order, so by the time this observer
-/// runs, the rest of the chain has already completed.
-///
-/// This barrier only holds when every earlier observer actually reaches
-/// completion. An earlier observer's `Err`/panic/`Required`-policy timeout
-/// detaches the target (`Target.detachFromTarget`) and stops the chain —
-/// this observer correctly never runs, and there is no live target to leak.
-/// But an earlier observer with [`zendriver_transport::ObserverFailurePolicy::BestEffort`]
-/// that *times out* does **not** stop the chain: the transport actor skips
-/// only that one observer and continues on to the rest, including this
-/// registrar — see `handle_target_attached` in `zendriver_transport::actor`.
-/// So "skip the registrar" happens only on detach, never on a bare
-/// `BestEffort` timeout.
 /// Build the [`SessionHandle`] a [`Tab`] will drive.
 ///
 /// When the browser's DevTools `host:port` is known (any real launch), dial a
@@ -2088,6 +2051,43 @@ async fn per_tab_session(
     }
 }
 
+/// [`TargetObserver`] that maintains [`BrowserInner::tabs`] in step with
+/// CDP target lifecycle events.
+///
+/// On `Target.attachedToTarget` with `target_info.kind == "page"`, it builds
+/// a fresh [`Tab`] for the new session (with its own [`InputController`]
+/// seeded from the cached [`zendriver_stealth::InputProfile`]) and inserts
+/// it into the registry. On `Target.detachedFromTarget`, the matching entry
+/// is removed.
+///
+/// The observer holds a [`Weak`] reference to [`BrowserInner`] so the
+/// observer chain does not extend the browser's lifetime — if the browser is
+/// dropped before a target event arrives, the upgrade fails silently and
+/// the event is ignored. The weak ref is wired in via [`OnceLock::set`]
+/// after the surrounding [`Arc::new_cyclic`] resolves; before that point
+/// the registrar is constructed empty.
+///
+/// Registered LAST in the observer chain — after [`StealthObserver`], every
+/// user-supplied [`BrowserBuilder::observer`], and the opt-in
+/// force-open-shadow-roots observer — so it acts as a **ready barrier**: a
+/// `Tab` is inserted into [`BrowserInner::tabs`] (and therefore becomes
+/// visible to [`Browser::tabs`] / is handed back from
+/// [`Browser::new_tab`]) only after every other observer has finished
+/// running against that target. Callers never see a page before its
+/// stealth/user/shadow-root setup has applied — the transport actor runs
+/// observers serially in registration order, so by the time this observer
+/// runs, the rest of the chain has already completed.
+///
+/// This barrier only holds when every earlier observer actually reaches
+/// completion. An earlier observer's `Err`/panic/`Required`-policy timeout
+/// detaches the target (`Target.detachFromTarget`) and stops the chain —
+/// this observer correctly never runs, and there is no live target to leak.
+/// But an earlier observer with [`zendriver_transport::ObserverFailurePolicy::BestEffort`]
+/// that *times out* does **not** stop the chain: the transport actor skips
+/// only that one observer and continues on to the rest, including this
+/// registrar — see `handle_target_attached` in `zendriver_transport::actor`.
+/// So "skip the registrar" happens only on detach, never on a bare
+/// `BestEffort` timeout.
 pub(crate) struct TabRegistrar {
     browser: OnceLock<Weak<BrowserInner>>,
     input_profile: zendriver_stealth::InputProfile,
