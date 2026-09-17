@@ -10,8 +10,11 @@ pub enum TransportError {
     Disconnected,
 
     /// Tungstenite raised an error on the underlying WebSocket.
+    ///
+    /// Boxed because `tungstenite::Error` is 136 bytes, which trips clippy's
+    /// `result_large_err` on every `Result` carrying this type.
     #[error("websocket: {0}")]
-    Ws(#[from] tokio_tungstenite::tungstenite::Error),
+    Ws(#[source] Box<tokio_tungstenite::tungstenite::Error>),
 
     /// JSON serialization or framing failed.
     #[error("framing: {0}")]
@@ -33,6 +36,12 @@ pub enum TransportError {
     /// An I/O error occurred (typically inside tungstenite).
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+}
+
+impl From<tokio_tungstenite::tungstenite::Error> for TransportError {
+    fn from(e: tokio_tungstenite::tungstenite::Error) -> Self {
+        Self::Ws(Box::new(e))
+    }
 }
 
 /// Result of a CDP call: either a transport-level failure, or a structured
@@ -131,7 +140,7 @@ mod tests {
     fn source_preserved_through_ws_wrap() {
         // Construct a tungstenite error and wrap it; check source chain works.
         let tung = tokio_tungstenite::tungstenite::Error::ConnectionClosed;
-        let wrapped = TransportError::Ws(tung);
+        let wrapped = TransportError::from(tung);
         // Display starts with "websocket: "
         assert!(wrapped.to_string().starts_with("websocket: "));
         // source() returns the inner
