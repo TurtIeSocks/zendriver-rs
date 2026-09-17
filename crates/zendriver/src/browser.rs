@@ -1624,9 +1624,11 @@ impl BrowserBuilder {
 
     /// Register an additional [`TargetObserver`].
     ///
-    /// Observers fire on each new attached page target. The stealth observer
-    /// (if any) is added before user observers; user observers run in the
-    /// order they were registered. The internal tab-registrar observer
+    /// Observers fire on each new attached target, which auto-attach limits
+    /// to `page` and `iframe`. Worker targets are excluded, so an observer
+    /// never sees one. The stealth observer (if any) is added before user
+    /// observers; user observers run in the order they were registered.
+    /// The internal tab-registrar observer
     /// always runs last, after every observer registered here — a ready
     /// barrier that keeps a `Tab` from being handed back until every
     /// observer above it (including this one) has finished running.

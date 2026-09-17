@@ -89,6 +89,13 @@ care". zendriver-rs has two layers:
   still paused, so the bootstrap script lands before any page script.
   No race; no need for the script to detect its own arrival timing.
 
+Auto-attach is filtered to `page` and `iframe` targets. Worker
+targets, service workers above all, are excluded on purpose: Chrome
+will not terminate a worker while a debugger session is attached to it,
+so attaching to every one of them leaked a renderer process per worker
+on a long-lived browser. Nothing in zendriver drives worker targets, so
+excluding them costs no functionality.
+
 The same observer chain re-applies stealth on every new tab — that's
 why `Browser::new_tab()` gives you a fully stealth-patched tab without
 extra code.
