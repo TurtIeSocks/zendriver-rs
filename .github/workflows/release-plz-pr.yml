@@ -53,6 +53,34 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
+      # Second line of defence, independent of why a release PR appeared.
+      # A release that changes no crate version is by definition a no-op, and
+      # it was this loop's own tell: 15 consecutive changelog-only "releases"
+      # ran while nothing was watching for exactly that shape.
+      #
+      # Block the MERGE, do not close the PR. The same changelog-only shape is
+      # also produced legitimately, by a hand-edited version -- release-plz
+      # then has nothing left to bump and opens a PR carrying only the
+      # changelog entry. Closing that one on 2026-08-18 cost the 0.5.25
+      # heading, and a changelog drifting from what actually published is the
+      # condition that started the loop in the first place. Leaving it open and
+      # red puts a human in front of the decision instead of guessing which
+      # case this is.
+      - name: Refuse to auto-merge a release PR that bumps no version
+        id: noop-guard
+        if: ${{ steps.release-plz.outputs.prs_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          PR_NUMBER: ${{ fromJSON(steps.release-plz.outputs.pr).number }}
+        run: |
+          if ! gh pr diff "$PR_NUMBER" --name-only | grep -q 'Cargo\.toml$'; then
+            echo "::error::release PR #$PR_NUMBER bumps no crate version, so it will not be auto-merged."
+            echo "::error::That is the no-op shape that looped on 2026-08-08 -- and also what a"
+            echo "::error::hand-edited version leaves behind. Left open for a human: merge it if the"
+            echo "::error::changelog entry is wanted, close it if this is a loop."
+            exit 1
+          fi
+
       # Auto-merge the release PR so publishing stays hands-off: the
       # merge pushes "chore: release ..." to main, which triggers
       # release-plz-release.yml to publish to crates.io.
@@ -72,26 +100,7 @@ jobs:
       # each one waited its full ~7 minutes for green CI and got it,
       # because an empty release genuinely passes every check. Required
       # checks answer "is this branch broken", never "should this exist";
-      # that question is the job of the two guards above and below.
-      # Second line of defence, independent of why a release PR appeared.
-      # A release that changes no crate version is by definition a no-op, and
-      # it was this loop's own tell: 15 consecutive changelog-only "releases"
-      # ran while nothing was watching for exactly that shape. Refuse to merge
-      # one, and leave the run red so a human sees it.
-      - name: Refuse a release PR that bumps no version
-        if: ${{ steps.release-plz.outputs.prs_created == 'true' }}
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
-          PR_NUMBER: ${{ fromJSON(steps.release-plz.outputs.pr).number }}
-        run: |
-          if ! gh pr diff "$PR_NUMBER" --name-only | grep -q 'Cargo\.toml$'; then
-            echo "::error::release PR #$PR_NUMBER changes no Cargo.toml version."
-            echo "::error::That is the no-op release shape that looped on 2026-08-08."
-            gh pr close "$PR_NUMBER" \
-              --comment "Closed automatically: this release PR bumps no crate version." || true
-            exit 1
-          fi
-
+      # that question is the job of the job-level `if:` and the no-op step above.
       - name: Auto-merge the release PR
         if: ${{ steps.release-plz.outputs.prs_created == 'true' }}
         env:

@@ -5,6 +5,13 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-17
+
+### Fixed
+
+- Box tungstenite::Error in TransportError::Ws **(BREAKING)**
+
+
 ## [0.2.6] - 2026-08-08
 
 ### Fixed

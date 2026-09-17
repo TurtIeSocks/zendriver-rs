@@ -5,6 +5,24 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.16.36] - 2026-09-17
+
+
+## [0.16.35] - 2026-08-18
+
+### Fixed
+
+- Block the no-op merge without closing the PR ([#229](https://github.com/TurtIeSocks/zendriver-rs/pull/229))
+
+
+## [0.16.34] - 2026-08-18
+
+### Fixed
+
+- Publishing works again. This crate depends on `zendriver`, and 0.5.24 was
+  yanked while still being the declared version, so `cargo package` refused to
+  resolve it. No source change beyond the version string.
+
 ## [0.16.33] - 2026-08-08
 
 Nothing changed in 0.16.21 through 0.16.33. A release-automation loop cut them
