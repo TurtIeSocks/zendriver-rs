@@ -28,7 +28,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::time::timeout;
 use tracing::trace;
-use zendriver_transport::{AccountedRawEvent, SessionHandle};
+use zendriver_transport::{AccountedRawEvent, Connection, SessionHandle};
 
 use crate::error::{Result, ZendriverError};
 use crate::frame::Frame;
@@ -378,6 +378,12 @@ impl Drop for TabInner {
         // posture as `network_cancel` above — the task selects on this
         // token alongside the three `Page.frame*` subscriber streams.
         self.frame_lifecycle_cancel.cancel();
+        // A per-tab (root) socket belongs to this tab alone; shut it down so its
+        // reader exits cleanly instead of logging the reset when the target goes
+        // away. Flat sessions share the browser socket — leave them untouched.
+        if self.session.is_root() {
+            self.session.connection().shutdown();
+        }
     }
 }
 
@@ -519,7 +525,7 @@ impl Tab {
     /// need a specific `targetId` should use [`Tab::new_for_test_with_target`].
     #[cfg(test)]
     pub(crate) fn new_for_test(session: SessionHandle) -> Self {
-        let target_id = format!("test-target-{}", session.session_id());
+        let target_id = format!("test-target-{}", session.session_id().unwrap_or("root"));
         Self::new(
             session,
             std::sync::Weak::new(),
@@ -584,6 +590,19 @@ impl Tab {
     /// ```
     pub fn session(&self) -> &SessionHandle {
         &self.inner.session
+    }
+
+    /// Connection for browser-scope `Target.*` commands. A per-tab (root)
+    /// session's connection is a `/devtools/page/<targetId>` socket, which does
+    /// not expose the browser-level `Target` domain, so route through the owning
+    /// browser's connection (same socket as before for a flat session). Falls
+    /// back to the session's own connection when the browser ref is gone (tests).
+    fn browser_conn(&self) -> Connection {
+        self.inner
+            .browser
+            .upgrade()
+            .map(|b| b.conn.clone())
+            .unwrap_or_else(|| self.inner.session.connection().clone())
     }
 
     /// Start a persistent network monitor over this tab's session.
@@ -827,10 +846,16 @@ impl Tab {
     /// ```
     #[must_use]
     pub fn cookies(&self) -> crate::CookieJar {
-        crate::CookieJar::for_session(
-            self.inner.session.connection().clone(),
-            self.inner.session.session_id(),
-        )
+        let conn = self.inner.session.connection().clone();
+        // A root (per-tab socket) session carries no `sessionId`: its commands
+        // already dispatch directly to the tab's target, so a browser-scope jar
+        // on that connection resolves against the right `BrowserContext`.
+        // Passing the `""` sentinel to `for_session` would put `"sessionId": ""`
+        // on the wire, which is rejected by Chrome.
+        match self.inner.session.session_id() {
+            Some(sid) => crate::CookieJar::for_session(conn, sid),
+            None => crate::CookieJar::new(conn),
+        }
     }
 
     /// Per-tab `localStorage` accessor.
@@ -1410,9 +1435,13 @@ impl Tab {
     /// ```
     pub async fn close(self) -> Result<()> {
         let target_id = self.target_id().to_string();
-        self.inner
-            .session
-            .connection()
+        // A per-tab (root) socket is ours alone: shut it down before Chrome
+        // destroys the target so its reader exits cleanly instead of logging the
+        // reset. A flat session shares the browser socket — leave it alone.
+        if self.inner.session.is_root() {
+            self.inner.session.connection().shutdown();
+        }
+        self.browser_conn()
             .call_raw("Target.closeTarget", json!({ "targetId": target_id }), None)
             .await?;
         Ok(())
@@ -1442,9 +1471,7 @@ impl Tab {
     /// ```
     pub async fn activate(&self) -> Result<()> {
         let target_id = self.target_id().to_string();
-        self.inner
-            .session
-            .connection()
+        self.browser_conn()
             .call_raw(
                 "Target.activateTarget",
                 json!({ "targetId": target_id }),

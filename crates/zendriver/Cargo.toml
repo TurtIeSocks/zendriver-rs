@@ -103,6 +103,8 @@ win32job = "2.0"
 
 [dev-dependencies]
 tokio-test.workspace          = true
+# Fake DevTools page endpoint for the per-tab socket tests.
+tokio-tungstenite.workspace   = true
 insta.workspace               = true
 tracing-subscriber.workspace  = true
 # Cross-platform process enumeration for the orphan-process leak audit in
@@ -122,6 +124,10 @@ required-features = ["datadome"]
 
 [[example]]
 name = "hello"
+required-features = []
+
+[[example]]
+name = "tab_concurrency"
 required-features = []
 
 [[example]]

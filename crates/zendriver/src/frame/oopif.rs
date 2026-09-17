@@ -125,7 +125,7 @@ pub(crate) async fn deregister_oopif_frame(browser: &Arc<BrowserInner>, session_
             let frames = tab.inner.frames.read().await;
             frames
                 .iter()
-                .filter(|(_, frame)| frame.session().session_id() == session_id)
+                .filter(|(_, frame)| frame.session().session_id() == Some(session_id))
                 .map(|(frame_id, _)| frame_id.clone())
                 .collect()
         };

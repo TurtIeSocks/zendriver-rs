@@ -547,7 +547,7 @@ async fn run_monitor(
     tx: mpsc::Sender<NetworkEvent>,
     cancel: CancellationToken,
 ) {
-    let session_id = session.session_id().to_string();
+    let session_id = session.session_id().map(str::to_string);
     // Shared across every spawned `streamResourceContent` enable task so an
     // unsupported-Chrome error is logged once for the whole monitor, not once
     // per streamed request (every subsequent call would fail identically).
@@ -608,7 +608,7 @@ async fn run_monitor(
                 let Some(acc) = next else { return };
                 match acc {
                     AccountedRawEvent::Event { event: ev, .. } => {
-                        if ev.session_id.as_deref() != Some(session_id.as_str()) {
+                        if ev.session_id.as_deref() != session_id.as_deref() {
                             continue;
                         }
                         match ev.method.as_str() {

@@ -1982,6 +1982,15 @@ pub(crate) fn test_only_browser_from_conn(conn: Connection) -> Browser {
 /// (per-context proxy support) reuse the same helper.
 #[cfg(test)]
 pub(crate) fn test_only_inner_from_conn(conn: Connection) -> Arc<BrowserInner> {
+    test_only_inner_with_host_port(conn, None)
+}
+
+/// [`test_only_inner_from_conn`] with a DevTools `host:port` for per-tab dials.
+#[cfg(test)]
+pub(crate) fn test_only_inner_with_host_port(
+    conn: Connection,
+    debug_host_port: Option<String>,
+) -> Arc<BrowserInner> {
     let input_profile = zendriver_stealth::InputProfile::native();
     Arc::new_cyclic(|weak: &std::sync::Weak<BrowserInner>| {
         let main_session = SessionHandle::new(conn.clone(), "S1");
@@ -1998,7 +2007,7 @@ pub(crate) fn test_only_inner_from_conn(conn: Connection) -> Arc<BrowserInner> {
             _extension_dirs: Vec::new(),
             owns_process: false,
             tabs: tokio::sync::RwLock::new(map),
-            debug_host_port: None,
+            debug_host_port,
             ws_url: None,
             tabs_changed: tokio::sync::Notify::new(),
             #[cfg(feature = "interception")]
@@ -2011,6 +2020,51 @@ pub(crate) fn test_only_inner_from_conn(conn: Connection) -> Arc<BrowserInner> {
             session_intercept_handles: tokio::sync::Mutex::new(HashMap::new()),
         }
     })
+}
+
+/// Build the [`SessionHandle`] a [`Tab`] will drive.
+///
+/// When the browser's DevTools `host:port` is known (any real launch), dial a
+/// dedicated per-target WebSocket (`/devtools/page/<targetId>`) and return a
+/// [root](SessionHandle::new_root) session on it, so each tab's traffic rides
+/// its own socket + reader task instead of the single flattened browser socket
+/// shared by every tab. This matches the one-connection-per-tab model of the
+/// upstream Python zendriver / nodriver. Falls back to the flat `session` for
+/// test-constructed browsers (no `host:port`) or if the dial fails. Stealth is
+/// unaffected: it is installed by the observer chain on the flat attach session
+/// before the debugger resumes, and its overrides carry over to the target.
+async fn per_tab_session(
+    debug_host_port: Option<&str>,
+    browser_ws_url: Option<&str>,
+    flat: SessionHandle,
+    target_id: &str,
+) -> SessionHandle {
+    let Some(host_port) = debug_host_port else {
+        return flat;
+    };
+    let scheme = if browser_ws_url.is_some_and(|u| u.starts_with("wss://")) {
+        "wss"
+    } else {
+        "ws"
+    };
+    let ws_url = format!("{scheme}://{host_port}/devtools/page/{target_id}");
+    // Must stay under the 5s observer timeout, or a stalled dial detaches the target.
+    const DIAL_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
+    match tokio::time::timeout(DIAL_BUDGET, zendriver_transport::connect(&ws_url)).await {
+        Ok(Ok(conn)) => SessionHandle::new_root(conn),
+        Ok(Err(err)) => {
+            warn!(%err, target_id, "per-tab socket dial failed; using the shared session");
+            flat
+        }
+        Err(_) => {
+            warn!(
+                target_id,
+                budget = ?DIAL_BUDGET,
+                "per-tab socket dial timed out; using the shared session"
+            );
+            flat
+        }
+    }
 }
 
 /// [`TargetObserver`] that maintains [`BrowserInner::tabs`] in step with
@@ -2161,8 +2215,18 @@ impl TargetObserver for TabRegistrar {
                 let new_session_for_intercept = new_session.clone();
                 let input = InputController::new(self.input_profile.clone());
                 let weak_inner = Arc::downgrade(&browser);
-                let tab = Tab::new(
+                // Give this tab its own CDP socket for its traffic (falls back to
+                // the flat attach session — see `per_tab_session`). Stealth and
+                // any per-context interception stay on the flat session.
+                let tab_session = per_tab_session(
+                    browser.debug_host_port.as_deref(),
+                    browser.ws_url.as_deref(),
                     new_session,
+                    &session.target_info.target_id,
+                )
+                .await;
+                let tab = Tab::new(
+                    tab_session,
                     weak_inner,
                     input,
                     session.target_info.target_id.clone(),
@@ -2213,7 +2277,7 @@ impl TargetObserver for TabRegistrar {
                             .session_intercept_handles
                             .lock()
                             .await
-                            .insert(new_session_for_intercept.session_id().to_string(), handle);
+                            .insert(session.session_id.to_string(), handle);
                     }
                 }
 
@@ -2876,19 +2940,20 @@ pub(crate) async fn finish_connect(
         }
     }
 
+    // The registrar skipped this attach, so dial the main tab's socket here.
+    let main_session = per_tab_session(
+        debug_host_port.as_deref(),
+        ws_url.as_deref(),
+        SessionHandle::new(conn.clone(), session_id.clone()),
+        &target_id,
+    )
+    .await;
+
     // Wrap session in Tab; build BrowserInner via the canonical
     // `Arc::new_cyclic` self-referential pattern.
-    let session_id_for_registry = session_id.clone();
-    let target_id_for_main_tab = target_id.clone();
     let inner = Arc::new_cyclic(|weak: &std::sync::Weak<BrowserInner>| {
-        let session = SessionHandle::new(conn.clone(), session_id);
         let main_tab_input = InputController::new(input_profile.clone());
-        let main_tab = Tab::new(
-            session,
-            weak.clone(),
-            main_tab_input,
-            target_id_for_main_tab,
-        );
+        let main_tab = Tab::new(main_session, weak.clone(), main_tab_input, target_id);
         BrowserInner {
             conn,
             main_tab,
@@ -2931,7 +2996,7 @@ pub(crate) async fn finish_connect(
         .tabs
         .write()
         .await
-        .insert(session_id_for_registry, inner.main_tab.clone());
+        .insert(session_id, inner.main_tab.clone());
 
     Ok(inner)
 }
@@ -6887,7 +6952,7 @@ mod tests {
         {
             let frames = parent_tab.inner.frames.read().await;
             let placeholder = frames.get("F_OOPIF").expect("placeholder seeded");
-            assert_eq!(placeholder.session().session_id(), "S1");
+            assert_eq!(placeholder.session().session_id(), Some("S1"));
         }
 
         // Emit the OOPIF attach event. The actor will dispatch the
@@ -6921,7 +6986,7 @@ mod tests {
             let frames = parent_tab.inner.frames.read().await;
             if frames
                 .get("F_OOPIF")
-                .is_some_and(|f| f.session().session_id() == "S2")
+                .is_some_and(|f| f.session().session_id() == Some("S2"))
             {
                 break;
             }
@@ -6938,7 +7003,7 @@ mod tests {
             .expect("OOPIF frame registered on parent");
         assert_eq!(
             oopif.session().session_id(),
-            "S2",
+            Some("S2"),
             "OOPIF frame must carry the child session, not the parent's",
         );
         assert_eq!(oopif.id(), "F_OOPIF");
@@ -8023,6 +8088,132 @@ mod tests {
         assert_eq!(closes, 0, "no close beyond the single extra page");
 
         inner.conn.shutdown();
+    }
+
+    /// A stalled per-tab dial must fall back to the flat session, not lose the tab.
+    #[tokio::test(start_paused = true)]
+    async fn tab_registrar_falls_back_when_the_per_tab_dial_stalls() {
+        use zendriver_transport::testing::MockConnection;
+
+        // Bound but never accepted: TCP connects, the upgrade never gets a reply.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let host_port = listener.local_addr().unwrap().to_string();
+
+        let registrar = Arc::new(TabRegistrar::new(zendriver_stealth::InputProfile::native()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+        let inner = test_only_inner_with_host_port(conn.clone(), Some(host_port));
+        registrar.set_browser(Arc::downgrade(&inner));
+
+        mock.emit_event(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": "S2",
+                "targetInfo": {
+                    "targetId": "T2",
+                    "type": "page",
+                    "url": "about:blank",
+                    "attached": true,
+                },
+                "waitingForDebugger": true,
+            }),
+        )
+        .await;
+
+        // Release means the registrar returned, detach means it timed out.
+        let outcome = loop {
+            let (method, id) = mock
+                .recv_cmd_timeout(std::time::Duration::from_secs(60))
+                .await
+                .expect("registrar never finished the attach");
+            if method == "Runtime.runIfWaitingForDebugger" || method == "Target.detachFromTarget" {
+                break (method, id);
+            }
+        };
+        assert_eq!(outcome.0, "Runtime.runIfWaitingForDebugger");
+        mock.reply(outcome.1, json!({})).await;
+
+        let tabs = inner.tabs.read().await;
+        let tab = tabs
+            .get("S2")
+            .expect("tab registered despite the stalled dial");
+        assert_eq!(tab.session().session_id(), Some("S2"));
+
+        drop(tabs);
+        drop(listener);
+        conn.shutdown();
+    }
+
+    /// The registrar skips the initial attach, so `finish_connect` must dial
+    /// the main tab's socket itself.
+    #[tokio::test]
+    #[allow(
+        clippy::result_large_err,
+        reason = "tungstenite's handshake callback signature"
+    )]
+    async fn finish_connect_gives_the_main_tab_its_own_socket() {
+        use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+        use zendriver_transport::testing::MockConnection;
+
+        // Fake DevTools server: accepts one WebSocket and reports its path.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let host_port = listener.local_addr().unwrap().to_string();
+        let (path_tx, path_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            tokio_tungstenite::accept_hdr_async(stream, move |req: &Request, resp: Response| {
+                let _ = path_tx.send(req.uri().path().to_string());
+                Ok(resp)
+            })
+            .await
+            .unwrap()
+        });
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+        let fut = tokio::spawn(finish_connect(FinishConnect {
+            conn,
+            registrar,
+            input_profile,
+            child: ChildSlot::default(),
+            job: ProcessJob::none(),
+            owned_tmp: None,
+            extension_dirs: Vec::new(),
+            debug_host_port: Some(host_port),
+            ws_url: None,
+            owns_process: true,
+            #[cfg(feature = "tracker-blocking")]
+            tracker_matcher: None,
+        }));
+
+        let id = mock.expect_cmd("Target.setAutoAttach").await;
+        mock.reply(id, json!({})).await;
+        let id = mock.expect_cmd("Target.getTargets").await;
+        mock.reply(
+            id,
+            json!({ "targetInfos": [
+                { "targetId": "T1", "type": "page", "url": "about:blank" },
+            ] }),
+        )
+        .await;
+        let id = mock.expect_cmd("Target.attachToTarget").await;
+        mock.reply(id, json!({ "sessionId": "S1" })).await;
+
+        let inner = fut.await.unwrap().unwrap();
+        let path = tokio::time::timeout(std::time::Duration::from_secs(5), path_rx)
+            .await
+            .expect("finish_connect never dialed a socket for the main tab")
+            .unwrap();
+        assert_eq!(path, "/devtools/page/T1");
+        assert!(inner.main_tab.session().is_root());
+        // Keyed by the flat session id, which is what detach events carry.
+        assert!(inner.tabs.read().await.contains_key("S1"));
+
+        inner.main_tab.session().connection().shutdown();
+        inner.conn.shutdown();
+        drop(server);
     }
 
     /// T3: a lone page target is the normal case — nothing to sweep, and the

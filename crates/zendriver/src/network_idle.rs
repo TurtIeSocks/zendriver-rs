@@ -185,7 +185,7 @@ impl InFlightTracker {
         // `requestWillBeSent` — the REMOVE then runs against an empty
         // set, the later INSERT installs the id, and the request leaks
         // forever. One stream means CDP's wire order is preserved.
-        let session_id = session.session_id().to_string();
+        let session_id = session.session_id().map(str::to_string);
         let mut events = session.connection().subscribe_raw();
 
         // Fire-and-forget `Network.enable`. We don't await the response
@@ -217,7 +217,7 @@ impl InFlightTracker {
                         trace!("InFlightTracker: event stream closed, exiting");
                         return;
                     };
-                    if ev.session_id.as_deref() != Some(session_id.as_str()) {
+                    if ev.session_id.as_deref() != session_id.as_deref() {
                         continue;
                     }
                     let changed = match ev.method.as_str() {

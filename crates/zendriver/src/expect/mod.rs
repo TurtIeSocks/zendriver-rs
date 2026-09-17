@@ -67,14 +67,14 @@ pub(crate) fn watch<T>(
 where
     T: serde::de::DeserializeOwned + Send + 'static,
 {
-    let sid = session.session_id().to_string();
+    let sid = session.session_id().map(str::to_string);
     let raw = session.connection().subscribe_raw_accounted();
     Box::pin(raw.filter_map(move |acc| {
         let sid = sid.clone();
         async move {
             match acc {
                 AccountedRawEvent::Event { event, .. } => {
-                    if event.session_id.as_deref() == Some(sid.as_str()) && event.method == method {
+                    if event.session_id.as_deref() == sid.as_deref() && event.method == method {
                         match serde_json::from_value::<T>(event.params) {
                             Ok(v) => Some(Ok(v)),
                             Err(_) => Some(Err(ZendriverError::EventStreamIncomplete)),
@@ -97,4 +97,53 @@ where
             }
         }
     }))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use serde_json::{Value, json};
+    use std::time::Duration;
+    use tokio::time::timeout;
+    use zendriver_transport::testing::MockConnection;
+
+    // A flat session filters events by its `sessionId`: an event tagged with
+    // the same id is delivered. This is the control for the root case below —
+    // if it broke, the harness (not the model) would be at fault.
+    #[tokio::test]
+    async fn flat_session_watch_still_receives_its_events() {
+        let (mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new(conn, "S1");
+        let mut stream = watch::<Value>(&sess, "Page.javascriptDialogOpening");
+        mock.emit_event_for_session(
+            "Page.javascriptDialogOpening",
+            json!({ "message": "hi" }),
+            "S1",
+        )
+        .await;
+        let got = timeout(Duration::from_millis(500), stream.next()).await;
+        assert!(
+            matches!(got, Ok(Some(Ok(_)))),
+            "flat session dropped its own event: {got:?}"
+        );
+    }
+
+    // A root (per-tab socket) session carries no `sessionId`, and neither do
+    // the events on its own socket. `session_id()` must therefore be `None`
+    // here so the filter matches sessionless frames — a `""` sentinel would
+    // make `None != Some("")` and drop every event the tab ever sees.
+    #[tokio::test]
+    async fn root_session_watch_receives_sessionless_events() {
+        let (mock, conn) = MockConnection::pair();
+        let sess = SessionHandle::new_root(conn);
+        let mut stream = watch::<Value>(&sess, "Page.javascriptDialogOpening");
+        mock.emit_event("Page.javascriptDialogOpening", json!({ "message": "hi" }))
+            .await;
+        let got = timeout(Duration::from_millis(500), stream.next()).await;
+        assert!(
+            matches!(got, Ok(Some(Ok(_)))),
+            "root session dropped its own event: {got:?}"
+        );
+    }
 }

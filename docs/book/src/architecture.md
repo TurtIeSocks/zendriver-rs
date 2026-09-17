@@ -25,7 +25,7 @@ performance ("is interception serializing my requests?").
                                             │
                                             ▼
                             ┌─────────────────────────────────┐
-                            │   CDP Actor (single Tokio task) │
+                            │   CDP Actor (one per socket)    │
                             │   – cmd/response routing        │
                             │   – event fan-out + observers   │
                             └────────────────┬────────────────┘
@@ -43,8 +43,8 @@ commands and inbound events.
 
 ## The CDP transport actor
 
-`zendriver-transport` runs a single Tokio task that owns the WebSocket
-connection to Chrome. All command sends go through a
+`zendriver-transport` runs one Tokio task per WebSocket connection to
+Chrome. All command sends go through a
 `mpsc::UnboundedSender`; every public handle holds a `Connection`
 clone that wraps that sender. The actor task:
 
@@ -66,6 +66,12 @@ The actor model gives you exactly-one-reader/writer per socket without
 explicit locking, while keeping the public surface cloneable (`Tab`,
 `Element` are `Clone + Send + Sync`). All concurrency happens in
 user-space Futures handed back from `connection.call(...)`.
+
+There is one browser socket, which carries browser-level commands and
+the observer chain. Each page tab also dials its own socket at
+`/devtools/page/<targetId>` with its own actor. If that dial fails or
+takes longer than 2s, the tab uses a session on the browser socket
+instead.
 
 ## Observer pattern
 
@@ -159,8 +165,8 @@ own isolated world (allocated per frame contextId).
   Anti-detection also requires protocol-level control:
   `chromedriver` injects its own automation tells that we'd then have
   to scrub back out.
-- **Single actor task.** Easier reasoning than a connection pool; no
-  command-ordering ambiguity. The actor does no parsing past JSON-RPC
+- **One actor task per socket.** Easier reasoning than a connection pool;
+  no command-ordering ambiguity within a socket. The actor does no parsing past JSON-RPC
   framing, so it's not a CPU bottleneck even under interception load.
 - **Tokio runtime.** Browser automation is I/O-heavy (every action
   costs at least one round-trip to Chrome); pinning ourselves to Tokio
