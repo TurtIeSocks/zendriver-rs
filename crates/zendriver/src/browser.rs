@@ -2273,13 +2273,11 @@ impl TargetObserver for TabRegistrar {
 
                     if needs_actor {
                         let handle = builder.start();
-                        browser.session_intercept_handles.lock().await.insert(
-                            new_session_for_intercept
-                                .session_id()
-                                .unwrap_or_default()
-                                .to_string(),
-                            handle,
-                        );
+                        browser
+                            .session_intercept_handles
+                            .lock()
+                            .await
+                            .insert(session.session_id.to_string(), handle);
                     }
                 }
 
