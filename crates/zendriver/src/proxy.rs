@@ -77,11 +77,13 @@ pub(crate) fn split_proxy_url(url: &str) -> Result<ParsedProxy, ZendriverError> 
 /// in an error message, so a rejected/malformed proxy URL never leaks its
 /// password. Deliberately string surgery rather than `url::Url`-based —
 /// this must also work on URLs that failed to parse in the first place.
-fn redact_userinfo(raw: &str) -> String {
-    let Some(scheme_end) = raw.find("://") else {
-        return raw.to_string();
-    };
-    let after_scheme = scheme_end + 3;
+///
+/// A missing `://` is not a reason to give up: `user:pass@host:port` with no
+/// scheme is a shape proxy vendors hand out, it is exactly the shape that
+/// *fails* to parse, and the failure path is what carries the string into a
+/// log or an error. Treat the whole string as the authority in that case.
+pub(crate) fn redact_userinfo(raw: &str) -> String {
+    let after_scheme = raw.find("://").map_or(0, |i| i + 3);
     // The authority (userinfo + host + port) ends at the first `/`, `?`, or
     // `#` — don't let an `@` in the path/query masquerade as userinfo.
     let authority_end = raw[after_scheme..]
@@ -188,5 +190,33 @@ mod tests {
             "http://proxy.example:8080"
         );
         assert_eq!(redact_userinfo("not a url"), "not a url");
+    }
+
+    /// `user:pass@host:port` with no scheme is one of the two shapes proxy
+    /// vendors hand out, and it is *unparseable* — so it reaches redaction
+    /// only along the failure path, which is exactly the path that logs and
+    /// returns the string. Redaction that only works on well-formed URLs
+    /// protects the case that never needed it.
+    #[test]
+    fn redact_userinfo_masks_credentials_on_a_scheme_less_url() {
+        assert_eq!(
+            redact_userinfo("bob:s3cret@localhost:8080"),
+            "***@localhost:8080"
+        );
+        assert_eq!(
+            redact_userinfo("bob:s3cret@10.0.0.1:1080/path"),
+            "***@10.0.0.1:1080/path"
+        );
+        // No userinfo, no scheme: untouched.
+        assert_eq!(redact_userinfo("localhost:8080"), "localhost:8080");
+    }
+
+    /// The parse failure for a scheme-less URL carries the string back to the
+    /// caller as an error. It must arrive redacted.
+    #[test]
+    fn a_scheme_less_url_fails_without_leaking_its_password() {
+        let err = split_proxy_url("bob:s3cret@localhost:8080").unwrap_err();
+        let msg = err.to_string();
+        assert!(!msg.contains("s3cret"), "error leaked password: {msg}");
     }
 }

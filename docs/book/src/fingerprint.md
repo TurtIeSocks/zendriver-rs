@@ -813,6 +813,11 @@ let browser = Browser::builder()
 authenticated proxy like the one above is probed authenticated — the probe
 would otherwise 407 silently and fail soft with no overlay.
 
+**Order matters here.** `geo_auto()` reads the proxy configured at the moment
+you call it, so it has to come *after* `.proxy(..)` — as above. Reversed,
+there is nothing to mirror: the probe leaves over your own connection, which
+hands `ip-api.com` your real IP and derives a locale for the wrong country.
+
 **Privacy:** the bundled `ip-api.com` probe fires ONLY when `.geo_auto()` (or
 `.geo_resolver()`) is called — it is fully opt-in, never implicit. Failure
 (no network, proxy down, unrecognized country) is fail-soft: a
@@ -831,6 +836,15 @@ credentials there), and auto-wires `proxy_auth` from the userinfo when set
 `Fetch.authRequired` challenge). It also makes `geo_auto()`'s probe traffic
 mirror the same upstream proxy the browser itself will use, so the resolved
 country matches the exit IP Chrome actually sees.
+
+**It fails closed.** The URL is parsed by `launch()` / `connect()` rather
+than by the setter, and one that can't be parsed fails that call — before
+Chrome is spawned or an endpoint is dialled. Unlike geo resolution, which
+degrades to a less coherent persona, a dropped proxy means requests leave
+from your own IP while you believe otherwise. Error messages redact any
+userinfo the URL carried, so a typo in a proxy password does not end up in
+a log. (`browser_context().proxy(..)` has always behaved this way — its
+`build()` returns the same parse error.)
 
 ### Custom resolver (`geo_resolver`)
 

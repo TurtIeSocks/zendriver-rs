@@ -60,12 +60,34 @@ impl Platform {
     }
 }
 
+/// Appended to a major-only [`StealthProfile::chrome_version`] pin to make a
+/// four-part version string. Fabricated, not probed — see the warning the
+/// resolver emits beside it.
+const SYNTHETIC_VERSION_TAIL: &str = ".0.6099.234";
+
+/// The range `navigator.hardwareConcurrency` commonly falls in on real
+/// browsers. Advisory only: values outside it are warned about and still
+/// reported as the caller stated them.
+const PLAUSIBLE_CPU_COUNTS: std::ops::RangeInclusive<u32> = 2..=32;
+
+/// The values `navigator.deviceMemory` exposes to JS, per the [Device Memory
+/// spec](https://www.w3.org/TR/device-memory/). Advisory, same as above.
+const SPEC_DEVICE_MEMORY_VALUES: [u32; 4] = [1, 2, 4, 8];
+
+/// The leading `major` of a `major.minor.build.patch` version string.
+fn major_from_full_version(full: &str) -> Option<u32> {
+    full.split('.').next()?.parse().ok()
+}
+
 #[derive(Debug, Clone, Default)]
 #[allow(dead_code)]
 pub(crate) struct PerFieldOverride {
     pub memory_gb: Option<u32>,
     pub cpu_count: Option<u32>,
     pub chrome_major: Option<u32>,
+    /// Full `major.minor.build.patch` version. Outranks `chrome_major`, which
+    /// can only be completed by inventing the other three digits.
+    pub chrome_full: Option<String>,
     pub platform: Option<Platform>,
     pub timezone: Option<String>,
     pub locale: Option<String>,
@@ -188,22 +210,15 @@ impl StealthProfile {
     }
     /// Override the reported `navigator.deviceMemory` (in GB).
     ///
-    /// Per the [HTML Device Memory spec][spec] the value Chrome reports
-    /// is one of `{1, 2, 4, 8}` (Chrome does not expose fractional values
-    /// to JS). The resolver snaps `gb` to the nearest valid integer at
-    /// or below it:
+    /// Reported exactly as given. Per the [HTML Device Memory spec][spec] the
+    /// value a real Chrome reports is one of `{1, 2, 4, 8}` — it does not
+    /// expose fractional values or anything above `8` to JS — so anything
+    /// else is a fingerprinting tell, and the resolver logs a warning naming
+    /// the value rather than correcting it. Which one you want is your call;
+    /// this is not the layer that gets to overrule it.
     ///
-    /// | Input `gb` | Reported |
-    /// |-----------:|---------:|
-    /// | `0` or `1` | `1`      |
-    /// | `2` or `3` | `2`      |
-    /// | `4`–`7`    | `4`      |
-    /// | `8`+       | `8`      |
-    ///
-    /// Snap-down (not nearest-round) matches Chrome's own behavior and
-    /// avoids inflating the reported value above what the host plausibly
-    /// has. Anything outside `{1, 2, 4, 8}` is itself a stealth tell
-    /// because real browsers never report it.
+    /// The host probe behind the *default* still rounds, because there the
+    /// input is a measurement rather than a statement of intent.
     ///
     /// [spec]: https://www.w3.org/TR/device-memory/
     #[must_use]
@@ -213,17 +228,57 @@ impl StealthProfile {
     }
     /// Override the reported `navigator.hardwareConcurrency` (CPU count).
     ///
-    /// Clamped to `2..=32` at resolve time — values outside that range are
-    /// implausibly low/high and trip simple heuristics.
+    /// Reported exactly as given. Values outside `2..=32` are warned about at
+    /// resolve time — a one-CPU container and a 64-thread workstation are both
+    /// real, but both are rare enough in browser traffic to be worth flagging.
+    /// Same division as [`memory_gb`](Self::memory_gb): the host probe behind
+    /// the default clamps, an explicit value does not.
     #[must_use]
     pub fn cpu_count(mut self, n: u32) -> Self {
         self.per_field.cpu_count = Some(n);
         self
     }
     /// Override the reported Chrome major version (e.g. `125`).
+    ///
+    /// The UA string and UA-CH `full_version` need all four digits, so a
+    /// major on its own leaves the other three to be invented — a build number
+    /// that no Chrome release ever carried, presented as this browser's own.
+    /// The resolver does it (there is no alternative once only the major is
+    /// known) and warns that it did. Pass
+    /// [`chrome_full_version`](Self::chrome_full_version) instead when the
+    /// exact build matters.
     #[must_use]
     pub fn chrome_version(mut self, major: u32) -> Self {
         self.per_field.chrome_major = Some(major);
+        self
+    }
+
+    /// Override the reported Chrome version in full, `major.minor.build.patch`
+    /// (e.g. `"125.0.6422.113"`).
+    ///
+    /// Used verbatim for the UA string and the UA-CH `full_version`, and its
+    /// leading component becomes the reported major — so this outranks
+    /// [`chrome_version`](Self::chrome_version) when both are set, rather than
+    /// composing a version out of two halves that disagree.
+    ///
+    /// A value whose leading component is not a number (`"beta"`) is still
+    /// used verbatim, but has no major to give: the reported major then falls
+    /// back to an explicit [`chrome_version`](Self::chrome_version) if there
+    /// is one, else the probed value, and the resolver warns naming which.
+    ///
+    /// Take the value from a real Chrome release (a version string this
+    /// project can verify, e.g. from Chrome for Testing's release feed); an
+    /// invented build number is itself a fingerprinting tell.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use zendriver_stealth::StealthProfile;
+    /// let profile = StealthProfile::spoofed().chrome_full_version("125.0.6422.113");
+    /// ```
+    #[must_use]
+    pub fn chrome_full_version(mut self, full: impl Into<String>) -> Self {
+        self.per_field.chrome_full = Some(full.into());
         self
     }
     /// Override the reported [`Platform`] (`navigator.platform` + UA OS
@@ -466,30 +521,69 @@ impl StealthProfile {
         if let Some(p) = self.per_field.platform {
             fp.platform = p;
         }
-        if let Some(c) = self.per_field.chrome_major {
+        // A stated full version is the more specific of the two, so it carries
+        // the major as well — nothing here composes a version out of two
+        // halves that disagree.
+        if let Some(full) = self.per_field.chrome_full.as_deref() {
+            match major_from_full_version(full) {
+                Some(major) => fp.chrome_major = major,
+                None => {
+                    // Nothing to read out of the string, so fall back to an
+                    // explicit `chrome_version` before the probed value.
+                    // Discarding a major the caller stated, because the *other*
+                    // version setter was unusable, is a silent override of a
+                    // stated intent — the thing this whole path stopped doing.
+                    let reported = self.per_field.chrome_major.unwrap_or(fp.chrome_major);
+                    fp.chrome_major = reported;
+                    tracing::warn!(
+                        chrome_full_version = full,
+                        chrome_major = reported,
+                        from_explicit_chrome_version = self.per_field.chrome_major.is_some(),
+                        "stealth chrome_full_version does not start with a numeric major; \
+                         using it verbatim and reporting the chrome_major shown here",
+                    );
+                }
+            }
+            fp.chrome_full = full.to_string();
+        } else if let Some(c) = self.per_field.chrome_major {
             fp.chrome_major = c;
-            fp.chrome_full = format!("{c}.0.6099.234"); // synthesize a full version if user only set major
+            // The UA string and UA-CH `full_version` need four digits, and a
+            // major is one of them. The remaining three are invented here —
+            // which is defensible only as long as it is said out loud, since
+            // the result is indistinguishable from a probed build number.
+            fp.chrome_full = format!("{c}{SYNTHETIC_VERSION_TAIL}");
+            tracing::warn!(
+                chrome_major = c,
+                chrome_full = %fp.chrome_full,
+                "stealth chrome_version pins only the major; the remaining build digits are \
+                 fabricated and match no real Chrome release — pass chrome_full_version(..) \
+                 with a real one to control them",
+            );
         }
         if let Some(n) = self.per_field.cpu_count {
-            fp.cpu_count = n.clamp(2, 32);
-        }
-        if let Some(g) = self.per_field.memory_gb {
-            // Snap-down to the nearest spec-valid value Chrome exposes
-            // to JS — see `memory_gb` doc table.
-            let snapped = match g {
-                0..=1 => 1,
-                2..=3 => 2,
-                4..=7 => 4,
-                _ => 8,
-            };
-            if snapped != g {
-                tracing::debug!(
-                    requested = g,
-                    chosen = snapped,
-                    "stealth memory_gb snapped to nearest navigator.deviceMemory spec value",
+            // Reported exactly as stated. A one-CPU container and a 64-thread
+            // workstation are both real machines, and quietly rewriting either
+            // hands back a host the caller never described — while leaving
+            // them believing they configured it.
+            if !PLAUSIBLE_CPU_COUNTS.contains(&n) {
+                tracing::warn!(
+                    cpu_count = n,
+                    "stealth cpu_count is outside the 2..=32 range browsers commonly report; \
+                     reporting it verbatim, but navigator.hardwareConcurrency is a tell there",
                 );
             }
-            fp.memory_gb = snapped;
+            fp.cpu_count = n;
+        }
+        if let Some(g) = self.per_field.memory_gb {
+            if !SPEC_DEVICE_MEMORY_VALUES.contains(&g) {
+                tracing::warn!(
+                    memory_gb = g,
+                    "stealth memory_gb is not one of the 1/2/4/8 values \
+                     navigator.deviceMemory exposes; reporting it verbatim, but no real \
+                     Chrome reports it",
+                );
+            }
+            fp.memory_gb = g;
         }
         // Always recompose so `ua_metadata.{platform_version, architecture,
         // bitness}` track any `platform` / `chrome_major` overrides applied
@@ -898,5 +992,158 @@ mod profile_tests {
             .unwrap();
         // No override → today's behavior: no screen field influence at all.
         assert_eq!(resolved.screen, None);
+    }
+
+    // ----- 2b: explicit overrides are reported, not corrected -------------
+
+    fn resolved_with(profile: StealthProfile) -> Fingerprint {
+        profile
+            .fingerprint(bare_fp())
+            .resolve_fingerprint(std::path::Path::new("/nonexistent"))
+            .unwrap()
+    }
+
+    /// Both fixtures sit OUTSIDE the old `2..=32` clamp, in both directions,
+    /// and both describe real machines: a one-CPU container, and any
+    /// Threadripper. Rewriting either produces a host the caller never asked
+    /// for — and, worse, one they still believe they configured.
+    #[test]
+    fn explicit_cpu_count_is_reported_verbatim() {
+        for n in [1, 64] {
+            let fp = resolved_with(StealthProfile::native().cpu_count(n));
+            assert_eq!(fp.cpu_count, n, "cpu_count({n}) must survive verbatim");
+        }
+    }
+
+    /// `3` is not a `navigator.deviceMemory` value any real Chrome reports and
+    /// `64` is above the spec's cap — the old code quietly snapped them to `2`
+    /// and `8`. Both are now the caller's call, so both come back unchanged.
+    #[test]
+    fn explicit_memory_gb_is_reported_verbatim() {
+        for gb in [3, 64] {
+            let fp = resolved_with(StealthProfile::native().memory_gb(gb));
+            assert_eq!(fp.memory_gb, gb, "memory_gb({gb}) must survive verbatim");
+        }
+    }
+
+    /// Dropping the correction without saying anything would just move the
+    /// surprise later, to whichever detector notices `deviceMemory === 3`. The
+    /// value stands; the operator gets told why it is a tell.
+    #[test]
+    fn an_implausible_explicit_value_is_announced_not_corrected() {
+        let logs = crate::test_logs::captured_warnings(|| {
+            let fp = resolved_with(StealthProfile::native().memory_gb(3).cpu_count(64));
+            assert_eq!(fp.memory_gb, 3);
+            assert_eq!(fp.cpu_count, 64);
+        });
+        assert!(logs.contains("memory_gb"), "got: {logs}");
+        assert!(logs.contains("cpu_count"), "got: {logs}");
+    }
+
+    /// A plausible value must stay quiet — a warning that fires on every
+    /// launch is one nobody reads.
+    #[test]
+    fn plausible_explicit_values_warn_about_nothing() {
+        let logs = crate::test_logs::captured_warnings(|| {
+            let fp = resolved_with(StealthProfile::native().memory_gb(8).cpu_count(16));
+            assert_eq!(fp.memory_gb, 8);
+            assert_eq!(fp.cpu_count, 16);
+        });
+        assert!(logs.is_empty(), "expected no warnings, got: {logs}");
+    }
+
+    /// Pinning only the major left the other three digits invented — a full
+    /// version string that names a Chrome build which never shipped, presented
+    /// as the browser's own. Callers can now state it.
+    #[test]
+    fn explicit_chrome_full_version_is_used_verbatim_and_carries_its_major() {
+        let fp = resolved_with(StealthProfile::native().chrome_full_version("125.0.6422.113"));
+        assert_eq!(fp.chrome_full, "125.0.6422.113");
+        assert_eq!(fp.chrome_major, 125);
+        // The UA string itself only ever carries Chrome's reduced version, so
+        // the stated build shows up where Chrome actually reports it: the
+        // UA-CH `fullVersionList`.
+        assert!(
+            fp.ua_metadata
+                .full_version_list
+                .iter()
+                .any(|b| b.version == "125.0.6422.113"),
+            "UA-CH must carry the stated build: {:?}",
+            fp.ua_metadata.full_version_list
+        );
+        assert!(
+            fp.ua_string.contains("Chrome/125.0.0.0"),
+            "the UA string keeps Chrome's reduced form: {}",
+            fp.ua_string
+        );
+    }
+
+    /// Major-only still has to synthesize the rest — the UA needs four digits
+    /// — but silently is exactly how a fabricated build number gets mistaken
+    /// for a probed one.
+    #[test]
+    fn a_major_only_pin_says_that_it_invented_the_build_digits() {
+        let logs = crate::test_logs::captured_warnings(|| {
+            let fp = resolved_with(StealthProfile::native().chrome_version(125));
+            assert_eq!(fp.chrome_major, 125);
+            assert!(fp.chrome_full.starts_with("125."), "got {}", fp.chrome_full);
+        });
+        assert!(logs.contains("chrome_full_version"), "got: {logs}");
+    }
+
+    /// A full version with no numeric leading component cannot supply the
+    /// major, so an explicit [`StealthProfile::chrome_version`] has to — it is
+    /// the only major anyone actually stated. Reporting the *probed* one there
+    /// discards a caller's setting without saying so, which is the exact
+    /// silent override the rest of this PR removes.
+    ///
+    /// `131` is deliberately not the fixture's probed `120`: a test pinned to
+    /// the probed value would pass against the code that drops the setting.
+    #[test]
+    fn a_non_numeric_full_version_still_honors_an_explicit_major() {
+        let logs = crate::test_logs::captured_warnings(|| {
+            let fp = resolved_with(
+                StealthProfile::native()
+                    .chrome_version(131)
+                    .chrome_full_version("beta"),
+            );
+            assert_eq!(
+                fp.chrome_major, 131,
+                "an explicit chrome_version must not be discarded"
+            );
+            assert_eq!(fp.chrome_full, "beta");
+        });
+        assert!(
+            logs.contains("131"),
+            "the warning must name the major it reported: {logs}"
+        );
+    }
+
+    /// With nothing stated, the probed major is genuinely the best available
+    /// answer — but the warning still has to name what it settled on, so
+    /// "which major did this launch claim" never needs guessing.
+    #[test]
+    fn a_non_numeric_full_version_falls_back_to_the_probed_major() {
+        let logs = crate::test_logs::captured_warnings(|| {
+            let fp = resolved_with(StealthProfile::native().chrome_full_version("beta"));
+            assert_eq!(fp.chrome_major, 120, "the probed major from the fixture");
+        });
+        assert!(
+            logs.contains("120"),
+            "the warning must name the major it reported: {logs}"
+        );
+    }
+
+    /// The full version is the more specific statement, so it wins the major
+    /// too — nothing here composes a version out of two disagreeing halves.
+    #[test]
+    fn chrome_full_version_outranks_a_conflicting_major() {
+        let fp = resolved_with(
+            StealthProfile::native()
+                .chrome_version(120)
+                .chrome_full_version("125.0.6422.113"),
+        );
+        assert_eq!(fp.chrome_full, "125.0.6422.113");
+        assert_eq!(fp.chrome_major, 125);
     }
 }

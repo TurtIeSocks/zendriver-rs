@@ -83,7 +83,7 @@ Sub-error returned wrapped in `ZendriverError::Stealth`.
 | `PatchFailed { patch, source }` | A specific stealth patch CDP call failed. | Read the source `CallError`; usually means the target page navigated mid-patch. Retry the launch. |
 | `ChromeVersionDetect(String)` | The Chrome version probe failed — reading the binary's PE version resource on Windows, or running `chrome --version` on Unix. Non-fatal on its own: the probe falls back to a baked-in version. | Confirm the binary path; pass `.chrome_version(N)` to the stealth profile to skip the probe. |
 | `SystemInfo(String)` | `sysinfo` couldn't read RAM / CPU count. | Pass `.memory_gb(N).cpu_count(N)` overrides to skip the auto-detect. |
-| `InvalidOverride(String)` | A fingerprint override value was outside the validated range (e.g. `memory_gb = 0`). | Read the message; fix the override. |
+| `InvalidOverride(String)` | Nothing constructs this today. An explicit fingerprint override is reported exactly as you set it, and an implausible value (`memory_gb` outside `{1, 2, 4, 8}`, `cpu_count` outside `2..=32`) is a `tracing::warn!` naming the field rather than an error. | Read the warning; the value is yours to keep or change. |
 
 ## `InterceptionError` variants
 

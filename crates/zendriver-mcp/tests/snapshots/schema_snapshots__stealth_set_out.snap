@@ -30,8 +30,13 @@ $defs:
         type:
           - boolean
           - "null"
+      chrome_full_version:
+        description: "Spoofed Chrome version in full, `major.minor.build.patch` (e.g.\n`\"125.0.6422.113\"`). Drives the UA-CH `fullVersionList`, and its\nleading component becomes the reported major, so it outranks\n`chrome_version` when both are set. Use a real Chrome release's\nversion; an invented build number is itself a fingerprinting tell."
+        type:
+          - string
+          - "null"
       chrome_version:
-        description: Spoofed Chrome major version.
+        description: "Spoofed Chrome major version. The other three digits of the version\nstring are fabricated from it (the server logs a warning saying so);\nset `chrome_full_version` instead to state all four."
         type:
           - integer
           - "null"

@@ -47,6 +47,8 @@ pub mod observer;
 pub mod patches;
 pub mod persona;
 pub mod profile;
+#[cfg(test)]
+mod test_logs;
 pub mod ua;
 
 // Re-exports added as types land in Tasks 1–13:

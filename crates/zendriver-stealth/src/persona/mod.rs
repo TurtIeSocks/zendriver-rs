@@ -437,6 +437,7 @@ fn persona_from_probe(v: &serde_json::Value) -> Persona {
 #[cfg(test)]
 mod persona_tests {
     use super::*;
+    use crate::test_logs::captured_warnings;
 
     #[test]
     fn default_persona_is_all_none() {
@@ -473,43 +474,6 @@ mod persona_tests {
         let b = Persona::system();
         // Cached → same values.
         assert_eq!(a.device_memory_gb, b.device_memory_gb);
-    }
-
-    /// Run `f` with a tracing subscriber capturing WARN and above, and return
-    /// what it logged. A failure warning nobody can observe is
-    /// indistinguishable from the silent fabrication it replaced. (Twin of the
-    /// helper in `patches.rs`'s test module — kept local rather than shared to
-    /// avoid a test-support module for two callers.)
-    fn captured_warnings(f: impl FnOnce()) -> String {
-        use std::io::Write;
-        use std::sync::{Arc, Mutex};
-
-        #[derive(Clone, Default)]
-        struct Sink(Arc<Mutex<Vec<u8>>>);
-        impl Write for Sink {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().unwrap().extend_from_slice(buf);
-                Ok(buf.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Sink {
-            type Writer = Self;
-            fn make_writer(&'a self) -> Self {
-                self.clone()
-            }
-        }
-
-        let sink = Sink::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer(sink.clone())
-            .with_max_level(tracing::Level::WARN)
-            .finish();
-        tracing::subscriber::with_default(subscriber, f);
-        let bytes = sink.0.lock().unwrap().clone();
-        String::from_utf8(bytes).expect("log output is utf-8")
     }
 
     // `StealthError` is large because `PatchFailed` wraps `CallError` (~152B);

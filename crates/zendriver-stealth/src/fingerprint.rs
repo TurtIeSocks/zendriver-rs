@@ -486,12 +486,26 @@ fn parse_pe_file_version(bytes: &[u8]) -> Option<(u32, String)> {
     None
 }
 
+/// Bound the *probed* host CPU count to what browsers commonly report.
+///
+/// This is the probe path, where the input is a measurement of whatever host
+/// happens to be running — a 128-thread build machine is a real number and a
+/// terrible thing to advertise. An explicit
+/// [`StealthProfile::cpu_count`](crate::StealthProfile::cpu_count) is a
+/// different kind of input: it is a statement of intent, is not clamped, and
+/// only warns. Keep the two apart.
 pub(crate) fn clamp_cpu_count(n: u32) -> u32 {
     n.clamp(2, 32)
 }
 
 /// Detect total RAM in GB, clamped to the spec-compliant values
-/// for `navigator.deviceMemory` (capped at 8 per W3C; floor at 4 for plausibility).
+/// for `navigator.deviceMemory` (capped at 8 per W3C; floor at 4 for
+/// plausibility).
+///
+/// Probe path, same division as [`clamp_cpu_count`]: rounding a measurement
+/// is not the same act as overriding
+/// [`StealthProfile::memory_gb`](crate::StealthProfile::memory_gb), which is
+/// reported exactly as the caller stated it.
 #[allow(clippy::result_large_err)]
 pub(crate) fn detect_memory_gb() -> Result<u32, StealthError> {
     let mut sys = sysinfo::System::new();
