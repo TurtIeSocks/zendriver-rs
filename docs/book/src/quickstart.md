@@ -42,8 +42,12 @@ defaults. The chain pattern lets you customize before launch:
   cookies and localStorage persist across runs.
 - `.stealth(StealthProfile::native())` — opt into the anti-detection
   patches (covered in [Stealth](./stealth.md)).
-- `.chrome_path(path)` — bypass the `$PATH` lookup when you want a
-  specific Chrome binary.
+- `.executable(path)` — bypass the `$PATH` lookup when you want a
+  specific Chrome binary (see [Install](./install.md#picking-the-binary)
+  for how `CHROME_BIN` and `.channel(..)` interact with it).
+- `.ci_defaults(true)` — add the container launch flags `--no-sandbox`
+  and `--disable-dev-shm-usage` (see
+  [Install](./install.md#running-in-a-container)).
 
 `.launch()` is async because it has to spin up the Chrome subprocess,
 wait for the CDP WebSocket endpoint to come up, perform the initial
