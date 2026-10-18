@@ -112,10 +112,8 @@ struct NavigatedFrameInner {
 /// constructed [`Frame`] so its `tab_for_synthesize` upgrade can return
 /// the owning `Tab`.
 ///
-/// Same fire-and-forget posture as
-/// [`crate::network_idle::InFlightTracker::run`] for the `Page.enable`
-/// call: failure is logged + ignored so the subscriber keeps running on a
-/// previously-enabled Page domain.
+/// The `Page.enable` call runs alongside events: failure is logged + ignored
+/// so the subscriber keeps running on a previously-enabled Page domain.
 pub(crate) async fn run(
     session: SessionHandle,
     frames: Arc<RwLock<HashMap<String, Frame>>>,
@@ -126,8 +124,7 @@ pub(crate) async fn run(
     let mut detached = session.subscribe::<FrameDetachedEvent>("Page.frameDetached");
     let mut navigated = session.subscribe::<FrameNavigatedEvent>("Page.frameNavigated");
 
-    // Fire-and-forget `Page.enable`. Same rationale as
-    // `InFlightTracker::run`: the mock harness never replies to this
+    // Run `Page.enable` alongside events: the mock harness never replies to this
     // call, and in production the subscribe streams above are already
     // registered, so awaiting the response would only serialize the
     // first arriving event behind the enable round-trip.
@@ -141,9 +138,12 @@ pub(crate) async fn run(
     let enable_cancel = cancel.clone();
     tokio::spawn(async move {
         tokio::select! {
+            biased;
             () = enable_cancel.cancelled() => {}
             res = enable_session.call("Page.enable", serde_json::json!({})) => {
-                if let Err(e) = res {
+                if let Err(e) = res
+                    && !enable_cancel.is_cancelled()
+                {
                     warn!(error = %e, "frame::lifecycle: Page.enable failed; frame events may be inactive");
                 }
             }
