@@ -8,7 +8,7 @@ expression: flags
 - "--no-default-browser-check"
 - "--password-store=basic"
 - "--disable-save-password-bubble"
-- "--disable-features=PasswordManagerOnboarding,AutofillServerCommunication"
+- "--disable-features=PasswordManagerOnboarding,AutofillServerCommunication,SingleVideoFrameRateThrottling"
 - "--headless=new"
 - "--disable-gpu"
 - "about:blank"
