@@ -2136,14 +2136,44 @@ fn auto_attach_params() -> serde_json::Value {
 pub(crate) struct TabRegistrar {
     browser: OnceLock<Weak<BrowserInner>>,
     input_profile: zendriver_stealth::InputProfile,
+    /// Targets whose observer chain reached this registrar before the weak ref
+    /// was wired — in practice the initial target. `finish_connect` waits here:
+    /// `Target.attachToTarget` replies before the chain has run, and handing
+    /// the main tab out early lets the first navigation outrun the stealth
+    /// bootstrap.
+    unwired: tokio::sync::watch::Sender<Vec<String>>,
 }
+
+/// Budget for the initial target's observer chain, which runs several
+/// observers with their own `DEFAULT_OBSERVER_TIMEOUT` (5 s) each.
+const INITIAL_TARGET_SETUP: Duration = Duration::from_secs(20);
 
 impl TabRegistrar {
     fn new(input_profile: zendriver_stealth::InputProfile) -> Self {
         Self {
             browser: OnceLock::new(),
             input_profile,
+            unwired: tokio::sync::watch::channel(Vec::new()).0,
         }
+    }
+
+    /// Wait until every observer ahead of the registrar has run against the
+    /// initial target. A chain that fails detaches the target and never gets
+    /// here, so the launch fails instead of returning an unpatched tab.
+    async fn wait_initial(&self, target_id: &str) -> Result<(), ZendriverError> {
+        let mut ready = self.unwired.subscribe();
+        timeout(
+            INITIAL_TARGET_SETUP,
+            ready.wait_for(|ids| ids.iter().any(|id| id == target_id)),
+        )
+        .await
+        .map_err(|_| {
+            ZendriverError::Navigation(format!(
+                "initial target {target_id}: observer setup did not finish"
+            ))
+        })?
+        .map_err(|_| ZendriverError::Navigation("tab registrar dropped".into()))?;
+        Ok(())
     }
 
     /// Wire the weak [`BrowserInner`] ref. Called once after
@@ -2182,6 +2212,8 @@ impl TargetObserver for TabRegistrar {
                 "tab-registrar: target attached before the browser weak ref was wired; skipping \
                  registration (expected exactly once, for the initial target)"
             );
+            let target_id = session.target_info.target_id.clone();
+            self.unwired.send_modify(|ids| ids.push(target_id));
             return Ok(());
         };
         let Some(browser) = weak.upgrade() else {
@@ -2945,6 +2977,8 @@ pub(crate) async fn finish_connect(
         .as_str()
         .ok_or_else(|| ZendriverError::Navigation("attach returned no sessionId".into()))?
         .to_string();
+    // The reply precedes the observer chain for an already-loaded target.
+    registrar.wait_initial(&target_id).await?;
 
     // Sweep the stray windows now that our own tab is safely attached.
     // Best-effort: a stray we cannot close is worth a warning, not a failed
@@ -4844,6 +4878,20 @@ impl Drop for BrowserInner {
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    /// Chrome follows `Target.attachToTarget` with `Target.attachedToTarget`;
+    /// `finish_connect` waits for the observer chain that event drives.
+    async fn emit_initial_attach(mock: &zendriver_transport::testing::MockConnection) {
+        mock.emit_event(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": "S1",
+                "targetInfo": { "targetId": "T1", "type": "page", "url": "about:blank", "attached": true },
+                "waitingForDebugger": false,
+            }),
+        )
+        .await;
+    }
 
     #[test]
     fn candidate_paths_is_nonempty() {
@@ -7453,6 +7501,7 @@ mod tests {
         let id = mock.expect_cmd("Target.attachToTarget").await;
         assert_eq!(mock.last_sent()["params"]["targetId"], "T1");
         mock.reply(id, json!({ "sessionId": "S1" })).await;
+        emit_initial_attach(&mock).await;
 
         let inner = fut.await.unwrap().unwrap();
 
@@ -7510,6 +7559,7 @@ mod tests {
         .await;
         let id = mock.expect_cmd("Target.attachToTarget").await;
         mock.reply(id, json!({ "sessionId": "S1" })).await;
+        emit_initial_attach(&mock).await;
 
         let inner = fut.await.unwrap().unwrap();
         assert!(!inner.owns_process);
@@ -7749,6 +7799,7 @@ mod tests {
         .await;
         let id = mock.expect_cmd("Target.attachToTarget").await;
         mock.reply(id, json!({ "sessionId": "S1" })).await;
+        emit_initial_attach(&mock).await;
 
         let inner = guarded.await.unwrap().expect("handshake should succeed");
         assert!(inner.tabs.read().await.contains_key("S1"));
@@ -7797,6 +7848,7 @@ mod tests {
         .await;
         let id = mock.expect_cmd("Target.attachToTarget").await;
         mock.reply(id, json!({ "sessionId": "S1" })).await;
+        emit_initial_attach(&mock).await;
 
         let inner = fut.await.unwrap().unwrap();
         (mock, Browser { inner })
@@ -8019,6 +8071,7 @@ mod tests {
         .await;
         let id = mock.expect_cmd("Target.attachToTarget").await;
         mock.reply(id, json!({ "sessionId": "S1" })).await;
+        emit_initial_attach(&mock).await;
         let inner = fut.await.unwrap().unwrap();
 
         Browser { inner }.close().await.unwrap();
@@ -8080,6 +8133,7 @@ mod tests {
         let id = mock.expect_cmd("Target.attachToTarget").await;
         assert_eq!(mock.last_sent()["params"]["targetId"], "T1");
         mock.reply(id, json!({ "sessionId": "S1" })).await;
+        emit_initial_attach(&mock).await;
 
         // The loser is closed, not abandoned.
         let id = mock.expect_cmd("Target.closeTarget").await;
@@ -8220,6 +8274,7 @@ mod tests {
         .await;
         let id = mock.expect_cmd("Target.attachToTarget").await;
         mock.reply(id, json!({ "sessionId": "S1" })).await;
+        emit_initial_attach(&mock).await;
 
         let inner = fut.await.unwrap().unwrap();
         let path = tokio::time::timeout(std::time::Duration::from_secs(5), path_rx)
@@ -8234,6 +8289,57 @@ mod tests {
         inner.main_tab.session().connection().shutdown();
         inner.conn.shutdown();
         drop(server);
+    }
+
+    /// The initial `about:blank` is already loaded, so `Target.attachToTarget`
+    /// replies before the observer chain has run. Handing the main tab out at
+    /// that point let the first navigation outrun the stealth bootstrap.
+    #[tokio::test]
+    async fn finish_connect_waits_for_the_initial_observer_chain() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+        let mut fut = tokio::spawn(finish_connect(FinishConnect {
+            conn,
+            registrar,
+            input_profile,
+            child: ChildSlot::default(),
+            job: ProcessJob::none(),
+            owned_tmp: None,
+            extension_dirs: Vec::new(),
+            debug_host_port: None,
+            ws_url: None,
+            owns_process: true,
+            #[cfg(feature = "tracker-blocking")]
+            tracker_matcher: None,
+        }));
+
+        let id = mock.expect_cmd("Target.setAutoAttach").await;
+        mock.reply(id, json!({})).await;
+        let id = mock.expect_cmd("Target.getTargets").await;
+        mock.reply(
+            id,
+            json!({ "targetInfos": [{ "targetId": "T1", "type": "page", "url": "about:blank" }] }),
+        )
+        .await;
+        let id = mock.expect_cmd("Target.attachToTarget").await;
+        mock.reply(id, json!({ "sessionId": "S1" })).await;
+
+        assert!(
+            timeout(Duration::from_millis(300), &mut fut).await.is_err(),
+            "the main tab must not be handed out before its observers ran",
+        );
+        emit_initial_attach(&mock).await;
+        let inner = timeout(Duration::from_secs(5), fut)
+            .await
+            .expect("finish_connect must return once the chain reached the registrar")
+            .unwrap()
+            .unwrap();
+        assert!(inner.tabs.read().await.contains_key("S1"));
+        inner.conn.shutdown();
     }
 
     /// T3: a lone page target is the normal case — nothing to sweep, and the
@@ -8275,6 +8381,7 @@ mod tests {
         .await;
         let id = mock.expect_cmd("Target.attachToTarget").await;
         mock.reply(id, json!({ "sessionId": "S1" })).await;
+        emit_initial_attach(&mock).await;
 
         // Bounded for the same reason: sweeping the worker (or the page we just
         // attached to) would block on a reply that never comes.
@@ -8339,6 +8446,7 @@ mod tests {
         .await;
         let id = mock.expect_cmd("Target.attachToTarget").await;
         mock.reply(id, json!({ "sessionId": "S1" })).await;
+        emit_initial_attach(&mock).await;
 
         // Bounded: a sweep here would block on a `closeTarget` reply the mock
         // never sends, so a regression must fail cleanly rather than hang.
