@@ -2351,9 +2351,58 @@ impl TargetObserver for TabRegistrar {
     }
 }
 
-/// Assemble the canonical observer chain: an optional stealth observer,
-/// then every user-supplied observer (registration order preserved), then
-/// the opt-in force-open-shadow-roots observer, then [`TabRegistrar`] LAST.
+/// Arms a session-scoped `Target.setAutoAttach` on every page and
+/// out-of-process iframe while it is still paused.
+///
+/// The browser-scoped auto-attach ([`auto_attach_params`]) reaches top-level
+/// targets only: an OOPIF is a child of its page's session and is reported
+/// only through that session's own auto-attach. Without this observer no
+/// `iframe` target ever attached, so OOPIFs skipped the whole observer chain —
+/// no stealth setup (Chrome's own UA-CH and locale, no bootstrap) and no
+/// `Frame` from the registrar's OOPIF path. Armed before the parent is
+/// released, so a child is paused before its first script and runs the chain
+/// like any other target.
+///
+/// `worker` is in the filter on purpose: under this pause a dedicated worker
+/// the page starts would wait for a debugger forever unless it is attached
+/// and released. Observers ignore it and it dies with its page, unlike the
+/// service workers [`auto_attach_params`] keeps unattached.
+///
+/// A failed call is logged, not returned: an observer error detaches the
+/// parent, which must keep working without its child frames attached.
+pub(crate) struct ChildTargetAutoAttach;
+
+#[async_trait::async_trait]
+impl TargetObserver for ChildTargetAutoAttach {
+    fn name(&self) -> &'static str {
+        "child-auto-attach"
+    }
+
+    async fn on_target_attached(&self, session: PausedSession<'_>) -> Result<(), ObserverError> {
+        if !matches!(session.target_info.kind.as_str(), "page" | "iframe") {
+            return Ok(());
+        }
+        let params = json!({
+            "autoAttach": true,
+            "waitForDebuggerOnStart": true,
+            "flatten": true,
+            "filter": [{ "type": "iframe" }, { "type": "worker" }, { "exclude": true }],
+        });
+        if let Err(error) = session.call("Target.setAutoAttach", params).await {
+            warn!(
+                target_id = %session.target_info.target_id,
+                %error,
+                "child frames of this target will not be auto-attached"
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Assemble the canonical observer chain: [`ChildTargetAutoAttach`] first,
+/// then an optional stealth observer, then every user-supplied observer
+/// (registration order preserved), then the opt-in force-open-shadow-roots
+/// observer, then [`TabRegistrar`] LAST.
 ///
 /// Registering the registrar last makes it a **ready barrier**. Observers
 /// run serially in registration order (the transport actor awaits each
@@ -2385,7 +2434,8 @@ fn assemble_observer_chain(
     registrar: Arc<TabRegistrar>,
 ) -> Vec<Arc<dyn TargetObserver>> {
     let mut obs_vec =
-        Vec::with_capacity(usize::from(stealth_obs.is_some()) + extra_observers.len() + 2);
+        Vec::with_capacity(usize::from(stealth_obs.is_some()) + extra_observers.len() + 3);
+    obs_vec.push(Arc::new(ChildTargetAutoAttach) as Arc<dyn TargetObserver>);
     obs_vec.extend(stealth_obs);
     obs_vec.extend(extra_observers.iter().cloned());
     if force_open_shadow_roots {
@@ -5124,6 +5174,7 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "child-auto-attach",
                 "stealth-stub",
                 "user-1",
                 "user-2",
@@ -5131,6 +5182,80 @@ mod tests {
                 "tab-registrar",
             ],
         );
+    }
+
+    /// An OOPIF is a child of its page's session; browser-scoped auto-attach
+    /// never reports it, so the page's own auto-attach is armed while the
+    /// page is paused.
+    #[tokio::test]
+    async fn child_auto_attach_arms_the_page_session() {
+        use zendriver_transport::testing::MockConnection;
+
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![
+                Arc::new(ChildTargetAutoAttach) as Arc<dyn TargetObserver>
+            ]);
+        mock.emit_event(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": "S9",
+                "targetInfo": { "targetId": "T9", "type": "page", "url": "about:blank", "attached": true },
+                "waitingForDebugger": true,
+            }),
+        )
+        .await;
+        let id = timeout(
+            Duration::from_secs(2),
+            mock.expect_cmd("Target.setAutoAttach"),
+        )
+        .await
+        .expect("page session auto-attach");
+        let sent = mock.last_sent().clone();
+        assert_eq!(sent["sessionId"], "S9", "scoped to the page session");
+        assert_eq!(sent["params"]["waitForDebuggerOnStart"], true);
+        assert_eq!(sent["params"]["flatten"], true);
+        assert_eq!(
+            sent["params"]["filter"],
+            json!([{ "type": "iframe" }, { "type": "worker" }, { "exclude": true }]),
+        );
+        mock.reply(id, json!({})).await;
+        let id = timeout(
+            Duration::from_secs(2),
+            mock.expect_cmd("Runtime.runIfWaitingForDebugger"),
+        )
+        .await
+        .expect("page released after arming");
+        mock.reply(id, json!({})).await;
+        conn.shutdown();
+    }
+
+    /// A failed arm must not detach the parent page.
+    #[tokio::test]
+    async fn child_auto_attach_failure_still_releases_the_parent() {
+        use zendriver_transport::testing::MockConnection;
+
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![
+                Arc::new(ChildTargetAutoAttach) as Arc<dyn TargetObserver>
+            ]);
+        mock.emit_event(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": "S9",
+                "targetInfo": { "targetId": "T9", "type": "page", "url": "about:blank", "attached": true },
+                "waitingForDebugger": true,
+            }),
+        )
+        .await;
+        let id = mock.expect_cmd("Target.setAutoAttach").await;
+        mock.reply_err(id, -32000, "not allowed").await;
+        let (method, id) = mock
+            .recv_cmd_timeout(Duration::from_secs(2))
+            .await
+            .expect("next command");
+        assert_eq!(method, "Runtime.runIfWaitingForDebugger");
+        mock.reply(id, json!({})).await;
+        conn.shutdown();
     }
 
     #[test]
@@ -5141,7 +5266,7 @@ mod tests {
         let registrar = Arc::new(TabRegistrar::new(zendriver_stealth::InputProfile::native()));
         let chain = assemble_observer_chain(None, &[], false, registrar);
         let names: Vec<&str> = chain.iter().map(|o| o.name()).collect();
-        assert_eq!(names, vec!["tab-registrar"]);
+        assert_eq!(names, vec!["child-auto-attach", "tab-registrar"]);
     }
 
     #[cfg(feature = "geo")]

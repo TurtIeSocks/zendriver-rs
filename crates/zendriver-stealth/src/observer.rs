@@ -17,8 +17,8 @@ use crate::persona::specs::UaMetadata;
 use crate::{Fingerprint, Persona, ProfileKind, StealthProfile};
 
 /// Observer that applies a [`StealthProfile`] + [`Fingerprint`] to every page
-/// target. Workers and iframes are skipped — workers have no DOM and iframes
-/// inherit patches from the parent target in flat session mode.
+/// and out-of-process iframe target. Workers are skipped — they have no DOM;
+/// same-process iframes are not targets and get the page's patches.
 #[derive(Debug)]
 pub struct StealthObserver {
     profile: StealthProfile,
@@ -121,11 +121,15 @@ impl TargetObserver for StealthObserver {
     }
 
     async fn on_target_attached(&self, session: PausedSession<'_>) -> Result<(), ObserverError> {
-        // Workers + iframes are skipped — workers have no DOM; iframes inherit
-        // patches via the parent in flat mode.
-        if session.target_info.kind != "page" {
-            return Ok(());
-        }
+        // An out-of-process iframe is a target of its own and inherits nothing
+        // from its page: it gets the same identity, locale and bootstrap.
+        // Viewport and focus belong to the tab and stay page-only. Workers are
+        // skipped — they have no DOM.
+        let frame = match session.target_info.kind.as_str() {
+            "page" => false,
+            "iframe" => true,
+            _ => return Ok(()),
+        };
         if self.profile.kind() == ProfileKind::Off {
             return Ok(());
         }
@@ -188,30 +192,32 @@ impl TargetObserver for StealthObserver {
         // fingerprint's screen (persona's when it set one, else the
         // `StealthProfile::screen` pin) wins; neither set → the fixed
         // 1920x1080 default.
-        let (screen_width, screen_height, device_scale_factor) = match self.fingerprint.screen {
-            Some(s) => (s.width, s.height, s.device_pixel_ratio),
-            None => (1920, 1080, 1.0),
-        };
-        session
-            .call(
-                "Emulation.setDeviceMetricsOverride",
-                json!({
-                    "width": screen_width,
-                    "height": screen_height,
-                    "deviceScaleFactor": device_scale_factor,
-                    "mobile": false,
-                    "screenWidth": screen_width,
-                    "screenHeight": screen_height,
-                }),
-            )
-            .await?;
+        if !frame {
+            let (screen_width, screen_height, device_scale_factor) = match self.fingerprint.screen {
+                Some(s) => (s.width, s.height, s.device_pixel_ratio),
+                None => (1920, 1080, 1.0),
+            };
+            session
+                .call(
+                    "Emulation.setDeviceMetricsOverride",
+                    json!({
+                        "width": screen_width,
+                        "height": screen_height,
+                        "deviceScaleFactor": device_scale_factor,
+                        "mobile": false,
+                        "screenWidth": screen_width,
+                        "screenHeight": screen_height,
+                    }),
+                )
+                .await?;
 
-        session
-            .call(
-                "Emulation.setFocusEmulationEnabled",
-                json!({ "enabled": true }),
-            )
-            .await?;
+            session
+                .call(
+                    "Emulation.setFocusEmulationEnabled",
+                    json!({ "enabled": true }),
+                )
+                .await?;
+        }
 
         if let Some(ref tz) = self.fingerprint.timezone {
             session
@@ -1139,6 +1145,60 @@ mod persona_reaches_cdp_tests {
             languages: None,
             screen: None,
         }
+    }
+
+    /// An out-of-process iframe inherits nothing from its page: it gets the
+    /// same identity, locale and bootstrap, but not the tab's viewport/focus.
+    #[tokio::test]
+    async fn oopif_gets_the_page_identity_without_the_tab_viewport() {
+        let fp = Fingerprint {
+            timezone: Some("Europe/Berlin".into()),
+            locale: Some("de-DE".into()),
+            ..bare_fingerprint()
+        };
+        let observer = StealthObserver::new(StealthProfile::spoofed(), fp);
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![std::sync::Arc::new(observer)
+                as std::sync::Arc<dyn zendriver_transport::TargetObserver>]);
+        mock.emit_event(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": "F1",
+                "targetInfo": {
+                    "targetId": "TF1",
+                    "type": "iframe",
+                    "url": "https://other.test/frame",
+                    "attached": true,
+                },
+                "waitingForDebugger": true,
+            }),
+        )
+        .await;
+        let mut methods = Vec::new();
+        while let Some((method, id)) = mock
+            .recv_cmd_timeout(std::time::Duration::from_secs(2))
+            .await
+        {
+            mock.reply(id, json!({})).await;
+            let done = method == "Runtime.runIfWaitingForDebugger";
+            methods.push(method);
+            if done {
+                break;
+            }
+        }
+        conn.shutdown();
+        assert_eq!(
+            methods,
+            [
+                "Page.enable",
+                "Emulation.setUserAgentOverride",
+                "Emulation.setTimezoneOverride",
+                "Emulation.setLocaleOverride",
+                "Page.setBypassCSP",
+                "Page.addScriptToEvaluateOnNewDocument",
+                "Runtime.runIfWaitingForDebugger",
+            ],
+        );
     }
 
     /// Drive one page-target attach through `observer` and return every CDP
