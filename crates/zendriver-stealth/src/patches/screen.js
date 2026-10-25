@@ -57,8 +57,12 @@
   // never be reported larger than the display containing it.
   set(window, 'outerWidth', W);
   set(window, 'outerHeight', H);
-  set(window, 'innerWidth', W);
-  set(window, 'innerHeight', Math.max(1, INNER_H === null ? H - CHROME_H : INNER_H));
+  // inner* is the frame's own viewport: only the top frame's equals the
+  // window's. An iframe (same-origin or OOPIF) keeps its native size.
+  if (window === window.top) {
+    set(window, 'innerWidth', W);
+    set(window, 'innerHeight', Math.max(1, INNER_H === null ? H - CHROME_H : INNER_H));
+  }
   set(window, 'screenX', 0);
   set(window, 'screenY', 0);
   set(window, 'screenLeft', 0);

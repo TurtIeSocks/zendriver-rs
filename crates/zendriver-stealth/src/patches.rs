@@ -2247,6 +2247,16 @@ mod geometry_bootstrap_tests {
         assert!(js.contains("availHeight"), "must repair the taskbar inset");
     }
 
+    /// The bootstrap runs in every frame, and only the top frame's viewport is
+    /// the window's: an iframe reporting the window's inner size is a frame
+    /// wider than its own element.
+    #[test]
+    fn geometry_bootstrap_keeps_iframe_viewports_native() {
+        let js = geometry_bootstrap();
+        let guard = js.find("window === window.top").expect("top-frame guard");
+        assert!(guard < js.find("'innerWidth'").expect("innerWidth patch"));
+    }
+
     /// Identity-neutral by construction: pulling in an identity patch here would stop
     /// `Native` being native, which is the whole reason callers choose it.
     #[test]
