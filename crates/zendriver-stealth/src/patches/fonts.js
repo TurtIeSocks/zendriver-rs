@@ -15,6 +15,9 @@
     const generic = new Set(['serif', 'sans-serif', 'monospace', 'cursive',
       'fantasy', 'system-ui', 'ui-serif', 'ui-sans-serif', 'ui-monospace', 'ui-rounded']);
     __zdReplace(document.fonts, 'check', (origCheck) => function (font, text) {
+      // Preserve native errors before the allow-list can return false. CSS
+      // style parsing accepts CSS-wide keywords that FontFaceSet rejects.
+      const result = origCheck.call(document.fonts, font, text);
       // Let the browser parse CSS font syntax: splitting on spaces truncates
       // multi-word names such as "Times New Roman" from the allow-list.
       const style = document.createElement('span').style;
@@ -24,7 +27,7 @@
         const name = family.trim().replace(/^["']|["']$/g, '').toLowerCase();
         if (!allowed.has(name) && !generic.has(name)) return false;
       }
-      return origCheck.call(document.fonts, font, text);
+      return result;
     });
   }
 })(FONT_ALLOW, SEED);
