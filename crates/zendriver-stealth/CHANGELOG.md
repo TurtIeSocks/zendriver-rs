@@ -3,6 +3,14 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.12.10] - 2026-11-08
+
+### Fixed
+
+- Scope async-trait must-use lint allowances
+- Remove duplicate async-trait lint allowances
+
+
 ## [0.12.9] - 2026-11-08
 
 ### Fixed

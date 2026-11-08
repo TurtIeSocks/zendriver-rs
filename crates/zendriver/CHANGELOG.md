@@ -5,6 +5,15 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.5.31] - 2026-11-08
+
+### Fixed
+
+- Merge every --disable-features into one flag
+- Scope async-trait must-use lint allowances
+- Remove duplicate async-trait lint allowances
+
+
 ## [0.5.30] - 2026-11-08
 
 ### Fixed
