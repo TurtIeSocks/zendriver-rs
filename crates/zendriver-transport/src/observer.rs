@@ -28,6 +28,8 @@ use crate::error::CallError;
 /// that over depending on this crate directly; see the crate-root docs.
 ///
 /// [`Target.attachedToTarget`]: https://chromedevtools.github.io/devtools-protocol/tot/Target/#event-attachedToTarget
+// async-trait adds #[must_use] to boxed futures, which Clippy 1.99 considers redundant.
+#[allow(clippy::double_must_use)]
 #[async_trait::async_trait]
 pub trait TargetObserver: Send + Sync {
     /// Called once per new target, after attach and before debugger release.

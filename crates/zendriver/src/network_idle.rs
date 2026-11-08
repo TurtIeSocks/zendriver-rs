@@ -188,26 +188,31 @@ impl InFlightTracker {
         let session_id = session.session_id().map(str::to_string);
         let mut events = session.connection().subscribe_raw();
 
-        // Fire-and-forget `Network.enable`. We don't await the response
-        // because the mock test harness never replies; the production
-        // connection actor does reply, but our subscriber stream above is
-        // ready either way. If the call errors (e.g. session torn down)
-        // we log and continue — subscriptions will simply receive nothing.
-        let enable_session = session.clone();
-        tokio::spawn(async move {
-            if let Err(e) = enable_session
-                .call("Network.enable", serde_json::json!({}))
-                .await
-            {
-                warn!(error = %e, "InFlightTracker: Network.enable failed; events may be inactive");
-            }
-        });
+        // Poll enable alongside events, without an independent spawned task:
+        // dropping a Tab cancels its tracker before shutting down its socket.
+        // The enable call must end with that tracker, including when the Tab
+        // was dropped before this task first ran. Do not block event handling
+        // on the reply (the mock harness may deliberately leave it pending).
+        let enable = session.call("Network.enable", serde_json::json!({}));
+        tokio::pin!(enable);
+        let mut enabling = true;
 
         loop {
             tokio::select! {
+                biased;
                 () = cancel.cancelled() => {
                     trace!("InFlightTracker: cancellation received, exiting");
                     return;
+                }
+                result = &mut enable, if enabling => {
+                    enabling = false;
+                    if let Err(e) = result {
+                        // Drop can race with completion on another thread.
+                        // Keep genuine failures on a live Tab observable.
+                        if !cancel.is_cancelled() {
+                            warn!(error = %e, "InFlightTracker: Network.enable failed; events may be inactive");
+                        }
+                    }
                 }
                 next = events.next() => {
                     let Some(ev) = next else {
@@ -254,6 +259,93 @@ mod tests {
     use super::*;
     use serde_json::json;
     use zendriver_transport::testing::MockConnection;
+
+    #[tokio::test]
+    async fn cancelled_tracker_does_not_enable_network() {
+        let (mut mock, conn) = MockConnection::pair();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+
+        InFlightTracker::new()
+            .run(SessionHandle::new(conn.clone(), "S1"), cancel)
+            .await;
+
+        assert!(
+            mock.recv_cmd_timeout(std::time::Duration::from_millis(50))
+                .await
+                .is_none(),
+            "a dropped tab must not start Network.enable"
+        );
+        conn.shutdown();
+    }
+
+    #[tokio::test]
+    async fn pending_enable_tracks_events_and_stops_with_tracker() {
+        use zendriver_transport::testing::LogCapture;
+
+        let (mut mock, conn) = MockConnection::pair();
+        let tracker = InFlightTracker::new();
+        let cancel = CancellationToken::new();
+        let logs = LogCapture::new();
+        let session = SessionHandle::new(conn.clone(), "S1");
+        let control = async {
+            mock.expect_cmd("Network.enable").await;
+            // No reply: event handling must keep working during enable.
+            mock.emit_event_for_session(
+                "Network.requestWillBeSent",
+                json!({"requestId": "R1"}),
+                "S1",
+            )
+            .await;
+            while tracker.in_flight.lock().await.is_empty() {
+                tokio::task::yield_now().await;
+            }
+            cancel.cancel();
+            // Both cancellation and the failed enable reply can be ready.
+            // This is the same order as TabInner::drop.
+            conn.shutdown();
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::join!(
+                logs.capture(tracker.clone().run(session, cancel.clone())),
+                control,
+            );
+        })
+        .await
+        .expect("tracker must stop even while Network.enable is pending");
+        assert!(
+            logs.contains("cancellation received"),
+            "capture must be active"
+        );
+        assert!(!logs.contains("Network.enable failed"));
+    }
+
+    #[tokio::test]
+    async fn live_tracker_still_warns_on_enable_failure() {
+        use zendriver_transport::testing::LogCapture;
+
+        let (mut mock, conn) = MockConnection::pair();
+        let tracker = InFlightTracker::new();
+        let cancel = CancellationToken::new();
+        let logs = LogCapture::new();
+        let session = SessionHandle::new(conn.clone(), "S1");
+        let control = async {
+            let id = mock.expect_cmd("Network.enable").await;
+            mock.reply_err(id, -32000, "enable rejected").await;
+            while !logs.contains("Network.enable failed") {
+                tokio::task::yield_now().await;
+            }
+            cancel.cancel();
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::join!(logs.capture(tracker.run(session, cancel.clone())), control);
+        })
+        .await
+        .expect("a live tracker must log the enable failure");
+        assert_eq!(logs.count("Network.enable failed"), 1);
+        assert!(logs.contains("enable rejected"));
+        conn.shutdown();
+    }
 
     /// End-to-end: emit `Network.requestWillBeSent` for one request, assert
     /// the in_flight set transitions to size 1. Then emit
