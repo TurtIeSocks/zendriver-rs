@@ -1716,6 +1716,14 @@ impl BrowserBuilder {
         if !self.extensions.is_empty() {
             disabled.push("DisableLoadExtensionCommandLineSwitch");
         }
+        // Headless has no display link, so frames come from a timer whose
+        // interval Chrome may change. With a 30 fps video on the page,
+        // `SingleVideoFrameRateThrottling` drops that timer — and every
+        // requestAnimationFrame — to 30 Hz, while a real display keeps 60:
+        // a measurable headless tell. Headful keeps the stock feature.
+        if headless {
+            disabled.push("SingleVideoFrameRateThrottling");
+        }
         v.push(format!("--disable-features={}", disabled.join(",")));
         let gpu_backend = self.effective_gpu_backend();
         if headless {
@@ -5875,6 +5883,18 @@ mod tests {
                 lines[0]
             );
         }
+    }
+
+    #[test]
+    fn build_flags_disables_video_frame_rate_throttling_only_headless() {
+        let has = |b: BrowserBuilder| {
+            b.build_flags(Path::new("/tmp/x")).iter().any(|f| {
+                f.strip_prefix("--disable-features=")
+                    .is_some_and(|l| l.split(',').any(|x| x == "SingleVideoFrameRateThrottling"))
+            })
+        };
+        assert!(has(BrowserBuilder::new()));
+        assert!(!has(BrowserBuilder::new().headless(false)));
     }
 
     #[test]
