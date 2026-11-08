@@ -31,8 +31,6 @@ use crate::error::CallError;
 // async-trait adds #[must_use] to boxed futures, which Clippy 1.99 considers redundant.
 #[allow(clippy::double_must_use)]
 #[async_trait::async_trait]
-// async-trait 0.1.89 adds #[must_use] to methods returning must-use futures.
-#[allow(clippy::double_must_use)]
 pub trait TargetObserver: Send + Sync {
     /// Called once per new target, after attach and before debugger release.
     /// Observer MUST complete and return before the target resumes execution.
