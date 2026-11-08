@@ -491,6 +491,11 @@ async fn native_webgl_is_hardware_accelerated(conn: &Connection) -> bool {
 /// for every backend that emits no ANGLE flags (in particular the default
 /// `GpuBackend::Disabled` path, which must reproduce today's behavior
 /// byte-for-byte, duplicate flags included).
+///
+/// The one exception is `--disable-features`: Chrome honours only the last
+/// occurrence of a switch, so `build_flags`, the profile and the caller's own
+/// `.arg("--disable-features=…")` would otherwise silently cancel each other.
+/// [`merge_disable_features`] folds every occurrence into one.
 pub(crate) fn merge_launch_flags(
     mut base_flags: Vec<String>,
     extra_flags: Vec<String>,
@@ -503,7 +508,44 @@ pub(crate) fn merge_launch_flags(
         }
         base_flags.push(f);
     }
-    base_flags
+    merge_disable_features(base_flags)
+}
+
+const DISABLE_FEATURES: &str = "--disable-features=";
+
+/// Fold every `--disable-features=` flag into one, placed where the first
+/// one was. Features keep their first-seen order and appear once; empty
+/// entries are dropped. Chrome's command line keeps only the last value of a
+/// repeated switch, so without this every earlier list is ignored.
+fn merge_disable_features(flags: Vec<String>) -> Vec<String> {
+    let mut features: Vec<String> = Vec::new();
+    let mut slot = None;
+    let mut out = Vec::with_capacity(flags.len());
+    for flag in flags {
+        let Some(list) = flag.strip_prefix(DISABLE_FEATURES) else {
+            out.push(flag);
+            continue;
+        };
+        for feature in list.split(',').filter(|f| !f.is_empty()) {
+            if !features.iter().any(|f| f == feature) {
+                features.push(feature.to_string());
+            }
+        }
+        if slot.is_none() {
+            slot = Some(out.len());
+            out.push(String::new());
+        }
+    }
+    match slot {
+        Some(i) if !features.is_empty() => {
+            out[i] = format!("{DISABLE_FEATURES}{}", features.join(","));
+        }
+        Some(i) => {
+            out.remove(i);
+        }
+        None => {}
+    }
+    out
 }
 
 /// Load (or first-time generate + persist) the fingerprint [`Seed`] bound to a
@@ -1665,22 +1707,26 @@ impl BrowserBuilder {
         // turn off `DisableLoadExtensionCommandLineSwitch`, or Chrome 136+
         // silently ignores `--load-extension`. The stealth profiles carry that
         // feature in their own `--disable-features=IsolateOrigins,…` line, but
-        // an Off profile would otherwise miss it, so merge it into the base
-        // line here — Chrome unions every `--disable-features` occurrence, so
-        // the redundancy under a stealth profile is harmless.
-        if self.extensions.is_empty() {
-            v.push(
-                "--disable-features=PasswordManagerOnboarding,AutofillServerCommunication"
-                    .to_string(),
-            );
-        } else {
-            v.push(
-                "--disable-features=PasswordManagerOnboarding,AutofillServerCommunication,DisableLoadExtensionCommandLineSwitch"
-                    .to_string(),
-            );
+        // an Off profile would otherwise miss it, so add it to the base line
+        // here. Chrome keeps only the last `--disable-features`, so
+        // `merge_launch_flags` folds this line, the profile's and the
+        // caller's into one.
+        let headless = self.headless.unwrap_or(true);
+        let mut disabled = vec!["PasswordManagerOnboarding", "AutofillServerCommunication"];
+        if !self.extensions.is_empty() {
+            disabled.push("DisableLoadExtensionCommandLineSwitch");
         }
+        // Headless has no display link, so frames come from a timer whose
+        // interval Chrome may change. With a 30 fps video on the page,
+        // `SingleVideoFrameRateThrottling` drops that timer — and every
+        // requestAnimationFrame — to 30 Hz, while a real display keeps 60:
+        // a measurable headless tell. Headful keeps the stock feature.
+        if headless {
+            disabled.push("SingleVideoFrameRateThrottling");
+        }
+        v.push(format!("--disable-features={}", disabled.join(",")));
         let gpu_backend = self.effective_gpu_backend();
-        if self.headless.unwrap_or(true) {
+        if headless {
             v.push("--headless=new".to_string());
             // `--disable-gpu` and an explicit ANGLE backend are mutually
             // exclusive: keeping the flag suppresses the GPU that
@@ -2136,14 +2182,44 @@ fn auto_attach_params() -> serde_json::Value {
 pub(crate) struct TabRegistrar {
     browser: OnceLock<Weak<BrowserInner>>,
     input_profile: zendriver_stealth::InputProfile,
+    /// Targets whose observer chain reached this registrar before the weak ref
+    /// was wired — in practice the initial target. `finish_connect` waits here:
+    /// `Target.attachToTarget` replies before the chain has run, and handing
+    /// the main tab out early lets the first navigation outrun the stealth
+    /// bootstrap.
+    unwired: tokio::sync::watch::Sender<Vec<String>>,
 }
+
+/// Budget for the initial target's observer chain, which runs several
+/// observers with their own `DEFAULT_OBSERVER_TIMEOUT` (5 s) each.
+const INITIAL_TARGET_SETUP: Duration = Duration::from_secs(20);
 
 impl TabRegistrar {
     fn new(input_profile: zendriver_stealth::InputProfile) -> Self {
         Self {
             browser: OnceLock::new(),
             input_profile,
+            unwired: tokio::sync::watch::channel(Vec::new()).0,
         }
+    }
+
+    /// Wait until every observer ahead of the registrar has run against the
+    /// initial target. A chain that fails detaches the target and never gets
+    /// here, so the launch fails instead of returning an unpatched tab.
+    async fn wait_initial(&self, target_id: &str) -> Result<(), ZendriverError> {
+        let mut ready = self.unwired.subscribe();
+        timeout(
+            INITIAL_TARGET_SETUP,
+            ready.wait_for(|ids| ids.iter().any(|id| id == target_id)),
+        )
+        .await
+        .map_err(|_| {
+            ZendriverError::Navigation(format!(
+                "initial target {target_id}: observer setup did not finish"
+            ))
+        })?
+        .map_err(|_| ZendriverError::Navigation("tab registrar dropped".into()))?;
+        Ok(())
     }
 
     /// Wire the weak [`BrowserInner`] ref. Called once after
@@ -2182,6 +2258,8 @@ impl TargetObserver for TabRegistrar {
                 "tab-registrar: target attached before the browser weak ref was wired; skipping \
                  registration (expected exactly once, for the initial target)"
             );
+            let target_id = session.target_info.target_id.clone();
+            self.unwired.send_modify(|ids| ids.push(target_id));
             return Ok(());
         };
         let Some(browser) = weak.upgrade() else {
@@ -2995,6 +3073,8 @@ pub(crate) async fn finish_connect(
         .as_str()
         .ok_or_else(|| ZendriverError::Navigation("attach returned no sessionId".into()))?
         .to_string();
+    // The reply precedes the observer chain for an already-loaded target.
+    registrar.wait_initial(&target_id).await?;
 
     // Sweep the stray windows now that our own tab is safely attached.
     // Best-effort: a stray we cannot close is worth a warning, not a failed
@@ -4895,6 +4975,20 @@ impl Drop for BrowserInner {
 mod tests {
     use super::*;
 
+    /// Chrome follows `Target.attachToTarget` with `Target.attachedToTarget`;
+    /// `finish_connect` waits for the observer chain that event drives.
+    async fn emit_initial_attach(mock: &zendriver_transport::testing::MockConnection) {
+        mock.emit_event(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": "S1",
+                "targetInfo": { "targetId": "T1", "type": "page", "url": "about:blank", "attached": true },
+                "waitingForDebugger": false,
+            }),
+        )
+        .await;
+    }
+
     #[test]
     fn candidate_paths_is_nonempty() {
         let v = candidate_paths_for_channel(Channel::Auto);
@@ -5912,6 +6006,68 @@ mod tests {
                 .iter()
                 .any(|f| f.contains("PasswordManagerOnboarding"))
         );
+    }
+
+    #[test]
+    fn merge_disable_features_folds_every_occurrence_into_the_first_slot() {
+        let flags = [
+            "--a",
+            "--disable-features=X,Y",
+            "--b",
+            "--disable-features=Y,,Z",
+            "--c",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(
+            super::merge_disable_features(flags),
+            ["--a", "--disable-features=X,Y,Z", "--b", "--c"].map(String::from)
+        );
+        let empty = ["--a", "--disable-features="].map(String::from).to_vec();
+        assert_eq!(super::merge_disable_features(empty), ["--a".to_string()]);
+    }
+
+    #[test]
+    fn launch_flags_keep_base_profile_and_caller_disable_features() {
+        // Chrome honours only the last --disable-features; the merged argv
+        // must carry one line with every source's features.
+        let base = Browser::builder()
+            .stealth(StealthProfile::spoofed())
+            .arg("--disable-features=CallerFeature")
+            .build_flags(Path::new("/tmp/zd-test"));
+        let extra = StealthProfile::spoofed().build_flags();
+        let merged = super::merge_launch_flags(base, extra, GpuBackend::Disabled);
+        let lines: Vec<_> = merged
+            .iter()
+            .filter(|f| f.starts_with("--disable-features="))
+            .collect();
+        assert_eq!(lines.len(), 1, "{merged:?}");
+        for feature in [
+            "PasswordManagerOnboarding",
+            "CallerFeature",
+            "IsolateOrigins",
+        ] {
+            assert!(
+                lines[0]
+                    .trim_start_matches("--disable-features=")
+                    .split(',')
+                    .any(|f| f == feature),
+                "{feature} missing from {}",
+                lines[0]
+            );
+        }
+    }
+
+    #[test]
+    fn build_flags_disables_video_frame_rate_throttling_only_headless() {
+        let has = |b: BrowserBuilder| {
+            b.build_flags(Path::new("/tmp/x")).iter().any(|f| {
+                f.strip_prefix("--disable-features=")
+                    .is_some_and(|l| l.split(',').any(|x| x == "SingleVideoFrameRateThrottling"))
+            })
+        };
+        assert!(has(BrowserBuilder::new()));
+        assert!(!has(BrowserBuilder::new().headless(false)));
     }
 
     #[test]
@@ -7578,6 +7734,7 @@ mod tests {
         let id = mock.expect_cmd("Target.attachToTarget").await;
         assert_eq!(mock.last_sent()["params"]["targetId"], "T1");
         mock.reply(id, json!({ "sessionId": "S1" })).await;
+        emit_initial_attach(&mock).await;
 
         let inner = fut.await.unwrap().unwrap();
 
@@ -7635,6 +7792,7 @@ mod tests {
         .await;
         let id = mock.expect_cmd("Target.attachToTarget").await;
         mock.reply(id, json!({ "sessionId": "S1" })).await;
+        emit_initial_attach(&mock).await;
 
         let inner = fut.await.unwrap().unwrap();
         assert!(!inner.owns_process);
@@ -7874,6 +8032,7 @@ mod tests {
         .await;
         let id = mock.expect_cmd("Target.attachToTarget").await;
         mock.reply(id, json!({ "sessionId": "S1" })).await;
+        emit_initial_attach(&mock).await;
 
         let inner = guarded.await.unwrap().expect("handshake should succeed");
         assert!(inner.tabs.read().await.contains_key("S1"));
@@ -7922,6 +8081,7 @@ mod tests {
         .await;
         let id = mock.expect_cmd("Target.attachToTarget").await;
         mock.reply(id, json!({ "sessionId": "S1" })).await;
+        emit_initial_attach(&mock).await;
 
         let inner = fut.await.unwrap().unwrap();
         (mock, Browser { inner })
@@ -8144,6 +8304,7 @@ mod tests {
         .await;
         let id = mock.expect_cmd("Target.attachToTarget").await;
         mock.reply(id, json!({ "sessionId": "S1" })).await;
+        emit_initial_attach(&mock).await;
         let inner = fut.await.unwrap().unwrap();
 
         Browser { inner }.close().await.unwrap();
@@ -8205,6 +8366,7 @@ mod tests {
         let id = mock.expect_cmd("Target.attachToTarget").await;
         assert_eq!(mock.last_sent()["params"]["targetId"], "T1");
         mock.reply(id, json!({ "sessionId": "S1" })).await;
+        emit_initial_attach(&mock).await;
 
         // The loser is closed, not abandoned.
         let id = mock.expect_cmd("Target.closeTarget").await;
@@ -8345,6 +8507,7 @@ mod tests {
         .await;
         let id = mock.expect_cmd("Target.attachToTarget").await;
         mock.reply(id, json!({ "sessionId": "S1" })).await;
+        emit_initial_attach(&mock).await;
 
         let inner = fut.await.unwrap().unwrap();
         let path = tokio::time::timeout(std::time::Duration::from_secs(5), path_rx)
@@ -8359,6 +8522,57 @@ mod tests {
         inner.main_tab.session().connection().shutdown();
         inner.conn.shutdown();
         drop(server);
+    }
+
+    /// The initial `about:blank` is already loaded, so `Target.attachToTarget`
+    /// replies before the observer chain has run. Handing the main tab out at
+    /// that point let the first navigation outrun the stealth bootstrap.
+    #[tokio::test]
+    async fn finish_connect_waits_for_the_initial_observer_chain() {
+        use zendriver_transport::testing::MockConnection;
+
+        let input_profile = zendriver_stealth::InputProfile::native();
+        let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+        let (mut mock, conn) =
+            MockConnection::pair_with_observers(vec![registrar.clone() as Arc<dyn TargetObserver>]);
+        let mut fut = tokio::spawn(finish_connect(FinishConnect {
+            conn,
+            registrar,
+            input_profile,
+            child: ChildSlot::default(),
+            job: ProcessJob::none(),
+            owned_tmp: None,
+            extension_dirs: Vec::new(),
+            debug_host_port: None,
+            ws_url: None,
+            owns_process: true,
+            #[cfg(feature = "tracker-blocking")]
+            tracker_matcher: None,
+        }));
+
+        let id = mock.expect_cmd("Target.setAutoAttach").await;
+        mock.reply(id, json!({})).await;
+        let id = mock.expect_cmd("Target.getTargets").await;
+        mock.reply(
+            id,
+            json!({ "targetInfos": [{ "targetId": "T1", "type": "page", "url": "about:blank" }] }),
+        )
+        .await;
+        let id = mock.expect_cmd("Target.attachToTarget").await;
+        mock.reply(id, json!({ "sessionId": "S1" })).await;
+
+        assert!(
+            timeout(Duration::from_millis(300), &mut fut).await.is_err(),
+            "the main tab must not be handed out before its observers ran",
+        );
+        emit_initial_attach(&mock).await;
+        let inner = timeout(Duration::from_secs(5), fut)
+            .await
+            .expect("finish_connect must return once the chain reached the registrar")
+            .unwrap()
+            .unwrap();
+        assert!(inner.tabs.read().await.contains_key("S1"));
+        inner.conn.shutdown();
     }
 
     /// T3: a lone page target is the normal case — nothing to sweep, and the
@@ -8400,6 +8614,7 @@ mod tests {
         .await;
         let id = mock.expect_cmd("Target.attachToTarget").await;
         mock.reply(id, json!({ "sessionId": "S1" })).await;
+        emit_initial_attach(&mock).await;
 
         // Bounded for the same reason: sweeping the worker (or the page we just
         // attached to) would block on a reply that never comes.
@@ -8464,6 +8679,7 @@ mod tests {
         .await;
         let id = mock.expect_cmd("Target.attachToTarget").await;
         mock.reply(id, json!({ "sessionId": "S1" })).await;
+        emit_initial_attach(&mock).await;
 
         // Bounded: a sweep here would block on a `closeTarget` reply the mock
         // never sends, so a regression must fail cleanly rather than hang.
