@@ -345,6 +345,8 @@ impl Persona {
 ///
 /// The `zendriver` crate implements this for its `Tab`, mapping its own
 /// evaluation error into [`StealthError::Probe`].
+// async-trait adds #[must_use] to boxed futures, which Clippy 1.99 considers redundant.
+#[allow(clippy::double_must_use)]
 #[async_trait::async_trait]
 // async-trait 0.1.89 adds #[must_use] to methods returning must-use futures.
 #[allow(clippy::double_must_use)]
