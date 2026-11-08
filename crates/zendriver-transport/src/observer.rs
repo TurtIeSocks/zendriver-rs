@@ -29,6 +29,10 @@ use crate::error::CallError;
 ///
 /// [`Target.attachedToTarget`]: https://chromedevtools.github.io/devtools-protocol/tot/Target/#event-attachedToTarget
 #[async_trait::async_trait]
+#[allow(
+    clippy::double_must_use,
+    reason = "async-trait 0.1.89 adds #[must_use] to methods returning must-use futures"
+)]
 pub trait TargetObserver: Send + Sync {
     /// Called once per new target, after attach and before debugger release.
     /// Observer MUST complete and return before the target resumes execution.
