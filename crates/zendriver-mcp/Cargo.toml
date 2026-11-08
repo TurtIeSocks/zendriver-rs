@@ -1,6 +1,6 @@
 [package]
 name = "zendriver-mcp"
-version = "0.16.38"
+version = "0.16.40"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
