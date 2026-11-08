@@ -491,6 +491,11 @@ async fn native_webgl_is_hardware_accelerated(conn: &Connection) -> bool {
 /// for every backend that emits no ANGLE flags (in particular the default
 /// `GpuBackend::Disabled` path, which must reproduce today's behavior
 /// byte-for-byte, duplicate flags included).
+///
+/// The one exception is `--disable-features`: Chrome honours only the last
+/// occurrence of a switch, so `build_flags`, the profile and the caller's own
+/// `.arg("--disable-features=…")` would otherwise silently cancel each other.
+/// [`merge_disable_features`] folds every occurrence into one.
 pub(crate) fn merge_launch_flags(
     mut base_flags: Vec<String>,
     extra_flags: Vec<String>,
@@ -503,7 +508,44 @@ pub(crate) fn merge_launch_flags(
         }
         base_flags.push(f);
     }
-    base_flags
+    merge_disable_features(base_flags)
+}
+
+const DISABLE_FEATURES: &str = "--disable-features=";
+
+/// Fold every `--disable-features=` flag into one, placed where the first
+/// one was. Features keep their first-seen order and appear once; empty
+/// entries are dropped. Chrome's command line keeps only the last value of a
+/// repeated switch, so without this every earlier list is ignored.
+fn merge_disable_features(flags: Vec<String>) -> Vec<String> {
+    let mut features: Vec<String> = Vec::new();
+    let mut slot = None;
+    let mut out = Vec::with_capacity(flags.len());
+    for flag in flags {
+        let Some(list) = flag.strip_prefix(DISABLE_FEATURES) else {
+            out.push(flag);
+            continue;
+        };
+        for feature in list.split(',').filter(|f| !f.is_empty()) {
+            if !features.iter().any(|f| f == feature) {
+                features.push(feature.to_string());
+            }
+        }
+        if slot.is_none() {
+            slot = Some(out.len());
+            out.push(String::new());
+        }
+    }
+    match slot {
+        Some(i) if !features.is_empty() => {
+            out[i] = format!("{DISABLE_FEATURES}{}", features.join(","));
+        }
+        Some(i) => {
+            out.remove(i);
+        }
+        None => {}
+    }
+    out
 }
 
 /// Load (or first-time generate + persist) the fingerprint [`Seed`] bound to a
@@ -1665,22 +1707,18 @@ impl BrowserBuilder {
         // turn off `DisableLoadExtensionCommandLineSwitch`, or Chrome 136+
         // silently ignores `--load-extension`. The stealth profiles carry that
         // feature in their own `--disable-features=IsolateOrigins,…` line, but
-        // an Off profile would otherwise miss it, so merge it into the base
-        // line here — Chrome unions every `--disable-features` occurrence, so
-        // the redundancy under a stealth profile is harmless.
-        if self.extensions.is_empty() {
-            v.push(
-                "--disable-features=PasswordManagerOnboarding,AutofillServerCommunication"
-                    .to_string(),
-            );
-        } else {
-            v.push(
-                "--disable-features=PasswordManagerOnboarding,AutofillServerCommunication,DisableLoadExtensionCommandLineSwitch"
-                    .to_string(),
-            );
+        // an Off profile would otherwise miss it, so add it to the base line
+        // here. Chrome keeps only the last `--disable-features`, so
+        // `merge_launch_flags` folds this line, the profile's and the
+        // caller's into one.
+        let headless = self.headless.unwrap_or(true);
+        let mut disabled = vec!["PasswordManagerOnboarding", "AutofillServerCommunication"];
+        if !self.extensions.is_empty() {
+            disabled.push("DisableLoadExtensionCommandLineSwitch");
         }
+        v.push(format!("--disable-features={}", disabled.join(",")));
         let gpu_backend = self.effective_gpu_backend();
-        if self.headless.unwrap_or(true) {
+        if headless {
             v.push("--headless=new".to_string());
             // `--disable-gpu` and an explicit ANGLE backend are mutually
             // exclusive: keeping the flag suppresses the GPU that
@@ -5787,6 +5825,56 @@ mod tests {
                 .iter()
                 .any(|f| f.contains("PasswordManagerOnboarding"))
         );
+    }
+
+    #[test]
+    fn merge_disable_features_folds_every_occurrence_into_the_first_slot() {
+        let flags = [
+            "--a",
+            "--disable-features=X,Y",
+            "--b",
+            "--disable-features=Y,,Z",
+            "--c",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(
+            super::merge_disable_features(flags),
+            ["--a", "--disable-features=X,Y,Z", "--b", "--c"].map(String::from)
+        );
+        let empty = ["--a", "--disable-features="].map(String::from).to_vec();
+        assert_eq!(super::merge_disable_features(empty), ["--a".to_string()]);
+    }
+
+    #[test]
+    fn launch_flags_keep_base_profile_and_caller_disable_features() {
+        // Chrome honours only the last --disable-features; the merged argv
+        // must carry one line with every source's features.
+        let base = Browser::builder()
+            .stealth(StealthProfile::spoofed())
+            .arg("--disable-features=CallerFeature")
+            .build_flags(Path::new("/tmp/zd-test"));
+        let extra = StealthProfile::spoofed().build_flags();
+        let merged = super::merge_launch_flags(base, extra, GpuBackend::Disabled);
+        let lines: Vec<_> = merged
+            .iter()
+            .filter(|f| f.starts_with("--disable-features="))
+            .collect();
+        assert_eq!(lines.len(), 1, "{merged:?}");
+        for feature in [
+            "PasswordManagerOnboarding",
+            "CallerFeature",
+            "IsolateOrigins",
+        ] {
+            assert!(
+                lines[0]
+                    .trim_start_matches("--disable-features=")
+                    .split(',')
+                    .any(|f| f == feature),
+                "{feature} missing from {}",
+                lines[0]
+            );
+        }
     }
 
     #[test]
