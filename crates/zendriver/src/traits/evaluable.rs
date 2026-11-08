@@ -20,6 +20,8 @@ use crate::error::Result;
 ///     e.evaluate_main("document.title").await
 /// }
 /// ```
+// async-trait adds #[must_use] to boxed futures, which Clippy 1.99 considers redundant.
+#[allow(clippy::double_must_use)]
 #[async_trait::async_trait]
 pub trait Evaluable {
     /// Evaluate JS in an isolated world (sandbox; no page globals visible).
