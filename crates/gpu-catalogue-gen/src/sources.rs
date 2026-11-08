@@ -11,7 +11,7 @@
 //! a pin possible at all.
 
 /// Read-only git mirror of the PCI ID Database.
-pub const PCI_IDS_COMMIT: &str = "7a900ad2ad4b91c3a9d4f4da60e247864e6a73aa";
+pub const PCI_IDS_COMMIT: &str = "32bce8c6bc068e0349d8762ff7a4a5cd92114f2c";
 
 /// The fingerprint corpus whose `videoCard` node carries driver-reported
 /// renderer strings.
@@ -19,7 +19,7 @@ pub const PCI_IDS_COMMIT: &str = "7a900ad2ad4b91c3a9d4f4da60e247864e6a73aa";
 /// The runtime cache in `zendriver-fingerprints` tracks `master`, which is
 /// right for a cache and wrong for a generator: the committed catalogue must
 /// not change unless a constant in this file changes.
-pub const CORPUS_COMMIT: &str = "358002c33e6e0b1cec4eb167be29ba9b3f854216";
+pub const CORPUS_COMMIT: &str = "4f3f3eb8cc426c1c712cdacda5075a9ad005c5b2";
 
 /// Raw URL for the pinned `pci.ids`.
 #[must_use]

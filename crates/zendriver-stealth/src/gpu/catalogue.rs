@@ -4,9 +4,9 @@
 // tier tables in `tiers.rs`; nothing here can fabricate one.
 //
 // Model names, device ids and population weights: fingerprint corpus
-// pinned at 358002c33e6e0b1cec4eb167be29ba9b3f854216.
+// pinned at 4f3f3eb8cc426c1c712cdacda5075a9ad005c5b2.
 // Device ids the corpus never reports: pciutils/pciids pinned at
-// 7a900ad2ad4b91c3a9d4f4da60e247864e6a73aa.
+// 32bce8c6bc068e0349d8762ff7a4a5cd92114f2c.
 //
 // 482 entries.
 // 2 models were dropped for having no device id in either source,
@@ -503,13 +503,6 @@ pub(crate) const CATALOGUE: &[CatalogueEntry] = &[
     CatalogueEntry {
         model: "AMD Radeon(TM) Graphics",
         vendor: "AMD",
-        device_id: Some(0x13C0),
-        tier: Tier::D3d11Fl11,
-        weight: 0.000140924,
-    },
-    CatalogueEntry {
-        model: "AMD Radeon(TM) Graphics",
-        vendor: "AMD",
         device_id: Some(0x1506),
         tier: Tier::D3d11Fl11,
         weight: 0.003875423,
@@ -518,6 +511,13 @@ pub(crate) const CATALOGUE: &[CatalogueEntry] = &[
         model: "AMD Radeon(TM) Graphics",
         vendor: "AMD",
         device_id: Some(0x150E),
+        tier: Tier::D3d11Fl11,
+        weight: 0.000140924,
+    },
+    CatalogueEntry {
+        model: "AMD Radeon(TM) Graphics",
+        vendor: "AMD",
+        device_id: Some(0x1586),
         tier: Tier::D3d11Fl11,
         weight: 0.000140924,
     },
