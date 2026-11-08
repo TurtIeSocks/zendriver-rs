@@ -20,6 +20,8 @@ use crate::error::Result;
 ///     e.evaluate_main("document.title").await
 /// }
 /// ```
+// async-trait adds #[must_use] to boxed futures, which Clippy 1.99 considers redundant.
+#[allow(clippy::double_must_use)]
 #[async_trait::async_trait]
 #[allow(
     clippy::double_must_use,
