@@ -346,6 +346,8 @@ impl Persona {
 /// The `zendriver` crate implements this for its `Tab`, mapping its own
 /// evaluation error into [`StealthError::Probe`].
 #[async_trait::async_trait]
+// async-trait 0.1.89 adds #[must_use] to methods returning must-use futures.
+#[allow(clippy::double_must_use)]
 pub trait JsProbe {
     /// Evaluate `js` in the page and return the result as a JSON value.
     async fn eval_json(&self, js: &str) -> Result<serde_json::Value, crate::StealthError>;

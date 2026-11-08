@@ -21,6 +21,8 @@ use crate::error::Result;
 /// }
 /// ```
 #[async_trait::async_trait]
+// async-trait 0.1.89 adds #[must_use] to methods returning must-use futures.
+#[allow(clippy::double_must_use)]
 pub trait Evaluable {
     /// Evaluate JS in an isolated world (sandbox; no page globals visible).
     ///

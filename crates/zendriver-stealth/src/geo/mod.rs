@@ -101,6 +101,8 @@ pub struct ResolvedGeo {
 /// [`persona`] mapping; a resolver's exact `timezone` (when present)
 /// overrides `persona`'s country-representative zone.
 #[async_trait::async_trait]
+// async-trait 0.1.89 adds #[must_use] to methods returning must-use futures.
+#[allow(clippy::double_must_use)]
 pub trait GeoResolver: Send + Sync {
     /// Resolve the apparent geo info, or `None` if it cannot be determined.
     async fn resolve(&self) -> Option<ResolvedGeo>;
