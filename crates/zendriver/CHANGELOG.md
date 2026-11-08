@@ -5,6 +5,14 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.5.29] - 2026-11-08
+
+### Fixed
+
+- End Network.enable and Page.enable with their tab
+- Allow async-trait attributes on Evaluable
+
+
 ## [0.5.28] - 2026-09-17
 
 ### Changed
