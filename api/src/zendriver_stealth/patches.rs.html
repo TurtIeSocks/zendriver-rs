@@ -2247,16 +2247,26 @@
 <a href=#2247 id=2247 data-nosnippet>2247</a>        <span class="macro">assert!</span>(js.contains(<span class="string">"availHeight"</span>), <span class="string">"must repair the taskbar inset"</span>);
 <a href=#2248 id=2248 data-nosnippet>2248</a>    }
 <a href=#2249 id=2249 data-nosnippet>2249</a>
-<a href=#2250 id=2250 data-nosnippet>2250</a>    <span class="doccomment">/// Identity-neutral by construction: pulling in an identity patch here would stop
-<a href=#2251 id=2251 data-nosnippet>2251</a>    /// `Native` being native, which is the whole reason callers choose it.
-<a href=#2252 id=2252 data-nosnippet>2252</a>    </span><span class="attr">#[test]
-<a href=#2253 id=2253 data-nosnippet>2253</a>    </span><span class="kw">fn </span>geometry_bootstrap_carries_no_identity_patches() {
-<a href=#2254 id=2254 data-nosnippet>2254</a>        <span class="kw">let </span>js = geometry_bootstrap();
-<a href=#2255 id=2255 data-nosnippet>2255</a>        <span class="macro">assert!</span>(
-<a href=#2256 id=2256 data-nosnippet>2256</a>            !js.contains(<span class="string">"navigator.webdriver"</span>),
-<a href=#2257 id=2257 data-nosnippet>2257</a>            <span class="string">"must not spoof webdriver"
-<a href=#2258 id=2258 data-nosnippet>2258</a>        </span>);
-<a href=#2259 id=2259 data-nosnippet>2259</a>        <span class="macro">assert!</span>(!js.contains(<span class="string">"WEBGL_PROFILE"</span>), <span class="string">"must not spoof WebGL"</span>);
-<a href=#2260 id=2260 data-nosnippet>2260</a>    }
-<a href=#2261 id=2261 data-nosnippet>2261</a>}
+<a href=#2250 id=2250 data-nosnippet>2250</a>    <span class="doccomment">/// The bootstrap runs in every frame, and only the top frame's viewport is
+<a href=#2251 id=2251 data-nosnippet>2251</a>    /// the window's: an iframe reporting the window's inner size is a frame
+<a href=#2252 id=2252 data-nosnippet>2252</a>    /// wider than its own element.
+<a href=#2253 id=2253 data-nosnippet>2253</a>    </span><span class="attr">#[test]
+<a href=#2254 id=2254 data-nosnippet>2254</a>    </span><span class="kw">fn </span>geometry_bootstrap_keeps_iframe_viewports_native() {
+<a href=#2255 id=2255 data-nosnippet>2255</a>        <span class="kw">let </span>js = geometry_bootstrap();
+<a href=#2256 id=2256 data-nosnippet>2256</a>        <span class="kw">let </span>guard = js.find(<span class="string">"window === window.top"</span>).expect(<span class="string">"top-frame guard"</span>);
+<a href=#2257 id=2257 data-nosnippet>2257</a>        <span class="macro">assert!</span>(guard &lt; js.find(<span class="string">"'innerWidth'"</span>).expect(<span class="string">"innerWidth patch"</span>));
+<a href=#2258 id=2258 data-nosnippet>2258</a>    }
+<a href=#2259 id=2259 data-nosnippet>2259</a>
+<a href=#2260 id=2260 data-nosnippet>2260</a>    <span class="doccomment">/// Identity-neutral by construction: pulling in an identity patch here would stop
+<a href=#2261 id=2261 data-nosnippet>2261</a>    /// `Native` being native, which is the whole reason callers choose it.
+<a href=#2262 id=2262 data-nosnippet>2262</a>    </span><span class="attr">#[test]
+<a href=#2263 id=2263 data-nosnippet>2263</a>    </span><span class="kw">fn </span>geometry_bootstrap_carries_no_identity_patches() {
+<a href=#2264 id=2264 data-nosnippet>2264</a>        <span class="kw">let </span>js = geometry_bootstrap();
+<a href=#2265 id=2265 data-nosnippet>2265</a>        <span class="macro">assert!</span>(
+<a href=#2266 id=2266 data-nosnippet>2266</a>            !js.contains(<span class="string">"navigator.webdriver"</span>),
+<a href=#2267 id=2267 data-nosnippet>2267</a>            <span class="string">"must not spoof webdriver"
+<a href=#2268 id=2268 data-nosnippet>2268</a>        </span>);
+<a href=#2269 id=2269 data-nosnippet>2269</a>        <span class="macro">assert!</span>(!js.contains(<span class="string">"WEBGL_PROFILE"</span>), <span class="string">"must not spoof WebGL"</span>);
+<a href=#2270 id=2270 data-nosnippet>2270</a>    }
+<a href=#2271 id=2271 data-nosnippet>2271</a>}
 </code></pre></div></section></main></body></html>
