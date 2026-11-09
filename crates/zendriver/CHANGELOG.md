@@ -5,6 +5,17 @@ Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://se
 
 ## [Unreleased]
 
+## [0.5.34] - 2026-11-09
+
+### Fixed
+
+- Merge main to resolve Rust 1.99 clippy failure
+- Preserve CSS generic font families
+- Budget initial setup for every observer
+- Restore main startup timing and API scope
+- Leave font masking outside OOPIF changes
+
+
 ## [0.5.33] - 2026-11-09
 
 
