@@ -2190,10 +2190,6 @@ pub(crate) struct TabRegistrar {
     unwired: tokio::sync::watch::Sender<Vec<String>>,
 }
 
-/// Budget for the initial target's observer chain, which runs several
-/// observers with their own `DEFAULT_OBSERVER_TIMEOUT` (5 s) each.
-const INITIAL_TARGET_SETUP: Duration = Duration::from_secs(20);
-
 impl TabRegistrar {
     fn new(input_profile: zendriver_stealth::InputProfile) -> Self {
         Self {
@@ -2206,10 +2202,11 @@ impl TabRegistrar {
     /// Wait until every observer ahead of the registrar has run against the
     /// initial target. A chain that fails detaches the target and never gets
     /// here, so the launch fails instead of returning an unpatched tab.
-    async fn wait_initial(&self, target_id: &str) -> Result<(), ZendriverError> {
+    /// `budget` covers every registered observer's individual timeout.
+    async fn wait_initial(&self, target_id: &str, budget: Duration) -> Result<(), ZendriverError> {
         let mut ready = self.unwired.subscribe();
         timeout(
-            INITIAL_TARGET_SETUP,
+            budget,
             ready.wait_for(|ids| ids.iter().any(|id| id == target_id)),
         )
         .await
@@ -2595,9 +2592,10 @@ impl QuitOutcome {
 /// How long [`resolve_ws_from_http`] waits for the `/json/version` round-trip.
 const JSON_VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Budget for everything *after* Chrome advertises its WS endpoint: the
+/// Base budget after Chrome advertises its WS endpoint: the
 /// WebSocket dial plus the initial `Target.setAutoAttach` / `Target.getTargets`
-/// / `Target.attachToTarget` round-trips.
+/// / `Target.attachToTarget` round-trips. [`launch_handshake_timeout`] adds
+/// the registered observer chain's budget.
 ///
 /// Before this existed, every step past the `WS_ENDPOINT_TIMEOUT`-guarded
 /// stderr read was unbounded, so a Chrome whose CDP responder was slow or
@@ -2615,6 +2613,14 @@ const JSON_VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 /// since a false timeout costs a whole retried launch while a slow success
 /// costs only latency.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Leave the network handshake its full budget even when each observer
+/// consumes its individual timeout before the initial tab is ready.
+fn launch_handshake_timeout(observer_count: usize) -> Duration {
+    (0..observer_count).fold(HANDSHAKE_TIMEOUT, |budget, _| {
+        budget.saturating_add(zendriver_transport::connection::DEFAULT_OBSERVER_TIMEOUT)
+    })
+}
 
 /// [`CREATE_NEW_PROCESS_GROUP`][1] — spawn Chrome as the root of its own
 /// process group so a console `Ctrl+C` is not delivered to it.
@@ -3074,7 +3080,9 @@ pub(crate) async fn finish_connect(
         .ok_or_else(|| ZendriverError::Navigation("attach returned no sessionId".into()))?
         .to_string();
     // The reply precedes the observer chain for an already-loaded target.
-    registrar.wait_initial(&target_id).await?;
+    registrar
+        .wait_initial(&target_id, conn.observer_chain_timeout())
+        .await?;
 
     // Sweep the stray windows now that our own tab is safely attached.
     // Best-effort: a stray we cannot close is worth a warning, not a failed
@@ -3659,25 +3667,29 @@ impl BrowserBuilder {
         // child we spawned on expiry, so a failed launch is retryable and
         // leaves no orphan `chrome.exe`.
         let child_slot: ChildSlot = Arc::new(std::sync::Mutex::new(Some(child)));
-        let inner = guard_handshake(HANDSHAKE_TIMEOUT, &child_slot, async {
-            debug!(ws_url = %ws_url, "connecting to chrome");
-            let conn = zendriver_transport::connect_with_observers(&ws_url, observers).await?;
-            finish_connect(FinishConnect {
-                conn,
-                registrar,
-                input_profile,
-                child: child_slot.clone(),
-                job,
-                owned_tmp,
-                extension_dirs,
-                debug_host_port: debug_host_port_from_ws(&ws_url),
-                ws_url: Some(ws_url.clone()),
-                owns_process: true,
-                #[cfg(feature = "tracker-blocking")]
-                tracker_matcher,
-            })
-            .await
-        })
+        let inner = guard_handshake(
+            launch_handshake_timeout(observers.len()),
+            &child_slot,
+            async {
+                debug!(ws_url = %ws_url, "connecting to chrome");
+                let conn = zendriver_transport::connect_with_observers(&ws_url, observers).await?;
+                finish_connect(FinishConnect {
+                    conn,
+                    registrar,
+                    input_profile,
+                    child: child_slot.clone(),
+                    job,
+                    owned_tmp,
+                    extension_dirs,
+                    debug_host_port: debug_host_port_from_ws(&ws_url),
+                    ws_url: Some(ws_url.clone()),
+                    owns_process: true,
+                    #[cfg(feature = "tracker-blocking")]
+                    tracker_matcher,
+                })
+                .await
+            },
+        )
         .await?;
 
         // 12b. `GpuBackend::Native` promises a hardware-accelerated surface,
@@ -8573,6 +8585,91 @@ mod tests {
             .unwrap();
         assert!(inner.tabs.read().await.contains_key("S1"));
         inner.conn.shutdown();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn finish_connect_allows_a_full_chain_of_slow_observers() {
+        use zendriver_transport::{ObserverFailurePolicy, testing::MockConnection};
+
+        struct SlowObserver(ObserverFailurePolicy);
+
+        #[async_trait::async_trait]
+        impl TargetObserver for SlowObserver {
+            fn name(&self) -> &'static str {
+                "slow-setup"
+            }
+
+            fn failure_policy(&self) -> ObserverFailurePolicy {
+                self.0
+            }
+
+            async fn on_target_attached(
+                &self,
+                _session: PausedSession<'_>,
+            ) -> Result<(), ObserverError> {
+                let delay = match self.0 {
+                    ObserverFailurePolicy::BestEffort => Duration::from_secs(6),
+                    _ => Duration::from_millis(4500),
+                };
+                tokio::time::sleep(delay).await;
+                Ok(())
+            }
+        }
+
+        for policy in [
+            ObserverFailurePolicy::Required,
+            ObserverFailurePolicy::BestEffort,
+        ] {
+            let input_profile = zendriver_stealth::InputProfile::native();
+            let registrar = Arc::new(TabRegistrar::new(input_profile.clone()));
+            let extras: Vec<Arc<dyn TargetObserver>> = (0..8)
+                .map(|_| Arc::new(SlowObserver(policy)) as Arc<dyn TargetObserver>)
+                .collect();
+            let observers = assemble_observer_chain(None, &extras, false, registrar.clone());
+            let handshake_budget = launch_handshake_timeout(observers.len());
+            let (mut mock, conn) = MockConnection::pair_with_observers(observers);
+            let child_slot = ChildSlot::default();
+            let args = FinishConnect {
+                conn,
+                registrar,
+                input_profile,
+                child: child_slot.clone(),
+                job: ProcessJob::none(),
+                owned_tmp: None,
+                extension_dirs: Vec::new(),
+                debug_host_port: None,
+                ws_url: None,
+                owns_process: false,
+                #[cfg(feature = "tracker-blocking")]
+                tracker_matcher: None,
+            };
+            let fut = tokio::spawn(async move {
+                guard_handshake(handshake_budget, &child_slot, finish_connect(args)).await
+            });
+
+            let id = mock.expect_cmd("Target.setAutoAttach").await;
+            mock.reply(id, json!({})).await;
+            let id = mock.expect_cmd("Target.getTargets").await;
+            mock.reply(
+                id,
+                json!({ "targetInfos": [{ "targetId": "T1", "type": "page", "url": "about:blank" }] }),
+            )
+            .await;
+            let id = mock.expect_cmd("Target.attachToTarget").await;
+            mock.reply(id, json!({ "sessionId": "S1" })).await;
+            let started = tokio::time::Instant::now();
+            emit_initial_attach(&mock).await;
+            let id = mock.expect_cmd("Target.setAutoAttach").await;
+            mock.reply(id, json!({})).await;
+
+            let inner = fut
+                .await
+                .unwrap()
+                .expect("each observer must get its own timeout before setup gives up");
+            assert!(started.elapsed() >= Duration::from_secs(36));
+            assert!(inner.tabs.read().await.contains_key("S1"));
+            inner.conn.shutdown();
+        }
     }
 
     /// T3: a lone page target is the normal case — nothing to sweep, and the

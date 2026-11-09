@@ -876,6 +876,10 @@ excluded = "internal jar constructor (session-scoped variant of CookieJar::new, 
 # zendriver-transport directly. Not an MCP tool surface — the MCP server exposes
 # high-level browser actions, not in-process custom-observer registration.
 [[entry]]
+api = "zendriver::Connection::observer_chain_timeout"
+excluded = "transport setup budget used by the browser ready barrier; no agent-facing operation"
+
+[[entry]]
 api = "zendriver::TargetObserver"
 excluded = "advanced transport trait for custom target-attach hooks (in-process); no MCP tool — the server exposes browser actions, not observer registration"
 

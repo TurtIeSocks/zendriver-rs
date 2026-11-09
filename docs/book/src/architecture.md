@@ -104,6 +104,11 @@ Child frames are then paused before their first script and run the same
 observer chain. Dedicated workers are attached only so they are released
 from that pause; they end with their page, unlike service workers.
 
+The initial tab's ready barrier waits for the sum of the registered
+observers' timeout budgets, including best-effort observers that time out
+and are skipped. Launch adds that setup budget to its network handshake
+budget, so registering more observers does not cut their setup short.
+
 The same observer chain re-applies stealth on every new tab — that's
 why `Browser::new_tab()` gives you a fully stealth-patched tab without
 extra code.
