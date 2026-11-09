@@ -9,6 +9,46 @@ use zendriver::{Browser, Persona};
 use zendriver_stealth::FontSpec;
 
 #[tokio::test]
+async fn font_allow_list_preserves_generic_families() {
+    let browser = Browser::builder()
+        .headless(true)
+        .stealth(StealthProfile::spoofed())
+        .persona(Persona {
+            fonts: Some(FontSpec {
+                available: Some(vec!["Arial".into()]),
+                ..FontSpec::default()
+            }),
+            ..Persona::default()
+        })
+        .launch()
+        .await
+        .unwrap();
+    let tab = browser.main_tab();
+    tab.goto("about:blank").await.unwrap();
+    tab.wait_for_load().await.unwrap();
+
+    let results: BTreeMap<String, bool> = tab
+        .evaluate_main(
+            r#"Object.fromEntries([
+                'Verdana', 'serif', 'sans-serif', 'monospace', 'cursive',
+                'fantasy', 'system-ui', 'ui-serif', 'ui-sans-serif',
+                'ui-monospace', 'ui-rounded', 'math', 'emoji', 'fangsong'
+            ].map(family => [family, document.fonts.check('12px ' + family)]))"#,
+        )
+        .await
+        .unwrap();
+    browser.close().await.unwrap();
+
+    assert_eq!(results.len(), 14);
+    assert!(!results["Verdana"], "the font allow-list must be active");
+    for (family, visible) in results {
+        if family != "Verdana" {
+            assert!(visible, "generic family must remain visible: {family}");
+        }
+    }
+}
+
+#[tokio::test]
 async fn font_allow_list_preserves_native_syntax_errors() {
     let browser = Browser::builder()
         .headless(true)
