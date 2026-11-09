@@ -13,8 +13,7 @@
   if (Array.isArray(allow) && document.fonts && document.fonts.check) {
     const allowed = new Set(allow.map((name) => name.toLowerCase()));
     const generic = new Set(['serif', 'sans-serif', 'monospace', 'cursive',
-      'fantasy', 'system-ui', 'ui-serif', 'ui-sans-serif', 'ui-monospace', 'ui-rounded',
-      'math', 'emoji', 'fangsong']);
+      'fantasy', 'system-ui', 'ui-serif', 'ui-sans-serif', 'ui-monospace', 'ui-rounded']);
     __zdReplace(document.fonts, 'check', (origCheck) => function (font, text) {
       // Preserve native errors before the allow-list can return false. CSS
       // style parsing accepts CSS-wide keywords that FontFaceSet rejects.
