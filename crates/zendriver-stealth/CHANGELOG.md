@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.12.12] - 2026-11-09
+
+### Fixed
+
+- Leave font masking outside OOPIF changes
+
+
 ## [0.12.11] - 2026-11-09
 
 ### Fixed
