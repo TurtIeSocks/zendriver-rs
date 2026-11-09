@@ -23,7 +23,7 @@ use crate::observer::TargetObserver;
 /// before the actor releases the debugger via
 /// `Runtime.runIfWaitingForDebugger`. Slow observers don't block the actor
 /// indefinitely; a misbehaving one trips the timeout and the debugger releases.
-pub const DEFAULT_OBSERVER_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const DEFAULT_OBSERVER_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Default per-call budget for [`Connection::call_raw`] — the ceiling on one
 /// whole CDP call, queueing included.
@@ -696,21 +696,6 @@ impl Connection {
         };
         self.reconnect(ws);
         Ok(())
-    }
-
-    /// Sum of the registered target observers' timeout budgets.
-    ///
-    /// Browser setup uses this to wait for the whole serial observer chain,
-    /// including observers skipped after a best-effort timeout. This excludes
-    /// WebSocket dialing and CDP round-trips outside the observer chain.
-    #[must_use]
-    pub fn observer_chain_timeout(&self) -> Duration {
-        self.inner
-            .observers
-            .iter()
-            .fold(Duration::ZERO, |budget, _| {
-                budget.saturating_add(self.inner.observer_timeout)
-            })
     }
 
     /// Per-connection observer timeout. Exposed for the actor's handler
