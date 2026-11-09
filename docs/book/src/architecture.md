@@ -96,6 +96,14 @@ so attaching to every one of them leaked a renderer process per worker
 on a long-lived browser. Nothing in zendriver drives worker targets, so
 excluding them costs no functionality.
 
+The browser-level auto-attach only reports top-level targets. An
+out-of-process iframe is a child of its page's session, so the first
+observer in the chain arms a session-scoped auto-attach (`iframe` and
+dedicated `worker`) on every page and OOPIF while it is still paused.
+Child frames are then paused before their first script and run the same
+observer chain. Dedicated workers are attached only so they are released
+from that pause; they end with their page, unlike service workers.
+
 The same observer chain re-applies stealth on every new tab — that's
 why `Browser::new_tab()` gives you a fully stealth-patched tab without
 extra code.
