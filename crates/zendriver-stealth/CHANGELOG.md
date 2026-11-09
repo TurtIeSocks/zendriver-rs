@@ -3,6 +3,13 @@
 All notable changes to this crate documented here. Format: [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/). Adheres to [SemVer](https://semver.org/).
 
+## [0.12.11] - 2026-11-09
+
+### Fixed
+
+- Merge main for Rust 1.99 clippy compatibility
+
+
 ## [0.12.10] - 2026-11-08
 
 ### Fixed
