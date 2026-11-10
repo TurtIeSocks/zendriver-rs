@@ -202,7 +202,14 @@ impl Fingerprint {
         let cpu_count = clamp_cpu_count(num_cpus::get() as u32);
         let memory_gb = detect_memory_gb()?;
         let ua_string = crate::ua::compose_ua_string(platform, &chrome_full);
-        let ua_metadata = UserAgentMetadata::realistic(platform, chrome_major, &chrome_full);
+        let mut ua_metadata = UserAgentMetadata::realistic(platform, chrome_major, &chrome_full);
+        // `realistic` describes a typical host of the platform; Chrome reports this
+        // host's own CPU and OS version in every context, workers included.
+        ua_metadata.architecture = host_architecture().to_string();
+        #[cfg(target_os = "macos")]
+        {
+            ua_metadata.platform_version = probe_macos_platform_version()?;
+        }
         Ok(Self {
             platform,
             chrome_major,
@@ -257,10 +264,20 @@ impl Fingerprint {
     }
 
     /// Recompose UA string + UAM after platform/version overrides.
+    ///
+    /// `architecture` and `platformVersion` describe the OS, so they are kept
+    /// while the platform is unchanged (the probed host values survive a
+    /// version-only override) and rebuilt only when the platform changes.
     pub fn recompose(&mut self) {
         self.ua_string = crate::ua::compose_ua_string(self.platform, &self.chrome_full);
-        self.ua_metadata =
-            UserAgentMetadata::realistic(self.platform, self.chrome_major, &self.chrome_full);
+        let previous = std::mem::replace(
+            &mut self.ua_metadata,
+            UserAgentMetadata::realistic(self.platform, self.chrome_major, &self.chrome_full),
+        );
+        if previous.platform == self.ua_metadata.platform {
+            self.ua_metadata.architecture = previous.architecture;
+            self.ua_metadata.platform_version = previous.platform_version;
+        }
     }
 }
 
@@ -484,6 +501,48 @@ fn parse_pe_file_version(bytes: &[u8]) -> Option<(u32, String)> {
         search_from += rel + 1;
     }
     None
+}
+
+/// UA-CH `architecture` Chrome reports for this build's CPU.
+pub(crate) fn host_architecture() -> &'static str {
+    if cfg!(any(target_arch = "aarch64", target_arch = "arm")) {
+        "arm"
+    } else {
+        "x86"
+    }
+}
+
+/// `sw_vers -productVersion` (`27.0`, `27.0.1`) in the three-part form Chrome
+/// reports as `platformVersion`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn macos_platform_version(product_version: &str) -> Option<String> {
+    let parts: Vec<&str> = product_version.trim().split('.').collect();
+    if parts.is_empty()
+        || parts.len() > 3
+        || parts
+            .iter()
+            .any(|p| p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return None;
+    }
+    let mut parts: Vec<String> = parts.iter().map(|p| (*p).to_string()).collect();
+    parts.resize(3, "0".into());
+    Some(parts.join("."))
+}
+
+/// The real macOS version. A failed probe is an error: the fixed
+/// `realistic()` value is what workers would contradict.
+#[cfg(target_os = "macos")]
+#[allow(clippy::result_large_err)]
+fn probe_macos_platform_version() -> Result<String, StealthError> {
+    let output = Command::new("sw_vers")
+        .arg("-productVersion")
+        .output()
+        .map_err(|e| StealthError::SystemInfo(format!("sw_vers: {e}")))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    macos_platform_version(&stdout)
+        .filter(|_| output.status.success())
+        .ok_or_else(|| StealthError::SystemInfo(format!("sw_vers -productVersion: {stdout:?}")))
 }
 
 pub(crate) fn clamp_cpu_count(n: u32) -> u32 {
@@ -735,6 +794,47 @@ mod tests {
 #[allow(clippy::panic, clippy::unwrap_used)]
 mod fingerprint_tests {
     use super::*;
+
+    #[test]
+    fn macos_platform_version_pads_to_three_parts() {
+        assert_eq!(
+            macos_platform_version("27.0.1\n").as_deref(),
+            Some("27.0.1")
+        );
+        assert_eq!(macos_platform_version("27.0").as_deref(), Some("27.0.0"));
+        assert_eq!(macos_platform_version("27").as_deref(), Some("27.0.0"));
+        assert_eq!(macos_platform_version(""), None);
+        assert_eq!(macos_platform_version("27.x"), None);
+        assert_eq!(macos_platform_version("1.2.3.4"), None);
+    }
+
+    #[test]
+    fn recompose_keeps_os_facts_unless_the_platform_changes() {
+        let mut fp = Fingerprint {
+            platform: Platform::MacIntel,
+            chrome_major: 120,
+            chrome_full: "120.0.6099.234".into(),
+            cpu_count: 8,
+            memory_gb: 8,
+            ua_string: String::new(),
+            ua_metadata: UserAgentMetadata::realistic(Platform::MacIntel, 120, "120.0.6099.234"),
+            timezone: None,
+            locale: None,
+            languages: None,
+            screen: None,
+        };
+        fp.ua_metadata.architecture = "arm".into();
+        fp.ua_metadata.platform_version = "27.0.1".into();
+        fp.chrome_major = 155;
+        fp.chrome_full = "155.0.8059.39".into();
+        fp.recompose();
+        assert_eq!(fp.ua_metadata.architecture, "arm");
+        assert_eq!(fp.ua_metadata.platform_version, "27.0.1");
+        fp.platform = Platform::Win32;
+        fp.recompose();
+        assert_eq!(fp.ua_metadata.architecture, "x86");
+        assert_eq!(fp.ua_metadata.platform_version, "15.0.0");
+    }
 
     #[test]
     fn clamp_cpu_count_floors_at_two() {
