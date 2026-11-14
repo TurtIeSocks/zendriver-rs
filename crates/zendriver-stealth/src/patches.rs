@@ -689,6 +689,7 @@ fn push_webrtc(out: &mut String, spec: Option<&WebrtcSpec>) {
 mod tests {
     use super::*;
     use crate::persona::surface::Strategy;
+    use crate::test_logs::captured_warnings;
     use crate::{Platform, UserAgentMetadata};
 
     fn mock_identity() -> Fingerprint {
@@ -827,8 +828,11 @@ mod tests {
         };
         let s = bootstrap_script(&persona, &mock_identity());
         assert!(s.contains("\"cpuCount\":4"), "cpu override missing");
-        // deviceMemory is rendered into the fp json untouched here (the JS
-        // clamps); persona value should appear.
+        // `memoryGb` reaches the page exactly as written: it is rendered into
+        // the fp JSON untouched, and `navigator_props.js` serves it through a
+        // bare getter. Nothing downstream corrects it — which is the point,
+        // and why the resolver warns about implausible values rather than
+        // rewriting them.
         assert!(s.contains("\"memoryGb\":16"), "memory override missing");
         assert!(s.contains("fr-FR"), "locale override missing");
     }
@@ -937,41 +941,6 @@ mod tests {
         // Drop the `);` that closes the call; the profile itself ends in `}`.
         let json = arg.trim().trim_end_matches([';', ')']);
         serde_json::from_str(json).expect("the substituted argument is JSON")
-    }
-
-    /// Run `f` with a tracing subscriber capturing WARN and above, and return
-    /// what it logged. A coherence warning nobody can observe is
-    /// indistinguishable from no warning at all.
-    fn captured_warnings(f: impl FnOnce()) -> String {
-        use std::io::Write;
-        use std::sync::{Arc, Mutex};
-
-        #[derive(Clone, Default)]
-        struct Sink(Arc<Mutex<Vec<u8>>>);
-        impl Write for Sink {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().unwrap().extend_from_slice(buf);
-                Ok(buf.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Sink {
-            type Writer = Self;
-            fn make_writer(&'a self) -> Self {
-                self.clone()
-            }
-        }
-
-        let sink = Sink::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer(sink.clone())
-            .with_max_level(tracing::Level::WARN)
-            .finish();
-        tracing::subscriber::with_default(subscriber, f);
-        let bytes = sink.0.lock().unwrap().clone();
-        String::from_utf8(bytes).expect("log output is utf-8")
     }
 
     #[test]

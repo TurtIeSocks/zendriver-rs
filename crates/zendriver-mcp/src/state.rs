@@ -94,9 +94,18 @@ pub struct StealthOverrides {
     /// Spoofed `navigator.hardwareConcurrency`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_count: Option<u32>,
-    /// Spoofed Chrome major version.
+    /// Spoofed Chrome major version. The other three digits of the version
+    /// string are fabricated from it (the server logs a warning saying so);
+    /// set `chrome_full_version` instead to state all four.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chrome_version: Option<u32>,
+    /// Spoofed Chrome version in full, `major.minor.build.patch` (e.g.
+    /// `"125.0.6422.113"`). Drives the UA-CH `fullVersionList`, and its
+    /// leading component becomes the reported major, so it outranks
+    /// `chrome_version` when both are set. Use a real Chrome release's
+    /// version; an invented build number is itself a fingerprinting tell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chrome_full_version: Option<String>,
     /// Full User-Agent string override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_agent: Option<String>,
