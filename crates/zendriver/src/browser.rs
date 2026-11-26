@@ -3360,7 +3360,7 @@ fn unzip_crx_blocking(crx_path: &Path, dest_dir: &Path) -> Result<(), ZendriverE
         let Some(rel_path) = entry.enclosed_name() else {
             return Err(BrowserError::ExtensionLoad {
                 path: crx_path.to_path_buf(),
-                reason: format!("zip entry has unsafe path: {}", entry.name()),
+                reason: format!("zip entry has unsafe path: {}", entry.name().unwrap_or_default()),
             }
             .into());
         };

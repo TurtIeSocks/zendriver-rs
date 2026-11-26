@@ -93,7 +93,7 @@ base64             = "0.22"
 reqwest            = { version = "0.13", default-features = false, features = ["rustls-no-provider", "gzip", "deflate", "stream"] }
 # Direct dep purely to name the ring provider in `install_default_crypto_provider`.
 rustls             = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }
-zip                = { version = "2",    default-features = false, features = ["deflate"] }
+zip                = { version = "9.8",  default-features = false, features = ["deflate"] }
 sha2               = "0.10"
 dirs               = "5"
 glob               = "0.3"

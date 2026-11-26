@@ -460,7 +460,12 @@ pub fn build_catalogue(network_json: &str, pci_ids: &str) -> BuildReport {
 pub fn unzip_network_json(zipped: &[u8]) -> Result<String, Box<dyn std::error::Error>> {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zipped))?;
     let name = (0..archive.len())
-        .filter_map(|i| archive.by_index(i).ok().map(|f| f.name().to_string()))
+        .filter_map(|i| {
+            archive
+                .by_index(i)
+                .ok()
+                .map(|f| f.name().unwrap_or_default().to_string())
+        })
         .find(|n| n.ends_with(".json"))
         .ok_or("corpus archive holds no .json member")?;
     let mut out = String::new();

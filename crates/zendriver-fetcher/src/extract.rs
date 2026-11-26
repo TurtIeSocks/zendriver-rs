@@ -135,7 +135,7 @@ fn extract_blocking(
         let Some(rel_path) = entry.enclosed_name() else {
             return Err(FetcherError::Extraction(format!(
                 "zip entry has unsafe path: {}",
-                entry.name()
+                entry.name().unwrap_or_default()
             )));
         };
 
@@ -272,7 +272,7 @@ fn extract_blocking(
 }
 
 /// True when a zip entry's mode marks it a symlink.
-fn is_symlink(entry: &zip::read::ZipFile<'_>) -> bool {
+fn is_symlink<R: std::io::Read + ?Sized>(entry: &zip::read::ZipFile<'_, R>) -> bool {
     const S_IFMT: u32 = 0o170_000;
     const S_IFLNK: u32 = 0o120_000;
     entry
